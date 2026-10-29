@@ -201,6 +201,31 @@ it("closes the real suggestion menu on the first bubbling Escape and stops only 
   expect(stopMutations()).toHaveLength(1);
 });
 
+it("closes the open conversation details before Escape may stop the active run", async () => {
+  await renderConversation();
+  const details = document.querySelector<HTMLDetailsElement>("header details")!;
+  const trigger = details.querySelector<HTMLElement>("summary")!;
+  await act(async () => { details.open = true; details.querySelector<HTMLButtonElement>("button")!.focus(); });
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => document.activeElement!.dispatchEvent(escape));
+  expect(details.open).toBe(false);
+  expect(escape.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(trigger);
+  expect(stopMutations()).toHaveLength(0);
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  await flush();
+  expect(stopMutations()).toHaveLength(1);
+});
+
+it("does not close conversation details or stop the run for IME Escape", async () => {
+  await renderConversation();
+  const details = document.querySelector<HTMLDetailsElement>("header details")!;
+  await act(async () => { details.open = true; });
+  await act(async () => details.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, isComposing: true })));
+  expect(details.open).toBe(true);
+  expect(stopMutations()).toHaveLength(0);
+});
+
 it("honors an already handled Escape and preserves dialog ownership", async () => {
   await renderConversation();
   const composer = document.querySelector<HTMLTextAreaElement>("textarea")!;

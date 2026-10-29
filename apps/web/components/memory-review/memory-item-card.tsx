@@ -1,7 +1,7 @@
 "use client";
 
 import { useT, type TFunction } from "@/components/locale-provider";
-import { useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { validReturnSessionId, withReturnSession } from "../session-return-navigation";
 import type { ConversationImageManifest, MemoryDecision, MemoryProposalItem, MemorySourceLocator } from "@talent-signal/contracts";
 import type { MemoryItemOutcome } from "./use-memory-review";
@@ -33,6 +33,25 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.display_text);
   const [sourceOpen, setSourceOpen] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const composingRef = useRef(false);
+  const editTrigger = useRef<HTMLButtonElement>(null);
+  const restoreEditFocus = useRef(false);
+  const sourceId = useId();
+  const sourceCanCollapse = item.source_excerpt.length > 120;
+  useLayoutEffect(() => {
+    if (!editing && restoreEditFocus.current) {
+      restoreEditFocus.current = false;
+      editTrigger.current?.focus({ preventScroll: true });
+    }
+  }, [editing]);
+  function cancelEdit() {
+    restoreEditFocus.current = true;
+    composingRef.current = false;
+    setComposing(false);
+    setDraft(item.display_text);
+    setEditing(false);
+  }
   const conflict = item.judgment_kind === "conflict" && item.admission_status === "needs_judgment";
   const sensitive = item.judgment_kind === "sensitive" && item.admission_status === "needs_judgment";
   const canDecide = (item.admission_status === "eligible" || conflict || sensitive) && item.status === "pending";
@@ -50,10 +69,13 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
   const redacted = sourceUnavailable || outcome?.kind === "unavailable";
   return <section className={styles.actionCard} aria-label={t("记忆 · {scope}", { scope: scopeLabel(item, redacted ? null : personLabel, t) })} data-memory-item-card={item.id}>
     <div className={styles.actionHead}><span>{t("记忆 · {scope}", { scope: scopeLabel(item, redacted ? null : personLabel, t) })}</span><span>{sourceUnavailable ? t("不可用") : outcome?.kind === "committed" ? t("已保存") : outcome?.kind === "skipped" ? t("已跳过") : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? t("待核对") : outcome?.kind === "unavailable" ? t("不可用") : t("待处理")}</span></div>
-    {redacted ? null : <p className={styles.actionChange}>{item.previous_text ? <><span>{item.previous_text}</span><span aria-hidden="true"> → </span><strong>{shownText}</strong></> : <strong>{shownText}</strong>}</p>}
+    {redacted ? null : item.previous_text ? <dl className={styles.actionChange}>
+      <div className={styles.actionValue}><dt>{t("原记忆")}</dt><dd>{item.previous_text}</dd></div>
+      <div className={styles.actionValue}><dt>{outcome?.kind === "committed" ? t("本次保存") : t("建议更新")}</dt><dd><strong>{shownText}</strong></dd></div>
+    </dl> : <p className={styles.actionChange}><strong>{shownText}</strong></p>}
     {redacted ? null : <div className={styles.actionSource}>
-      <blockquote data-expanded={sourceOpen}>{item.source_excerpt}</blockquote>
-      {item.source_excerpt.length > 120 ? <button type="button" onClick={() => setSourceOpen(!sourceOpen)}>{sourceOpen ? t("收起原句") : t("展开原句")}</button> : null}
+      <blockquote id={sourceId} data-collapsed={sourceCanCollapse && !sourceOpen}>{item.source_excerpt}</blockquote>
+      {sourceCanCollapse ? <button type="button" aria-expanded={sourceOpen} aria-controls={sourceId} onClick={() => setSourceOpen(!sourceOpen)}>{sourceOpen ? t("收起原句") : t("展开原句")}</button> : null}
       {sourceImage ? <SourceImageButton source={sourceImage}/> : null}
     </div>}
     {sourceUnavailable ? <p className={styles.actionReceipt} role="alert">{t("来源已失效，不能继续操作。")}</p>
@@ -65,12 +87,28 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
       : null}
     {!resolved && !outcome && !locked && !sourceUnavailable && editing ? <form className={styles.actionEdit} onSubmit={(event) => {
       event.preventDefault();
+      if (busy || composingRef.current || !canDecide) return;
       const value = draft.trim();
       if (value) onDecide(item.id, conflict ? "accept_new" : "accept", value);
+    }} onKeyDown={event => {
+      if (event.nativeEvent.isComposing || composingRef.current || event.keyCode === 229) {
+        // An IME candidate key belongs to this editor, including engines that
+        // omit isComposing on the last candidate Escape.
+        event.stopPropagation();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!busy) cancelEdit();
+      }
     }}>
       <label htmlFor={`memory-item-edit-${item.id}`}>{t("修改这条记忆")}</label>
-      <textarea id={`memory-item-edit-${item.id}`} maxLength={1000} value={draft} onChange={(event) => setDraft(event.target.value)}/>
-      <div><button type="submit" disabled={busy || !draft.trim()}>{t("保存修改")}</button><button type="button" onClick={() => { setDraft(item.display_text); setEditing(false); }}>{t("取消")}</button></div>
+      <textarea autoFocus id={`memory-item-edit-${item.id}`} maxLength={1000} value={draft} disabled={busy}
+        onCompositionStart={() => { composingRef.current = true; setComposing(true); }}
+        onCompositionEnd={() => { composingRef.current = false; setComposing(false); }}
+        onChange={(event) => setDraft(event.target.value)}/>
+      <div><button type="submit" disabled={busy || composing || !draft.trim()}>{t("保存修改")}</button><button disabled={busy} type="button" onClick={cancelEdit}>{t("取消")}</button></div>
     </form> : null}
     {!resolved && !outcome && !locked && !sourceUnavailable && !editing ? <div className={styles.actionButtons}>
       {conflict ? <>
@@ -78,7 +116,7 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
         <button disabled={busy} type="button" onClick={() => onDecide(item.id, "keep_old")}>{t("保留旧值")}</button>
         <button disabled={busy} type="button" onClick={() => onDecide(item.id, "retain_conflict")}>{t("保留两种说法")}</button>
       </> : canDecide ? <button className={styles.actionPrimary} disabled={busy} type="button" onClick={() => onDecide(item.id, "accept")}>{sensitive ? t("确认记住") : primary}</button> : null}
-      {canDecide ? <button disabled={busy} type="button" onClick={() => setEditing(true)}>{t("改一下")}</button> : null}
+      {canDecide ? <button ref={editTrigger} disabled={busy} type="button" onClick={() => setEditing(true)}>{t("改一下")}</button> : null}
       <button disabled={busy} type="button" onClick={() => onDecide(item.id, "skip")}>{pass}</button>
       {onComment ? <button className={styles.actionComment} type="button" onClick={() => onComment(item.id)}>{t("补充一句")}</button> : null}
     </div> : null}

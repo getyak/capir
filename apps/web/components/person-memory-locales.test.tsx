@@ -65,8 +65,8 @@ it.each([
 ] as const)("keeps a short localized empty state in %s", async (locale, sentence, action) => {
   await mount(locale, []);
   expect(host.querySelector("p")?.textContent).toBe(sentence);
-  expect(host.querySelector("a")?.textContent).toContain(action);
-  expect(host.querySelector("a")?.getAttribute("href")).toBe("/workspace");
+  expect(host.querySelector("a")).toBeNull();
+  expect(host.textContent).not.toContain(action);
   expect(host.querySelector("nav")).toBeNull();
   expect(fetcher).not.toHaveBeenCalled();
 });

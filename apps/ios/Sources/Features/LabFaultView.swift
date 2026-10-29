@@ -60,10 +60,23 @@ private struct LabFaultPreview: View {
                 }.accessibilityLabel(language.text("Fixture request trace")).accessibilityIdentifier("lab-fault-trace")
             }.buttonStyle(.plain).padding(.horizontal, 12)
             VStack(alignment: .leading, spacing: 8) {
-                Text(language.text("Synthetic test"))
-                    .font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(language.text("SYNTHETIC TRANSPORT · No connection to your backend"))
-                    .accessibilityIdentifier("lab-fault-boundary")
+                HStack(alignment: .center, spacing: 12) {
+                    Text(language.text("Synthetic test"))
+                        .font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel(language.text("SYNTHETIC TRANSPORT · No connection to your backend"))
+                        .accessibilityIdentifier("lab-fault-boundary")
+                    if dynamicTypeSize.isAccessibilitySize {
+                        Spacer(minLength: 0)
+                        Menu { faultActions } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 20, weight: .medium))
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityLabel(language.text("Fault controls"))
+                        .accessibilityIdentifier("lab-fault-actions")
+                    }
+                }
                 if let state = store.state {
                     DisclosureGroup(isExpanded: $showsDetails) {
                         ScrollView {
@@ -79,9 +92,7 @@ private struct LabFaultPreview: View {
                             .accessibilityIdentifier("lab-fault-status")
                     }
                 }
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 4) { faultActions }
-                } else {
+                if !dynamicTypeSize.isAccessibilitySize {
                     HStack(spacing: 20) { faultActions; Spacer(minLength: 0) }
                 }
                 Picker(language.text("Page"), selection: $page) {
@@ -143,6 +154,7 @@ private struct LabFaultPreview: View {
                 PursuitWorkspaceFailureView(message: language.text(message == "The canonical workspace could not be loaded." ? "The isolated fixture read did not complete. Inspect its request trace, then retry." : message), isRetrying: workspace.isReadInFlight,
                     completedReadCount: workspace.completedReadCount, isSynthetic: true) { store.reload() }
             }
+            .accessibilityIdentifier("lab-fault-read-content")
         case .empty: PursuitWorkspaceEmptyView(selectedPage: page == 0 ? .people : .today)
         case .loaded(let snapshot), .preview(let snapshot):
             if page == 0 {

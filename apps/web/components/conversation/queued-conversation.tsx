@@ -695,7 +695,14 @@ export function QueuedConversation(props: Props) {
       <div className={styles.headingText}><h1 title={chat.detail?.title || t("conversation.new")}>{chat.detail?.title || t("conversation.new")}</h1></div>
       {personId && !chat.unavailable && <button className={styles.personContext} aria-label={t("conversation.person.view", { person: personLabel || t("conversation.person.fallback") })} onClick={event => personContextPanel.open(personId,event.currentTarget)}>{t("conversation.person.context")}</button>}
       <div className={styles.taskSlot}>{!chat.unavailable && <SessionTaskCapsule/>}</div>
-      <details className={styles.details}><summary aria-label={t("conversation.detail.label")}><DotsThree aria-hidden="true" size={18}/><span className={styles.detailsLabel}>{t("conversation.detail.label")}</span></summary><div className={styles.detailPanel}>
+      <details className={styles.details} onKeyDown={event => {
+        if (event.key !== "Escape" || event.nativeEvent.isComposing || composingRef.current.value || event.keyCode === 229 || !event.currentTarget.open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.open = false;
+        setConfirmDelete(false);
+        event.currentTarget.querySelector("summary")?.focus({ preventScroll: true });
+      }}><summary aria-label={t("conversation.detail.label")}><DotsThree aria-hidden="true" size={18}/><span className={styles.detailsLabel}>{t("conversation.detail.label")}</span></summary><div className={styles.detailPanel}>
       <p>{chat.detail?.title || t("conversation.new")}</p>
       <p className={styles.detailScope}>{scopeLabel}</p>
       <p>{t("conversation.detail.historyHint")}</p>

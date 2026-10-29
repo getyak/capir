@@ -72,55 +72,86 @@ struct TodayUnreadSessionRow: View {
     let remainingCount: Int
     let action: () -> Void
     @Environment(\.appLanguage) private var appLanguage
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         Button(action: action) {
-            HStack(alignment: .center, spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(Color.tsInk)
-                        .frame(width: 42, height: 42)
-                    Image(systemName: "sparkles")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.tsSurface)
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 10) {
+                        conversationContext
+                        if remainingCount > 0 { remainingSessions }
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "bubble.left.and.text.bubble.right")
+                            .font(.body)
+                            .foregroundStyle(Color.tsMutedInk)
+                            .frame(width: 36, height: 36)
+                            .background(Color.tsSurfaceMuted, in: Circle())
+                            .accessibilityHidden(true)
+                        conversationContext
+                        if remainingCount > 0 {
+                            Text(verbatim: "+\(remainingCount)")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Color.tsMutedInk)
+                                .fixedSize()
+                        }
+                        Circle()
+                            .fill(Color.tsVermilion)
+                            .frame(width: 7, height: 7)
+                            .padding(.top, 6)
+                            .accessibilityHidden(true)
+                    }
                 }
-                .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(session.displayTitle(in: appLanguage))
-                        .font(.headline)
-                        .foregroundStyle(Color.tsInk)
-                        .lineLimit(1)
-                    Text(
-                        "\(session.personDisplayLabel) · \(session.displayContextLabel(in: appLanguage))"
-                    )
-                        .font(.caption)
-                        .foregroundStyle(Color.tsMutedInk)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                if remainingCount > 0 {
-                    Text("+\(remainingCount)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.tsMutedInk)
-                }
-                Circle()
-                    .fill(Color.tsVermilion)
-                    .frame(width: 7, height: 7)
-                    .accessibilityHidden(true)
             }
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .frame(minHeight: 66)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(
-            appLanguage.text(
-                "Unread session: \(session.displayTitle(in: appLanguage)), \(session.personDisplayLabel)",
-                zhHans: "未读会话：\(session.displayTitle(in: appLanguage))，\(session.personDisplayLabel)"
-            )
-        )
+        .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier("today-unread-session")
+    }
+
+    private var conversationContext: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(session.displayTitle(in: appLanguage))
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Color.tsInk)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(participantContext)
+                .font(.subheadline)
+                .foregroundStyle(Color.tsMutedInk)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var participantContext: String {
+        if session.isUnresolvedIntent { return session.displayContextLabel(in: appLanguage) }
+        if session.isIdentityReview { return session.personDisplayLabel }
+        return "\(session.personDisplayLabel) · \(session.displayContextLabel(in: appLanguage))"
+    }
+
+    private var remainingSessions: some View {
+        Text(remainingSessionsLabel)
+            .font(.caption)
+            .foregroundStyle(Color.tsMutedInk)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var remainingSessionsLabel: String {
+        String(format: appLanguage.text(remainingCount == 1 ? "%d more unread session" : "%d more unread sessions"),
+               locale: appLanguage.locale, remainingCount)
+    }
+
+    private var accessibilityLabel: String {
+        [appLanguage.text("Unread session"), session.displayTitle(in: appLanguage), participantContext,
+         remainingCount > 0 ? remainingSessionsLabel : nil]
+            .compactMap { $0 }.joined(separator: ", ")
     }
 }

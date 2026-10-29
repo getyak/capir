@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowUpRight, X } from "@phosphor-icons/react";
+import { ArrowUpRight, CaretRight, X } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -11,15 +11,25 @@ import { WORKSPACE_SESSION_EXPIRED_EVENT, workspaceSessionFetch } from "./worksp
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import { coordinatorScopeIsCurrent, subscribeWorkspaceRefresh, workspaceRefreshGeneration } from "@/lib/workspace-refresh";
 import { withReturnSession } from "./session-return-navigation";
+import { useLocale, useT, type TFunction } from "./locale-provider";
+import type { MarketingLocale } from "@/lib/marketing-locale";
 import styles from "./person-context-panel.module.css";
 
 type Selection = { personId: string; binding: string; pathname: string; returnSession: string | null; opener: HTMLElement | null };
 type PanelContext = { open: (personId: string, opener?: HTMLElement | null) => void; selectedId: string | null };
 const Context = createContext<PanelContext>({open: () => undefined, selectedId: null});
 export const usePersonContextPanel = () => useContext(Context);
-const date = (value: string) => new Date(value).toLocaleDateString("zh-CN", {month: "numeric", day: "numeric"});
+function previewDate(value: string, locale: MarketingLocale, t: TFunction) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return t("时间未知");
+  return new Intl.DateTimeFormat(locale, {
+    month: "short", day: "numeric",
+    ...(date.getFullYear() !== new Date().getFullYear() ? { year: "numeric" as const } : {}),
+  }).format(date);
+}
 
 export function PersonContextPanelProvider({binding, children}: {binding: string | null; children: ReactNode}) {
+  const t = useT();
   const pathname = usePathname();
   const [selection, setSelection] = useState<Selection | null>(null);
   // Discard is authorization loss, not a retryable read error. Keep its fence
@@ -61,7 +71,7 @@ export function PersonContextPanelProvider({binding, children}: {binding: string
       {current && <Dialog.Portal><Dialog.Overlay className={`ts-workspace-theme ${styles.overlay}`} data-person-context-overlay />
         <Dialog.Content aria-describedby={undefined} className={`ts-workspace-theme ts-workspace-surface ${styles.panel}`} data-person-context-panel
           onCloseAutoFocus={event => {event.preventDefault(); const target = current.opener; requestAnimationFrame(() => {if (target?.isConnected) target.focus(); else document.querySelector<HTMLElement>("#queued-conversation-composer")?.focus();});}}>
-          <div className={styles.top}><Dialog.Title>人物背景</Dialog.Title><Dialog.Close aria-label="关闭人物背景" className={styles.close}><X size={18} aria-hidden="true" /></Dialog.Close></div>
+          <div className={styles.top}><Dialog.Title>{t("人物背景")}</Dialog.Title><Dialog.Close aria-label={t("关闭人物背景")} className={styles.close}><X size={18} aria-hidden="true" /></Dialog.Close></div>
           <Preview key={`${current.binding}:${current.personId}`} selection={current} bindingDenied={bindingDenied} denyBinding={denyBinding}/>
         </Dialog.Content>
       </Dialog.Portal>}
@@ -70,6 +80,8 @@ export function PersonContextPanelProvider({binding, children}: {binding: string
 }
 
 function Preview({selection, bindingDenied, denyBinding}: {selection: Selection; bindingDenied: (binding: string) => boolean; denyBinding: (binding: string) => void}) {
+  const t = useT();
+  const locale = useLocale();
   const [result, setResult] = useState<PersonContextPreview | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -117,16 +129,16 @@ function Preview({selection, bindingDenied, denyBinding}: {selection: Selection;
     return () => {owned = false; controller?.abort(); unsubscribe(); unsubscribeRefresh();};
   }, [selection.binding, selection.personId, attempt, bindingDenied, denyBinding]);
   const canonical = withReturnSession(`/workspace/people/${selection.personId}`, selection.returnSession);
-  if (failed) return <div className={styles.state} role="alert"><p>人物背景暂时无法读取。</p><button onClick={() => {setFailed(false); setAttempt(value => value + 1);}}>重试</button><p>不会使用陈旧内容补齐。</p></div>;
-  if (!result) return <div className={styles.state} role="status">正在读取人物背景…</div>;
+  if (failed) return <div className={styles.state} role="alert"><p>{t("人物背景暂时无法读取。")}</p><button onClick={() => {setFailed(false); setAttempt(value => value + 1);}}>{t("重试")}</button></div>;
+  if (!result) return <div className={styles.state} role="status">{t("正在读取人物背景…")}</div>;
   return <div className={styles.body}>
     <div className={styles.identity}><PersonDirectoryAvatar id={result.person.id} label={result.person.label} url={result.person.avatarUrl} size={48}/><div><h2>{result.person.label}</h2>{result.person.headline && <p>{result.person.headline}</p>}</div></div>
-    {result.person.contexts.length > 0 && <div className={styles.metadata}><span>关系情境</span><div>{result.person.contexts.map(context => <span key={context.id}>{context.label}</span>)}</div></div>}
-    <section className={styles.memory}><h3>与你有关</h3>{result.memory.length ? result.memory.map(item => <article key={item.id}>
-      <span className={styles.kind}>{item.scope === "relationship" ? "我们之间" : "沟通背景"}{item.timeStatus === "future" ? " · 尚未发生" : item.timeStatus === "unknown" ? " · 时间未明" : ""}</span>
-      <p>{item.text}</p><Link className={styles.provenance} href={canonical}>{[item.speaker, item.observedAt ? date(item.observedAt) : null, "已保存", item.kind === "source_statement" ? "来源陈述" : item.kind === "user_opinion" ? "用户观点" : "已保存事实"].filter(Boolean).join(" · ")}<span>{item.evidenceRetained ? "核对人物记忆" : "原始证据已不保留"} ›</span></Link>
-    </article>) : <p className={styles.empty}>暂无已保存的相关记忆。</p>}</section>
-    <section className={styles.history}><h3>最近对话</h3>{result.historyUnavailable ? <p className={styles.empty}>相关对话暂时无法读取。</p> : result.history.length ? result.history.map(session => <Link key={session.id} href={`/workspace/sessions/${session.id}`}><time dateTime={session.updatedAt} title="对话更新时间">{date(session.updatedAt)}</time><div><span>{session.title}</span><small>对话记录 ›</small></div></Link>) : <p className={styles.empty}>暂无相关对话。</p>}</section>
-    <Link className={styles.destination} href={canonical}>打开联系人页面<ArrowUpRight size={14} aria-hidden="true"/></Link>
+    {result.person.contexts.length > 0 && <div className={styles.metadata}><span>{t("关系情境")}</span><div>{result.person.contexts.map(context => <span key={context.id}>{context.label}</span>)}</div></div>}
+    <section className={styles.memory}><h3>{t("与你有关")}</h3>{result.memory.length ? result.memory.map(item => <article key={item.id}>
+      <span className={styles.kind}>{item.scope === "relationship" ? t("我们之间") : t("沟通背景")}{item.timeStatus === "future" ? ` · ${t("尚未发生")}` : item.timeStatus === "unknown" ? ` · ${t("时间未知")}` : ""}</span>
+      <p>{item.text}</p><Link className={styles.provenance} href={canonical}>{[item.speaker, item.observedAt ? previewDate(item.observedAt, locale, t) : null, item.kind === "source_statement" ? t("来源陈述") : item.kind === "user_opinion" ? t("用户观点") : t("已保存事实")].filter(Boolean).join(" · ")}<span>{item.evidenceRetained ? t("核对人物记忆") : t("原始证据已不保留")}<CaretRight size={12} aria-hidden="true"/></span></Link>
+    </article>) : <p className={styles.empty}>{t("暂无已保存的相关记忆。")}</p>}</section>
+    <section className={styles.history}><h3>{t("最近对话")}</h3>{result.historyUnavailable ? <p className={styles.empty}>{t("相关对话暂时无法读取。")}</p> : result.history.length ? result.history.map(session => <Link key={session.id} href={`/workspace/sessions/${session.id}`}><time dateTime={session.updatedAt} title={t("对话更新时间")}>{previewDate(session.updatedAt, locale, t)}</time><span>{session.title}</span><CaretRight size={14} aria-hidden="true"/></Link>) : <p className={styles.empty}>{t("暂无相关对话。")}</p>}</section>
+    <Link className={styles.destination} href={canonical}>{t("打开联系人页面")}<ArrowUpRight size={14} aria-hidden="true"/></Link>
   </div>;
 }

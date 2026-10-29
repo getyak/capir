@@ -24,7 +24,10 @@ final class LabFaultStore: ObservableObject {
         do {
             let service = try LabFaultWorkspaceService(preset: preset, seconds: Double(minutes * 60), enabled: enabled)
             self.service = service
-            workspace = PursuitWorkspaceStore(service: service, actionCompletions: LabFaultMemoryCompletions())
+            // One-shot faults remain available to inspect until the person
+            // retries. Shared foreground/interval refresh must not consume them.
+            workspace = PursuitWorkspaceStore(service: service,
+                actionCompletions: LabFaultMemoryCompletions(), activeRefreshEnabled: false)
             sessionID = UUID(); generation = sessionID!; error = nil
             state = await service.engine.state()
             let current = generation

@@ -9,6 +9,8 @@ vi.mock("./workspace-session-request",()=>({workspaceSessionFetch:mocks.fetch,WO
 import {PersonContextPanelProvider,usePersonContextPanel} from "./person-context-panel";
 import {requestWorkspaceRefresh} from "@/lib/workspace-refresh";
 import {invalidateWorkspaceDirectory} from "@/lib/workspace-directory-cache";
+import {LocaleProvider} from "./locale-provider";
+import type {MarketingLocale} from "@/lib/marketing-locale";
 let root:Root, host:HTMLDivElement;
 function Buttons(){const panel=usePersonContextPanel();return createElement("div",null,...["a","b"].map(id=>createElement("button",{key:id,onClick:(event:React.MouseEvent<HTMLButtonElement>)=>panel.open(id,event.currentTarget)},id)));}
 const render=async(binding="binding")=>act(async()=>{root.render(<PersonContextPanelProvider binding={binding}><Buttons /></PersonContextPanelProvider>);});
@@ -17,6 +19,39 @@ const body=(id:string)=>({person:{id,label:`same name ${id}`,headline:null,avata
 beforeEach(()=>{vi.resetAllMocks();mocks.path="/workspace";Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});Object.defineProperty(window,"matchMedia",{configurable:true,value:()=>({matches:false,addEventListener(){},removeEventListener(){}})});host=document.createElement("div");document.body.append(host);root=createRoot(host);});
 afterEach(async()=>{await act(async()=>root.unmount());host.remove();});
 describe("person preview ownership",()=>{
+  it.each([
+    ["en", "Person context", "No saved context yet."],
+    ["zh-CN", "人物背景", "暂无已保存的相关记忆。"],
+    ["zh-TW", "人物背景", "暫無已儲存的相關記憶。"],
+    ["ja", "人物の背景", "保存された関連メモリはまだありません。"],
+    ["ko", "인물 배경", "저장된 관련 기억이 없습니다."],
+  ] as const)("uses the host locale %s without changing person data",async(locale,title,empty)=>{
+    mocks.fetch.mockResolvedValue(Response.json(body("a")));
+    await act(async()=>root.render(<LocaleProvider locale={locale as MarketingLocale}><PersonContextPanelProvider binding="binding"><Buttons /></PersonContextPanelProvider></LocaleProvider>));
+    await click("a");
+    const panel=document.querySelector('[role="dialog"]')!;
+    expect(panel.querySelector("h2")?.textContent).toBe(title);
+    expect(panel.textContent).toContain(empty);
+    expect(panel.textContent).toContain("same name a");
+  });
+  it("formats historical dates in the active locale and preserves saved evidence wording",async()=>{
+    mocks.fetch.mockResolvedValue(Response.json({...body("a"),memory:[{id:"fact",text:"原始保留的中文",scope:"person",kind:"source_statement",timeStatus:"known",speaker:"林岚",observedAt:"2025-12-24T12:00:00Z",evidenceRetained:true}],history:[{id:"older-session",title:"Original session title",updatedAt:"2025-12-24T12:00:00Z"}]}));
+    await act(async()=>root.render(<LocaleProvider locale="en"><PersonContextPanelProvider binding="binding"><Buttons /></PersonContextPanelProvider></LocaleProvider>));
+    await click("a");
+    const panel=document.querySelector('[role="dialog"]')!;
+    expect(panel.textContent).toContain("原始保留的中文");
+    expect(panel.textContent).toContain("Dec 24, 2025");
+    expect(panel.querySelector("time")?.textContent).toBe("Dec 24, 2025");
+    expect(panel.textContent).toContain("Source statements");
+    expect(panel.querySelector('a[href="/workspace/sessions/older-session"]')?.textContent).toContain("Original session title");
+  });
+  it("keeps malformed source time visibly unknown instead of breaking the context panel",async()=>{
+    mocks.fetch.mockResolvedValue(Response.json({...body("a"),memory:[{id:"fact",text:"已保存的内容",scope:"person",kind:"fact",timeStatus:"known",speaker:null,observedAt:"not-a-date",evidenceRetained:true}]}));
+    await render();await click("a");
+    const panel=document.querySelector('[role="dialog"]')!;
+    expect(panel.textContent).toContain("已保存的内容");
+    expect(panel.textContent).toContain("时间未知");
+  });
   it("reads only after an explicit person selection",async()=>{
     mocks.fetch.mockResolvedValue(Response.json(body("a")));
     await render();

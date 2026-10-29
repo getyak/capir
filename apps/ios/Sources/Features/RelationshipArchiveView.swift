@@ -3436,10 +3436,14 @@ private struct AgentSessionRow: View {
                 .padding(.trailing, 36)
             participantContext
             attentionState
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 relativeTime
                 forkState
-                unreadState
+                if session.isUnread {
+                    Text(appLanguage.text("Unread"))
+                        .font(.caption)
+                        .foregroundStyle(Color.tsMutedInk)
+                }
             }
         }
     }
@@ -3480,7 +3484,7 @@ private struct AgentSessionRow: View {
         )
         .font(.caption)
         .foregroundStyle(Color.tsMutedInk)
-        .fixedSize()
+        .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
     }
 
     private var participantContext: some View {
@@ -4261,26 +4265,18 @@ struct PursuitWorkspaceLoadingView: View {
     @Environment(\.appLanguage) private var appLanguage
 
     var body: some View {
-        VStack(spacing: 14) {
-            ProgressView()
-            Text(isSynthetic ? appLanguage.text("Reading the synthetic workspace…") :
-                appLanguage.text(
-                    "Reading canonical Pursuits…",
-                    zhHans: "正在读取权威目标…"
-                )
-            )
+        HStack(alignment: .top, spacing: 12) {
+            ProgressView().accessibilityHidden(true)
+            Text(isSynthetic ? appLanguage.text("Loading preview…") : appLanguage.text("Loading your workspace…"))
                 .font(.subheadline)
                 .foregroundStyle(Color.tsMutedInk)
-            Text(isSynthetic ? appLanguage.text("Only the isolated fixture transport is used for this read.") :
-                appLanguage.text(
-                    "No preview facts are shown while this read is unresolved.",
-                    zhHans: "读取尚未完成时，不会展示任何预览事实。"
-                )
-            )
-                .font(.caption)
-                .foregroundStyle(Color.tsMutedInk)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityElement(children: .combine)
         .accessibilityIdentifier("workspace-loading")
     }
 }
@@ -4295,71 +4291,55 @@ struct PursuitWorkspaceFailureView: View {
     @Environment(\.appLanguage) private var appLanguage
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            RelationshipEyebrow(
-                appLanguage.text("Read failed", zhHans: "读取失败")
-            )
-            Text(producerTitle ?? (isSynthetic ? appLanguage.text("Synthetic workspace unavailable") :
-                appLanguage.text(
-                    "Canonical workspace unavailable",
-                    zhHans: "权威工作区不可用"
-                )
-            ))
-                .font(.custom("Georgia", size: 28, relativeTo: .title2))
+        ViewThatFits(in: .vertical) {
+            failureContent
+            ScrollView { failureContent }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var failureContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(producerTitle ?? appLanguage.text(isSynthetic ? "Preview unavailable" : "Workspace unavailable"))
+                .font(.headline)
                 .foregroundStyle(Color.tsInk)
+                .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("workspace-failed")
             Text(message)
-                .font(.subheadline)
+                .font(.body)
                 .foregroundStyle(Color.tsMutedInk)
-            Text(isSynthetic ? appLanguage.text("No partial fixture response is substituted for a verified read.") :
-                appLanguage.text(
-                    "No cached or synthetic candidate facts are being substituted.",
-                    zhHans: "不会用缓存或合成的候选人事实替代当前状态。"
-                )
-            )
-                .font(.caption)
-                .foregroundStyle(Color.tsMutedInk)
-            Text(isSynthetic ? appLanguage.text("Inspect the synthetic error, then retry this fixture.") :
-                completedReadCount > 1
-                    ? appLanguage.text(
-                        "Last retry finished · canonical state is still unavailable.",
-                        zhHans: "上次重试已结束 · 权威状态仍不可用。"
-                    )
-                    : appLanguage.text(
-                        "Initial read finished · canonical state is unavailable.",
-                        zhHans: "首次读取已结束 · 权威状态不可用。"
-                    )
-            )
-                .font(.caption2)
-                .foregroundStyle(Color.tsMutedInk.opacity(0.82))
-                .accessibilityIdentifier(
-                    "workspace-failed-attempt-\(completedReadCount)"
-                )
+                .accessibilityIdentifier(completedReadCount > 1 ? "workspace-failure-reason" : "workspace-failed-attempt-\(completedReadCount)")
+            if completedReadCount > 1 {
+                Text(appLanguage.text("Still unavailable after retry."))
+                    .font(.subheadline)
+                    .foregroundStyle(Color.tsMutedInk)
+                    .accessibilityIdentifier("workspace-failed-attempt-\(completedReadCount)")
+            }
             if isRetrying {
                 HStack(spacing: 10) {
-                    ProgressView()
-                    Text(isSynthetic ? appLanguage.text("Retrying the synthetic read…") :
-                        appLanguage.text(
-                            "Retrying canonical read…",
-                            zhHans: "正在重试权威读取…"
-                        )
-                    )
-                        .font(.subheadline.weight(.semibold))
+                    ProgressView().accessibilityHidden(true)
+                    Text(appLanguage.text("Trying again…"))
+                        .font(.subheadline.weight(.medium))
                 }
                 .frame(minHeight: 44)
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("workspace-retrying")
             } else {
                 Button(action: retry) {
-                    Text(appLanguage.text("Retry read", zhHans: "重新读取"))
+                    Text(appLanguage.text("Retry"))
                         .font(.subheadline.weight(.semibold))
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
-                }.accessibilityIdentifier("retry-workspace-read")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.tsInk)
+                .accessibilityIdentifier("retry-workspace-read")
             }
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 28)
     }
 }
 
@@ -4380,26 +4360,17 @@ struct PursuitWorkspaceEmptyView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            RelationshipEyebrow(
-                appLanguage.text(
-                    "Canonical workspace",
-                    zhHans: "权威工作区"
-                )
-            )
-            Text(
-                emptyTitle
-            )
-                .font(.custom("Georgia", size: 31, relativeTo: .title2))
+        VStack(alignment: .leading, spacing: 12) {
+            Text(emptyTitle)
+                .font(.headline)
                 .foregroundStyle(Color.tsInk)
-            Text(
-                appLanguage.text(
-                    "Capture can preserve a Signal, but it will not invent an identity or Pursuit.",
-                    zhHans: "捕捉可以保留信号，但不会凭空创建身份或目标。"
-                )
-            )
+                .accessibilityAddTraits(.isHeader)
+            if let emptyGuidance {
+                Text(emptyGuidance)
                 .font(.subheadline)
                 .foregroundStyle(Color.tsMutedInk)
+                .fixedSize(horizontal: false, vertical: true)
+            }
             if selectedPage == .today, pendingCaptureCount > 0 {
                 TodayCaptureInboxRow(
                     count: pendingCaptureCount,
@@ -4408,9 +4379,19 @@ struct PursuitWorkspaceEmptyView: View {
                 .padding(.top, 8)
             }
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityIdentifier("workspace-empty")
+    }
+
+    private var emptyGuidance: String? {
+        switch selectedPage {
+        case .today: return nil
+        case .sessions: return appLanguage.text("Use the field below to begin.")
+        case .people: return appLanguage.text("Contacts you choose to keep will appear here.")
+        case .meetings: return appLanguage.text("Your recorded arrangements will appear here.")
+        }
     }
 
     private var emptyTitle: String {
