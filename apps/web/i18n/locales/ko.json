@@ -2648,5 +2648,11 @@
   "sessionMenu.loadFailed": "대화를 읽을 수 없습니다. 닫고 다시 시도하세요.",
   "sessionMenu.conflict": "대화가 변경되었습니다. 이름 변경을 다시 열어 확인하세요.",
   "sessionMenu.renameFailed": "이름 변경을 확인하지 못했습니다. 입력한 제목은 유지됩니다.",
-  "sessionMenu.saving": "저장 중…"
+  "sessionMenu.saving": "저장 중…",
+  "sessionMenu.copy": "대화 복사",
+  "sessionMenu.copyHint": "보낸 텍스트와 완료된 답변만 복사합니다. 이미지와 미확인 제안은 제외됩니다.",
+  "sessionMenu.you": "나",
+  "sessionMenu.copied": "복사했습니다.",
+  "sessionMenu.copyFailed": "복사하지 못했습니다. 메뉴에서 다시 시도하세요.",
+  "sessionMenu.copying": "복사 중…"
 }

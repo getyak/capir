@@ -2648,5 +2648,11 @@
   "sessionMenu.loadFailed": "暫時無法讀取這段對話，請關閉後重試。",
   "sessionMenu.conflict": "對話已更新，請重新開啟重新命名，核對最新版本。",
   "sessionMenu.renameFailed": "重新命名尚未確認，輸入的標題已保留。",
-  "sessionMenu.saving": "正在儲存…"
+  "sessionMenu.saving": "正在儲存…",
+  "sessionMenu.copy": "複製對話",
+  "sessionMenu.copyHint": "僅複製已傳送文字和完成的回覆，不含圖片和待確認內容。",
+  "sessionMenu.you": "你",
+  "sessionMenu.copied": "已複製。",
+  "sessionMenu.copyFailed": "複製失敗，請開啟選單重試。",
+  "sessionMenu.copying": "正在複製…"
 }

@@ -2648,5 +2648,11 @@
   "sessionMenu.loadFailed": "会話を読み込めません。閉じて再試行してください。",
   "sessionMenu.conflict": "会話が更新されました。名前の変更を開き直して確認してください。",
   "sessionMenu.renameFailed": "名前の変更を確認できませんでした。入力は保持されています。",
-  "sessionMenu.saving": "保存中…"
+  "sessionMenu.saving": "保存中…",
+  "sessionMenu.copy": "会話をコピー",
+  "sessionMenu.copyHint": "送信済みテキストと完了した回答のみ。画像や未確認の提案は含みません。",
+  "sessionMenu.you": "あなた",
+  "sessionMenu.copied": "コピーしました。",
+  "sessionMenu.copyFailed": "コピーできませんでした。メニューから再試行してください。",
+  "sessionMenu.copying": "コピー中…"
 }

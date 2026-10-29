@@ -581,5 +581,11 @@
   "sessionMenu.loadFailed": "暂时无法读取这段对话，请关闭后重试。",
   "sessionMenu.conflict": "对话已更新，请重新打开重命名，核对最新版本。",
   "sessionMenu.renameFailed": "重命名尚未确认，输入的标题已保留。",
-  "sessionMenu.saving": "正在保存…"
+  "sessionMenu.saving": "正在保存…",
+  "sessionMenu.copy": "复制对话",
+  "sessionMenu.copyHint": "仅复制已发送文字和完成的回复，不含图片和待确认内容。",
+  "sessionMenu.you": "你",
+  "sessionMenu.copied": "已复制。",
+  "sessionMenu.copyFailed": "复制失败，请打开菜单重试。",
+  "sessionMenu.copying": "正在复制…"
 }

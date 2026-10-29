@@ -2648,5 +2648,11 @@
   "sessionMenu.loadFailed": "Could not read this conversation. Close and try again.",
   "sessionMenu.conflict": "This conversation changed. Reopen Rename to review the latest version.",
   "sessionMenu.renameFailed": "Rename was not confirmed. Your title is kept here.",
-  "sessionMenu.saving": "Saving…"
+  "sessionMenu.saving": "Saving…",
+  "sessionMenu.copy": "Copy conversation",
+  "sessionMenu.copyHint": "Only sent text and completed replies; excludes images and pending decisions.",
+  "sessionMenu.you": "You",
+  "sessionMenu.copied": "Copied.",
+  "sessionMenu.copyFailed": "Could not copy. Open the menu and try again.",
+  "sessionMenu.copying": "Copying…"
 }

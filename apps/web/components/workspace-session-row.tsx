@@ -21,6 +21,7 @@ import { useT } from "./locale-provider";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import styles from "./workspace-shell.module.css";
 import { SessionRenameDialog, type SessionMenuTarget } from "./session-rename-dialog";
+import { SessionCopyAction } from "./session-copy-action";
 import { ListOrderActions, type OrderControl } from "./workspace-list-order";
 
 /**
@@ -160,6 +161,7 @@ export function SessionRowMenu({
           <span>{t(archived ? "sessionRow.restore" : "sessionRow.archive")}</span>
         </button>
         {organization.reorder ? <ListOrderActions control={organization.reorder} onMove={() => { setOpen(false); onOpenChange?.(false); }} /> : null}
+        {organization.session && <SessionCopyAction target={organization.session} />}
         <span className={styles.sessionRowMenuNote}>{t(organization.reorder ? "listOrder.sessionLocal" : "sessionRow.localOrganization")}</span>
       </PopoverContent>
       </Popover>
