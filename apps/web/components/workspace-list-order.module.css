@@ -7,6 +7,16 @@
 .handle:hover { background: var(--workspace-row-hover, var(--surface-muted)); color: var(--ink); }
 .handle:active { cursor: grabbing; }
 .handle:focus-visible { outline: 2px solid var(--focus, var(--ink)); outline-offset: -2px; }
+/* Preserve the target and tab order without painting management chrome at rest.
+   Only real hover pointers reveal on hover; touch uses the named Arrange mode. */
+.row[data-order-controls="quiet"] .handle { opacity: 0; pointer-events: none; }
+.row[data-order-controls="quiet"]:has(:focus-visible) .handle,
+.row[data-order-controls="quiet"][data-order-organizing="true"] .handle,
+.row[data-order-controls="quiet"][data-order-dragging="true"] .handle,
+.row[data-order-controls="quiet"] .handle[data-state="open"] { opacity: 1; pointer-events: auto; }
+@media (hover: hover) {
+  .row[data-order-controls="quiet"]:hover .handle { opacity: 1; pointer-events: auto; }
+}
 .notice { color: var(--muted-strong); font-size: var(--workspace-meta-size, 0.8125rem); line-height: 1.6; margin: 4px 8px; overflow-wrap: anywhere; }
 .menu[data-slot="popover-content"] { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; display: grid; gap: 2px; max-width: min(280px, calc(100vw - 24px)); padding: 6px; z-index: 65; }
 .menu button { align-items: center; background: transparent; border: 0; border-radius: 6px; color: var(--ink); cursor: pointer; display: flex; font: inherit; gap: 8px; min-height: 44px; padding: 8px 12px; text-align: start; }

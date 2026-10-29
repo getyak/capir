@@ -1967,20 +1967,16 @@
 .brandRow { min-height:36px; margin-bottom:12px; }
 .brand { font-size:var(--workspace-section-size,1.125rem); line-height:20px; gap:8px; padding:6px 8px; }
 .brandMark { height:20px; width:20px; }
-.brandActions .iconButton { height:36px; width:36px; }
+.brandActions .iconButton { height:44px; width:44px; }
 .railRow { align-items:center; display:flex; gap:2px; }
-.railPair { display:flex; flex:0 0 64px; min-width:0; align-items:center; }
-/* The inactive pair needs only its two symbols. Give the selected destination
-   the remaining reading space before truncating its name. */
-.railPair:has(.railControl[data-selected="true"]) { flex:1 1 0; }
-.railPair .railControl { flex:1 1 0; min-width:32px; overflow:hidden; }
-.railPair .railControl[data-selected="true"] { flex:0 0 calc(100% - 32px); gap:4px; }
-.railRow > button { flex:0 0 32px; }
+.railPair { display:flex; flex:1 1 auto; min-width:0; align-items:center; gap:2px; }
+.railPair .railControl { flex:1 0 auto; min-width:44px; overflow:hidden; }
 .railControl { align-items:center; background:transparent; border:0; border-radius:18px; color:var(--muted-strong); cursor:pointer; display:inline-flex; flex:0 0 36px; font:inherit; font-size:var(--workspace-meta-size,0.8125rem); gap:6px; height:36px; justify-content:center; padding:0; text-decoration:none; transition:background var(--workspace-transition-duration,180ms) var(--ease-out),color var(--workspace-transition-duration,180ms) var(--ease-out); }
 .railControl:hover { background:var(--hover); color:var(--ink); }
 .railControl[data-selected="true"] { background:var(--surface-selected); color:var(--ink); font-weight:500; }
-.railControlLabel { display:none; line-height:20px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
-.railControl[data-selected="true"] .railControlLabel { display:inline; }
+.railControlLabel { display:inline; line-height:20px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.railRow .railControl .navIcon { display:none; }
+.railRow .railControl { height:44px; border-radius:8px; }
 .railControl:focus-visible,.newConversation:focus-visible,.personChip:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .railCollapsed { display:none; }
 .sidebarScroll { margin-top:20px; }
@@ -2076,6 +2072,7 @@
   .railRow > button { display:none; }
   .railControl,.railControl[data-selected="true"] { border-radius:10px; flex-direction:column; font-size:var(--workspace-meta-size,0.8125rem); gap:2px; height:44px; min-width:44px; width:100%; }
   .railControl .railControlLabel { display:inline; }
+  .railRow .railControl .navIcon { display:block; }
   .mobileHeader .accountStrip :is(.connectPill,.footerEntryWrap) { display:none; }
   .mobileHeader .accountStrip > .accountMenu { flex:none; }
   .mobileHeader .accountTrigger { width:44px; }
@@ -2173,8 +2170,9 @@
   padding-right: 0;
   visibility: hidden;
 }
-.shell[data-sidebar-compact="true"] .railRow .railControl { flex: 1 1 0; min-width: 28px; }
-.shell[data-sidebar-compact="true"] .railRow .railControlLabel { display: none; }
+.shell[data-sidebar-compact="true"] .railRow { flex-direction:column; align-items:stretch; }
+.shell[data-sidebar-compact="true"] .railPair { flex:1 1 auto; }
+.shell[data-sidebar-compact="true"] .brand { gap:4px; padding-inline:4px; }
 :global(html[data-desktop-surface="settings"]) .sidebarResizeHandle,
 :global(html[data-desktop-surface="settings"]) .sidebarRestoreFallback,
 :global(html[data-desktop-surface="settings"]) .sidebarRestore,
@@ -2186,6 +2184,7 @@
   .sidebarRestore { display: none; }
   .sidebarResizeHandle { display: none; }
   .shell[data-sidebar-compact="true"] .railRow .railControlLabel { display: inline; }
+  .shell[data-sidebar-compact="true"] .railRow { flex-direction:row; }
 }
 
 @media (forced-colors: active) {

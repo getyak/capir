@@ -56,9 +56,19 @@ describe("workspace navigation accessibility and reachability", () => {
       "/workspace/people",
       "/workspace/meetings",
     ].map((href) => primary.indexOf(`href="${href}"`));
-    expect(primary).toContain('aria-label="搜索人物或对话"');
+    // Search remains directly available beside the brand, leaving this row
+    // for four stable, named destinations.
+    expect(primary).not.toContain('aria-label="搜索人物或对话"');
     expect(indices.every((index) => index > -1)).toBe(true);
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
+  });
+
+  it("renders a short text label for every expanded destination", () => {
+    const primary = render().match(/<nav\b[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
+    for (const label of ["今日", "对话", "人物", "时间"]) {
+      expect(primary).toContain(`>${label}</span>`);
+    }
+    expect(primary.match(/data-selected="true"/g)).toHaveLength(1);
   });
 
   it("keeps the compact dock to four destinations", () => {
