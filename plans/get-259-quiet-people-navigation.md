@@ -66,3 +66,6 @@ CI, local browser evidence and resident acceptance remain separate observations.
 - Canonical PR: https://github.com/getyak/capir/pull/479 (linked/read back in Linear).
 - Final release and cleanup receipts supplement this plan in the task's external
   delivery evidence after merge; they must not be inferred from the checkboxes.
+- Full Web CI exposed one remaining legacy assertion placing Search inside the
+  primary row (3,496 tests passed). It now checks that Search remains before the
+  row beside the brand, while the row preserves the four destination order.
