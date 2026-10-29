@@ -2,6 +2,7 @@ import { LocaleProvider } from "../locale-provider";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Window } from "happy-dom";
 import { SessionExecutionCard, SessionRunUpdate, SessionSendTime } from "./session-execution-card";
 
 describe("in-place execution card", () => {
@@ -95,7 +96,7 @@ describe("in-place execution card", () => {
       milestones: [{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-09-30T01:00:01.000Z" }],
       failureCode: null,
     }));
-    expect(html).toContain("正在处理");
+    expect(html).toContain('data-phase="running"');
     expect(html).toContain("capri");
     expect(html).toContain('role="status"');
     expect(html).toContain("正在阅读相关记录");
@@ -177,7 +178,7 @@ describe("milestone update and per-send time", () => {
   });
 });
 
-it("renders a whole forming Markdown draft only inside execution details", () => {
+it("keeps the whole unfinished Markdown reply readable before closed activity details", () => {
   const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
     phase: "running", stage: "answer", startedAt: "2026-10-01T01:00:00Z", milestones: [],
     draft: "```ts\nconst x = 1;\n```\n\n1. First\n2. Second\n\n| A | B |\n| --- | --- |\n| 1 | 2 |",
@@ -187,6 +188,35 @@ it("renders a whole forming Markdown draft only inside execution details", () =>
   expect(html).toContain("<ol");
   expect(html).toContain("<table");
   expect(html).not.toContain("data-run-update");
+  const root = new Window().document.createElement("div");
+  root.innerHTML = html;
+  const draft = root.querySelector('[aria-label="回复草稿，尚未完成"]');
+  expect(draft?.closest("details")).toBeNull();
+  expect(draft?.textContent).toContain("const x = 1;");
+  expect(root.querySelector("details")?.open).toBe(false);
+  expect(root.querySelector("details")?.textContent).not.toContain("const x = 1;");
+});
+
+it("shows the observed stage on the reading axis before any reply arrives", () => {
+  const root = new Window().document.createElement("div");
+  root.innerHTML = renderToStaticMarkup(<LocaleProvider locale="en"><SessionExecutionCard
+    phase="running" stage="contact_read" startedAt="2026-10-29T01:00:00Z"
+    milestones={[]} statusInHeader/></LocaleProvider>);
+  const progress = root.querySelector("[data-run-progress]");
+  expect(progress?.textContent).toContain("Reading the related records");
+  expect(progress?.closest("details")).toBeNull();
+  expect(root.querySelector("details")?.open).toBe(false);
+  expect(root.querySelector("details > summary")?.textContent).toBe("Activity details");
+});
+
+it("never presents a retained draft as a new live reply after terminal state", () => {
+  for (const phase of ["completed", "failed", "interrupted", "waiting-review", "review-unknown"] as const) {
+    const root = new Window().document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(<SessionExecutionCard phase={phase} stage="answer"
+      startedAt="2026-10-29T01:00:00Z" endedAt="2026-10-29T01:00:03Z"
+      milestones={[]} draft="Uncommitted preview"/>);
+    expect(root.querySelector("[data-run-progress]")).toBeNull();
+  }
 });
 
 it("keeps waiting, stopping and terminal outcomes distinct from active processing", () => {

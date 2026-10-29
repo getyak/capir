@@ -7,3 +7,6 @@
 .diagnostics > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .diagnostics code { font: inherit; overflow-wrap: anywhere; }
 @media (forced-colors: active) { .completed > summary { color: CanvasText; } .diagnostics > summary:focus-visible { outline-color: Highlight; } }
+.progress { min-width: 0; }
+.stage { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; min-height: 44px; color: var(--muted-strong, var(--ink)); font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; }
+.draftLabel { margin: 0 0 8px; color: var(--muted); font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }
