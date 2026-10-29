@@ -73,6 +73,17 @@ export function SessionExecutionCard({
   const elapsedMs = conversationElapsedMs({ startedAt, nowMs, endedAt });
   const stageLabel = conversationStageLabel(stage, locale);
   return (
+    <>
+    {live ? <div className={executionStyles.progress} data-run-progress>
+      {draft?.trim() ? <section aria-label={t("回复草稿，尚未完成")}>
+        <p className={executionStyles.draftLabel}>{t("回复草稿，尚未完成")}</p>
+        <ConversationResponse>{draft}</ConversationResponse>
+        {phase === "running" ? <span className={styles.cursor} aria-hidden="true"/> : null}
+      </section> : <p className={executionStyles.stage} role={statusInHeader ? undefined : "status"}>
+        {!statusInHeader ? <span className={styles.workingName}>{siteConfig.name}</span> : null}
+        <ProcessingLabel animated={phase === "running"}>{phase === "running" ? stageLabel ?? conversationExecutionPhaseLabel(phase, locale) : conversationExecutionPhaseLabel(phase, locale)}</ProcessingLabel>
+      </p>}
+    </div> : null}
     <details className={`${styles.execution} ${phase === "completed" ? executionStyles.completed : ""}`} data-phase={phase} data-run-stage={stage ?? undefined} data-live={live ? "true" : undefined} open={defaultOpen} onKeyDown={event => {
       if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
       // An older inspected record can remain open after a new run takes over.
@@ -82,8 +93,7 @@ export function SessionExecutionCard({
       event.currentTarget.querySelector("summary")?.focus({ preventScroll: true });
     }}>
       <summary className={styles.executionSummary} title={live ? stageLabel ?? undefined : undefined}>
-        {live && !statusInHeader ? <span className={styles.workingName}>{siteConfig.name}</span> : null}
-        {phase === "completed" || (live && statusInHeader) ? <span>{t("conversation.task.record")}</span> : <span className={styles.executionState} role={live ? "status" : undefined}><ProcessingLabel animated={phase === "running" && live}>{phase === "running" && live ? t("正在处理") : conversationExecutionPhaseLabel(phase, locale)}</ProcessingLabel></span>}
+        {phase === "completed" || live ? <span>{t("conversation.task.record")}</span> : <span className={styles.executionState}>{conversationExecutionPhaseLabel(phase, locale)}</span>}
       </summary>
       <div className={styles.executionDetail}>
         <p className={styles.executionElapsed} data-elapsed-ms={elapsedMs}>{t(phase === "queued" ? "已等待" : timingBasis === "receipt" ? "记录跨度" : "用时")} {conversationElapsedLabel(elapsedMs, locale)}</p>
@@ -104,7 +114,7 @@ export function SessionExecutionCard({
             ))}
           </ol>
         ) : null}
-        {draft && <div className={styles.executionDraft} aria-label={t("回复草稿，尚未完成")}><ConversationResponse>{draft}</ConversationResponse></div>}
+        {!live && draft && <div className={styles.executionDraft} aria-label={t("回复草稿，尚未完成")}><ConversationResponse>{draft}</ConversationResponse></div>}
         <p className={styles.executionTimes}>
           {t(timingBasis === "receipt" ? "消息接收" : "开始")} {clock(startedAt, locale) || t("未记录")}
           {endedAt ? ` · ${t(timingBasis === "receipt" ? "结果记录" : "结束")} ${clock(endedAt, locale) || t("未记录")}` : live ? ` · ${t("仍在进行")}` : ""}
@@ -124,6 +134,7 @@ export function SessionExecutionCard({
         {children}
       </div>
     </details>
+    </>
   );
 }
 

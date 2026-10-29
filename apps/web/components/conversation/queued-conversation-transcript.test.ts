@@ -160,7 +160,7 @@ it("composes the transcript: send time, user objective, observed status, executi
   expect(text.match(/\d+月\d+日 \d{2}:\d{2}/gu)?.length).toBe(2);
   // User objective and the trailing bubble carry the message content.
   expect(text).toContain("帮我整理林晓和周予的合作进展。");
-  // Processing is observed status; genuine preview stays in execution details.
+  // Processing is observed status; genuine preview stays readable in the thread.
   expect(document.querySelectorAll("[data-run-update]")).toHaveLength(0);
   const transcript = document.querySelector('[role="region"][aria-label="对话记录"]');
   expect(transcript).not.toBeNull();
@@ -169,6 +169,7 @@ it("composes the transcript: send time, user objective, observed status, executi
   expect(document.querySelector('header [data-session-task-capsule] [role="status"]')?.textContent).toBe("正在查找相关人物");
   expect(text).not.toContain("收到，我先理清这件事。");
   expect(document.querySelector('[aria-label="回复草稿，尚未完成"]')?.textContent).toContain("我先核对两人的沟通记录。");
+  expect(document.querySelector('[aria-label="回复草稿，尚未完成"]')?.closest("details")).toBeNull();
   // The in-place execution record reports observed state and elapsed time.
   const phases = [...transcript!.querySelectorAll("details[data-phase]")].map((node) => node.getAttribute("data-phase"));
   expect(phases).toContain("running");
