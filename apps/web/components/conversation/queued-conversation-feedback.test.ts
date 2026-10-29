@@ -261,7 +261,7 @@ it("keeps the queued supplement state and its existing queue controls", async ()
   expect(document.body.textContent).toContain("已排队，等待处理");
   expect(document.body.textContent).toContain("可控补充的下一条");
   expect(document.querySelectorAll("[data-user-message]")).toHaveLength(2);
-  const queue = document.querySelector("[aria-label='可控补充']");
+  const queue = document.querySelector("[aria-label='待处理消息']");
   expect(queue).not.toBeNull();
   expect(queue?.closest('[role="region"]')).not.toBeNull();
   expect(queue?.textContent).not.toContain("可控补充的下一条");

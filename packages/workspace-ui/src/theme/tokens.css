@@ -8,13 +8,13 @@
 
 :where(.ts-workspace-theme, .ts-workspace-surface) {
   --ts-accent: #bc3827;
-  --ts-chrome-muted: #6a675f;
-  --ts-chrome-surface: #f4f3ef;
-  --ts-content-surface: #fcfbf7;
-  --ts-divider: #e2e0d8;
+  --ts-chrome-muted: #676761;
+  --ts-chrome-surface: #f7f7f5;
+  --ts-content-surface: #fcfcfb;
+  --ts-divider: #e7e7e2;
   --ts-ink: #171715;
   --ts-panel-surface: #ffffff;
-  --ts-selected-surface: #e8e6df;
+  --ts-selected-surface: #ecece8;
   --ts-sidebar-width: 236px;
   --ts-rail-width: 56px;
   --ts-radius-control: 8px;

@@ -188,7 +188,7 @@ it("offers prioritize as an explicit control on a waiting supplement and posts t
   });
   await flush();
 
-  const queue = document.querySelector("[aria-label='可控补充']");
+  const queue = document.querySelector("[aria-label='待处理消息']");
   expect(queue).not.toBeNull();
   expect(queue?.closest('[role="region"]')).not.toBeNull();
   expect(queue?.textContent).not.toContain("可控补充的下一条");
