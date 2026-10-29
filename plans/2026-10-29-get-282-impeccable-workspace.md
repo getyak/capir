@@ -104,15 +104,31 @@ Native screenshots/AX observations are retained in this chat. Private credential
 browser state, logs, the isolated app and reproducible builds stay in the registered
 temporary artifact `/private/tmp/ai-test-GET-282.oBNxTi` and must not be committed.
 
-Test run `f70b2513-5ca5-40ed-8304-5b61a7278119`, request
-`08bde9ec-9b5a-454e-b5c2-cb9de653251e`; reuse, then stop and verify cleanup.
+Initial test run `f70b2513-5ca5-40ed-8304-5b61a7278119`, request
+`08bde9ec-9b5a-454e-b5c2-cb9de653251e`, was stopped: both stop and status
+read back `deleted` with `cleanup_error=null`. Its invalidated credential and
+browser-state files were removed; formal evidence and source were preserved.
 Initial Chromium absence, incomplete TLS downloads, missing package builds and
 a missing build-time AUTH_SECRET were diagnosed and recovered. The abandoned
 tail-origin-to-dev browser proxy is harness evidence, not an acceptance pass.
 Unadmitted empty drafts already produce expected detail 404 probes; report this
 separately from runtime errors.
 
-Independent review, responsive/theme browser checks, latest-head CI, canonical
-PR/merge, clean resident activation and live acceptance, test cleanup and Linear
-readback remain open. An intentional turn interruption ended an earlier reviewer
-before a result was delivered; a fresh independent review is running.
+Independent review of the business change and installation entry returned no
+confirmed P0/P1/P2. Imported reference Markdown subsequently received only
+whitespace normalization and a documentation-link correction; docs checks pass.
+Browser reload initially read the draft before hydration settled; a later
+readback found the full staged draft and an enabled editor. The resumed harness
+must wait for the actual ready state before judging recovery.
+
+The controller authorized continuation on 2026-10-29 under the same generation
+and workspace. Current remote `8d4816f` (including the already merged GET-275 and
+GET-262 changes) was merged without conflicts. Recheck the integrated revision;
+prior evidence does not certify untested new code. GET-262 is still completing
+acceptance on the resident `8d4816f` Web release: verify its ownership and cleanup
+before activation. Keep test data, ports and browser contexts separate.
+
+Responsive/theme/keyboard browser checks, latest-head CI, canonical PR/merge,
+clean resident activation and live acceptance, the new test run's cleanup and
+Linear readback remain open. UI acceptance does not require paid generation;
+the separately recorded Hao HTTP 402 must not be retried or bypassed here.
