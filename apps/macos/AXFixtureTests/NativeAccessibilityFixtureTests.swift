@@ -106,16 +106,18 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
     func testCapturePreviewCropAndMaskSurviveActualWindowResizeUntilExplicitSend() throws {
         let app = try launch(capture: true)
         let preview = try openSyntheticPreview(app)
+        let caption = "待发送截图；选择裁剪或遮挡后拖动来修改"
         let canvas = preview.descendants(matching: .any).matching(
-            NSPredicate(format: "label == %@", "待发送截图；选择裁剪或遮挡后拖动来修改")).firstMatch
+            NSPredicate(format: "label == %@ OR value == %@", caption, caption)).firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(canvas.frame.width, 100)
-        XCTAssertGreaterThan(canvas.frame.height, 100)
+        // macOS exposes the canvas as StaticText.value and its AX frame also
+        // unions the bottom-trailing hint. Locate the actual bitmap in the PNG.
+        let imageRect = try renderedImageRect(in: preview)
 
         try selectTool("裁剪", in: preview)
-        drag(in: canvas, from: 0.25, to: 0.75)
+        drag(in: preview, imageRect: imageRect, from: 0.25, to: 0.75)
         try selectTool("遮挡", in: preview)
-        drag(in: canvas, from: 0.375, to: 0.625)
+        drag(in: preview, imageRect: imageRect, from: 0.375, to: 0.625)
         XCTAssertEqual(text(app.staticTexts["fixture.capture.submissions"]), "0")
         retainWindow(preview, name: "synthetic-capture-crop-mask-before-resize")
 
@@ -167,6 +169,9 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
         let preview = app.windows["capri · 截图预览"]
         XCTAssertTrue(preview.waitForExistence(timeout: 5))
         waitForText(app.staticTexts["fixture.capture.stage"], "preview-ready")
+        let cancel = preview.buttons["取消"]
+        let reachable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: cancel)
+        XCTAssertEqual(XCTWaiter.wait(for: [reachable], timeout: 5), .completed)
         XCTAssertEqual(text(app.staticTexts["fixture.capture.submissions"]), "0")
         return preview
     }
@@ -181,15 +186,46 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
         control.click()
     }
 
-    private func drag(in canvas: XCUIElement, from start: CGFloat, to end: CGFloat) {
-        // The labelled element is the viewport. Match the real aspect-fitted
-        // 800×400 image inside it, including any centred letterbox margins.
-        let scale = min(canvas.frame.width / 800, canvas.frame.height / 400)
-        let size = CGSize(width: 800 * scale, height: 400 * scale)
-        let center = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        let first = center.withOffset(CGVector(dx: (start - 0.5) * size.width, dy: (start - 0.5) * size.height))
-        let last = center.withOffset(CGVector(dx: (end - 0.5) * size.width, dy: (end - 0.5) * size.height))
+    private func drag(in window: XCUIElement, imageRect: CGRect, from start: CGFloat, to end: CGFloat) {
+        let origin = window.coordinate(withNormalizedOffset: .zero)
+        let first = origin.withOffset(CGVector(dx: imageRect.minX + start * imageRect.width,
+                                               dy: imageRect.minY + start * imageRect.height))
+        let last = origin.withOffset(CGVector(dx: imageRect.minX + end * imageRect.width,
+                                              dy: imageRect.minY + end * imageRect.height))
         first.click(forDuration: 0.2, thenDragTo: last)
+    }
+
+    private func renderedImageRect(in window: XCUIElement) throws -> CGRect {
+        let screenshot = window.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = "synthetic-capture-rendered-image-location"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: screenshot.pngRepresentation))
+        let scaleX = CGFloat(bitmap.pixelsWide) / window.frame.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / window.frame.height
+        XCTAssertEqual(scaleX, scaleY, accuracy: 0.01, "The fixture window PNG must not be clipped.")
+        var left = bitmap.pixelsWide, top = bitmap.pixelsHigh, right = -1, bottom = -1
+        for y in 0..<bitmap.pixelsHigh {
+            autoreleasepool {
+                for x in 0..<bitmap.pixelsWide {
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                          color.redComponent > 0.85, color.greenComponent < 0.15, color.blueComponent > 0.85 else { continue }
+                    left = min(left, x); top = min(top, y)
+                    right = max(right, x); bottom = max(bottom, y)
+                }
+            }
+        }
+        XCTAssertGreaterThan(right - left, 100, "The synthetic source border must be painted.")
+        XCTAssertGreaterThan(bottom - top, 100)
+        let rect = CGRect(x: CGFloat(left) / scaleX, y: CGFloat(top) / scaleY,
+                          width: CGFloat(right - left + 1) / scaleX, height: CGFloat(bottom - top + 1) / scaleY)
+        XCTAssertEqual(rect.width / rect.height, 2, accuracy: 0.03, "The complete 800×400 source must be visible.")
+        let report = XCTAttachment(string: "Fixture window: \(window.frame); PNG pixels: \(bitmap.pixelsWide)×\(bitmap.pixelsHigh); rendered synthetic image in window points: \(rect)")
+        report.name = "synthetic-capture-rendered-image-geometry"
+        report.lifetime = .keepAlways
+        add(report)
+        return rect
     }
 
     private func waitForText(_ node: XCUIElement, _ expected: String) {

@@ -280,8 +280,25 @@ private final class NativeCaptureFixtureModel: ObservableObject {
         Task {
             await coordinator.startCapture()
             guard coordinator.presentation == .previewReady else { stage = "no-preview"; return }
-            stage = "preview-ready"
+            stage = "positioning-preview"
             preview.show(coordinator: coordinator)
+            // Resolve initial fitting before arranging only this fixture's
+            // window. The failed 1024-point CI capture placed its right-hand
+            // controls outside the display; keep space for the later drag.
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      let window = NSApp.windows.first(where: { $0.title == "capri · 截图预览" }),
+                      let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame else { return }
+                window.contentView?.layoutSubtreeIfNeeded()
+                let desired = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 760, height: 560)).size
+                let size = NSSize(width: min(desired.width, visible.width - 128),
+                                  height: min(desired.height, visible.height - 96))
+                window.setFrame(NSRect(x: visible.minX + 24, y: visible.maxY - size.height - 24,
+                                       width: size.width, height: size.height), display: true)
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.makeKeyAndOrderFront(nil)
+                self.stage = visible.contains(window.frame) ? "preview-ready" : "preview-offscreen"
+            }
         }
     }
 
@@ -360,6 +377,13 @@ private final class NativeCaptureSelector: CaptureSelecting {
         ("SYNTHETIC CAPTURE FIXTURE" as NSString).draw(at: CGPoint(x: 20, y: 365),
             withAttributes: [.font: NSFont.systemFont(ofSize: 18), .foregroundColor: NSColor.white])
         NSGraphicsContext.restoreGraphicsState()
+        // A unique, synthetic-only bitmap border lets XCTest locate the actual
+        // rendered image in its own window PNG, independent of AX union frames.
+        canvas.setFillColor(CGColor(red: 1, green: 0, blue: 1, alpha: 1))
+        for edge in [CGRect(x: 0, y: 0, width: 800, height: 8), CGRect(x: 0, y: 392, width: 800, height: 8),
+                     CGRect(x: 0, y: 0, width: 8, height: 400), CGRect(x: 792, y: 0, width: 8, height: 400)] {
+            canvas.fill(edge)
+        }
         image = canvas.makeImage()!
     }
 
