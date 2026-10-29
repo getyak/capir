@@ -37,6 +37,8 @@ it.each(["MODEL_RUN_TOKEN_BUDGET_EXHAUSTED", "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUS
     expect(mount.textContent).not.toContain("超时");
     expect(mount.querySelector('img[alt="保留的图片"]')).not.toBeNull();
     expect([...mount.querySelectorAll("button")].some(button => button.textContent === "重试")).toBe(true);
+    expect(mount.querySelector('[data-queued-message="message"]')?.textContent).toContain("未能完成");
+    expect([...mount.querySelectorAll("button")].some(button => button.textContent?.includes("继续"))).toBe(false);
     expect(mount.querySelector('[aria-label="移除第 1 条待处理消息"]')).not.toBeNull();
     expect(mount.textContent).toContain("移除任务消息时，也会移除仍待处理的补充。");
   } finally {
@@ -47,6 +49,8 @@ it.each(["MODEL_RUN_TOKEN_BUDGET_EXHAUSTED", "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUS
 });
 
 it("keeps timeout, text-only exhaustion and unknown failures distinct", () => {
+  expect(queueFailureText("MODEL_PROVIDER_BILLING_REQUIRED", false)).toContain("计费或额度限制");
+  expect(queueFailureText("MODEL_PROVIDER_BILLING_REQUIRED", true)).toContain("消息已保留");
   expect(queueFailureText("MODEL_RUN_TIMEOUT", true)).toContain("图片分析超时");
   expect(queueFailureText("MODEL_RUN_TOKEN_BUDGET_EXHAUSTED", false)).toContain("消息已保留");
   expect(queueFailureText("arbitrary-provider-prose", true)).toBe("上次未完成，请重试或移除");

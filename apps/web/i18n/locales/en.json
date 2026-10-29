@@ -2637,5 +2637,6 @@
   "对话不可用": "Conversation unavailable",
   "无法读取这段对话。": "This conversation could not be loaded.",
   "登录已过期，请重新登录后查看这段对话。": "Your session expired. Sign in again to view this conversation.",
-  "返回对话列表": "Back to conversations"
+  "返回对话列表": "Back to conversations",
+  "模型服务的计费或额度限制阻止了本次处理，消息已保留。处理额度问题后可重试。": "The model service blocked this request because of a billing or quota limit. Your message is kept. Resolve the limit, then retry."
 }

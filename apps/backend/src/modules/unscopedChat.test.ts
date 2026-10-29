@@ -1,4 +1,5 @@
 import type { UnscopedChatTaskRequest } from "@talent-signal/contracts";
+import { ClaudeHarnessFailure } from "@talent-signal/agent";
 import { describe, expect, it, vi } from "vitest";
 
 import { createEnvironmentChatAnswerProvider, type RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
@@ -15,6 +16,20 @@ const request: UnscopedChatTaskRequest = {
 };
 
 describe("unscoped Agent conversation", () => {
+  it.each([402, 400])("retains the billing refusal only for a typed provider HTTP 402 (status=%s)", async providerStatus => {
+    const answer = vi.fn(async () => { throw new ClaudeHarnessFailure({
+      sessionID:"11111111-1111-4111-8111-111111111111", inputTokens:0, outputTokens:0,
+      estimatedUsd:0, turns:1, toolCalls:0, toolCompletions:[], reportedModels:[],
+      terminalReason:"PRIVATE_PROVIDER_PROSE", permissionDenials:[], providerStatus,
+    }, "CLAUDE_HARNESS_PROVIDER_ERROR"); });
+    const execution = await executeUnscopedChatTask({ request,
+      provider:{ providerId:"claude-agent-sdk", model:"synthetic", supportsImageInput:false, answer } });
+    expect(answer).toHaveBeenCalledOnce();
+    expect(execution.remoteStatus).toBe("fallback");
+    expect(execution.remoteFailureCode).toBe(providerStatus === 402 ? "MODEL_PROVIDER_BILLING_REQUIRED" : undefined);
+    expect(execution.body.external_effects).toEqual([]);
+    expect(JSON.stringify(execution.body)).not.toContain("PRIVATE_PROVIDER_PROSE");
+  });
   const auth = { accountId: "account", userId: "user" } as AuthContext;
 
   it("defaults a clear image-only chat to an immediate editable review without a permission round", () => {

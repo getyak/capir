@@ -61,7 +61,9 @@ export function displayText(objective: string, images: readonly ConversationImag
  * boundary; raw provider or backend errors never reach this text.
  */
 export function queueFailureText(code: string | null, hasImages: boolean, t?: TFunction): string {
-  const key = memoryDraftFailureKey(code) ?? (code === "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED" || code === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED"
+  const key = memoryDraftFailureKey(code) ?? (code === "MODEL_PROVIDER_BILLING_REQUIRED"
+    ? "模型服务的计费或额度限制阻止了本次处理，消息已保留。处理额度问题后可重试。"
+    : code === "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED" || code === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED"
     ? hasImages
       ? "图片分析已达到本次处理的 token 预算，原图已保留。可重试或移除。"
       : "本次处理已达到 token 预算，消息已保留。可重试或移除。"
@@ -523,8 +525,8 @@ export function QueuedConversation(props: Props) {
         focused.focusOwned = false;
       }}>
       {showOrder && <div className={styles.queueHeading}>
-        <span>{paused ? t("conversation.queue.paused") : supplement ? t("conversation.queue.thisSupplement") : t("conversation.queue.upNext")}<small>{index + 1}</small></span>
-        {paused && index === 0 && <button disabled={chat.mutating || Boolean(active) || queued.some(item => item.status !== "queued")} onClick={() => owned(() => { void chat.mutate({ kind: "continue" }); })}>{t("conversation.queue.continue")}<ArrowUp size={13}/></button>}
+        <span>{["failed", "interrupted"].includes(entry.status) ? t("未能完成") : paused ? t("conversation.queue.paused") : supplement ? t("conversation.queue.thisSupplement") : t("conversation.queue.upNext")}<small>{index + 1}</small></span>
+        {paused && index === 0 && queued.every(item => item.status === "queued") && <button disabled={chat.mutating || Boolean(active)} onClick={() => owned(() => { void chat.mutate({ kind: "continue" }); })}>{t("conversation.queue.continue")}<ArrowUp size={13}/></button>}
       </div>}
       {editingEntry ? <form className={styles.edit} ref={editForm}
         onFocusCapture={() => { const operation = editOwner.current; if (operation?.token === editing.token) operation.focusOwned = true; }}
