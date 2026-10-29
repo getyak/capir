@@ -2660,5 +2660,6 @@
   "sessionMenu.copyLink": "リンクをコピー",
   "sessionMenu.linkCopied": "リンクをコピーしました。",
   "sessionMenu.shared": "システムの共有に渡しました。",
-  "sessionMenu.shareFailed": "共有できませんでした。リンクをコピーできます。"
+  "sessionMenu.shareFailed": "共有できませんでした。リンクをコピーできます。",
+  "sessionMenu.arrange": "順序を調整"
 }

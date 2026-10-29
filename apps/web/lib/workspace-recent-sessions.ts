@@ -8,6 +8,7 @@ export type RecentSession = {
   /** Real person identity behind the row, when the Session has one. */
   personId: string | null;
   personLabel: string;
+  updatedAt?: number;
 };
 
 /** Reject unbound responses and exclude unavailable records before rendering titles. */
@@ -24,6 +25,7 @@ export function recentSessionRows(payload: unknown, binding: string, now = Date.
       expiresAt: Date.parse(row.expires_at),
       personId: typeof row.person_id === "string" && row.person_id ? row.person_id : null,
       personLabel: typeof row.person_label === "string" ? row.person_label : "",
+      ...(typeof row.updated_at === "string" ? { updatedAt: Date.parse(row.updated_at) || 0 } : {}),
     });
     // Local organization may read a wider window so pinned rows survive the
     // eight-row presentation cap; ordinary callers keep the eight-row default.

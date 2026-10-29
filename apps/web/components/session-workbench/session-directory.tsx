@@ -80,12 +80,19 @@ export function SessionDirectory({
     return () => window.clearInterval(timer);
   }, []);
   const [sessions, setSessions] = useState(initialSessions);
+  const [serverSessions, setServerSessions] = useState(initialSessions);
   const [complete, setComplete] = useState(initialComplete);
   const [cursor, setCursor] = useState(initialNextCursor);
   const [binding, setBinding] = useState(sessionVersion);
   const [error, setError] = useState(initialError);
   const [busy, setBusy] = useState<"create" | "more" | null>(null);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
+  // Next may retain this client component through a fresh server navigation.
+  // Accept its new authoritative page instead of keeping the first mount forever.
+  if (serverSessions !== initialSessions) {
+    setServerSessions(initialSessions); setSessions(initialSessions);
+    setComplete(initialComplete); setCursor(initialNextCursor); setBinding(sessionVersion);
+  }
   const archiveId = useId();
   const { snapshot, setFlag } = useSessionOrganization(storageScope);
   const arrival = useArrivalRegistry(sessions.map((session) => session.session_id));
@@ -186,7 +193,7 @@ export function SessionDirectory({
   );
 
   const order = useWorkspaceListReorder(organized.visible, "sessions", {
-    scope: storageScope, group: row => snapshot.entries[row.id]?.pinned ? "pinned" : "regular",
+    scope: storageScope, group: row => snapshot.entries[row.id]?.pinned ? "pinned" : "regular", activity: row => Date.parse(row.session.updated_at),
   });
 
   function organizationFor(session: SessionSummary): SessionRowOrganization {
@@ -198,7 +205,7 @@ export function SessionDirectory({
       rowLabel: sessionDisplayTitle(session.title),
       reorder: order.control(session.session_id),
       session: binding ? { id: session.session_id, binding, scope: storageScope,
-        onRenamed: detail => setSessions(current => current.map(row => row.session_id === detail.session_id ? { ...row, title: detail.title, revision: detail.revision } : row)),
+        onRenamed: detail => setSessions(current => current.map(row => row.session_id === detail.session_id ? { ...row, title: detail.title, revision: detail.revision, updated_at: detail.updated_at } : row)),
       } : undefined,
     };
   }

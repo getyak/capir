@@ -593,5 +593,6 @@
   "sessionMenu.copyLink": "复制链接",
   "sessionMenu.linkCopied": "链接已复制。",
   "sessionMenu.shared": "已交给系统分享。",
-  "sessionMenu.shareFailed": "分享未完成，可以改为复制链接。"
+  "sessionMenu.shareFailed": "分享未完成，可以改为复制链接。",
+  "sessionMenu.arrange": "调整顺序"
 }

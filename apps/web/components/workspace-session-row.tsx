@@ -161,7 +161,10 @@ export function SessionRowMenu({
           )}
           <span>{t(archived ? "sessionRow.restore" : "sessionRow.archive")}</span>
         </button>
-        {organization.reorder ? <ListOrderActions control={organization.reorder} onMove={() => { setOpen(false); onOpenChange?.(false); }} /> : null}
+        {organization.reorder ? <details className={styles.sessionRowArrange}>
+          <summary>{t("sessionMenu.arrange")}</summary>
+          <ListOrderActions control={organization.reorder} onMove={() => { setOpen(false); onOpenChange?.(false); }} />
+        </details> : null}
         {organization.session && <SessionCopyAction target={organization.session} />}
         {organization.session && <SessionShareAction id={organization.session.id} />}
         <span className={styles.sessionRowMenuNote}>{t(organization.reorder ? "listOrder.sessionLocal" : "sessionRow.localOrganization")}</span>

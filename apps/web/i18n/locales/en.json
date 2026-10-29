@@ -2660,5 +2660,6 @@
   "sessionMenu.copyLink": "Copy link",
   "sessionMenu.linkCopied": "Link copied.",
   "sessionMenu.shared": "Handed to system sharing.",
-  "sessionMenu.shareFailed": "Could not share. You can copy the link instead."
+  "sessionMenu.shareFailed": "Could not share. You can copy the link instead.",
+  "sessionMenu.arrange": "Arrange order"
 }

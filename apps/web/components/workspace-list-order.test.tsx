@@ -177,3 +177,17 @@ it("hydrates the real People list without replacing links when local controls ap
   expect(host.querySelector('a[href*="/workspace/people/' + A + '"]')).toBe(anchor);
   expect(handle(A)).not.toBeNull();
 });
+
+
+it("brings newly active Sessions ahead of saved positions without changing People order", async () => {
+  const stamp = new Date(Date.now() - 60_000).toISOString();
+  const payload = data.payload as { sessions: { sessions: Array<Record<string, unknown>> } };
+  payload.sessions.sessions.forEach(row => row.updated_at = stamp);
+  await render();
+  await menuMove(C, "上移");
+  expect(ids()).toEqual([A, C, B]);
+  const latest = new Date(Date.now() + 1000).toISOString();
+  payload.sessions.sessions.find(row => row.session_id === B)!.updated_at = latest;
+  await render();
+  expect(ids()).toEqual([B, A, C]);
+});

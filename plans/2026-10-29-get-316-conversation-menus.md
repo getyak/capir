@@ -38,16 +38,16 @@ by AGENTS.md for this multi-path change. Keep repository plans here per PLANS.md
 
 - [x] Quiet hover/focus three-dot menu: preserve vertical drag, optional swipe,
   keyboard pin/archive/reorder and a coarse-pointer target; browser geometry.
-- [ ] Canonical rename: bounded nonempty title, revision conflict, unavailable
+- [x] Canonical rename: bounded nonempty title, revision conflict, unavailable
   Session, cancellation, failure and readback; row/directory/open-header sync.
-- [ ] Copy conversation: authenticated fresh read, only eligible completed prose,
+- [x] Copy conversation: authenticated fresh read, only eligible completed prose,
   clipboard success/failure, cancellation on scope/unmount changes.
-- [ ] Share conversation: clean same-origin authenticated URL, native share when
+- [x] Share conversation: clean same-origin authenticated URL, native share when
   supported, copy-link fallback, cancellation/failure feedback; no private query.
-- [ ] Recent ordering/continuity: new conversations precede saved old ordering,
+- [x] Recent ordering/continuity: new conversations precede saved old ordering,
   explicit reset to newest activity; paginated directory dedupe and refresh;
   preserve pinned groups and unrelated local preferences.
-- [ ] Investigate recent message handoff with isolated synthetic content; fix
+- [x] Investigate recent message handoff with isolated synthetic content; fix
   only a reproduced cause in a separate commit, otherwise retain uncertainty.
 
 For each meaningful behavior: focused regression first, implement, run the
@@ -64,6 +64,23 @@ the requested surface evidence and any final merge decision are resolved.
 
 ## Progress
 
-Intake and source comparison complete. Implementation active. Resource audit:
+Implementation and independent review fixes are complete. The review found no
+P0/P1; fixes cover real initial-title producers and all first-reply writers,
+presentation-aware ordering across groups, revision-fenced local saves, rename
+readback time, retained row identity and modal focus restoration. The original
+recorded image Session currently shows its image and an Added receipt on the
+installed macOS surface at the baseline Web revision; this does not establish
+its state or failure cause during recording. No image-loss fix is claimed.
+
+The baseline whole Web suite passed 384 files / 3514 tests; focused checks cover
+subsequent review changes. A disposable PostgreSQL suite additionally checks
+canonical first-reply readback and image/recovery paths. An attempted concurrent
+rename test encountered the existing run/write lock; no passing claim is made
+for that concurrency sample. Rename requests have bounded waiting and keep
+unconfirmed input. Final source checks, build, browser/native acceptance, service
+revision readback, test cleanup, PR and CI are recorded in the task-owned receipt:
+`/Users/cubxxw/.codex/visualizations/2026/10/29/01a18690-c5e8-7f63-80cb-9a41c978d796/get-316/acceptance.json`.
+
+Resource audit: Resource audit:
 59 GiB host free, high swap and many shared Node/MCP processes; run heavy checks
 serially and preserve shared services. No pause marker was present.

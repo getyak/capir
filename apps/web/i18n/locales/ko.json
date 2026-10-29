@@ -2660,5 +2660,6 @@
   "sessionMenu.copyLink": "링크 복사",
   "sessionMenu.linkCopied": "링크를 복사했습니다.",
   "sessionMenu.shared": "시스템 공유로 전달했습니다.",
-  "sessionMenu.shareFailed": "공유하지 못했습니다. 링크를 복사할 수 있습니다."
+  "sessionMenu.shareFailed": "공유하지 못했습니다. 링크를 복사할 수 있습니다.",
+  "sessionMenu.arrange": "순서 정리"
 }

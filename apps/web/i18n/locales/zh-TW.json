@@ -2660,5 +2660,6 @@
   "sessionMenu.copyLink": "複製連結",
   "sessionMenu.linkCopied": "連結已複製。",
   "sessionMenu.shared": "已交給系統分享。",
-  "sessionMenu.shareFailed": "分享未完成，可以改為複製連結。"
+  "sessionMenu.shareFailed": "分享未完成，可以改為複製連結。",
+  "sessionMenu.arrange": "調整順序"
 }
