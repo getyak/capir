@@ -12,6 +12,8 @@ overrides:
   # https://github.com/advisories/GHSA-46jr-4wx8-v453
   # https://github.com/advisories/GHSA-rvq5-wwqv-78pq
   "@modelcontextprotocol/sdk@^1.29.0": "1.32.0"
+  # https://github.com/advisories/GHSA-rmxm-3fg6-px4f
+  "@modelcontextprotocol/sdk@1.32.0>@hono/node-server": "2.1.3"
   # https://github.com/honojs/hono/security/advisories/GHSA-hxh3-vqpv-xpqv
   # https://github.com/advisories/GHSA-5r4p-p66f-jhc7
   "hono@^4": "4.13.11"
