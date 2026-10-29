@@ -1,5 +1,6 @@
 import { measureLabServerStage, measureLabServerStageSync } from "../lib/labDiagnostics.js";
 import { workspaceConversationTimeoutMs } from "./workspaceConversationBudget.js";
+import { authoredProposalText as authoredNote, proposalDeclines } from "./workspaceProposalDeclines.js";
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalizeSessionTitle } from "./sessionTitles.js";
 import { authorizeMemoryDraftTarget, memoryDraftProposalViolation, type MemoryDraftTargetAdmission } from "./memoryDraftTarget.js";
@@ -235,28 +236,10 @@ function isGroundedExcerpt(excerpt: string, objective: string): boolean {
   return excerpt.trim().length > 0 && objective.includes(excerpt.trim());
 }
 
-function authoredNote(objective: string): string {
-  return objective
-    .replace(/```[\s\S]*?```/gu, " ")
-    .replace(/^\s*>.*$/gmu, " ")
-    .replace(/[“「『][\s\S]*?[”」』]/gu, " ")
-    .replace(/"[^"\n]*"/gu, " ");
-}
-
 /** A lookup opt-out does not prohibit an editable new contact draft. */
 function contactLookupDeclined(text: string): boolean {
   const note = authoredNote(text).replace(/\s+/gu, " ");
   return /(?:不要|不用|不需要|不必|不许|禁止|请勿|别)(?:联网|上网|公开|在线)?(?:搜索|查询|检索)(?:我的|已有|现有)?(?:联系人|通讯录)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:search|look\s+up|query)\s+(?:(?:my|the|existing|online)\s+)*(?:contacts?|contact\s+list|address\s+book|directory)\b/iu.test(note);
-}
-
-const CONTACT_DECLINE = /(?:不要|不用|别|不需要|不必|不许|禁止|请勿)[^，,。；;!?！？\n]{0,12}(?:添加|建|保存)\s*(?:到|为|新的?|任何|一个|这些|这位|这个)?(?:联系人|人物)(?!以外|之外)|(?:do not|don['’]t|no need to)[^,;.!?\n]{0,12}(?:add|create|save)\s+(?:(?:a|new|any)\s+)?contacts?\b|\bno\s+contact\s+creation\b/iu;
-
-/** Current authored intent only: never infer a refusal from pixels or host prose. */
-function analysisOnlyOrNoSave(text: string): boolean {
-  // A contact-only refusal must not disable an explicitly requested self note.
-  const note = authoredNote(text).replace(new RegExp(CONTACT_DECLINE.source, "giu"), " ");
-  return /(?:仅供|只供)(?:分析|参考)|(?:只|仅仅?)(?:需要|要|想|帮我|请|做)?(?:分析|解释|描述|总结|翻译|看看|看一下)|(?:不要|不用|别|不必|不需要|无需|不许|禁止|请勿)[^，,。；;!?！？\n]{0,12}(?:保存|记录|记住|建档|归档|添加|创建|更新|操作|行动)|(?:不做|不进行)[^，,。；;!?！？\n]{0,8}(?:操作|更改|动作|行动)/u.test(note)
-    || /\b(?:no[\s_-]+(?:actions?|sav(?:e|ing)|proposals?)|analysis[\s_-]+only|(?:just|only)\s+(?:analy[sz]e|describe|explain|summari[sz]e|translate)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:(?:make|take|perform)\s+(?:any\s+)?(?:actions?|changes?)|save|record|remember|store|archive|create|add|update))\b/iu.test(note);
 }
 
 function toolFailure(
@@ -530,11 +513,17 @@ export async function executeWorkspaceConversationAgentCore(input: {
     searchResults.set(personID, current[0]!);
     return true;
   };
-  const declinedProposals = () => sourceTexts().some(analysisOnlyOrNoSave);
-  const declinedContact = () => declinedProposals() || sourceTexts().some(text => CONTACT_DECLINE.test(authoredNote(text)));
+  const declines = () => proposalDeclines(sourceTexts());
+  const declinedProposals = () => declines().global;
+  const declinedContact = () => { const policy = declines(); return policy.global || policy.contact; };
+  const declinedMemory = () => { const policy = declines(); return policy.global || policy.memory; };
+  const declinedCalendar = () => { const policy = declines(); return policy.global || policy.calendar; };
+  const declinedMcp = () => { const policy = declines(); return policy.global || policy.mcp; };
   let stagedContactSource: { id: string; text: string } | null = null;
   let stagedMemorySourceID = sourceMessageID;
   let stagedMemoryHasContact = false;
+  let stagedMemoryHasItems = false;
+  let refusedMixedProposal = false;
   let mcpProposalsPending = false;
   const withdrawalNotices: string[] = [];
   let withdrawalTail = Promise.resolve();
@@ -544,7 +533,9 @@ export async function executeWorkspaceConversationAgentCore(input: {
   reconcileDeclinedProposals = () => {
     const pending = withdrawalTail.then(async () => {
       if (declinedContact()) runState.proposal = null;
-      if (runState.memoryProposal && (declinedProposals() || (stagedMemoryHasContact && declinedContact()))) {
+      if (runState.memoryProposal && (declinedProposals() || (stagedMemoryHasItems && declinedMemory())
+        || (stagedMemoryHasContact && declinedContact()))) {
+        if (stagedMemoryHasContact && stagedMemoryHasItems) refusedMixedProposal = true;
         if (!input.memory?.withdraw) throw new Error("MEMORY_WITHDRAWAL_UNAVAILABLE");
         const result = await input.memory.withdraw({
           proposalID: runState.memoryProposal.proposalID,
@@ -554,7 +545,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         if (result.status === "already_committed" || result.hadCommittedItems) withdrawalNotices.push("An earlier proposal was already saved by you; it has not been undone.");
         runState.memoryProposal = null;
       }
-      if (mcpProposalsPending && declinedProposals()) {
+      if (mcpProposalsPending && declinedMcp()) {
         if (!input.mcpConnections?.withdrawPending) throw new Error("MCP_WITHDRAWAL_UNAVAILABLE");
         const result = await input.mcpConnections.withdrawPending();
         const visible = result.requests.find(request => request.requestID === runState.mcpInteraction?.request_id);
@@ -770,7 +761,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
           "User-owned MCP connections are not available in this Run.",
         );
       }
-      if (!["list", "read_tool", "read_receipt"].includes(parsedMcp.data.operation) && declinedProposals()) {
+      if (!["list", "read_tool", "read_receipt"].includes(parsedMcp.data.operation) && declinedMcp()) {
         return toolFailure(name, "MCP_PROPOSAL_DECLINED", "The current user requested analysis only or declined operation proposals.");
       }
       const result = await input.mcpConnections.handle(
@@ -891,8 +882,11 @@ export async function executeWorkspaceConversationAgentCore(input: {
           : "This message permits a review-only Person Memory draft for its selected existing person, with no relationship or new-contact change.");
       }
 
-      if (declinedProposals()) return toolFailure(name, "MEMORY_PROPOSAL_DECLINED",
-        "The current user requested analysis only or declined saved changes. Answer without a proposal.");
+      if (declinedProposals() || (request.items.length > 0 && declinedMemory())) {
+        if (request.contact_decision === "new" && request.items.length > 0) refusedMixedProposal = true;
+        return toolFailure(name, "MEMORY_PROPOSAL_DECLINED",
+          "The current user declined an effect in this proposal. Do not remove items to bypass the refusal.");
+      }
       const proposalArtifactID = request.new_contact_source_locator?.kind === "image_region"
         ? request.new_contact_source_locator.artifact_id
         : request.new_contact_source_locator?.kind === "message"
@@ -915,8 +909,10 @@ export async function executeWorkspaceConversationAgentCore(input: {
         request.new_contact_source_locator = automaticCounterparty.source_locator;
         currentCounterparty = automaticCounterparty;
       }
-      if (request.contact_decision === "new" && declinedContact()) return toolFailure(name,
-        "CONTACT_ADD_DECLINED", "The current user declined adding contacts. Answer without a contact proposal.");
+      if (request.contact_decision === "new" && declinedContact()) {
+        if (request.items.length > 0) refusedMixedProposal = true;
+        return toolFailure(name, "CONTACT_ADD_DECLINED", "The current user declined adding contacts. Do not remove effects to bypass the refusal.");
+      }
       if (request.contact_decision === "new" && currentCounterparty) {
         request.new_contact_source_locator = currentCounterparty.source_locator;
       }
@@ -1133,7 +1129,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         }
         // Host-owned source-grounded person-name candidate for the visible
         // direct-chat counterparty; the model never authors or duplicates it.
-        const nameCandidate = request.contact_decision === "new" && currentCounterparty
+        const nameCandidate = declinedMemory() ? null : request.contact_decision === "new" && currentCounterparty
           ? firstContactNameCandidate({
               name: currentCounterparty.name,
               nameExcerpt: currentCounterparty.source_excerpt,
@@ -1187,7 +1183,8 @@ export async function executeWorkspaceConversationAgentCore(input: {
       }
       runState.memoryProposal = staged;
       stagedMemorySourceID = memorySourceID;
-      stagedMemoryHasContact = request.contact_decision !== "none";
+      stagedMemoryHasContact = request.contact_decision === "new";
+      stagedMemoryHasItems = request.items.length > 0 || staged.itemCount > 0;
       await reconcileDeclinedProposals();
       return {
         ok: true,
@@ -1599,7 +1596,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         ...(input.responsePreference ? { responsePreference: input.responsePreference } : {}),
         ...(!memoryDraftTarget && input.memory ? { selfMemoryContext: compileSelfMemoryContext(selfMemoryPage) } : {}),
         ...(!memoryDraftTarget && input.calendarContext ? { calendarContext: {...input.calendarContext, validateImageExcerpt:imageInspection.supportsExcerpt,
-          permitsDraft: () => !declinedProposals() && input.calendarContext?.permitsDraft?.() !== false,
+          permitsDraft: () => !declinedCalendar() && input.calendarContext?.permitsDraft?.() !== false,
           resolveMessageExcerpt: excerpt => {
             const matches = [...messageSources].filter(([, text]) => text.includes(excerpt));
             const match = matches.find(([id]) => id === sourceMessageID) ?? (matches.length === 1 ? matches[0] : undefined);
@@ -1655,6 +1652,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
     abort.signal.throwIfAborted();
     providerResult.prompt ??= promptReference(snapshot);
     await reconcileDeclinedProposals();
+    if (declinedCalendar()) delete providerResult.calendarDraft;
     let output = measureLabServerStageSync("validation", () => WorkspaceConversationFinalOutputSchema.parse(
       providerResult.structuredOutput,
     ));
@@ -1664,7 +1662,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
     // Preparing an optional review card does not create a person or grant
     // identity authority. The staging service still detects namesakes and
     // checks the live source before any later human commit.
-    if (!memoryDraftTarget && !runState.memoryProposal && !runState.proposal && input.memory && !declinedContact()) {
+    if (!memoryDraftTarget && !refusedMixedProposal && !runState.memoryProposal && !runState.proposal && input.memory && !declinedContact()) {
       const counterparty = await defaultCounterparty();
       if (counterparty) {
         abort.signal.throwIfAborted();
@@ -1676,7 +1674,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         if (!await defaultCounterparty()) throw new Error("PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT");
         // The host stages the source-grounded name candidate itself; the model
         // is never asked to invent a Memory item for this card.
-        const nameCandidate = firstContactNameCandidate({
+        const nameCandidate = declinedMemory() ? null : firstContactNameCandidate({
           name: counterparty.name,
           nameExcerpt: counterparty.source_excerpt,
           sourceLocator: counterparty.source_locator as MemoryProposalCandidateInput["source_locator"],
@@ -1690,6 +1688,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         } catch { /* An optional contact review must not discard the answer. */ }
         stagedMemorySourceID = sourceMessageID;
         stagedMemoryHasContact = true;
+        stagedMemoryHasItems = Boolean(nameCandidate) || (runState.memoryProposal?.itemCount ?? 0) > 0;
         await reconcileDeclinedProposals();
         await input.assertCurrent?.();
       }
