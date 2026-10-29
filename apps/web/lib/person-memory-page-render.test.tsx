@@ -2,12 +2,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { auth, loadPersonMemory, claims, mint, review } = vi.hoisted(() => ({
+const { auth, loadPersonMemory, related, claims, mint, review } = vi.hoisted(() => ({
   auth: vi.fn(), loadPersonMemory: vi.fn(), claims: vi.fn(),
-  mint: vi.fn(), review: vi.fn(),
+  related: vi.fn(), mint: vi.fn(), review: vi.fn(),
 }));
 vi.mock("@/auth", () => ({ auth }));
 vi.mock("@/lib/server/localBackend", () => ({ loadPersonMemory, isIntegrationMode: () => true }));
+vi.mock("@/lib/server/personRelatedSessions", () => ({ loadPersonRelatedSessions: related }));
 vi.mock("@/lib/server/backendAuth", () => ({ readBackendSessionClaims: claims }));
 vi.mock("@/lib/server/contact-handoff-session", () => ({ contactHandoffSessionVersion: () => "binding" }));
 vi.mock("@/lib/server/memoryEntryCapability", () => ({ mintMemoryEntryCapability: mint }));
@@ -44,6 +45,7 @@ beforeEach(() => {
   claims.mockResolvedValue({ backendAccountId: "account" });
   mint.mockReturnValue("scoped-entry");
   loadPersonMemory.mockResolvedValue(fixture());
+  related.mockResolvedValue({ sessions: [], complete: true });
 });
 
 describe("saved Person destination", () => {
@@ -205,9 +207,78 @@ it("keeps a successful empty Person to one sentence and an existing new-conversa
     basicFields: [{ field: "display_name", value: "陈知远" }], contactPoints: [] });
   const html = await render();
   expect(html).toContain("还没有关于这个人的记忆。");
-  expect(html).toContain('href="/workspace"');
-  expect(html).toContain("开始记录");
+  expect(html).toMatch(/href="\/workspace\?draft_session=[0-9a-f-]{36}&amp;intent=compose"/);
+  expect(html).toContain("新建对话");
   for (const text of ['id="person-contexts"', 'id="person-basic-fields"', '<aside', 'id="person-memory-accepted"', "记忆阅读方式", "0 条", "选择已有情境", "还没有关系情境"]) expect(html).not.toContain(text);
+});
+
+it("lets the user choose each actual related Session without substituting the return Session", async () => {
+  related.mockResolvedValue({ sessions: [
+    { id: "44444444-4444-4444-8444-444444444444", title: "First actual topic", updatedAt: "2026-10-29T00:00:00.000Z" },
+    { id: "55555555-5555-4555-8555-555555555555", title: "Second actual topic", updatedAt: "2026-10-28T00:00:00.000Z" },
+  ], complete: true });
+  const html = await render();
+  const section = html.match(/<section[^>]*data-person-related-sessions[^>]*>[\s\S]*?<\/section>/)?.[0] ?? "";
+  expect(section).toContain("最近相关对话");
+  expect(section).toContain('href="/workspace/sessions/44444444-4444-4444-8444-444444444444"');
+  expect(section).toContain('href="/workspace/sessions/55555555-5555-4555-8555-555555555555"');
+  expect(section).toContain("First actual topic");
+  expect(section).toContain("Second actual topic");
+  expect(section).not.toContain(sessionId);
+  expect(related).toHaveBeenCalledWith(expect.objectContaining({ id: personId }));
+});
+
+it.each([
+  ["zh-CN", "最近相关对话", "新建对话"],
+  ["en", "Recent related conversations", "New conversation"],
+  ["zh-TW", "最近相關對話", "新增對話"],
+  ["ja", "最近の関連する会話", "新しい会話"],
+  ["ko", "최근 관련 대화", "새 대화"],
+] as const)("localizes related-conversation navigation in %s while keeping the original topic", async (locale, heading, action) => {
+  language.locale = locale;
+  related.mockResolvedValue({ sessions: [{ id: contextId, title: "未翻译的用户原题目", updatedAt: "2026-10-29T00:00:00.000Z" }], complete: true });
+  const html = await render();
+  const section = html.match(/<section[^>]*data-person-related-sessions[^>]*>[\s\S]*?<\/section>/)?.[0] ?? "";
+  expect(section).toContain(heading);
+  expect(section).toContain(action);
+  expect(section).toContain("未翻译的用户原题目");
+  const fresh = section.match(/href="(\/workspace\?draft_session=[0-9a-f-]{36}&amp;intent=compose)"/)?.[1];
+  expect(fresh).toBeTruthy();
+  expect(fresh).not.toMatch(/person=|context=|&amp;session=/);
+});
+
+it("keeps partial coverage distinct from a confirmed empty related-conversation list", async () => {
+  related.mockResolvedValue({ sessions: [], complete: false });
+  const html = await render();
+  const section = html.match(/<section[^>]*data-person-related-sessions[^>]*>[\s\S]*?<\/section>/)?.[0] ?? "";
+  expect(section).toContain("仅显示当前已加载的对话。");
+  expect(section).toContain('href="/workspace/sessions"');
+  expect(section).not.toContain("暂无相关对话");
+});
+
+it("shows a failed related-conversation read as an error without inventing an empty result", async () => {
+  related.mockRejectedValue(new Error("transport unavailable"));
+  const html = await render();
+  expect(html).toContain("最近相关对话暂时无法读取。");
+  expect(html).toContain('role="alert"');
+  expect(html).toContain("陈知远");
+  expect(html).not.toContain("暂无相关对话");
+});
+
+it.each([401, 403])("withdraws the loaded Person when related-history authorization is denied (%s)", async status => {
+  related.mockRejectedValue({ status });
+  const html = await render();
+  expect(html).toContain('role="alert"');
+  expect(html).not.toContain("陈知远");
+  expect(html).not.toContain("我们通过读书会认识");
+  expect(html).not.toContain("最近相关对话");
+  if (status === 401) expect(html).toContain("重新登录");
+});
+
+it("names the relationship-context destination honestly instead of promising a chat", async () => {
+  const html = await render();
+  expect(html).toContain("查看关系情境");
+  expect(html).not.toContain("去相关对话");
 });
 
 it("keeps real context links without introductory instructions", async () => {

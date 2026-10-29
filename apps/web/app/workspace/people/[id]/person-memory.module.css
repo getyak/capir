@@ -81,7 +81,7 @@
 .error { color: var(--danger, var(--ink)); font-size: var(--workspace-body-size); line-height: 1.7; margin: 10px 0; overflow-wrap: anywhere; }
 .saveNotice { color: var(--muted-strong); font-size: var(--workspace-meta-size); line-height: 1.6; margin: 8px 0 16px; }
 .quiet, .layerHelp { color: var(--muted); font-size: var(--workspace-body-size); line-height: 1.7; margin: 12px 0 0; overflow-wrap: anywhere; }
-.emptyMemory { border-bottom: 1px solid var(--line-soft); padding: 22px 0 24px; }
+.emptyMemory { padding:16px 0 8px; }
 .emptyMemory h3 { font-size: var(--workspace-body-size); font-weight: 500; line-height: 1.6; margin: 0 0 8px; }
 .emptyMemory p { color: var(--muted-strong); font-size: var(--workspace-body-size); line-height: 1.8; margin: 0; max-width: 44ch; overflow-wrap: anywhere; }
 .layerHelp { margin: 0 0 18px; }
@@ -101,11 +101,11 @@
 .stateTitle { font-size: var(--workspace-title-size); font-weight: 600; line-height: 1.42; margin: 0; }
 .stateText { color: var(--muted-strong); font-size: var(--workspace-body-size); line-height: 1.7; margin: 12px 0 0; overflow-wrap: anywhere; }
 .main button:focus-visible, .main a:focus-visible, .main summary:focus-visible, .main textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-.memoryItem:focus-visible, .readingParagraph:focus-visible, .rawItem:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.memoryItem:focus-visible, .readingParagraph:focus-visible, .rawItem:focus-visible, .emptyMemory:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 /* Browser focus scrolling must leave room for the fixed workspace chrome. */
-.main :is(button, a, summary, textarea, [data-memory-item]) { scroll-margin-top: 88px; scroll-margin-bottom: 20px; }
+.main :is(button, a, summary, textarea, [data-memory-item], [data-memory-empty-state]) { scroll-margin-top: 88px; scroll-margin-bottom: 20px; }
 @media (max-width: 760px) {
-  .main :is(button, a, summary, textarea, [data-memory-item]) { scroll-margin-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
+  .main :is(button, a, summary, textarea, [data-memory-item], [data-memory-empty-state]) { scroll-margin-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
 }
 /* Reuse the stacked reading layout before an expanded workspace rail squeezes it. */
 @media (max-width: 1000px) {
@@ -137,4 +137,17 @@
 .conflictNote { color: var(--muted-strong); font-size: var(--workspace-body-size); font-weight: 500; line-height: 1.6; margin: 3px 0 12px; }
 
 .columns[data-reference="false"] { grid-template-columns: minmax(0, 1fr); }
-.emptyAction { align-items: center; color: var(--ink); display: inline-flex; font-size: var(--workspace-body-size); gap: 7px; min-height: 44px; margin-top: 8px; text-decoration: underline; text-underline-offset: 4px; }
+.relatedSessions { border-top:1px solid var(--line-soft); margin-top:28px; padding-top:20px; }
+.relatedSessions .sectionHeading { flex-wrap:wrap; gap:4px 16px; }
+.relatedNew { align-items:center; color:var(--ink); display:inline-flex; font-size:var(--workspace-meta-size); min-height:44px; text-decoration:underline; text-underline-offset:3px; }
+.relatedList { list-style:none; margin:8px 0 0; padding:0; }
+.relatedList li + li { border-top:1px solid var(--line-soft); }
+.relatedList a { align-items:center; color:var(--ink); display:grid; gap:4px 12px; grid-template-columns:minmax(0,1fr) auto 14px; min-height:52px; padding:10px 0; text-decoration:none; }
+.relatedList a > span { font-size:var(--workspace-body-size); line-height:1.6; overflow-wrap:anywhere; }
+.relatedList a:hover > span { text-decoration:underline; text-underline-offset:3px; }
+.relatedList time,.relatedCoverage { color:var(--muted); font-size:var(--workspace-meta-size); line-height:1.6; }
+.relatedList time { font-variant-numeric:tabular-nums; }
+.relatedList svg { color:var(--muted); }
+.relatedCoverage { margin:12px 0 0; }
+.relatedCoverage a,.relatedSessions .error a { align-items:center; color:var(--ink); display:inline-flex; min-height:44px; text-decoration:underline; text-underline-offset:3px; }
+@media(max-width:560px) { .relatedList a { grid-template-columns:minmax(0,1fr) 14px; } .relatedList time { grid-column:1; grid-row:2; } .relatedList svg { grid-column:2; grid-row:1 / 3; } }

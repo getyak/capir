@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft, CaretRight } from "@phosphor-icons/react/dist/ssr";
@@ -24,6 +25,7 @@ import { isIntegrationMode, loadPersonMemory } from "@/lib/server/localBackend";
 import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-session";
 import { mintMemoryEntryCapability } from "@/lib/server/memoryEntryCapability";
 import { readBackendSessionClaims } from "@/lib/server/backendAuth";
+import { loadPersonRelatedSessions, type PersonRelatedSessions } from "@/lib/server/personRelatedSessions";
 
 import { translate } from "@/lib/i18n";
 import { getMarketingLocale } from "@/lib/server/marketing-locale";
@@ -102,12 +104,36 @@ export default async function PersonMemoryPage({
 
   let data: Awaited<ReturnType<typeof loadPersonMemory>> | null = null;
   let error: string | null = null;
+  let sessionRecoveryHref: string | null = null;
   try {
     data = await loadPersonMemory(id);
   } catch (caught) {
     error = isBackendSessionExpiredError(caught)
       ? t("登录已过期，请重新登录后查看这个人物。")
       : t("无法读取这个人物的记忆；系统不会用缓存或示例内容代替。");
+  }
+
+  let relatedSessions: PersonRelatedSessions | null = null;
+  let relatedSessionsFailed = false;
+  if (data?.person) {
+    try {
+      relatedSessions = await loadPersonRelatedSessions(data.person);
+    } catch (caught) {
+      const status = caught && typeof caught === "object" && "status" in caught ? caught.status : null;
+      if (status === 401 || status === 403 || isBackendSessionExpiredError(caught)) {
+        // A denied second read invalidates this request's private presentation;
+        // do not render the Person loaded before that authorization loss.
+        data = null;
+        if (status === 401 || isBackendSessionExpiredError(caught)) {
+          error = t("登录已过期，请重新登录后查看这个人物。");
+          sessionRecoveryHref = backendSessionRecoveryHref(href);
+        } else {
+          error = t("人物访问权限已变化，请重新打开人物目录。");
+        }
+      } else {
+        relatedSessionsFailed = true;
+      }
+    }
   }
 
   if (!data) {
@@ -120,6 +146,7 @@ export default async function PersonMemoryPage({
           <p className={styles.stateText} role="alert">
             {error}
           </p>
+          {sessionRecoveryHref ? <Link className={styles.backLink} href={sessionRecoveryHref}>{t("重新登录")}</Link> : null}
           <Link
             className={styles.backLink}
             href={directoryHref}
@@ -153,6 +180,9 @@ export default async function PersonMemoryPage({
 
   const hasBasicInformation = fields.size > 0 || contactPoints.length > 0;
   const hasReference = Boolean(hasBasicInformation || person?.profile?.headline || confirmedIdentity || person?.profile?.summary);
+  // The existing fresh-draft entry is intentionally unscoped. Opening it
+  // neither binds this Person nor reuses a caller's return Session.
+  const newConversationHref = `/workspace?draft_session=${randomUUID()}&intent=compose`;
 
   return (
     <main className={styles.main} id="main-content" tabIndex={-1}>
@@ -185,6 +215,7 @@ export default async function PersonMemoryPage({
                 {person.contexts.map((context) => (
                   <li key={context.id}>
                     <Link
+                      aria-label={translate(locale, "查看关系情境：{context}", { context: context.display_label ?? t("关系情境") })}
                       className={styles.contextRow}
                       href={withReturnSession(
                         `/workspace?person=${encodeURIComponent(person.id)}&context=${encodeURIComponent(context.id)}`,
@@ -231,6 +262,23 @@ export default async function PersonMemoryPage({
           {person || items.length || proposals.length || hasMore ? <PersonMemoryContent key={`${binding}:${person?.id ?? id}`} personId={person?.id ?? id} binding={binding} entryCapability={entryCapability}
             initialItems={items} hasMore={hasMore} nextCursor={nextCursor} contexts={person?.contexts ?? []} returnSessionId={returnSessionId} />
             : <p className={styles.quiet}>{t("人物目录暂时没有这个人的条目。")}</p>}
+          {person ? <section className={styles.relatedSessions} aria-labelledby="person-related-sessions" data-person-related-sessions>
+            <div className={styles.sectionHeading}>
+              <h2 className={styles.sectionTitle} id="person-related-sessions">{t("最近相关对话")}</h2>
+              <Link className={styles.relatedNew} href={newConversationHref} prefetch={false}>{t("新建对话")}</Link>
+            </div>
+            {relatedSessionsFailed ? <p className={styles.error} role="alert">{t("最近相关对话暂时无法读取。")} <Link href={href} prefetch={false}>{t("重新载入")}</Link></p>
+              : relatedSessions?.sessions.length ? <ul className={styles.relatedList}>
+                {relatedSessions.sessions.map(conversation => <li key={conversation.id}>
+                  <Link href={`/workspace/sessions/${conversation.id}`} prefetch={false}>
+                    <span>{conversation.title}</span>
+                    <time dateTime={conversation.updatedAt}>{memoryDate(conversation.updatedAt, locale)}</time>
+                    <CaretRight size={14} aria-hidden="true" />
+                  </Link>
+                </li>)}
+              </ul> : null}
+            {!relatedSessionsFailed && relatedSessions && !relatedSessions.complete ? <p className={styles.relatedCoverage}>{t("仅显示当前已加载的对话。")} <Link href="/workspace/sessions">{t("查看对话列表")}</Link></p> : null}
+          </section> : null}
         </div>
 
         {hasReference ? <aside className={styles.contextColumn} aria-label={t("人物资料")}>

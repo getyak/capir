@@ -7,6 +7,7 @@ vi.mock("@/lib/server/localBackend", () => ({
   loadPersonMemory: mocks.memory,
 }));
 vi.mock("@/lib/server/backendAuth", () => ({ readBackendSessionClaims: mocks.claims }));
+vi.mock("@/lib/server/personRelatedSessions", () => ({ loadPersonRelatedSessions: async () => ({ sessions: [], complete: true }) }));
 vi.mock("@/lib/server/contact-handoff-session", () => ({ contactHandoffSessionVersion: () => "binding" }));
 vi.mock("@/lib/server/memoryEntryCapability", () => ({ mintMemoryEntryCapability: mocks.mint }));
 vi.mock("@/components/memory-review/memory-review-card", () => ({ MemoryReviewCard: () => null }));

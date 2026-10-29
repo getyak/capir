@@ -102,10 +102,6 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
   // A complete, successful read owns the empty state. Keep pagination,
   // failures and orphan drafts on their existing recovery surface.
   const showMemory = Boolean(ordinary.length || controller.hasMore || controller.loadError || edit);
-  const onlyContext = contexts.length === 1 ? contexts[0] : null;
-  const emptyHref = onlyContext
-    ? withReturnSession(`/workspace?person=${encodeURIComponent(personId)}&context=${encodeURIComponent(onlyContext.id)}`, returnSessionId)
-    : contexts.length ? "#person-contexts" : "/workspace";
 
   useLayoutEffect(() => {
     if (!focusRequest || handledFocus.current === focusRequest) return;
@@ -113,18 +109,18 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
     handledFocus.current = focusRequest;
     if (focusRequest.binding !== binding || focusRequest.personId !== personId) return;
     const modeButton = root.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
-    const emptyAction = root.current?.querySelector<HTMLAnchorElement>("[data-memory-empty-action]");
+    const emptyState = root.current?.querySelector<HTMLElement>("[data-memory-empty-state]");
     if (focusRequest.kind === "edit") {
       const button = Array.from(root.current?.querySelectorAll<HTMLButtonElement>("[data-memory-edit]") ?? [])
         .find(element => element.dataset.memoryEdit === focusRequest.id);
-      (button ?? modeButton ?? emptyAction)?.focus();
+      (button ?? modeButton ?? emptyState)?.focus();
       return;
     }
     const active = document.activeElement;
     if (active !== focusRequest.button && active !== document.body && active?.isConnected) return;
     const firstNew = Array.from(root.current?.querySelectorAll<HTMLElement>("[data-memory-item]") ?? [])
       .find(element => !focusRequest.previous.has(element.dataset.memoryItem));
-    (firstNew ?? root.current?.querySelector<HTMLElement>("[data-memory-load-more]") ?? modeButton ?? emptyAction)?.focus();
+    (firstNew ?? root.current?.querySelector<HTMLElement>("[data-memory-load-more]") ?? modeButton ?? emptyState)?.focus();
   }, [focusRequest, controller.edit, controller.loadingMore, controller.items, controller.hasMore, binding, personId]);
 
   function restoreFocus(id: string) {
@@ -144,7 +140,7 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
   }
   function contextLink(item: MemoryRecallItem) {
     const context = contexts.find(entry => entry.id === item.relationship_context_id);
-    return context ? <Link className={styles.memoryContext} href={withReturnSession(`/workspace?person=${encodeURIComponent(personId)}&context=${encodeURIComponent(context.id)}`, returnSessionId)}>{context.display_label ?? t("关系情境")}</Link> : null;
+    return context ? <Link aria-label={t("查看关系情境：{context}", { context: context.display_label ?? t("关系情境") })} className={styles.memoryContext} href={withReturnSession(`/workspace?person=${encodeURIComponent(personId)}&context=${encodeURIComponent(context.id)}`, returnSessionId)}>{context.display_label ?? t("关系情境")}</Link> : null;
   }
 
   const editor = edit ? <MemoryEditor edit={edit} onChange={controller.change} onSave={save}
@@ -204,9 +200,8 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
         {!raw.length ? !controller.loadError && <p className={styles.quiet}>{controller.hasMore ? t("当前已加载内容中没有可读取的摘录，可继续加载查看。") : t("暂无可读取的原始摘录。未保留、已删除或不可用的来源不会显示。")}</p> : raw.map(item => <article className={styles.rawItem} data-memory-item={item.id} tabIndex={-1} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}><h3>{item.display_text}</h3>{item.conflict_group_id ? <p className={styles.conflictNote}>{t("存在冲突 · 待核对")}</p> : null}<SourceExcerpts item={item} /></article>)}
       </div>}
       {controller.hasMore ? <div className={styles.pagination}><Button data-memory-load-more variant="ghost" disabled={controller.loadingMore || Boolean(edit)} onClick={() => void loadMore()}>{controller.loadingMore ? t("正在加载…") : t("继续加载记忆")}</Button><span>{t("还有已保存内容")}</span></div> : null}
-    </section> : <div className={styles.emptyMemory}>
+    </section> : <div className={styles.emptyMemory} data-memory-empty-state tabIndex={-1}>
       <p>{t("还没有关于这个人的记忆。")}</p>
-      <Link data-memory-empty-action className={styles.emptyAction} href={emptyHref}>{contexts.length ? t("去相关对话") : t("开始记录")} <ArrowSquareOut size={14} aria-hidden="true" /></Link>
     </div>}
     {research.length ? <details className={styles.researchDisclosure}><summary>{t("研究笔记")} <span>{t("AI 整理 · 待复核")}</span><CaretDown size={14} aria-hidden="true" /></summary><ResearchNotebook items={research} /></details> : null}
   </div>;

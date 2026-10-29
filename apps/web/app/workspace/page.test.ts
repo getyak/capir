@@ -9,6 +9,7 @@ vi.mock("@/components/workspace-app", () => ({ WorkspaceApp: () => null }));
 vi.mock("@/components/new-conversation", () => ({ WorkspaceNewConversation: () => null }));
 import WorkspacePage from "./page";
 import { BackendSessionExpiredError } from "@/lib/backend-session";
+import { TalentSignalClient, TalentSignalHttpError } from "@talent-signal/contracts";
 
 const parameters = { surface: "desk", intent: "create-contact", session: "33333333-3333-4333-8333-333333333333" };
 const callback = "/workspace?surface=desk&intent=create-contact&session=33333333-3333-4333-8333-333333333333";
@@ -59,4 +60,18 @@ it("passes the actual owner time binding separately through the real workspace p
   expect(result.props.initialSourceSyncBinding).toBe(workspaceSessionsBinding(claims));
   expect(result.props.initialSessionVersion).toBe(contactHandoffSessionVersion(claims));
   expect(result.props.initialSourceSyncBinding).not.toBe(result.props.initialSessionVersion);
+});
+
+it("opens a fresh draft locator in the unscoped canvas without entering the relationship workspace", async () => {
+  const draft = "66666666-6666-4666-8666-666666666666";
+  fixture.claims.mockResolvedValue({ backendAccountId: "synthetic-account", backendAccountName: "Synthetic account", backendAccountSlug: "synthetic-account", backendUserId: "synthetic-user", backendUsername: "synthetic-owner", backendRole: "admin", backendAccessToken: "synthetic-test-token", backendExpiresAt: "2099-01-01T00:00:00Z" });
+  const read = vi.spyOn(TalentSignalClient.prototype, "getAgentSession").mockRejectedValue(new TalentSignalHttpError(404, "NOT_FOUND", "Synthetic absent draft", null));
+  try {
+    const result = await WorkspacePage({ searchParams: Promise.resolve({ draft_session: draft, intent: "compose" }) });
+    expect(result.props.bootstrap.sessionId).toBe(draft);
+    expect(result.props.bootstrap.capability).toEqual(expect.any(String));
+    expect(result.props.accountId).toBe("synthetic-account");
+    expect(fixture.load).not.toHaveBeenCalled();
+    expect(result.props.initialScope).toBeUndefined();
+  } finally { read.mockRestore(); }
 });

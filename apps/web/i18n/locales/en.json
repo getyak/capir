@@ -2679,5 +2679,12 @@
   "相关对话暂时无法读取。": "Related conversations are unavailable right now.",
   "对话更新时间": "Conversation update time",
   "暂无相关对话。": "No related conversations yet.",
-  "打开联系人页面": "Open person page"
+  "打开联系人页面": "Open person page",
+  "最近相关对话": "Recent related conversations",
+  "最近相关对话暂时无法读取。": "Recent related conversations are unavailable right now.",
+  "仅显示当前已加载的对话。": "Only currently loaded conversations are shown.",
+  "查看对话列表": "View conversation list",
+  "人物访问权限已变化，请重新打开人物目录。": "Access to this person has changed. Reopen the people directory.",
+  "查看关系情境：{context}": "View relationship context: {context}",
+  "新建对话": "New conversation"
 }
