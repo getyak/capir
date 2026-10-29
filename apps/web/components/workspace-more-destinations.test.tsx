@@ -100,8 +100,9 @@ describe("expanded and collapsed workspace navigation", () => {
 
   it("keeps primary destinations in the same keyboard order and places compose after them", async () => {
     await render();
-    const expected = ["今日", "对话", "人物", "时间", "搜索人物或对话"];
+    const destinations = ["今日", "对话", "人物", "时间"];
     for (const label of ["工作台导航", "工作台导航（已收起）"]) {
+      const expected = label.endsWith("（已收起）") ? [...destinations, "搜索人物或对话"] : destinations;
       const nav = host.querySelector(`nav[aria-label="${label}"]`)!;
       const controls = [...nav.querySelectorAll<HTMLElement>('a[aria-label],button[aria-label]')];
       expect(controls.map(item => item.getAttribute("aria-label")).filter(name => expected.includes(name!))).toEqual(expected);
@@ -111,6 +112,7 @@ describe("expanded and collapsed workspace navigation", () => {
         expect(compose).toBeGreaterThan(search);
       }
     }
+    expect(host.querySelector('button[aria-label="搜索人物或对话"]')).not.toBeNull();
   });
 
   it("wires remembered exact locations into both presentations of the actual navigation", async () => {

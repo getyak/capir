@@ -95,6 +95,28 @@ it("offers equivalent People menu moves, preserves focus/DOM, and isolates the o
   expect(ids()).toEqual([B, A, C]);
 });
 
+it("offers explicit People arrangement without changing order or replacing row links", async () => {
+  await render(true);
+  const anchor = row(B).querySelector("a");
+  const organize = host.querySelector<HTMLButtonElement>('button[aria-label="整理人物"]')!;
+  expect(organize.getAttribute("aria-pressed")).toBe("false");
+  expect(row(B).dataset.orderControls).toBe("quiet");
+  expect(row(B).dataset.orderOrganizing).toBeUndefined();
+  expect(handle(B).getAttribute("aria-hidden")).toBeNull();
+  await act(async () => organize.click());
+  expect(organize.getAttribute("aria-pressed")).toBe("true");
+  expect(organize.textContent).toBe("完成");
+  expect(organize.getAttribute("aria-label")).toBe("完成 · 整理人物");
+  expect(row(B).dataset.orderOrganizing).toBe("true");
+  await menuMove(B, "上移");
+  expect(ids()).toEqual([B, A, C]);
+  expect(row(B).querySelector("a")).toBe(anchor);
+  await act(async () => organize.click());
+  expect(organize.getAttribute("aria-pressed")).toBe("false");
+  expect(row(B).dataset.orderOrganizing).toBeUndefined();
+  expect(ids()).toEqual([B, A, C]);
+});
+
 it("cancels Escape, pointer cancellation and invalid drops without writing", async () => {
   await render(); geometry();
   await pointer(C, "pointerdown", 120); await pointer(C, "pointermove", 2);

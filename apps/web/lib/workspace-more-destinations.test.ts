@@ -37,7 +37,8 @@ describe("workspace navigation without a generic More disclosure", () => {
       "/workspace/meetings",
     ];
     const indices = order.map((href) => primary.indexOf(`href="${href}"`));
-    expect(primary).toContain('aria-label="搜索人物或对话"');
+    expect(primary).not.toContain('aria-label="搜索人物或对话"');
+    expect(html.slice(0, html.indexOf(primary))).toContain('aria-label="搜索人物或对话"');
     for (const index of indices) expect(index).toBeGreaterThan(-1);
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
   });

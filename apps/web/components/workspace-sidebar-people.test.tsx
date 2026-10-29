@@ -172,7 +172,7 @@ describe("contextual People directory", () => {
     expect(links()).toHaveLength(0);
     expect(host.textContent).toContain("侧栏目录中没有匹配人物");
     expect(host.textContent).not.toContain("没有找到此人物");
-    expect(Array.from(host.querySelectorAll("a")).find(link => link.textContent === "查看全部人物")?.getAttribute("href"))
+    expect(host.querySelector('a[aria-label="人物目录 · 查看全部人物"]')?.getAttribute("href"))
       .toBe(`/workspace/people?query=${encodeURIComponent("隐藏目录人物")}`);
   });
 
@@ -305,7 +305,7 @@ describe("contextual People directory", () => {
     await render();
     expect(searchInput().value).toBe("");
     expect(host.textContent).toContain("还没有人物");
-    expect(host.textContent).toContain("查看全部人物");
+    expect(host.querySelector('a[aria-label="人物目录 · 查看全部人物"]')).not.toBeNull();
     expect(host.querySelector('input[name="session"]')).toBeNull();
   });
 });
