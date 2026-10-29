@@ -37,7 +37,7 @@ beforeEach(() => {
   stage = document.createElement("div"); document.body.append(stage); root = createRoot(stage);
   workspace = document.createElement("div"); workspace.id = "workspace-content"; document.body.append(workspace);
 });
-afterEach(async () => { await act(async () => root.unmount()); stage.remove(); workspace.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => root.unmount()); stage.remove(); workspace.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 async function openSearch(): Promise<HTMLButtonElement> {
   await act(async () => root.render(createElement(WorkspaceGlobalSearchDialog, { binding: "scope" })));
@@ -71,6 +71,86 @@ function destination(href: string, text = "Destination heading"): HTMLHeadingEle
 function settle(ms = 30): Promise<void> {
   return act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
 }
+
+/** Keep the real Radix Presence/FocusScope mounted through production's exit
+ * animation. happy-dom has no CSS animations; only its live animation name and
+ * final animationend are fixtures, not the Dialog or autofocus behavior. */
+function retainSearchExitAnimation(): void {
+  const original = window.getComputedStyle.bind(window);
+  vi.spyOn(window, "getComputedStyle").mockImplementation((node, pseudo) => {
+    const computed = original(node, pseudo);
+    if (!(node instanceof HTMLElement) || node.dataset.slot !== "dialog-content") return computed;
+    return new Proxy(computed, { get(target, prop) {
+      if (prop === "animationName") return node.dataset.state === "open" ? "surface-in" : "veil-out";
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+  });
+  vi.stubGlobal("getComputedStyle", window.getComputedStyle);
+}
+
+async function finishSearchExit(content: HTMLElement): Promise<void> {
+  expect(content.dataset.state).toBe("closed");
+  await act(async () => {
+    const ended = new Event("animationend", { bubbles: true });
+    Object.defineProperty(ended, "animationName", { value: "veil-out" });
+    content.dispatchEvent(ended);
+  });
+  await settle();
+  expect(document.querySelector("[data-slot=dialog-content]")).toBeNull();
+}
+
+async function reopenBeforeSearchExit(): Promise<{ trigger: HTMLButtonElement; content: HTMLElement; oldHeading: HTMLHeadingElement }> {
+  retainSearchExitAnimation();
+  directory.people = [{ id: PERSON_ID, display_label: "林夏" }];
+  directory.sessions = [{ session_id: SESSION_ID, title: "林氏周会", state: "active", expires_at: "2099-01-01T00:00:00.000Z" }];
+  const trigger = await openSearch();
+  await typeQuery("林");
+  const selected = resultLink(`/workspace/people/${PERSON_ID}`);
+  await act(async () => { selected.focus(); selected.click(); });
+  const content = document.querySelector<HTMLElement>("[data-slot=dialog-content]")!;
+  expect(content, "real Presence retains Content during its exit").not.toBeNull();
+  expect(content.dataset.state).toBe("closed");
+  Object.defineProperty(trigger, "offsetParent", { configurable: true, get: () => stage });
+  await act(async () => selected.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true })));
+  expect(document.querySelector("[data-slot=dialog-content]")).toBe(content);
+  expect(content.dataset.state).toBe("open");
+  expect(content.querySelector("input")).toHaveProperty("value", "");
+  const oldHeading = destination(`/workspace/people/${PERSON_ID}`, "Previous selection");
+  workspace.append(oldHeading);
+  return { trigger, content, oldHeading };
+}
+
+it.each(["Escape", "close control", "ctrlKey", "metaKey", "shiftKey", "altKey", "_blank"] as const)("forgets an earlier selection when reopened during exit then dismissed with %s", async (activation) => {
+  const { trigger, content, oldHeading } = await reopenBeforeSearchExit();
+  if (activation === "Escape") {
+    await act(async () => content.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  } else if (activation === "close control") {
+    await act(async () => content.querySelector<HTMLButtonElement>("[aria-label=关闭搜索]")!.click());
+  } else {
+    await typeQuery("林");
+    const link = resultLink(`/workspace/people/${PERSON_ID}`);
+    if (activation === "_blank") link.target = "_blank";
+    const modifiers = activation === "_blank" ? {} : { [activation]: true };
+    await act(async () => { link.focus(); link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...modifiers })); });
+  }
+  await finishSearchExit(content);
+  expect(document.activeElement).toBe(trigger);
+  expect(document.activeElement).not.toBe(oldHeading);
+});
+
+it("uses only a newly accepted result after reopening the same closing Content", async () => {
+  const { content, oldHeading } = await reopenBeforeSearchExit();
+  await typeQuery("林");
+  const href = `/workspace/sessions/${SESSION_ID}`;
+  await vi.waitFor(() => expect(document.querySelector(`[href="${href}"]`)).not.toBeNull());
+  const newHeading = destination(href, "New selection");
+  workspace.append(newHeading);
+  await act(async () => { const link = resultLink(href); link.focus(); link.click(); });
+  await finishSearchExit(content);
+  expect(document.activeElement).toBe(newHeading);
+  expect(document.activeElement).not.toBe(oldHeading);
+});
 it("closes a filled search in one Escape and returns focus to its trigger", async () => {
   await act(async () => root.render(createElement(WorkspaceGlobalSearchDialog, { binding: "scope" })));
   const trigger = stage.querySelector("button")!;

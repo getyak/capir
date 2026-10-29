@@ -48,3 +48,26 @@ The pnpm docs:check wrapper attempted its dependency preflight and stopped befor
 The exact local commit, check artifacts, command results and limitations are in the parent audit's capir-search-recovery-handoff. Source is ready for independent review, not runtime delivery or production acceptance.
 
 The first post-rebase assertion run exposed a test-double defect: happy-dom followed the _blank link to anonymous localhost instead of remaining a controlled navigation fixture. The Link double now suppresses actual browser navigation in every branch and models only the documented onNavigate eligibility. The accepted final 162-test run is clean; this does not prove real tab navigation.
+
+## Independent review follow-up
+
+The real Radix Presence keeps closing Content mounted for its 120ms CSS exit.
+Cmd-K can reopen that same Content before close autofocus consumes the previous
+selection. A new open now clears that selection and cancels any active handoff.
+The behavior belongs in the existing dialog integration tests: seven red cases
+cover reopening then Escape, explicit close, four modifiers and a new tab;
+another case proves a newly accepted result still wins. The harness uses real
+Dialog/Presence with live CSS animation-name and painted-heading fixtures;
+animationend is dispatched explicitly. It does not establish compiled browser
+animation or App Router acceptance. Parent review is required again before push.
+
+The first multi-case animation harness restored a global getComputedStyle spy
+in the wrong order, causing cross-test recursion. Its first Escape failure was
+valid, but the rest of that run is harness failure evidence. Corrected teardown
+produced exactly seven focus failures with fifteen passing controls before the
+product edit, then all twenty-two dialog tests passed after the fix.
+
+The final single-worker neighboring regression run passes 170 tests across the
+same twelve files, with no failures or skips. Narrow lint and the four existing
+documentation/boundary scripts pass. Earlier full-Web typecheck and compiled
+browser/deployment limitations still apply; this follow-up does not claim them.

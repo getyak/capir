@@ -261,16 +261,23 @@ export function WorkspaceGlobalSearchDialog({
   const trigger = useRef<HTMLButtonElement>(null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const pendingFocus = useRef<{ href: string; binding: string } | null>(null);
+  const handoff = useRef<WorkspaceSearchFocusHandoff | null>(null);
   const changeOpen = useCallback((next: boolean) => {
-    if (next) setQuery("");
+    if (next) {
+      // Presence can reuse the closing Content before its exit animation ends.
+      // A new search owns neither the previous selection nor its deferred focus.
+      pendingFocus.current = null;
+      handoff.current?.cancel();
+      handoff.current = null;
+      setQuery("");
+    }
     setOpen(next);
   }, []);
   const show = useCallback(() => {
     if (!open) changeOpen(true);
   }, [open, changeOpen]);
   const close = useCallback(() => changeOpen(false), [changeOpen]);
-  const pendingFocus = useRef<{ href: string; binding: string } | null>(null);
-  const handoff = useRef<WorkspaceSearchFocusHandoff | null>(null);
   const currentBinding = useRef(binding);
   const scopeExpired = useRef(false);
   const ownerMounted = useRef(false);
