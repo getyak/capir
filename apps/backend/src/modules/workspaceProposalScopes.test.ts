@@ -88,30 +88,45 @@ describe("governed proposal scope boundaries", () => {
     expect(result.event).toMatchObject({ kind: "contact_change_proposal", source_message_id: root });
   });
 
-  it.each(["不要保存 Memory", "Do not save Memory"])("default image contact review adds no hidden name Memory: %s", async instruction => {
+  it.each(["不要保存 Memory", "Do not save Memory"])("requires a typed contact proposal after a Memory refusal: %s", async instruction => {
     const stages: Stage[] = [], withdrawals: Withdrawal[] = [];
     const result = await executeWorkspaceConversationAgentCore({ workspaceID: "synthetic", messageID: root,
       objective: `为林海（测试）准备联系人草稿。${instruction}`, contacts, memory: memoryAdapter(stages, withdrawals),
       inputParts: [image], imageInspector, imageIsCurrent: async () => true,
       provider: provider(async () => ({ ...reply })) });
-    expect(result.memoryProposal).toEqual({ proposal_id: proposalID, revision: 1 });
-    expect(stages).toHaveLength(1);
-    expect(stages[0]).toMatchObject({ contactDecision: "new", personID: null, identityAuthority: "tentative",
-      newContact: { display_label: "林海（测试）", source_locator: { kind: "image_region", artifact_id: image.artifactID } } });
-    expect(stages[0]!.items).toEqual([]);
-    expect(stages[0]!.nameCandidate).toBeUndefined();
+    expect(result.memoryProposal).toBeNull();
+    expect(result.firstContactResearch).toEqual([]);
+    expect(stages).toHaveLength(0);
   });
 
   it.each([
     "不要保存 Memory。联系人草稿已经准备好供审核。",
     "Do not save Memory. The contact draft is ready for review.",
     "Do not save Memory. The draft contact proposal is ready.",
+    "Do not save Memory. The prepared contact draft is ready.",
+    "Do not save Memory. I created a contact draft yesterday.",
   ])("does not treat a prepared-card statement as a contact request: %s", async text => {
     const stages: Stage[] = [], withdrawals: Withdrawal[] = [];
     const result = await executeWorkspaceConversationAgentCore({ workspaceID: "synthetic", messageID: root,
       objective: text, sourceText: text, contacts, memory: memoryAdapter(stages, withdrawals),
       inputParts: [image], imageInspector, imageIsCurrent: async () => true,
       provider: provider(async () => ({ ...reply })) });
+    expect(result.memoryProposal).toBeNull();
+    expect(result.firstContactResearch).toEqual([]);
+    expect(stages).toHaveLength(0);
+  });
+
+  it.each(["不要保存 Memory", "Do not save Memory"])("does not upgrade an empty Memory request into a contact: %s", async instruction => {
+    const stages: Stage[] = [], withdrawals: Withdrawal[] = [];
+    let receipt: AgentToolResult | undefined;
+    const result = await executeWorkspaceConversationAgentCore({ workspaceID: "synthetic", messageID: root,
+      objective: `为林海（测试）准备联系人草稿。${instruction}`, contacts, memory: memoryAdapter(stages, withdrawals),
+      inputParts: [image], imageInspector, imageIsCurrent: async () => true,
+      provider: provider(async (_request, invoke) => {
+        receipt = await invoke("memory_review", { operation: "propose", contact_decision: "none", items: [] });
+        return { ...reply };
+      }) });
+    expect(receipt).toMatchObject({ ok: false });
     expect(result.memoryProposal).toBeNull();
     expect(result.firstContactResearch).toEqual([]);
     expect(stages).toHaveLength(0);
@@ -303,7 +318,7 @@ describe("governed proposal scope boundaries", () => {
     ["default", "不要 `保存` Memory，请为林海（测试）准备联系人草稿。"],
     ["tool", "Do not `save` Memory. Prepare a contact draft for 林海（测试） for review."],
     ["default", "Do not `save` Memory. Prepare a contact draft for 林海（测试） for review."],
-  ] as const)("formatted refusal keeps the %s contact review without hidden Memory: %s", async (path, text) => {
+  ] as const)("formatted refusal preserves the %s proposal boundary: %s", async (path, text) => {
     const stages: Stage[] = [], withdrawals: Withdrawal[] = [];
     let toolReceipt: AgentToolResult | undefined;
     const result = await executeWorkspaceConversationAgentCore({ workspaceID: "synthetic", messageID: root,
@@ -317,6 +332,12 @@ describe("governed proposal scope boundaries", () => {
         return { ...reply };
       }) });
     if (path === "tool") expect(toolReceipt).toMatchObject({ ok: true });
+    if (path === "default") {
+      expect(result.memoryProposal).toBeNull();
+      expect(result.firstContactResearch).toEqual([]);
+      expect(stages).toHaveLength(0);
+      return;
+    }
     expect(result.memoryProposal).toEqual({ proposal_id: proposalID, revision: 1 });
     expect(stages).toHaveLength(1);
     expect(stages[0]!.items).toEqual([]);

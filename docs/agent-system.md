@@ -105,7 +105,7 @@ Capabilities progress through increasing consequence:
 | Device or external write | Change Contacts, Calendar, ATS, CRM, or communication | Exact-effect approval and verification |
 | Prohibited | Judge people, infer protected traits, or expose generic production access | Never available |
 
-The model proposes intent; the control plane verifies capability availability, scope, permission and safe execution. Refusals constrain their named effects, including system-added content: declining Memory preserves a separately requested contact review. Unqualified analysis-only, no-save and no-action requests still block all affected proposals. Absence of refusal never grants execution authority.
+The model proposes intent; the control plane verifies capability availability, scope, permission and safe execution. Refusals constrain their named effects, including system-added content: declining Memory preserves a separately requested contact review. Unqualified analysis-only, no-save and no-action requests still block all affected proposals. A Memory refusal suppresses host contact defaults; a separately requested contact review needs a typed, source-checked proposal. Absence of refusal never grants execution authority.
 
 Validate original tool arguments before provider normalization discards unknown fields.
 Repair hints use bounded schema-owned names/codes, never rejected values or unknown keys; diagnostic failures preserve denial. Per-Run SDK observations may omit identical successful state metadata; changed/error state and source evidence remain intact, and tool authority is checked anew.
