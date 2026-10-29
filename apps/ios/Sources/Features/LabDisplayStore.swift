@@ -188,16 +188,19 @@ struct LabDisplaySessionRoot<Content: View>: View {
 }
 
 #if DEBUG
-private struct LabEffectiveDisplayProbe: View {
+struct LabEffectiveDisplayProbe: View {
+    var identifier = "lab-effective-display"
     @Environment(\.appLanguage) private var language
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var textSize
     @Environment(\.workspaceCardDensity) private var density
+    @Environment(\.talentSignalReduceMotion) private var reduceMotion
     private var value: String { "\(language.rawValue)|\(colorScheme == .dark ? "dark" : "light")|\(textSize)|\(density.rawValue)" }
     var body: some View {
         Color.clear.frame(width: 1, height: 1).accessibilityElement()
+            .accessibilityLabel(Text(verbatim: reduceMotion ? "effective-reduce-motion:on" : "effective-reduce-motion:off"))
             .accessibilityValue(value)
-            .accessibilityIdentifier("lab-effective-display")
+            .accessibilityIdentifier(identifier)
     }
 }
 #endif

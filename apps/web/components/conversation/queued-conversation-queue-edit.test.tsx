@@ -209,6 +209,37 @@ it("returns focus to the same row's Edit button after an explicit cancel", async
   expect(document.activeElement).toBe(editButton());
 });
 
+it("cancels queue editing with Escape before it can stop an unrelated active run", async () => {
+  await renderWithQueuedEntry();
+  await act(async () => emit?.(frame("snapshot", snapshot(6, [queuedEntry()], queuedEntry("Another active message", {
+    queue_entry_id: "55555555-5555-4555-8555-555555555555", message_id: "55555555-5555-4555-8555-555555555555",
+    status: "running", run_id: "66666666-6666-4666-8666-666666666666", stage: "preparing",
+  })))));
+  await act(async () => editButton()!.click());
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => editField()!.dispatchEvent(escape));
+  expect(editForm()).toBeNull(); expect(document.activeElement).toBe(editButton());
+  expect(escape.defaultPrevented).toBe(true);
+  expect(postedMutations()).toEqual([]);
+});
+
+it("keeps candidate Escape and mouse Save inside the queue editor until composition ends", async () => {
+  await renderWithQueuedEntry();
+  await act(async () => editButton()!.click());
+  const field = editField()!;
+  await act(async () => {
+    field.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    control("保存")!.click();
+  });
+  expect(editField()).toBe(field); expect(control("保存")!.disabled).toBe(true);
+  expect(postedMutations()).toEqual([]);
+  await act(async () => field.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
+  await act(async () => control("保存")!.click()); await flush();
+  expect(postedMutations()).toMatchObject([{ kind: "edit", queue_entry_id: MID }]);
+  expect(editForm()).toBeNull(); expect(document.activeElement).toBe(editButton());
+});
+
 it("keeps the first accepted waiting message once in the transcript and its management out of the composer dock", async () => {
   await renderWithQueuedEntry();
   expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);

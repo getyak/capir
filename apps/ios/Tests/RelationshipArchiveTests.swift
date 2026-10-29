@@ -4726,6 +4726,31 @@ final class RetrievalNavigationTests: XCTestCase {
     }
 }
 
+final class RelationshipHeaderDimensionTests: XCTestCase {
+    func testTransientHeaderDimensionsRemainFiniteAndNonnegative() {
+        let inputs: [CGFloat] = [-1, 0, 1, 8, 64, 88, 96, .infinity, .nan]
+        for input in inputs {
+            let dimensions = RelationshipHeaderDimensions(availableWidth: input, compact: true)
+            let values = [dimensions.slotWidth, dimensions.activeWidth, dimensions.compressedWidth,
+                          dimensions.activeVisualWidth, RelationshipHeaderDimensions.inactiveVisualWidth(itemWidth: dimensions.slotWidth)]
+            XCTAssertTrue(values.allSatisfy { $0.isFinite && $0 >= 0 },
+                          "Every fixed frame must be valid for a transient proposal: \(input), \(values)")
+        }
+    }
+
+    func testNormalHeaderKeepsFourTouchTargetsAndTheWidthBudget() {
+        for width: CGFloat in [176, 236, 294, 350] {
+            for compact in [true, false] {
+                let dimensions = RelationshipHeaderDimensions(availableWidth: width, compact: compact)
+                XCTAssertGreaterThanOrEqual(dimensions.slotWidth, 44)
+                XCTAssertGreaterThanOrEqual(dimensions.activeWidth, 44)
+                XCTAssertGreaterThanOrEqual(dimensions.compressedWidth, 44)
+                XCTAssertEqual(dimensions.activeWidth + dimensions.compressedWidth + 2 * dimensions.slotWidth, width, accuracy: 0.001)
+            }
+        }
+    }
+}
+
 private final class RecoveryReadbackURLProtocol: URLProtocol, @unchecked Sendable {
     static var requests = 0
     override class func canInit(with request: URLRequest) -> Bool { true }

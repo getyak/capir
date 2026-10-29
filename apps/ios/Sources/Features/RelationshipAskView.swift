@@ -463,6 +463,9 @@ struct RelationshipAskView: View {
     @State private var reinstatementOperation: AgentEvidenceReviewOperation?
     @State private var reinstatementReason = ""
     @State private var reviewPreparationError: String?
+#if DEBUG
+    @State private var seededReviewNoticeFixture = false
+#endif
     @State private var isVoiceDisclosurePresented = false
     @State private var voiceOperation: Task<Void, Never>?
     @State private var draftPersistenceTask: Task<Void, Never>?
@@ -518,6 +521,14 @@ struct RelationshipAskView: View {
                 }
             }
             .background(Color.tsSurface.ignoresSafeArea())
+            .overlay(alignment: .bottomLeading) {
+#if DEBUG
+                if hasConversationExperienceFixture,
+                   ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_DISPLAY_PROBE"] == "true" {
+                    LabEffectiveDisplayProbe(identifier: "ask-effective-display")
+                }
+#endif
+            }
             .animation(
                 reduceMotion
                     ? nil
@@ -640,6 +651,13 @@ struct RelationshipAskView: View {
             )
         }
         .task {
+#if DEBUG
+            if hasConversationExperienceFixture, !seededReviewNoticeFixture,
+               ProcessInfo.processInfo.environment["TS_IOS_CONVERSATION_EXPERIENCE"] == "review-notice" {
+                seededReviewNoticeFixture = true
+                reviewPreparationError = appLanguage.text("Synthetic notice: your review could not be prepared. Your draft is unchanged.")
+            }
+#endif
             voiceInput.updateSceneIsActive(scenePhase == .active)
             await revalidateAndDismissUnavailableCitation()
             activeSessionID = sessionID
@@ -1437,6 +1455,7 @@ struct RelationshipAskView: View {
                         }
                         .padding(14)
                         .background(Color.tsCanvas, in: RoundedRectangle(cornerRadius: 14))
+                        .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("ask-evidence-review-persistence-error")
                     }
 
@@ -3544,7 +3563,7 @@ struct RelationshipAskView: View {
     private var hasConversationExperienceFixture: Bool {
 #if DEBUG
         !isCanonical && ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_PREVIEW_WORKSPACE"] == "true"
-            && ["review", "processing", "error"].contains(
+            && ["review", "processing", "error", "review-notice"].contains(
                 ProcessInfo.processInfo.environment["TS_IOS_CONVERSATION_EXPERIENCE"] ?? ""
             )
 #else

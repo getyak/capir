@@ -19,6 +19,13 @@ struct LabPagePreview: View {
                     .id("\(page.rawValue)|\(state.rawValue)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
+            .overlay(alignment: .bottomLeading) {
+#if DEBUG
+                if ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_DISPLAY_PROBE"] == "true" {
+                    LabEffectiveDisplayProbe(identifier: "lab-preview-effective-display")
+                }
+#endif
+            }
             .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $controls) {
                 NavigationStack {
@@ -70,6 +77,15 @@ private struct LabPreviewContents: View {
     @State private var sessions: [AgentSession] = []
     private var snapshot: PursuitWorkspaceSnapshot { LabPreviewFixtures.snapshot(state: state) }
     private var archivePage: RelationshipArchivePage { page == .today ? .today : page == .sessions ? .sessions : .people }
+    private var unreadFixture: String? {
+#if DEBUG
+        guard ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_PREVIEW_WORKSPACE"] == "true" else { return nil }
+        let value = ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_TODAY_UNREAD"]
+        return ["relationship", "identity-review"].contains(value ?? "") ? value : nil
+#else
+        return nil
+#endif
+    }
     var body: some View {
         VStack(spacing: 0) {
             if state == .stale {
@@ -88,11 +104,16 @@ private struct LabPreviewContents: View {
         .background(Color.tsSurface)
         .modifier(LabLayoutOutline())
         .task {
-            if page == .sessions {
+            if page == .sessions || (page == .today && unreadFixture != nil) {
                 sessions = AgentSessionStore.preview(snapshot: snapshot, sessionCount: state == .partial ? 1 : 4).sessions
                 if state == .longContent {
                     sessions = sessions.map { value in var result = value; result.title = LabPreviewFixtures.longTitle; return result }
                 }
+#if DEBUG
+                if page == .today, let unreadFixture {
+                    sessions = LabPreviewFixtures.unreadSessions(from: sessions, identityReview: unreadFixture == "identity-review")
+                }
+#endif
             }
         }
         .alert(language.text("Preview interaction"), isPresented: Binding(get: { selected != nil }, set: { if !$0 { selected = nil } })) {
@@ -105,6 +126,26 @@ private struct LabPreviewContents: View {
             WorkspacePeopleView(snapshot: snapshot, isPreview: true, restorationPosition: nil, scrollPosition: $peoplePosition,
                 onSelect: { selected = $0.displayLabel }, onAsk: { selected = $0.displayLabel })
         case .sessions:
+#if DEBUG
+            if ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_PREVIEW_WORKSPACE"] == "true",
+               ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_HEADER_GEOMETRY"] == "true" {
+                RelationshipHeaderGeometryFixture()
+            } else {
+                sessionContents
+            }
+#else
+            sessionContents
+#endif
+        case .today:
+            PursuitTodayView(snapshot: snapshot, isPreview: unreadFixture == nil, calendarActivities: [], unreadSessions: unreadFixture == nil ? [] : sessions, actionRecovery: nil,
+                onOpenSession: { selected = unreadFixture == nil ? $0.displayTitle(in: language) : $0.id.uuidString }, onOpenCalendar: { selected = language.text("Calendar") },
+                onOpenAttention: { _ in selected = language.text("Preview interaction") }, onOpenPursuit: { selected = $0.title }, onOpenActionRecovery: { selected = $0 })
+        case .review, .fullReview, .onboarding:
+            StandaloneOnboardingView(arguments: [], labPreview: true, labPreviewStartsInReview: page != .onboarding, labPreviewExpandedEvidence: page == .fullReview)
+        }
+    }
+
+    private var sessionContents: some View {
             AgentSessionListView(sessions: sessions, people: Dictionary(uniqueKeysWithValues: snapshot.people.map { ($0.id, $0) }), isPreview: true,
                 persistenceNotice: nil,
                 restorationPosition: nil, scrollPosition: $sessionPosition,
@@ -112,18 +153,33 @@ private struct LabPreviewContents: View {
                 onMarkRead: { id in if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].isUnread = false } },
                 onMarkUnread: { id in if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].isUnread = true } },
                 onDelete: { id in sessions.removeAll { $0.id == id }; return true })
-        case .today:
-            PursuitTodayView(snapshot: snapshot, isPreview: true, calendarActivities: [], unreadSessions: [], actionRecovery: nil,
-                onOpenSession: { selected = $0.displayTitle(in: language) }, onOpenCalendar: { selected = language.text("Calendar") },
-                onOpenAttention: { _ in selected = language.text("Preview interaction") }, onOpenPursuit: { selected = $0.title }, onOpenActionRecovery: { selected = $0 })
-        case .review, .fullReview, .onboarding:
-            StandaloneOnboardingView(arguments: [], labPreview: true, labPreviewStartsInReview: page != .onboarding, labPreviewExpandedEvidence: page == .fullReview)
-        }
     }
 }
 
 enum LabPreviewFixtures {
     static let longTitle = "Alexandra Chen — international engineering leadership, research collaboration and a long unresolved location question / 跨地区合作与工作地点沟通"
+#if DEBUG
+    static func unreadSessions(from values: [AgentSession], identityReview: Bool) -> [AgentSession] {
+        guard var first = values.first else { return [] }
+        first.isUnread = true
+        first.title = "Review the synthetic design collaboration / 设计协作"
+        if identityReview {
+            first.scope = .identityReview(resolutionCaseID: "synthetic-identity-review", personDisplayLabel: "Unconfirmed synthetic identity")
+            first.title = "Review synthetic identity"
+            first.pendingObjective = "PROTECTED_REVIEW_OBJECTIVE"
+            first.composerDraft = "PROTECTED_REVIEW_DRAFT"
+        } else if let personID = first.personID, let contextID = first.relationshipContextID {
+            first.scope = .relationship(personID: personID, relationshipContextID: contextID,
+                personDisplayLabel: "Alexandra Chen / 周琳",
+                contextDisplayLabel: "Synthetic design collaboration / 跨地区设计协作")
+        }
+        // Two distinct Sessions intentionally share one participant/context.
+        // Exact activation must follow the Session, not the person's label.
+        let sibling = AgentSession(id: UUID(uuidString: "90000000-0000-4000-8000-000000000099")!, scope: first.scope,
+            title: "A different synthetic design discussion", turns: [], contactReceipts: [], updatedAt: first.updatedAt, isUnread: true)
+        return [first, sibling]
+    }
+#endif
     static func snapshot(state: LabPreviewState) -> PursuitWorkspaceSnapshot {
         let base = PursuitWorkspaceSnapshot.preview
         let people: [WorkspacePerson]

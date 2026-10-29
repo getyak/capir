@@ -34,12 +34,13 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function PeoplePage({
   searchParams,
 }: {
-  searchParams: Promise<{ query?: string; session?: string }>;
+  searchParams: Promise<{ query?: string | string[]; session?: string | string[] }>;
 }) {
   const locale = await getMarketingLocale();
   const parameters = await searchParams;
   const returnSessionId = validReturnSessionId(parameters.session);
-  const query = (parameters.query ?? "")
+  const queryInvalid = parameters.query !== undefined && typeof parameters.query !== "string";
+  const query = (typeof parameters.query === "string" ? parameters.query : "")
     .normalize("NFKC")
     .trim()
     .slice(0, 160);
@@ -59,10 +60,10 @@ export default async function PeoplePage({
   }
 
   let people: Awaited<ReturnType<typeof loadPeopleDirectory>>["people"] = [];
-  let error: string | null = null;
+  let error: string | null = queryInvalid ? translate(locale, "搜索条件无效，请只使用一个搜索条件。") : null;
   let sessionRecoveryHref: string | null = null;
   try {
-    people = (
+    if (!queryInvalid) people = (
       await (query
         ? searchPeopleDirectory(query)
         : loadPeopleDirectory())
@@ -86,6 +87,7 @@ export default async function PeoplePage({
       query={query}
       returnSessionId={returnSessionId}
       sessionRecoveryHref={sessionRecoveryHref}
+      queryInvalid={queryInvalid}
     />
   );
 }

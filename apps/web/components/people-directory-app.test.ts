@@ -38,6 +38,15 @@ describe("people directory states", () => {
     expect(empty).toContain("添加第一位联系人");
     expect(empty).not.toContain("每位联系人保留独立身份，资料只在对应关系情境中使用。");
   });
+  it("shows an invalid search as a correctable query error rather than a connection failure or zero people", () => {
+    const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props, error: "搜索条件无效，请只使用一个搜索条件。", queryInvalid: true }));
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("搜索条件无效");
+    expect(html).not.toContain("连接暂时中断");
+    expect(html).not.toContain("人物目录暂时不可用");
+    expect(html).not.toContain("0 位人物");
+    expect(html).not.toContain("还没有人物");
+  });
   it("keeps historical identity and relationship scope explicit", () => {
     const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props, people: [person], query: "林", returnSessionId: "session-a" }));
     expect(html).toContain("历史邮箱：l***@example.test");

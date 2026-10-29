@@ -82,6 +82,7 @@ type QueueEditOperation = {
   token: symbol;
   focusOwned: boolean;
   saveToken: symbol | null;
+  composing: boolean;
 };
 
 /** Body is a valid fallback only after this editor actually owned focus and
@@ -198,6 +199,7 @@ export function QueuedConversation(props: Props) {
   }, [chat.attachmentDraftUnsafe, chat.unavailable, t]);
   const [editing, setEditing] = useState<Pick<QueueEditOperation, "entry" | "owner" | "sessionId" | "token"> | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [editComposition, setEditComposition] = useState<{ token: symbol; value: boolean } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [away, setAway] = useState(false);
   // Queue edit focus lifecycle: the auto-focused form is transient, so its
@@ -291,7 +293,7 @@ export function QueuedConversation(props: Props) {
   }, [readbackOwner, id]);
   function beginEdit(entryId: string, objective: string) {
     const operation: QueueEditOperation = { entry: entryId, owner: readbackOwner, sessionId: id,
-      token: Symbol(entryId), focusOwned: false, saveToken: null };
+      token: Symbol(entryId), focusOwned: false, saveToken: null, composing: false };
     editOwner.current = operation;
     editReturn.current = null;
     editingRef.current = entryId;
@@ -516,6 +518,13 @@ export function QueuedConversation(props: Props) {
     if (!entry || chat.unavailable) return null;
     const owned = (action: () => void) => { if (refreshScope.current === readbackOwner) action(); };
     const editingEntry = editing?.entry === entry.queue_entry_id && editing.owner === readbackOwner && editing.sessionId === id;
+    const composingEdit = Boolean(editing && editingEntry && editComposition?.token === editing.token && editComposition.value);
+    const changeComposition = (value: boolean) => {
+      const operation = editOwner.current;
+      if (!editing || !editingEntry || !operation || operation.token !== editing.token || operation.owner !== readbackOwner || operation.sessionId !== id) return;
+      operation.composing = value;
+      setEditComposition({ token: operation.token, value });
+    };
     const supplement = entry.steers_run_id && entry.steer_state !== "unsupported";
     const showOrder = queued.length > 1 || paused || Boolean(entry.steers_run_id);
     return <section className={styles.inlineQueue} aria-label={t("conversation.queue.label")} data-queued-message={messageId} data-status={entry.status}
@@ -532,6 +541,15 @@ export function QueuedConversation(props: Props) {
         {paused && index === 0 && queued.every(item => item.status === "queued") && <button disabled={chat.mutating || Boolean(active)} onClick={() => owned(() => { void chat.mutate({ kind: "continue" }); })}>{t("conversation.queue.continue")}<ArrowUp size={13}/></button>}
       </div>}
       {editingEntry ? <form className={styles.edit} ref={editForm}
+        onKeyDown={event => {
+          if (event.defaultPrevented) return;
+          const operation = editOwner.current;
+          if (event.nativeEvent.isComposing || operation?.composing || event.keyCode === 229) { event.stopPropagation(); return; }
+          if (event.key === "Escape") {
+            event.preventDefault(); event.stopPropagation();
+            finishEditing(entry.queue_entry_id, true, operation);
+          }
+        }}
         onFocusCapture={() => { const operation = editOwner.current; if (operation?.token === editing.token) operation.focusOwned = true; }}
         onBlurCapture={event => {
           const operation = editOwner.current;
@@ -541,9 +559,10 @@ export function QueuedConversation(props: Props) {
           operation.focusOwned = false;
         }} onSubmit={event => { event.preventDefault(); owned(() => { void applyEdit(entry.queue_entry_id); }); }}>
         <label htmlFor={`edit-${entry.queue_entry_id}`}>{t("conversation.queue.editLabel")}</label>
-        <textarea autoFocus id={`edit-${entry.queue_entry_id}`} value={editValue} maxLength={1000} onChange={event => setEditValue(event.target.value)}/>
+        <textarea autoFocus id={`edit-${entry.queue_entry_id}`} value={editValue} maxLength={1000} onChange={event => setEditValue(event.target.value)}
+          onCompositionStart={() => changeComposition(true)} onCompositionEnd={() => changeComposition(false)}/>
         <div><button type="button" onClick={() => finishEditing(entry.queue_entry_id, true)}>{t("conversation.queue.cancel")}</button>
-          <button type="submit" disabled={!editValue.trim() || chat.mutating}>{t("conversation.queue.save")}</button></div>
+          <button type="submit" disabled={!editValue.trim() || chat.mutating || composingEdit}>{t("conversation.queue.save")}</button></div>
       </form> : <div className={styles.inlineQueueRow}>
         <span className={styles.queueText}>
           {entry.status === "queued" && (active || paused || entry.steers_run_id) && <small>{entry.steer_state === "unsupported" ? t("conversation.queue.steerUnsupported") : entry.steers_run_id ? entry.steer_delivered ? t("conversation.queue.steerDelivered") : entry.steer_state === "dispatching" ? t("conversation.queue.steerDispatching") : t("conversation.queue.steerPending") : active ? t("conversation.queue.afterRun") : t("conversation.queue.afterResume")}</small>}
@@ -647,7 +666,7 @@ export function QueuedConversation(props: Props) {
   }
   async function applyEdit(entry: string) {
     const operation = editOwner.current;
-    if (!operation || operation.entry !== entry || operation.owner !== readbackOwner || operation.sessionId !== id || operation.saveToken) return;
+    if (!operation || operation.entry !== entry || operation.owner !== readbackOwner || operation.sessionId !== id || operation.saveToken || operation.composing) return;
     const token = Symbol("save");
     operation.saveToken = token;
     const ok = await chat.mutate({ kind: "edit", queue_entry_id: entry, objective: editValue.trim() });

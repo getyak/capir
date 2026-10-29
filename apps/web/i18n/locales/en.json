@@ -2686,5 +2686,9 @@
   "查看对话列表": "View conversation list",
   "人物访问权限已变化，请重新打开人物目录。": "Access to this person has changed. Reopen the people directory.",
   "查看关系情境：{context}": "View relationship context: {context}",
-  "新建对话": "New conversation"
+  "新建对话": "New conversation",
+  "搜索“{query}”": "Search “{query}”",
+  "正在搜索人物…": "Searching people…",
+  "搜索条件无效": "Invalid search query",
+  "搜索条件无效，请只使用一个搜索条件。": "The search query is invalid. Use one search query."
 }
