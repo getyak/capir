@@ -103,7 +103,12 @@ describe("saved Person destination", () => {
       profile: { headline, summary: null, provenance_kind: "user_authored", updated_at: "2026-10-12T00:00:00Z" } } });
     const html = await render();
     const header = html.match(/<header[\s\S]*?<\/header>/)?.[0];
-    expect(header).toContain(`<h1 title="${name}">${name}</h1>`);
+    const headings = header?.match(/<h1\b[^>]*>[\s\S]*?<\/h1>/g) ?? [];
+    expect(headings).toHaveLength(1);
+    expect(headings[0]).toContain(`title="${name}"`);
+    expect(headings[0]).toContain(`>${name}</h1>`);
+    expect(headings[0]).toContain('tabindex="-1"');
+    expect(headings[0]).toContain(`data-workspace-focus-href="/workspace/people/${personId}"`);
     expect(header).toContain(`编辑 ${name} 的头像`);
     expect(header).not.toContain(headline);
     expect(html.slice(html.indexOf("<aside"))).toContain(headline);

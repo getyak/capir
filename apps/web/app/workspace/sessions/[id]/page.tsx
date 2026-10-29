@@ -1,3 +1,4 @@
+import { workspaceSearchFocusTargetProps } from "@/lib/workspace-search-focus";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -75,7 +76,7 @@ export default async function SessionDetailPage({
     return (
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section aria-labelledby="session-unavailable" className={styles.recovery}>
-          <h1 className={styles.title} id="session-unavailable">{t("对话不可用")}</h1>
+          <h1 className={styles.title} id="session-unavailable" {...workspaceSearchFocusTargetProps(`/workspace/sessions/${encodeURIComponent(id)}`)}>{t("对话不可用")}</h1>
           <p className={styles.message} role="alert">{error}</p>
           <div className={styles.actions}>
             {sessionRecoveryHref ? (

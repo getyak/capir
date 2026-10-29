@@ -1,3 +1,4 @@
+import { workspaceSearchFocusTargetProps } from "@/lib/workspace-search-focus";
 import type { Metadata } from "next";
 import { randomUUID } from "node:crypto";
 import Link from "next/link";
@@ -65,6 +66,7 @@ export default async function PersonMemoryPage({
   const directoryQuery = readPeopleDirectoryQuery(parameters.directory_query);
   const href = personMemoryHref(id, directoryQuery, returnSessionId);
   const directoryHref = peopleDirectoryHref(directoryQuery, returnSessionId);
+  const searchFocusTarget = workspaceSearchFocusTargetProps(`/workspace/people/${encodeURIComponent(id)}`);
   const session = await auth();
   if (!session?.user) {
     redirect(`/login?callbackUrl=${encodeURIComponent(href)}`);
@@ -76,7 +78,7 @@ export default async function PersonMemoryPage({
     return (
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section className={styles.state} aria-labelledby="person-invalid">
-          <h1 className={styles.stateTitle} id="person-invalid">
+          <h1 className={styles.stateTitle} id="person-invalid" {...searchFocusTarget}>
             {t("人物不可用")}
           </h1>
           <p className={styles.stateText}>{t("这个人物标识无效。")}</p>
@@ -140,7 +142,7 @@ export default async function PersonMemoryPage({
     return (
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section className={styles.state} aria-labelledby="person-unavailable">
-          <h1 className={styles.stateTitle} id="person-unavailable">
+          <h1 className={styles.stateTitle} id="person-unavailable" {...searchFocusTarget}>
             {t("人物记忆不可用")}
           </h1>
           <p className={styles.stateText} role="alert">
@@ -198,7 +200,7 @@ export default async function PersonMemoryPage({
         <PersonDirectoryAvatar id={person?.id ?? id} size={28} shape="circle"
           label={person?.display_label ?? t("人物")} url={person?.avatar?.url ?? null} />
         <div className={styles.identityText}>
-          <h1 title={person?.display_label ?? t("人物")}>{person?.display_label ?? t("人物")}</h1>
+          <h1 {...searchFocusTarget} title={person?.display_label ?? t("人物")}>{person?.display_label ?? t("人物")}</h1>
         </div>
         {person ? <AvatarEditor id={person.id} label={person.display_label} url={person.avatar?.url ?? null}
           shape="circle" appearance="text" /> : null}
