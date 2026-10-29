@@ -1,6 +1,6 @@
 import { measureLabServerStage, measureLabServerStageSync } from "../lib/labDiagnostics.js";
 import { workspaceConversationTimeoutMs } from "./workspaceConversationBudget.js";
-import { authoredContactDraftRequested, authoredProposalText as authoredNote, proposalDeclines } from "./workspaceProposalDeclines.js";
+import { authoredProposalText as authoredNote, proposalDeclines } from "./workspaceProposalDeclines.js";
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalizeSessionTitle } from "./sessionTitles.js";
 import { authorizeMemoryDraftTarget, memoryDraftProposalViolation, type MemoryDraftTargetAdmission } from "./memoryDraftTarget.js";
@@ -882,7 +882,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
           : "This message permits a review-only Person Memory draft for its selected existing person, with no relationship or new-contact change.");
       }
 
-      if (declinedProposals() || (request.items.length > 0 && declinedMemory())) {
+      if (declinedProposals() || (declinedMemory() && (request.items.length > 0 || request.contact_decision !== "new"))) {
         if (request.contact_decision === "new" && request.items.length > 0) refusedMixedProposal = true;
         return toolFailure(name, "MEMORY_PROPOSAL_DECLINED",
           "The current user declined an effect in this proposal. Do not remove items to bypass the refusal.");
@@ -901,7 +901,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
       // Contact defaults and refusal apply equally to model and host paths.
       // Merge a self-only suggestion into the same review card so it cannot
       // accidentally consume the only slot for the direct-chat counterparty.
-      if (!declinedContact() && !input.humanIdentityBinding && !confirmedHandlePeople.size
+      if (!declinedContact() && !declinedMemory() && !input.humanIdentityBinding && !confirmedHandlePeople.size
         && automaticCounterparty && request.contact_decision === "none"
         && !request.person_id && request.items.every(item => item.scope === "self")) {
         request.contact_decision = "new";
@@ -1662,8 +1662,8 @@ export async function executeWorkspaceConversationAgentCore(input: {
     // Preparing an optional review card does not create a person or grant
     // identity authority. The staging service still detects namesakes and
     // checks the live source before any later human commit.
-    if (!memoryDraftTarget && !refusedMixedProposal && !runState.memoryProposal && !runState.proposal && input.memory && !declinedContact()
-      && (!declinedMemory() || authoredContactDraftRequested(sourceTexts()))) {
+    if (!memoryDraftTarget && !refusedMixedProposal && !runState.memoryProposal && !runState.proposal && input.memory
+      && !declinedContact() && !declinedMemory()) {
       const counterparty = await defaultCounterparty();
       if (counterparty) {
         abort.signal.throwIfAborted();
@@ -1675,7 +1675,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         if (!await defaultCounterparty()) throw new Error("PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT");
         // The host stages the source-grounded name candidate itself; the model
         // is never asked to invent a Memory item for this card.
-        const nameCandidate = declinedMemory() ? null : firstContactNameCandidate({
+        const nameCandidate = firstContactNameCandidate({
           name: counterparty.name,
           nameExcerpt: counterparty.source_excerpt,
           sourceLocator: counterparty.source_locator as MemoryProposalCandidateInput["source_locator"],
