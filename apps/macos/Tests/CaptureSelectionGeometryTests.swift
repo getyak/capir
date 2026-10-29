@@ -27,6 +27,31 @@ final class CaptureSelectionGeometryTests: XCTestCase {
     }
 
     @MainActor
+    func testPreviewShortcutThenSpaceCarriesExplicitReviewIntentIntoWindowRequest() throws {
+        let bytes = Data(repeating: 255, count: 4 * 4 * 4)
+        let provider = try XCTUnwrap(CGDataProvider(data: bytes as CFData))
+        let image = try XCTUnwrap(CGImage(width: 4, height: 4, bitsPerComponent: 8, bitsPerPixel: 32,
+                                        bytesPerRow: 16, space: CGColorSpaceCreateDeviceRGB(),
+                                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                        provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let view = CaptureSelectionView(frame: CGRect(x: 0, y: 0, width: 4, height: 4), image: image)
+        var requests: [Bool] = []
+        view.didRequestWindow = { requests.append($0) }
+        let space = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                 windowNumber: 0, context: nil, characters: " ",
+                                                 charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49))
+        let preview = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                   windowNumber: 0, context: nil, characters: "p",
+                                                   charactersIgnoringModifiers: "p", isARepeat: false, keyCode: 35))
+
+        view.keyDown(with: space)
+        view.keyDown(with: preview)
+        view.keyDown(with: space)
+
+        XCTAssertEqual(requests, [false, true])
+    }
+
+    @MainActor
     func testSelectionCallbacksReleaseTheFullDisplayViewAfterSelectionOrCancel() throws {
         let bytes = Data(repeating: 255, count: 4 * 4 * 4)
         let provider = try XCTUnwrap(CGDataProvider(data: bytes as CFData))

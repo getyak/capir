@@ -496,13 +496,31 @@ function AppearancePane({ sessionVersion, account, accountAvailable = true }: {
       </Group>
 
       <Group title={t("界面主题")}>
-        <div className={styles.themes} role="radiogroup" aria-label={t("界面主题")}>
+        <div className={styles.themes} role="radiogroup" aria-label={t("界面主题")}
+          onKeyDown={event => {
+            if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+            const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-theme-option]")];
+            const index = options.indexOf(event.target as HTMLButtonElement);
+            if (index < 0) return;
+            let next: number;
+            switch (event.key) {
+              case "ArrowRight": case "ArrowDown": next = (index + 1) % options.length; break;
+              case "ArrowLeft": case "ArrowUp": next = (index - 1 + options.length) % options.length; break;
+              case "Home": next = 0; break;
+              case "End": next = options.length - 1; break;
+              default: return;
+            }
+            event.preventDefault();
+            choose(THEME_OPTIONS[next]!.value);
+            options[next]?.focus();
+          }}>
           {THEME_OPTIONS.map(({ value, label, hint, Icon }) => (
             <button
               key={value}
               type="button"
               role="radio"
               aria-checked={selected === value}
+              tabIndex={selected === value ? 0 : -1}
               data-theme-option={value}
               onClick={() => choose(value)}
             >
@@ -764,7 +782,7 @@ function SettingsWorkspaceSession({
   // macOS Settings scene can say "this Mac" without granting any capability.
   const scopes =
     section === "appearance"
-      ? { web: t("仅此浏览器 · 本机保存"), desktop: t("仅此 Mac · 本机保存") }
+      ? { web: t("账号语言 · 本机外观"), desktop: t("账号语言 · 本机外观") }
       : section === "overview"
         ? { web: t("账号 · 本机头像"), desktop: t("账号 · 本机头像") }
         : section === "connections" && workspaceName

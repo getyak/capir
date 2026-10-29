@@ -28,7 +28,7 @@ import json,sys
 s=json.load(open(sys.argv[1]))
 print('Native component AX:',s.get('passedTests'),'passed,',s.get('failedTests'),'failed,',s.get('skippedTests'),'skipped')
 for f in s.get('testFailures',[]):print(f.get('testIdentifierString'),f.get('failureText'))
-if s.get('passedTests')!=2 or s.get('failedTests')!=0 or s.get('skippedTests')!=0:raise SystemExit(1)
+if s.get('passedTests')!=4 or s.get('failedTests')!=0 or s.get('skippedTests')!=0:raise SystemExit(1)
 PY
 else
   summary_status=1

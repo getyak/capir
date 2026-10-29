@@ -10,13 +10,12 @@ struct CapturePreviewView: View {
     @ObservedObject var coordinator: CaptureCoordinator
     let close: () -> Void
     @State private var tool: PreviewTool = .redact
-    @State private var crop: CGRect?
-    @State private var redactions: [CGRect] = []
+    @State private var edits = CapturePreviewEdits()
     @State private var pending: CGRect?
     @State private var dragStart: CGPoint?
+    @State private var dragDisplaySize: CGSize?
     @State private var busy = false
     @State private var error: String?
-    @State private var displaySize: CGSize = .zero
     @State private var objective = ""
 
     var body: some View {
@@ -38,11 +37,11 @@ struct CapturePreviewView: View {
                         Image(decorative: image, scale: 1)
                             .resizable()
                             .frame(width: display.width, height: display.height)
-                        ForEach(Array(redactions.enumerated()), id: \.offset) { _, rect in
+                        ForEach(Array(edits.redactions.enumerated()), id: \.offset) { _, rect in
                             Rectangle().fill(.black).frame(width: rect.width, height: rect.height)
                                 .position(x: rect.midX, y: rect.midY)
                         }
-                        if let crop {
+                        if let crop = edits.crop {
                             Rectangle().strokeBorder(.white, lineWidth: 2)
                                 .background(.white.opacity(0.08))
                                 .frame(width: crop.width, height: crop.height)
@@ -59,28 +58,35 @@ struct CapturePreviewView: View {
                     .contentShape(Rectangle())
                     .gesture(DragGesture(minimumDistance: 3)
                         .onChanged { value in
-                            if dragStart == nil { dragStart = value.startLocation }
+                            if dragStart == nil {
+                                dragStart = value.startLocation
+                                dragDisplaySize = display
+                            }
+                            guard dragDisplaySize == display else { pending = nil; return }
                             let start = dragStart ?? value.startLocation
                             pending = CGRect(x: min(start.x, value.location.x), y: min(start.y, value.location.y),
                                              width: abs(start.x - value.location.x), height: abs(start.y - value.location.y))
                         }
                         .onEnded { value in
-                            defer { dragStart = nil; pending = nil }
-                            guard let selection = pending, selection.width > 3, selection.height > 3,
+                            defer { dragStart = nil; dragDisplaySize = nil; pending = nil }
+                            guard dragDisplaySize == display, edits.displaySize == display,
+                                  let selection = pending, selection.width > 3, selection.height > 3,
                                   selection.minX >= 0, selection.minY >= 0,
                                   selection.maxX <= display.width, selection.maxY <= display.height else { return }
-                            if tool == .crop { crop = selection }
-                            else { redactions.append(selection) }
+                            if tool == .crop { edits.setCrop(selection) }
+                            else { edits.addRedaction(selection) }
                         })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .bottomTrailing) { Text("仅这块选区会发送").font(.caption).padding(8)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)) }
                     .accessibilityLabel("待发送截图；选择裁剪或遮挡后拖动来修改")
-                    .onAppear { displaySize = display }
+                    .onAppear { edits.resize(to: display) }
                     .onChange(of: display) { _, new in
-                        // A resized window changes the image-to-point mapping.
-                        // Clear old coordinates rather than apply them elsewhere.
-                        if displaySize != new { crop = nil; redactions = []; displaySize = new }
+                        // An in-progress drag belongs to the old point space.
+                        // Keep its size token until it ends so it cannot restart
+                        // mid-gesture with a stale startLocation.
+                        pending = nil
+                        edits.resize(to: new)
                     }
                 }
                 .frame(minHeight: 280)
@@ -98,7 +104,7 @@ struct CapturePreviewView: View {
                 Picker("编辑方式", selection: $tool) {
                     ForEach(PreviewTool.allCases, id: \.self) { item in Text(item.rawValue).tag(item) }
                 }.pickerStyle(.segmented).frame(width: 180)
-                Button { crop = nil; redactions = [] } label: {
+                Button { edits.clear() } label: {
                     Text("清除编辑").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }
                 Spacer()
@@ -118,10 +124,8 @@ struct CapturePreviewView: View {
     private func submit() {
         guard let source = coordinator.previewImage else { return }
         busy = true
-        let logical = displaySize == .zero
-            ? CGSize(width: CGFloat(source.width), height: CGFloat(source.height)) : displaySize
         do {
-            let edited = try CapturePreviewImage.render(source, logicalSize: logical, crop: crop, redactions: redactions)
+            let edited = try edits.render(source)
             Task { await coordinator.submitPreview(edited, objective: objective); close() }
         } catch {
             busy = false

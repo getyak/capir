@@ -12,7 +12,7 @@ final class CaptureSelectionView: NSView {
     var preview = false
     var didSelect: ((CGRect, Bool) -> Void)?
     var didCancel: (() -> Void)?
-    var didRequestWindow: (() -> Void)?
+    var didRequestWindow: ((Bool) -> Void)?
     private var start: CGPoint?
 
     override var isFlipped: Bool { true }
@@ -70,7 +70,7 @@ final class CaptureSelectionView: NSView {
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 53: didCancel?()        // Escape
-        case 49: didRequestWindow?() // Space
+        case 49: didRequestWindow?(preview) // Space
         default:
             if event.charactersIgnoringModifiers?.lowercased() == "p" { preview = true }
             else { super.keyDown(with: event) }
@@ -164,11 +164,12 @@ final class CaptureOverlayController: CaptureSelecting {
             self.finish(.success(.init(image: cropped, capturedAt: self.capturedAt, preview: preview, origin: origin)))
         }
         view.didCancel = { [weak self] in self?.finish(.failure(CaptureSelectionError.cancelled)) }
-        view.didRequestWindow = { [weak self] in self?.selectWindowInstead() }
+        view.didRequestWindow = { [weak self] preview in self?.selectWindowInstead(preview: preview) }
     }
 
-    private func selectWindowInstead() {
+    private func selectWindowInstead(preview: Bool) {
         let revision = selectionRevision
+        let selection = CaptureWindowSelection(capturedAt: capturedAt, preview: preview)
         for panel in panels { panel.contentView = nil; panel.close() }
         panels.removeAll()
         images.removeAll()
@@ -179,10 +180,7 @@ final class CaptureOverlayController: CaptureSelecting {
                 // historical 2560-pixel default.
                 let payload = try await SystemWindowCaptureService.shared.captureOneWindow(maximumDimension: nil)
                 guard revision == selectionRevision else { return }
-                guard let bitmap = NSBitmapImageRep(data: payload.imagePNG), let image = bitmap.cgImage else {
-                    throw CaptureSelectionError.empty
-                }
-                finish(.success(.init(image: image, capturedAt: capturedAt, preview: false)))
+                finish(.success(try selection.decode(payload.imagePNG)))
             } catch {
                 guard revision == selectionRevision else { return }
                 finish(.failure(error))

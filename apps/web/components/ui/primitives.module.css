@@ -9,7 +9,6 @@
 .content {
   position: fixed;
   inset: 50% auto auto 50%;
-  z-index: 150;
   translate: -50% -50%;
   display: flex;
   flex-direction: column;
@@ -25,6 +24,28 @@
   box-shadow: 0 24px 70px color-mix(in srgb, var(--ink) 18%, transparent);
   outline: none;
 }
+/* A caller's frame may own layout, never a lower modal layer than chrome. */
+.modalLayer.modalLayer { z-index: 151; }
+.customContent { position: fixed; outline: none; }
+.scroller {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: inherit;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Keep offset focus rings inside the scrolling clip. */
+  margin: -3px;
+  padding: 3px;
+  scroll-padding-block: 8px;
+}
+.scroller > * { flex-shrink: 0; }
+.content[data-has-close="true"] .scroller > :is(h1, h2, h3):first-child {
+  padding-inline-end: 44px;
+  overflow-wrap: anywhere;
+}
 .content[data-layout="search"] {
   top: min(15dvh, 120px);
   translate: -50% 0;
@@ -35,7 +56,9 @@
 .overlay[data-state="open"] { animation: veil-in 160ms ease-out; }
 .overlay[data-state="closed"] { animation: veil-out 120ms ease-in; }
 .content[data-state="open"], .popover[data-state="open"] { animation: surface-in 180ms var(--ease-out); }
-.content[data-state="closed"], .popover[data-state="closed"] { animation: veil-out 120ms ease-in; }
+/* A custom frame may use transform for centering; preserve its geometry. */
+.customContent[data-state="open"] { animation: veil-in 160ms ease-out; }
+.content[data-state="closed"], .customContent[data-state="closed"], .popover[data-state="closed"] { animation: veil-out 120ms ease-in; }
 @keyframes veil-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes veil-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes surface-in {
@@ -43,7 +66,11 @@
   to { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .overlay[data-state], .content[data-state], .popover[data-state] { animation: none; }
+  .overlay[data-state], .content[data-state], .customContent[data-state], .popover[data-state] { animation: none; }
+}
+@media (forced-colors: active) {
+  .content, .customContent { border-color: CanvasText; }
+  .close:focus-visible { outline-color: Highlight; }
 }
 
 .popover {

@@ -22,7 +22,7 @@ beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); localStorage
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 it.each(["en", "ja", "ko", "zh-TW"] as LocaleTag[])("localizes Settings-owned scope chrome in %s and preserves authored names", async locale => {
   const initial = { ...settingsAccount, user: { ...settingsAccount.user, display_name: "我的中文姓名" }, workspace: { ...settingsAccount.workspace, name: "中文原始空间" } };
-  for (const [section, scope] of [["overview", "账号 · 本机头像"], ["appearance", "仅此浏览器 · 本机保存"], ["connections", "当前空间 · {name}"]] as const) {
+  for (const [section, scope] of [["overview", "账号 · 本机头像"], ["appearance", "账号语言 · 本机外观"], ["connections", "当前空间 · {name}"]] as const) {
     await act(async () => root.render(<LocaleProvider locale={locale}><SettingsWorkspace initial={initial} section={section} labEnabled={false} sessionVersion="locale" /></LocaleProvider>));
     const expected = translate(locale, scope, { name: "中文原始空间" });
     expect(host.querySelector("[data-settings-scope]")?.textContent).toContain(expected);

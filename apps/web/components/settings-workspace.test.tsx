@@ -101,3 +101,43 @@ it("saves the profile avatar through the shared editor and restores its labelled
   await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
   expect(save).not.toHaveBeenCalled();
 });
+
+async function editName(value: string) {
+  const input = host.querySelector<HTMLInputElement>('input[name="name"]')!;
+  await act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+it("withdraws a rejected name receipt after a new edit and gives the new intent a new operation", async () => {
+  save.mockResolvedValueOnce({ error: "Synthetic name rejection" });
+  await click("编辑显示名称"); await editName("First draft"); await submit();
+  expect(host.textContent).toContain("Synthetic name rejection");
+  const first = submittedForm(0).get("operationId");
+  await editName("Second draft");
+  expect(host.textContent).not.toContain("Synthetic name rejection");
+  save.mockResolvedValueOnce({ error: "Synthetic second rejection" });
+  await submit();
+  expect(submittedForm(1).get("operationId")).not.toBe(first);
+  expect(submittedForm(1).get("name")).toBe("Second draft");
+  expect(host.textContent).toContain("Synthetic second rejection");
+  await editName("First draft");
+  expect(host.textContent).not.toContain("Synthetic name rejection");
+  expect(host.textContent).not.toContain("Synthetic second rejection");
+});
+it("withdraws a member save receipt when its editable selection changes again", async () => {
+  vi.stubGlobal("confirm", vi.fn(() => true));
+  const data = { ...settingsAccount, members: [{ id: "33333333-3333-4333-8333-333333333333", display_name: "Synthetic member", email: "member@example.test", role: "member" as const, status: "active" as const, is_owner: false }] };
+  await act(() => root.render(<AccountSettingsPanel initial={data} section="workspace" embedded />));
+  const form = host.querySelector<HTMLInputElement>('input[name="kind"][value="member"]')!.form!;
+  const status = form.querySelector<HTMLSelectElement>('select[name="status"]')!;
+  await act(() => { status.value = "revoked"; status.dispatchEvent(new Event("change", { bubbles: true })); });
+  save.mockResolvedValueOnce({ saved: true, data: { ...data, workspace: { ...data.workspace, revision: 2 }, members: [{ ...data.members[0], status: "revoked" }] } });
+  await act(async () => form.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
+  expect(form.textContent).toContain("已保存并核验。");
+  const role = form.querySelector<HTMLSelectElement>('select[name="role"]')!;
+  await act(() => { role.value = "admin"; role.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(form.textContent).not.toContain("已保存并核验。");
+  await act(() => { role.value = "member"; role.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(form.textContent).not.toContain("已保存并核验。");
+});
