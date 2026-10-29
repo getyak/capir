@@ -1427,7 +1427,7 @@ struct RelationshipAskView: View {
                             Button {
                                 self.reviewPreparationError = nil
                             } label: {
-                                Text(appLanguage.text("Dismiss"))
+                                Text(appLanguage.text("Close notice"))
                                     .font(.subheadline.weight(.medium))
                                     .frame(minWidth: 44, minHeight: 44)
                                     .contentShape(Rectangle())

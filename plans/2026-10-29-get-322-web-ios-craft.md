@@ -47,12 +47,13 @@ paths and their boundary states, preserving their product meaning.
 - [x] Fetch latest remote main; create isolated managed worktree and issue.
 - [x] Read product/design, operations and task-specific skill owners.
 - [x] Audit and compare rendered directions; freeze first coherent batch.
-- [ ] **Active: implement and validate complete Web/iOS paths**, resolve observed
-  failures before release and investigate navigation discovered by real use.
+- [x] Implement the first two coherent Web/iOS batches and resolve the observed
+  native failure; preserve direct evidence and explicit coverage gaps.
 - [ ] Verify desktop/narrow, light/dark, keyboard/reduced motion; native primary
   iPhone and relevant Dynamic Type/compact coverage with direct evidence.
-- [ ] Independent review, corrections, focused checks and applicable repository gates.
-- [ ] PR linked to GET-322; latest-head CI; normal merge; resident Web deployment
+- [x] Independent review and focused corrections for both Web batches and native
+  increments; applicable final-head CI remains part of the release milestone.
+- [ ] **Active: release** — PR linked to GET-322; latest-head CI; normal merge; resident Web deployment
   and changed-behavior/version readback when applicable.
 - [ ] Continue only into remaining high-value gaps; at deadline preserve evidence,
   clean owned temporary resources, pause heartbeat and report exact remaining work.
@@ -86,13 +87,15 @@ synthetic component observations, not Memory persistence or physical IME proof.
 The temporary component route was removed after capturing evidence.
 
 Web focused suite: 154 passed; locale coverage/runtime: 25 passed; lint and
-`pnpm docs:check` passed. Broader Web checks remain in progress.
+`pnpm docs:check` passed. Broader Web typecheck and all 387 files / 3,535 tests also passed on the first checkpoint.
 Impeccable targeted scan returned no findings.
 
 Native build succeeded; seven focused Simulator checks yielded six passes and
-one retained failure in interrupted-response recovery. The failure may be a
-transparent URLSession retry crossing the Lab one-shot boundary; diagnosis is
-in progress and this is not yet a confirmed cause. Chinese AX5 Lab diagnostic
+one retained failure in interrupted-response recovery. Follow-up focused unit
+and host probes rejected the initial transparent-URLSession-retry hypothesis.
+The isolated Lab fault store appears to join global active refresh and recover
+before manual Retry; a red/green isolation test is being added. Diagnosis is
+still in progress. Chinese AX5 Lab diagnostic
 chrome also consumes too much space; error-body completeness is unverified.
 Today unread and review-error Dismiss currently have source-only evidence.
 
@@ -107,8 +110,29 @@ request `0310a5e0-2db9-4954-a860-04ddc8ef53c3`, environment `staging`.
 Reuse it through the deadline; private credentials and browser state remain only
 in the registered temporary artifact. Stop it and verify cleanup at closeout.
 
-Pending: native failure diagnosis/correction, remaining direct native evidence,
-round 2 implementation/review, current-head CI/merge and resident Web deployment.
+### Round 2, 21:38 Asia/Shanghai
+
+Web related-session navigation is committed as `afdfae84`. Its 111 focused tests,
+locale checks and typecheck passed. Actual Person → New conversation navigation
+reached a queued composer with no Person/context query scope; the 375px CTA is
+44px high and no overflow or console/page error was observed. Empty-state focus
+now shares the fixed chrome scroll margins. Populated related-session lists
+remain unit/source evidence because the daily account contains no such Sessions.
+
+Native recovery regression is fixed and independently reviewed. Round 2 passed
+five checks (three unit, two UI); final Chinese copy readback passed one UI check.
+Both result sets have zero skips. The AX5 screenshot contains the complete error
+reason and the correct Retry action. Initial failures and the red regression
+remain retained.
+
+Draft PR: [#485](https://github.com/getyak/capir/pull/485), first checkpoint
+`28777508`. Current-head CI is running; first security gates passed. This does
+not establish the final head, merge or deployment.
+
+Pending: final committed source, latest-main integration and CI/merge, clean
+resident Web build/activation/readback, then remaining direct native evidence
+and further high-value loops before the deadline. Formal evidence is kept in
+the task visualization directory under `get322/verification.md` and `get322/ios`.
 
 ## Resume and stopping rule
 

@@ -33,6 +33,71 @@ final class LabFaultTests: XCTestCase {
         await service.close()
     }
 
+    func testFaultPreviewWaitsForManualRetryWhileDefaultWorkspaceStillRefreshes() async throws {
+        let preview = LabFaultStore(enabled: true)
+        await preview.start(.interruptedOnce, minutes: 1)
+        for _ in 0..<100 where preview.isWorking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let previewWorkspace = try XCTUnwrap(preview.workspace)
+        guard case .failed = previewWorkspace.phase else {
+            await preview.close()
+            return XCTFail("The interrupted first read must reach its actual failure state")
+        }
+        let previewReadCount = previewWorkspace.completedReadCount
+
+        // A default store is the positive control: the shared refresh must
+        // actually run before checking that the manual fault preview stayed put.
+        let service = try LabFaultWorkspaceService(preset: .serverErrorOnce, seconds: 60, enabled: true)
+        let ordinaryWorkspace = PursuitWorkspaceStore(service: service,
+            actionCompletions: LabFaultTestCompletions())
+        await ordinaryWorkspace.load()
+        let ordinaryReadCount = ordinaryWorkspace.completedReadCount
+        WorkspaceActiveRefresh.shared.requestRefresh(reason: "isolated-fault-regression")
+        for _ in 0..<300 where ordinaryWorkspace.completedReadCount == ordinaryReadCount {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertGreaterThan(ordinaryWorkspace.completedReadCount, ordinaryReadCount,
+                             "Default workspaces must retain automatic active refresh")
+        XCTAssertEqual(ordinaryWorkspace.snapshot?.people.count, 1)
+        // Let the same refresh group's other callbacks settle, rather than
+        // assuming the positive control completed last.
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(previewWorkspace.completedReadCount, previewReadCount,
+                       "A shared refresh must not consume a fault preview's explicit retry")
+        XCTAssertNil(previewWorkspace.snapshot,
+                     "The isolated failure must stay inspectable until manual retry")
+
+        preview.reload()
+        for _ in 0..<100 where preview.isWorking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(previewWorkspace.snapshot?.people.count, 1)
+        XCTAssertEqual(previewWorkspace.completedReadCount, previewReadCount + 1)
+        previewWorkspace.invalidateReadScope()
+        ordinaryWorkspace.invalidateReadScope()
+        await service.close()
+        await preview.close()
+    }
+
+    func testDefaultWorkspaceCanBeDestroyedAfterRegisteringActiveRefresh() async throws {
+        let service = try LabFaultWorkspaceService(preset: .staleEvidence, seconds: 60, enabled: true)
+        var workspace: PursuitWorkspaceStore? = PursuitWorkspaceStore(service: service,
+            actionCompletions: LabFaultTestCompletions())
+        await workspace?.load()
+        weak var releasedWorkspace = workspace
+        workspace = nil
+        await Task.yield()
+        XCTAssertNil(releasedWorkspace,
+                     "The shared refresh registration must not retain a destroyed workspace")
+        let before = await service.engine.state().events.count
+        WorkspaceActiveRefresh.shared.requestRefresh(reason: "released-fault-regression")
+        try await Task.sleep(for: .milliseconds(1200))
+        let after = await service.engine.state().events.count
+        XCTAssertEqual(after, before, "A destroyed workspace must not perform another read")
+        await service.close()
+    }
+
     func testMonotonicExpiryDisablesOfflineInjection() async throws {
         let clock = LabFaultTestClock()
         let service = try LabFaultWorkspaceService(preset: .offline, seconds: 1, enabled: true, clock: clock.read)
@@ -161,4 +226,12 @@ private final class LabFaultTestClock: @unchecked Sendable {
     private var value = 0.0
     func read() -> Double { lock.lock(); defer { lock.unlock() }; return value }
     func advance(_ seconds: Double) { lock.lock(); value += seconds; lock.unlock() }
+}
+
+private final class LabFaultTestCompletions: PursuitActionCompletionPersisting {
+    func entry(for actionID: String) throws -> PersistedPursuitActionCompletion? { nil }
+    func allEntries() throws -> [PersistedPursuitActionCompletion] { [] }
+    func save(_ entry: PersistedPursuitActionCompletion) throws {}
+    func remove(actionID: String) throws {}
+    func deleteAll() throws {}
 }

@@ -2,6 +2,10 @@ import XCTest
 
 @MainActor
 final class LabFaultUITests: XCTestCase {
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
     func testOneShotFailuresAndInterruptedResponseRecoverThroughRealPages() {
         let app = launch()
         for preset in ["One 401 response", "One 429 response", "One 500 response", "Interrupt one response"] {
@@ -69,7 +73,25 @@ final class LabFaultUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(closeButton.frame.height + 0.001, 44)
         XCTAssertGreaterThanOrEqual(closeButton.frame.width + 0.001, 44)
         capture("lab-fault-chinese-ax5")
+        let content = app.scrollViews["lab-fault-read-content"]
+        let reason = app.staticTexts["workspace-failed-attempt-1"]
+        let retry = app.buttons["retry-workspace-read"]
+        XCTAssertTrue(content.exists)
+        XCTAssertTrue(reason.exists)
+        for _ in 0..<8 where !retry.isHittable { content.swipeUp() }
+        XCTAssertTrue(retry.isHittable, "Recovery must stay reachable beneath the AX5 diagnostic controls")
+        XCTAssertEqual(retry.label, "重试", "A workspace retry must not be described as asking a new question")
+        XCTAssertGreaterThanOrEqual(retry.frame.height + 0.001, 44)
+        XCTAssertGreaterThanOrEqual(reason.frame.minY, content.frame.minY - 1)
+        XCTAssertLessThanOrEqual(reason.frame.maxY, content.frame.maxY + 1,
+                                "The full failure explanation must be readable, not only present in AX")
+        capture("lab-fault-chinese-ax5-reason-and-retry")
         XCUIDevice.shared.press(.home); app.activate()
+        let actions = app.buttons["lab-fault-actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(actions.frame.width + 0.001, 44)
+        XCTAssertGreaterThanOrEqual(actions.frame.height + 0.001, 44)
+        actions.tap()
         XCTAssertTrue(app.buttons["lab-fault-stop"].waitForNonExistence(timeout: 5))
         let reload = app.buttons["lab-fault-reload"]
         XCTAssertTrue(reload.waitForExistence(timeout: 5))

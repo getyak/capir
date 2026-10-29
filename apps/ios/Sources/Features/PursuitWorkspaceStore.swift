@@ -242,9 +242,10 @@ final class PursuitWorkspaceStore: ObservableObject {
     /// bounded active interval through one coordinator. Completions are fenced
     /// by the captured scope generation and the store's own lifetime.
     private var activeRefreshRegistration: WorkspaceActiveRefresh.Registration?
+    private let activeRefreshEnabled: Bool
 
     private func adoptActiveRefresh() {
-        guard readScopeActive, readScopeIsCurrent(), activeRefreshRegistration == nil else { return }
+        guard activeRefreshEnabled, readScopeActive, readScopeIsCurrent(), activeRefreshRegistration == nil else { return }
         activeRefreshRegistration = WorkspaceActiveRefresh.shared.register(
             scope: "pursuit-workspace-directory"
         ) { [weak self] generation in
@@ -300,9 +301,11 @@ final class PursuitWorkspaceStore: ObservableObject {
         actionCompletions: PursuitActionCompletionPersisting = UserDefaultsPursuitActionCompletionStore(),
         operationIDFactory: @escaping () -> UUID = UUID.init,
         previewSnapshot: PursuitWorkspaceSnapshot = .preview,
+        activeRefreshEnabled: Bool = true,
         readScopeIsCurrent: @escaping () -> Bool = { true }
     ) {
         self.service = service
+        self.activeRefreshEnabled = activeRefreshEnabled
         self.readScopeIsCurrent = readScopeIsCurrent
         self.actionCompletions = actionCompletions
         self.operationIDFactory = operationIDFactory

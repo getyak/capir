@@ -4326,7 +4326,7 @@ struct PursuitWorkspaceFailureView: View {
                 .accessibilityIdentifier("workspace-retrying")
             } else {
                 Button(action: retry) {
-                    Text(appLanguage.text("Try again"))
+                    Text(appLanguage.text("Retry"))
                         .font(.subheadline.weight(.semibold))
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
