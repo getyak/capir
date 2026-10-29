@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, DotsThree, PushPin, Tray } from "@phosphor-icons/react";
+import { Archive, DotsThree, PencilSimple, PushPin, Tray } from "@phosphor-icons/react";
 import {
   Children,
   cloneElement,
@@ -20,6 +20,7 @@ import type { SessionOrganizationFlag } from "@/lib/workspace-session-organizati
 import { useT } from "./locale-provider";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import styles from "./workspace-shell.module.css";
+import { SessionRenameDialog, type SessionMenuTarget } from "./session-rename-dialog";
 import { ListOrderActions, type OrderControl } from "./workspace-list-order";
 
 /**
@@ -42,6 +43,7 @@ export type SessionRowOrganization = {
   /** Row title used to name the accessible buttons. */
   rowLabel: string;
   reorder?: OrderControl;
+  session?: SessionMenuTarget;
 };
 
 type SwipeState = {
@@ -106,13 +108,16 @@ export function SessionRowMenu({
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const menuTrigger = useRef<HTMLButtonElement>(null);
   const { archived, pinned, onToggle, rowLabel } = organization;
   return (
-    <div className={styles.sessionRowMenu} data-open={open ? "true" : undefined}>
+    <><div className={styles.sessionRowMenu} data-open={open ? "true" : undefined}>
       <Popover open={open} onOpenChange={value => { setOpen(value); onOpenChange?.(value); if (value) onOpen?.(); }}>
         <PopoverTrigger asChild>
           <button
             {...organization.reorder?.handleProps}
+            ref={menuTrigger}
             title={open ? undefined : organization.reorder?.handleProps.title}
             aria-label={t("sessionRow.moreForTitle", { title: rowLabel })}
             className={`${styles.sessionRowMenuTrigger} ${organization.reorder?.handleProps.className ?? ""}`}
@@ -124,6 +129,9 @@ export function SessionRowMenu({
       <PopoverContent aria-label={t("sessionRow.moreForTitle", { title: rowLabel })}
         align="end" sideOffset={4} className={styles.sessionRowMenuPopover}>
         <span className={styles.sessionRowMenuTitle}>{rowLabel}</span>
+        {organization.session && <button type="button" onClick={() => { setOpen(false); onOpenChange?.(false); setRenaming(true); }}>
+          <PencilSimple aria-hidden="true" size={15} /><span>{t("sessionMenu.rename")}</span>
+        </button>}
         <button
           aria-pressed={pinned}
           onClick={() => {
@@ -156,6 +164,9 @@ export function SessionRowMenu({
       </PopoverContent>
       </Popover>
     </div>
+    {renaming && organization.session && <SessionRenameDialog key={organization.session.id + organization.session.binding}
+      target={organization.session} title={rowLabel} onClose={() => setRenaming(false)}
+      returnFocus={() => { if (menuTrigger.current?.isConnected) menuTrigger.current.focus({ preventScroll: true }); }} />}</>
   );
 }
 

@@ -1,5 +1,6 @@
 import { sessionBindingCredentials } from "./primary-session-binding";
 import "server-only";
+import { normalizeSessionTitle } from "../session-title";
 
 import { createHmac } from "node:crypto";
 
@@ -669,6 +670,33 @@ export type DeleteWorkspaceSessionInput = {
   expectedRevision: number;
   idempotencyKey: string;
 };
+
+/** Rename exactly the revision the person reviewed; preserve every other field. */
+export async function renameWorkspaceSession(input: {
+  sessionId: string; expectedRevision: number; idempotencyKey: string; title: string;
+}): Promise<WorkspaceSessionDetail> {
+  const title = normalizeSessionTitle(input.title);
+  if (!title || !isWorkspaceSessionId(input.sessionId) || !UUID.test(input.idempotencyKey)
+    || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+    throw new TalentSignalHttpError(400, "agent_session_invalid", "Invalid conversation title.", null);
+  }
+  const current = await loadWorkspaceSession(input.sessionId);
+  if (current.state !== "active" || !current.record.payload) {
+    throw new TalentSignalHttpError(410, "AGENT_SESSION_DELETED", "Conversation unavailable.", null);
+  }
+  if (current.record.revision !== input.expectedRevision) {
+    throw new TalentSignalHttpError(409, "AGENT_SESSION_REVISION_CONFLICT", "Conversation changed. Review the latest title and retry.", null);
+  }
+  const response = await (await client()).saveAgentSession(input.sessionId, {
+    expected_revision: input.expectedRevision,
+    idempotency_key: input.idempotencyKey,
+    payload: { ...current.record.payload, title },
+  });
+  if (!matchesTypeBox(AgentSessionResponseSchema, response) || response.session.payload?.title !== title) {
+    throw new TalentSignalHttpError(502, "agent_session_unavailable", "Rename could not be verified.", null);
+  }
+  return workspaceSessionDetail(response.session);
+}
 
 /** Tombstone deletion. Reversible only by the canonical record, never locally. */
 export async function deleteWorkspaceSession(

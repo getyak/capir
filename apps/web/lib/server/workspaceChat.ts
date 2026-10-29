@@ -1,4 +1,4 @@
-import { CONTRACT_VERSION, TalentSignalHttpError, type TalentSignalClient, type AgentSessionResponse } from "@talent-signal/contracts";
+import { CONTRACT_VERSION, TalentSignalHttpError, resolveFirstReplyTitle, type TalentSignalClient, type AgentSessionResponse } from "@talent-signal/contracts";
 
 export type WorkspaceChatInput = { request_id: string; session_id: string; objective: string; time_zone: string };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -57,7 +57,7 @@ export async function askWorkspaceChat(client: TalentSignalClient, input: Worksp
     await client.saveAgentSession(input.session_id, {
       expected_revision: session.session.revision, idempotency_key: input.request_id,
       payload: { ...payload,
-        ...(payload.turns.length === 0 && output.session_title ? { title: workspaceSessionTitle(output.session_title) } : {}),
+        ...(payload.turns.length === 0 && output.session_title ? { title: resolveFirstReplyTitle(payload.title, workspaceSessionTitle(output.session_title), workspaceSessionTitle(input.objective)) } : {}),
         updatedAt: output.created_at, turns: [...payload.turns, {
         id: input.request_id, objective: input.objective.trim(), createdAt: now,
         response: { contractVersion: CONTRACT_VERSION, taskID: output.task_id, contextManifestID: "",

@@ -74,6 +74,7 @@ export function WorkspaceRecentSessions({
       onToggle: (flag, value) => setFlag(row.id, flag, value),
       rowLabel: row.title,
       reorder: order.control(row.id),
+      session: { id: row.id, binding, scope: storageScope },
     };
   }
 

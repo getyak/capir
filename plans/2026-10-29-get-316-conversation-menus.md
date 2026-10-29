@@ -36,7 +36,7 @@ by AGENTS.md for this multi-path change. Keep repository plans here per PLANS.md
 
 ## Commit sequence and verification
 
-- [ ] Quiet hover/focus three-dot menu: preserve vertical drag, optional swipe,
+- [x] Quiet hover/focus three-dot menu: preserve vertical drag, optional swipe,
   keyboard pin/archive/reorder and a coarse-pointer target; browser geometry.
 - [ ] Canonical rename: bounded nonempty title, revision conflict, unavailable
   Session, cancellation, failure and readback; row/directory/open-header sync.
@@ -55,8 +55,9 @@ focused checks, commit the improvement. Run appropriate Web lint/type/test,
 docs checks and browser acceptance after all commits. Provision an expiring
 test account using capir help/test create, retain sanitized evidence, stop it.
 Deploy affected resident Web from clean committed source and read back revision
-and changed behavior. Backend deployment is required only if backend runtime
-changes; current approach reuses its existing mutation contract. Create and
+and changed behavior. A first-reply title write would overwrite a renamed empty Session. The backend
+now preserves an explicitly chosen initial title, using the existing payload
+contract; deploy all affected resident APIs/Agent Hosts as well as Web. Create and
 attach one combined PR, link GET-316, and record CI/review/deployment separately.
 User requested a PR for review; leave it open and the issue In Review until
 the requested surface evidence and any final merge decision are resolved.

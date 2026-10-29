@@ -10,6 +10,7 @@ import {
   isWorkspaceSessionId,
   isWorkspaceSessionTimestamp,
   loadWorkspaceSession,
+  renameWorkspaceSession,
   saveWorkspaceSessionDraft,
   workspaceSessionDetailWire,
   workspaceSessionsBinding,
@@ -166,6 +167,24 @@ export async function PUT(
   } catch (error) {
     return failure(error);
   }
+}
+
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  const guard = await guardMutation(request);
+  if (!guard.ok) return guard.response;
+  try {
+    const id = await sessionId(context);
+    if (!id) return reply({ code: "agent_session_invalid" }, 400);
+    const input: unknown = await request.json().catch(() => null);
+    if (!input || typeof input !== "object" || !("title" in input) || typeof input.title !== "string"
+      || !("expected_revision" in input) || !Number.isSafeInteger(input.expected_revision)
+      || !("idempotency_key" in input) || typeof input.idempotency_key !== "string" || !UUID.test(input.idempotency_key)) {
+      return reply({ code: "agent_session_invalid" }, 400);
+    }
+    const detail = await renameWorkspaceSession({ sessionId: id, title: input.title,
+      expectedRevision: input.expected_revision as number, idempotencyKey: input.idempotency_key });
+    return reply({ detail: workspaceSessionDetailWire(detail) });
+  } catch (error) { return failure(error); }
 }
 
 /** Tombstone deletion, only after the client's explicit confirmation. */

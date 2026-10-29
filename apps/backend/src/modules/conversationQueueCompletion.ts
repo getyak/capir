@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { titleAfterFirstReply } from "./sessionTitles.js";
 
 import {
   CONTRACT_VERSION,
@@ -472,7 +473,7 @@ async function saveConversationQueueTurn(
       ...payload,
       isUnread: payload.isUnread ?? false,
       updatedAt: metadata.updatedAt,
-      ...(payload.turns.length === 0 && metadata.title ? { title: metadata.title } : {}),
+      ...(payload.turns.length === 0 && metadata.title ? { title: titleAfterFirstReply(payload.title, metadata.title, turn.objective) } : {}),
       turns: [...payload.turns, turn],
     };
     try {

@@ -197,6 +197,9 @@ export function SessionDirectory({
       onToggle: (flag, value) => setFlag(session.session_id, flag, value),
       rowLabel: sessionDisplayTitle(session.title),
       reorder: order.control(session.session_id),
+      session: binding ? { id: session.session_id, binding, scope: storageScope,
+        onRenamed: detail => setSessions(current => current.map(row => row.session_id === detail.session_id ? { ...row, title: detail.title, revision: detail.revision } : row)),
+      } : undefined,
     };
   }
 

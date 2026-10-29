@@ -8,7 +8,7 @@ const record = { contract_version: CONTRACT_VERSION, session: { session_id: sid,
 const output = { task_id: tid, created_at: payload.updatedAt, disposition: "answer", blocks: [{ id: "answer-1", kind: "answer", title: "回复", status: "ready", body: "草稿等待确认", requires_user_decision: true, calendar_draft: { sensitive: "never persist executable payload" } }], external_effects: [], session_title: "安排明天下午会议" };
 function fixture() {
  const getAgentSession = vi.fn().mockResolvedValue(structuredClone(record));
- const saveAgentSession = vi.fn().mockResolvedValue(structuredClone(record));
+ const saveAgentSession = vi.fn().mockImplementation(async (_id, mutation) => ({ ...structuredClone(record), session: { ...structuredClone(record.session), payload: mutation.payload } }));
  const createUnscopedChatTask = vi.fn().mockResolvedValue(output);
  return { getAgentSession, saveAgentSession, createUnscopedChatTask, client: { getAgentSession, saveAgentSession, createUnscopedChatTask } as unknown as TalentSignalClient };
 }
@@ -59,4 +59,11 @@ describe("Web workspace conversation", () => {
   expect(workspaceSessionTitle("你好")).toBe("简单聊两句");
   expect(workspaceSessionTitle("Response")).toBe("Quick hello");
  });
+});
+
+
+it("keeps an explicitly renamed empty Session through its first legacy reply", async () => {
+  const f = fixture();
+  await askWorkspaceChat(f.client, input);
+  expect(f.saveAgentSession.mock.calls[0][1].payload.title).toBe(payload.title);
 });

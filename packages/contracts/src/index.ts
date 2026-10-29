@@ -2,6 +2,7 @@ export * from "./client.js";
 export * from "./agentSchemas.js";
 export * from "./constants.js";
 export * from "./identityHandles.js";
+export * from "./sessionTitle.js";
 export * from "./labSchemas.js";
 export * from "./proposalSchemas.js";
 export * from "./pursuitSchemas.js";
