@@ -37,7 +37,7 @@ html:has(.quiet-workspace) body {
   --ts-sidebar-width: 236px;
   --ts-rail-width: 72px;
   --workspace-agent-bubble: var(--ts-chrome-surface);
-  --workspace-user-bubble: #eceae4;
+  --workspace-user-bubble: var(--ts-selected-surface);
   --workspace-brand-image: url("/brand/symbol-ink.svg");
   --shadow-object: none;
   --shadow-accent: none;
