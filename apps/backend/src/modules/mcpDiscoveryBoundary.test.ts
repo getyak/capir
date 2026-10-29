@@ -40,6 +40,9 @@ describe('untrusted discovery boundary',()=>{
  it('does not report a truncated paginated directory as verified',async()=>{
   expect((await discover({tools:[],nextCursor:'more'})).status).toBe('failed');
  });
+ it.each([42, {}, null])('does not treat an invalid continuation cursor as complete: %j',async nextCursor=>{
+  expect((await discover({tools:[],nextCursor}))).toMatchObject({status:'failed',errorCode:'MCP_RESPONSE_INVALID'});
+ });
  it('bounds multilingual discovery before database persistence',async()=>{
   const result=await discover({tools:Array.from({length:100},(_,i)=>({name:`tool_${i}`,description:'汉'.repeat(2000)}))});
   expect(result.status).toBe('failed');

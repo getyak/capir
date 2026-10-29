@@ -173,6 +173,20 @@ describe("real MCP tools/call transport", () => {
     }
   });
 
+  it.each([42, {}, null])("does not execute after malformed discovery continuation: %j", async nextCursor => {
+    const standard = standardHandler({ content: [{ type: "text", text: "must not execute" }] });
+    const server = await syntheticServer((body, request, response) => {
+      if (body.method === "tools/list") {
+        json(response, { id: body.id, jsonrpc: "2.0", result: { nextCursor,
+          tools: [{ name: "lookup", inputSchema: { type: "object", properties: {} } }] } });
+      } else standard(body, request, response);
+    });
+    const result = await performMcpToolCall({ arguments: {}, target: await targetFor(server.origin),
+      timeoutMs: 4_000, toolName: "lookup" });
+    expect(result).toMatchObject({ status: "failed", errorCode: "MCP_RESPONSE_INVALID", effectSent: false });
+    expect(server.calls.some(call => call.body.method === "tools/call")).toBe(false);
+  });
+
   it("distinguishes a tool isError result from transport failure", async () => {
     const server = await syntheticServer(
       standardHandler({ content: [{ text: "tool says no", type: "text" }], isError: true }),
