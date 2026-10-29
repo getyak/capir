@@ -2,7 +2,7 @@
 
 import { ArrowCounterClockwise, ArrowDown, ArrowUp, DotsSixVertical } from "@phosphor-icons/react";
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type PointerEvent, type ReactNode } from "react";
-import { projectListOrder, useListOrder, type ListOrderKind } from "@/lib/workspace-list-order";
+import { projectListOrder, projectSessionOrder, useListOrder, type ListOrderKind } from "@/lib/workspace-list-order";
 import { useT } from "./locale-provider";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import styles from "./workspace-list-order.module.css";
@@ -26,8 +26,8 @@ const oneGroup = () => "all";
  * horizontal navigation and vertical touch scrolling retain their ownership. */
 export function useWorkspaceListReorder<T extends { id: string }>(
   rows: readonly T[], kind: ListOrderKind,
-  { scope: explicitScope, disabled = false, group = oneGroup, limit = Infinity }: {
-    scope?: string | null; disabled?: boolean; group?: (row: T) => string; limit?: number;
+  { scope: explicitScope, disabled = false, group = oneGroup, limit = Infinity, activity }: {
+    scope?: string | null; disabled?: boolean; group?: (row: T) => string; limit?: number; activity?: (row: T) => number;
   } = {},
 ) {
   const inheritedScope = useContext(Scope);
@@ -36,17 +36,19 @@ export function useWorkspaceListReorder<T extends { id: string }>(
   const t = useT();
   const listId = useId();
   const groups = [...new Set(rows.map(group))];
-  const ordered = groups.flatMap(key => projectListOrder(rows.filter(row => group(row) === key), snapshot.ids, row => row.id));
+  const ordered = groups.flatMap(key => kind === "sessions" && activity
+    ? projectSessionOrder(rows.filter(row => group(row) === key), snapshot.ids, Date.parse(snapshot.updatedAt ?? "") || 0, activity)
+    : projectListOrder(rows.filter(row => group(row) === key), snapshot.ids, row => row.id));
   const visible = ordered.slice(0, limit);
   const [indicator, setIndicator] = useState<{ id: string; target: string | null; edge: string } | null>(null);
   const [announcement, setAnnouncement] = useState("");
-  const latest = useRef({ visible, group, store, disabled, active: true });
+  const latest = useRef({ visible, ordered, group, store, disabled, active: true });
   const generation = useRef(0);
   const drag = useRef<Drag | null>(null);
   const frame = useRef<number | null>(null);
   const suppressClick = useRef(0);
   useLayoutEffect(() => { generation.current += 1; }, [store]);
-  useLayoutEffect(() => { latest.current = { visible, group, store, disabled, active: true }; });
+  useLayoutEffect(() => { latest.current = { visible, ordered, group, store, disabled, active: true }; });
 
   function cancel(announce = true) {
     const state = drag.current;
@@ -92,7 +94,7 @@ export function useWorkspaceListReorder<T extends { id: string }>(
   function move(id: string, target: string, edge: "before" | "after") {
     if (!store) return;
     const attempt = generation.current;
-    void store.move(() => generation.current === attempt ? allowed(id, target) : [], id, target, edge).then(saved => {
+    void store.move(() => generation.current === attempt ? allowed(id, target) : [], id, target, edge, kind === "sessions" && activity ? { revision: snapshot.revision, ids: () => latest.current.ordered.map(row => row.id) } : undefined).then(saved => {
       if (latest.current.active && latest.current.store === store) setAnnouncement(saved ? t("listOrder.saved") : store.getSnapshot().status === "error" ? "" : t("listOrder.cancelled"));
     });
   }

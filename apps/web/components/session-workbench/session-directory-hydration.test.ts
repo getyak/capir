@@ -42,3 +42,22 @@ it("hydrates the same session time when loading crosses a relative-time boundary
   expect(recoverable).not.toHaveBeenCalled();
   expect(host.textContent).toContain("59 分钟前");
 });
+
+
+it("accepts a fresh server directory when navigation retains the client component", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const { createRoot } = await import("react-dom/client");
+  const sample = { session_id: "11111111-1111-4111-8111-111111111111", revision: 1,
+    updated_at: "2026-10-29T00:00:00Z", expires_at: "2030-01-01T00:00:00Z",
+    state: "active", title: "Old synthetic title", turn_count: 1, is_unread: false,
+    scope_kind: "unresolved_intent", person_label: "", context_label: "", scope: { kind: "unresolved_intent" },
+  } as SessionSummary;
+  const props = { renderedAt: "2026-10-29T00:00:00Z", initialSessions: [sample], initialComplete: true,
+    initialNextCursor: null, sessionVersion: "binding", initialError: null, sessionRecoveryHref: null };
+  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(createElement(SessionDirectory, props)));
+  expect(host.textContent).toContain("Old synthetic title");
+  await act(async () => root!.render(createElement(SessionDirectory, { ...props, initialSessions: [{ ...sample, title: "Fresh synthetic title", revision: 2 }] })));
+  expect(host.textContent).toContain("Fresh synthetic title");
+  expect(host.textContent).not.toContain("Old synthetic title");
+});

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it } from "vitest";
-import { createListOrderStore, projectListOrder, type OrderLock } from "./workspace-list-order";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createListOrderStore, projectListOrder, projectSessionOrder, type OrderLock } from "./workspace-list-order";
 
 const scope = "a".repeat(64);
 const A = "11111111-1111-4111-8111-111111111111";
@@ -135,4 +135,38 @@ describe("owner-controlled local list order", () => {
     expect(store.getSnapshot()).toMatchObject({ ids: [], status: "error" });
     expect(JSON.parse(localStorage.getItem(store.key)!).revision).toBe(2);
   });
+});
+
+
+it("promotes activity since a manual arrangement without promoting old paginated history", () => {
+  const rows = [
+    { id: "new", time: 300 }, { id: "active", time: 250 },
+    { id: "one", time: 100 }, { id: "two", time: 90 }, { id: "history", time: 20 },
+  ];
+  expect(projectSessionOrder(rows, ["two", "one", "active"], 200, row => row.time).map(row => row.id)).toEqual(["new", "active", "two", "one", "history"]);
+  expect(projectSessionOrder(rows, [], 0, row => row.time)).toEqual(rows);
+});
+
+
+it("rearranges the currently presented Session order after activity promotion", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(new Date(1000));
+    const store = createListOrderStore(scope, "sessions", () => localStorage, locks());
+    await store.move(() => [A, B, C], A, B, "before");
+    vi.setSystemTime(new Date(2000));
+    const activity = [{ id: C, time: 1500 }, { id: A, time: 100 }, { id: B, time: 90 }];
+    const presented = projectSessionOrder(activity, store.getSnapshot().ids, 1000, row => row.time).map(row => row.id);
+    expect(presented).toEqual([C, A, B]);
+    await store.move(() => presented, B, A, "before", { revision: store.getSnapshot().revision, ids: () => presented });
+    expect(store.getSnapshot().ids).toEqual([C, B, A]);
+  } finally { vi.useRealTimers(); }
+});
+
+
+it("retains the promoted pinned group when rearranging the ordinary group", async () => {
+  const store = createListOrderStore(scope, "sessions", () => localStorage, locks());
+  await store.move(() => [A, B, C, D], A, B, "before");
+  expect(await store.move(() => [C, D], D, C, "before", { revision: store.getSnapshot().revision, ids: () => [B, A, C, D] })).toBe(true);
+  expect(store.getSnapshot().ids).toEqual([B, A, D, C]);
 });

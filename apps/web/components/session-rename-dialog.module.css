@@ -1,0 +1,10 @@
+.dialog h2 { font-size: var(--ts-type-heading, 1.125rem); font-weight: 550; margin: 0; }
+.dialog p { color: var(--muted-strong); font-size: 0.875rem; line-height: 1.6; }
+.dialog form { display: grid; gap: 12px; }
+.dialog label { font-size: 0.875rem; }
+.dialog input { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font: inherit; min-height: 44px; padding: 8px 12px; width: 100%; }
+.dialog input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.dialog button { background: var(--surface-muted); border: 0; border-radius: 8px; color: var(--ink); cursor: pointer; font: inherit; min-height: 44px; padding: 8px 16px; }
+.dialog button:disabled { cursor: default; opacity: 0.5; }
+.dialog button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.actions { display: flex; gap: 8px; justify-content: flex-end; }

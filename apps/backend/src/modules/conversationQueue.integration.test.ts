@@ -106,6 +106,7 @@ async function seedSession(options: {
     personDisplayLabel: "",
     contextDisplayLabel: "",
     title: "",
+    isUnread: false,
     turns: [],
     updatedAt: now,
     createdAt: now,
@@ -307,6 +308,24 @@ async function commitUnpublishedStop(sessionId: string, accountId: string): Prom
 }
 
 suite("durable conversation queue", () => {
+  it("keeps a chosen title through first reply readback", async () => {
+    const seeded = await seedSession();
+    const before = await getAgentSession(pool!, seeded.auth, seeded.sessionId);
+    await mutateAgentSession(pool!, seeded.auth, seeded.sessionId, {
+      expected_revision: before.revision, idempotency_key: randomUUID(),
+      payload: { ...before.payload!, title: "Chosen before reply" },
+    });
+    const provider = new ScriptedConversationProvider();
+    const runner = await startRunner(provider);
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, { session_id: seeded.sessionId,
+        message_id: randomUUID(), idempotency_key: randomUUID(), objective: "Hello" });
+      await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.status === "completed");
+      const after = await getAgentSession(pool!, seeded.auth, seeded.sessionId);
+      expect(after.payload?.title).toBe("Chosen before reply");
+      expect(after.payload?.turns).toHaveLength(1);
+    } finally { await runner.close(); await removeProofAccount(seeded.accountId); }
+  });
   it("lets an account-fenced MCP transaction inspect its claim while a heartbeat waits on the account", async () => {
     const seeded = await seedSession();
     const heartbeatPool = new Pool({ connectionString: databaseURL, max: 1, statement_timeout: 5000 });

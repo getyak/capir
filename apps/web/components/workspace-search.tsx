@@ -170,7 +170,7 @@ export function useWorkspaceDirectory(binding: string | null, enabled: boolean) 
       if (disposed || expired) return;
       if (!(keys === null || keys.includes(key))) return;
       if (mode === "revalidate" || mode === "refresh") {
-        // Additive send admission changes the directory without retracting
+        // Send admission and title-only rename change the directory without retracting
         // existing rows. Keep this mounted, same-binding projection while the
         // invalidated cache is read again; destructive mutations still clear
         // it immediately. Scope/401/expiry below always fail closed.

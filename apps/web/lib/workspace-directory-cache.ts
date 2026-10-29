@@ -380,7 +380,8 @@ export function workspaceDirectoryMutationInvalidationMode(
   pathname: string,
 ): Exclude<WorkspaceDirectoryInvalidationMode, "discard"> | null {
   if (!workspaceDirectoryMutationInvalidates(method, pathname)) return null;
-  return method.toUpperCase() === "POST" && /^\/api\/workspace-sessions\/[^/]+\/conversation-queue$/.test(pathname)
+  return (method.toUpperCase() === "POST" && /^\/api\/workspace-sessions\/[^/]+\/conversation-queue$/.test(pathname))
+    || (method.toUpperCase() === "PATCH" && /^\/api\/workspace-sessions\/[^/]+$/.test(pathname))
     ? "refresh"
     : "revalidate";
 }

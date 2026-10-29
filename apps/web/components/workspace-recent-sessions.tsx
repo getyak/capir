@@ -60,7 +60,7 @@ export function WorkspaceRecentSessions({
     ? { rows: { visible: organized.visible.slice(0, 8), archived: organized.archived.slice(0, 8) }, state: "ready" as const }
     : failed ? { rows: { visible: [], archived: [] }, state: "error" as const } : null;
   const order = useWorkspaceListReorder(current?.state === "ready" ? organized?.visible ?? [] : [], "sessions", {
-    scope: storageScope, limit: 8, group: row => snapshot.entries[row.id]?.pinned ? "pinned" : "regular",
+    scope: storageScope, limit: 8, group: row => snapshot.entries[row.id]?.pinned ? "pinned" : "regular", activity: row => row.updatedAt ?? 0,
   });
   const visibleRows = order.visible;
   const archivedRows = current?.state === "ready" ? current.rows.archived : [];
@@ -74,6 +74,7 @@ export function WorkspaceRecentSessions({
       onToggle: (flag, value) => setFlag(row.id, flag, value),
       rowLabel: row.title,
       reorder: order.control(row.id),
+      session: { id: row.id, binding, scope: storageScope },
     };
   }
 

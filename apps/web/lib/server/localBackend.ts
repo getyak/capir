@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 
 import {
   CONTRACT_VERSION,
+  resolveFirstReplyTitle,
   SIMULATED_CAPABILITY,
   TalentSignalClient,
   TalentSignalHttpError,
@@ -1010,7 +1011,7 @@ export async function askRelationshipChat(
           payload: {
             ...payload,
             ...(payload.turns.length === 0 && response.session_title
-              ? { title: response.session_title.slice(0, 256) }
+              ? { title: resolveFirstReplyTitle(payload.title, response.session_title.slice(0, 256), objective.slice(0, 120) || "关系对话") }
               : {}),
             updatedAt: response.created_at,
             turns: [

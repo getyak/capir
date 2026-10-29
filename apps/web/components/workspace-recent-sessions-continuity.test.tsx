@@ -217,3 +217,15 @@ it.each(["503", "network"])("aborts the sibling after an early %s and fences its
   await act(async () => denied.filter(read => read !== source).forEach(read => read.resolve(response(read.url))));
   expect(link()).toBeNull();
 });
+
+
+it("keeps the row and focus through a successful title mutation and directory readback", async () => {
+  await render(); const selected = link()!; selected.focus(); hold = true;
+  await act(async () => { await workspaceSessionFetch(`/api/workspace-sessions/${SESSION}`, { method: "PATCH", body: "{}" }); });
+  expect(link()).toBe(selected);
+  expect(document.activeElement).toBe(selected);
+  await settle([session(SESSION, "Renamed synthetic title")]);
+  expect(link()).toBe(selected);
+  expect(selected.textContent).toContain("Renamed synthetic title");
+  expect(document.activeElement).toBe(selected);
+});

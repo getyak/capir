@@ -42,3 +42,19 @@ describe("Session title canonicalization", () => {
     expect(firstTurnSessionTitle("Hello", "Reply")).toBe("Quick hello");
   });
 });
+
+
+it("keeps a person's explicit title when the first answer completes", async () => {
+  const { titleAfterFirstReply } = await import("./sessionTitles.js");
+  expect(titleAfterFirstReply("My chosen title", "Model suggestion")).toBe("My chosen title");
+  expect(titleAfterFirstReply("新的对话", "Model suggestion")).toBe("Model suggestion");
+  expect(titleAfterFirstReply("", "Model suggestion")).toBe("Model suggestion");
+  expect(titleAfterFirstReply("Synthetic first message", "Model suggestion", "Synthetic first message")).toBe("Model suggestion");
+});
+
+
+it("replaces the Web producer's greeting fallback with the first answer title", async () => {
+  const { titleAfterFirstReply } = await import("./sessionTitles.js");
+  expect(titleAfterFirstReply("Quick hello", "Plan tomorrow", "Hello")).toBe("Plan tomorrow");
+  expect(titleAfterFirstReply("简单聊两句", "明天的安排", "你好")).toBe("明天的安排");
+});

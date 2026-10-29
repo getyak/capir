@@ -77,10 +77,11 @@ describe("disposable workspace directory", () => {
 });
 
 describe("bounded directory continuity cache", () => {
-  it("retains mounted projections only for the exact additive send admission", () => {
+  it("retains mounted projections for send admission and title-only rename", () => {
     const admission = "/api/workspace-sessions/11111111-1111-4111-8111-111111111111/conversation-queue";
     expect(workspaceDirectoryMutationInvalidationMode("POST", admission)).toBe("refresh");
     expect(workspaceDirectoryMutationInvalidationMode("post", admission)).toBe("refresh");
+    expect(workspaceDirectoryMutationInvalidationMode("PATCH", "/api/workspace-sessions/session-a")).toBe("refresh");
     for (const [method, pathname] of [
       ["POST", `${admission}/mutations`],
       ["POST", `${admission}/stream`],

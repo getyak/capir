@@ -17,6 +17,7 @@ import {
   createUnscopedWorkspaceSession,
   loadWorkspaceSessionDirectory,
   saveWorkspaceSessionDraft,
+  renameWorkspaceSession,
   workspaceSessionDirectory,
   workspaceSessionDisplayTitle,
   workspaceSessionReturnHref,
@@ -246,5 +247,39 @@ describe("workspace Session service adapter", () => {
   it("fails closed when no authenticated backend client exists", async () => {
     mocked.authenticatedClient.mockResolvedValue(null);
     await expect(loadWorkspaceSessionDirectory()).rejects.toMatchObject({ status: 401 });
+  });
+});
+
+
+describe("canonical Session rename", () => {
+  it("changes only the title at the exact revision and reads back the result", async () => {
+    const current = record();
+    current.payload!.composerDraft = "Unsent synthetic draft";
+    const renamed = structuredClone(current);
+    renamed.payload!.title = "Renamed synthetic conversation";
+    renamed.revision++;
+    const saveAgentSession = vi.fn().mockResolvedValue(response(renamed));
+    mocked.authenticatedClient.mockResolvedValue({ getAgentSession: vi.fn().mockResolvedValue(response(current)), saveAgentSession });
+    const result = await renameWorkspaceSession({ sessionId, expectedRevision: 3, idempotencyKey: requestId, title: "  Renamed synthetic conversation  " });
+    expect(result.record.payload?.title).toBe("Renamed synthetic conversation");
+    expect(saveAgentSession).toHaveBeenCalledExactlyOnceWith(sessionId, {
+      expected_revision: 3, idempotency_key: requestId,
+      payload: { ...current.payload, title: "Renamed synthetic conversation" },
+    });
+  });
+  it("refuses stale revisions and invalid titles without overwriting a draft", async () => {
+    const saveAgentSession = vi.fn();
+    mocked.authenticatedClient.mockResolvedValue({ getAgentSession: vi.fn().mockResolvedValue(response(record({ revision: 4 }))), saveAgentSession });
+    await expect(renameWorkspaceSession({ sessionId, expectedRevision: 3, idempotencyKey: requestId, title: "New title" })).rejects.toMatchObject({ status: 409 });
+    for (const title of ["  ", "x".repeat(33)]) {
+      await expect(renameWorkspaceSession({ sessionId, expectedRevision: 4, idempotencyKey: requestId, title })).rejects.toMatchObject({ status: 400 });
+    }
+    expect(saveAgentSession).not.toHaveBeenCalled();
+  });
+  it("does not resurrect deleted Sessions", async () => {
+    const saveAgentSession = vi.fn();
+    mocked.authenticatedClient.mockResolvedValue({ getAgentSession: vi.fn().mockResolvedValue(response(record({ deleted_at: "2026-10-29T00:00:00Z" }))), saveAgentSession });
+    await expect(renameWorkspaceSession({ sessionId, expectedRevision: 3, idempotencyKey: requestId, title: "New title" })).rejects.toMatchObject({ status: 410 });
+    expect(saveAgentSession).not.toHaveBeenCalled();
   });
 });

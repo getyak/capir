@@ -7,6 +7,8 @@
  * pass the title already produced by the current answer model call.
  */
 
+import { resolveFirstReplyTitle } from "@talent-signal/contracts";
+
 /** Maximum user-perceived characters allowed in a stored Session title. */
 export const SESSION_TITLE_MAX_CHARACTERS = 32;
 /** Secondary transport guard; never split a grapheme to reach it. */
@@ -117,4 +119,9 @@ export function firstTurnSessionTitle(objective: string, proposed?: unknown): st
   if (!fallback) return null;
   if (!isGenericLabel(fallback)) return fallback;
   return /\p{Script=Han}/u.test(objective) ? "简单聊两句" : "Quick hello";
+}
+
+/** A first model reply may name an empty Session, never replace a chosen name. */
+export function titleAfterFirstReply(current: string, suggested: string, objective = ""): string {
+  return resolveFirstReplyTitle(current, suggested, objective.trim() ? firstTurnSessionTitle(objective) ?? "" : "图片");
 }

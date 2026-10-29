@@ -64,6 +64,7 @@ export default async function SessionsPage() {
 
   return (
     <SessionDirectory
+      key={workspaceSessionsBinding(claims)}
       renderedAt={new Date().toISOString()}
       initialComplete={complete}
       initialError={error}

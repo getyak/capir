@@ -11,13 +11,15 @@ export type OrderLock = (key: string, task: () => boolean) => Promise<boolean>;
 export type ListOrderSnapshot = {
   readonly ids: readonly string[];
   readonly status: "idle" | "saving" | "error";
+  readonly updatedAt: string | null;
+  readonly revision: number;
 };
 export const LIST_ORDER_PREFIX = "talent-signal:workspace-list-order:v1:";
 const MAX_IDS = 1000;
 const MAX_BYTES = 48 * 1024;
 const SCOPE = /^[a-f0-9]{64}$/u;
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
-const EMPTY: ListOrderSnapshot = { ids: [], status: "idle" };
+const EMPTY: ListOrderSnapshot = { ids: [], status: "idle", updatedAt: null, revision: 0 };
 type Payload = { v: 1; scope: string; kind: ListOrderKind; revision: number; updatedAt: string; ids: string[] };
 const storage = () => window.localStorage;
 const lock: OrderLock = async (key, task) => {
@@ -51,6 +53,16 @@ export function projectListOrder<T>(rows: readonly T[], ids: readonly string[], 
   return [...rows].sort((a, b) => (rank.get(getId(a)) ?? Infinity) - (rank.get(getId(b)) ?? Infinity));
 }
 
+/** Activity after an explicit arrangement deserves attention before its old
+ * positions. Old paginated history does not count as a new conversation. */
+export function projectSessionOrder<T extends { id: string }>(rows: readonly T[], ids: readonly string[], orderedAt: number, activity: (row: T) => number): T[] {
+  const recent = [...rows].sort((a, b) => (activity(b) || 0) - (activity(a) || 0));
+  if (!ids.length) return recent;
+  const fresh = recent.filter(row => activity(row) > orderedAt);
+  const promoted = new Set(fresh.map(row => row.id));
+  return [...fresh, ...projectListOrder(recent.filter(row => !promoted.has(row.id)), ids, row => row.id)];
+}
+
 export function createListOrderStore(scope: string | null, kind: ListOrderKind,
   getStorage: () => OrderStorage = storage, withLock: OrderLock = lock) {
   const key = LIST_ORDER_PREFIX + scope + ":" + kind;
@@ -60,18 +72,18 @@ export function createListOrderStore(scope: string | null, kind: ListOrderKind,
   let retired = false;
   let pending = 0;
   let failures = 0;
-  function publish(ids: readonly string[], status: ListOrderSnapshot["status"]) {
-    snapshot = { ids, status };
+  function publish(ids: readonly string[], status: ListOrderSnapshot["status"], updatedAt = snapshot.updatedAt, revision = snapshot.revision) {
+    snapshot = { ids, status, updatedAt, revision };
     listeners.forEach(fn => fn());
   }
   function refresh() {
     if (!bound || retired) return;
-    try { publish(read(getStorage(), key, scope!, kind).ids, pending ? "saving" : failures ? "error" : "idle"); }
+    try { const value = read(getStorage(), key, scope!, kind); publish(value.ids, pending ? "saving" : failures ? "error" : "idle", value.updatedAt || null, value.revision); }
     catch { publish(snapshot.ids, "error"); }
   }
   if (bound) {
-    try { snapshot = { ids: read(getStorage(), key, scope!, kind).ids, status: "idle" }; }
-    catch { snapshot = { ids: [], status: "error" }; }
+    try { const value = read(getStorage(), key, scope!, kind); snapshot = { ids: value.ids, status: "idle", updatedAt: value.updatedAt || null, revision: value.revision }; }
+    catch { snapshot = { ids: [], status: "error", updatedAt: null, revision: 0 }; }
   }
   const onStorage = (event: StorageEvent) => {
     if (event.key === key || event.key === null) refresh();
@@ -95,7 +107,7 @@ export function createListOrderStore(scope: string | null, kind: ListOrderKind,
         }
       };
     },
-    retire() { retired = true; publish([], "idle"); },
+    retire() { retired = true; publish([], "idle", null, 0); },
     async reset(isCurrent: () => boolean = () => true): Promise<boolean> {
       if (!bound || retired) return false;
       pending += 1; publish(snapshot.ids, "saving");
@@ -108,15 +120,16 @@ export function createListOrderStore(scope: string | null, kind: ListOrderKind,
           // preference. It never clears pin/archive or another list/account.
           let revision = 0;
           try { revision = read(target, key, scope!, kind).revision; } catch { /* explicitly reset */ }
-          const body = JSON.stringify({ v: 1, scope, kind, revision: revision + 1, updatedAt: new Date().toISOString(), ids: [] });
+          const updatedAt = new Date().toISOString();
+          const body = JSON.stringify({ v: 1, scope, kind, revision: revision + 1, updatedAt, ids: [] });
           target.setItem(key, body);
           if (target.getItem(key) !== body) throw new Error("Readback mismatch");
-          failures = 0; publish([], "saving");
+          failures = 0; publish([], "saving", updatedAt, revision + 1);
           return true;
         });
       } catch {
         failures += 1;
-        try { publish(read(getStorage(), key, scope!, kind).ids, "error"); } catch { /* retain confirmed state */ }
+        try { const value = read(getStorage(), key, scope!, kind); publish(value.ids, "error", value.updatedAt || null, value.revision); } catch { /* retain confirmed state */ }
       }
       finally {
         pending -= 1;
@@ -124,7 +137,7 @@ export function createListOrderStore(scope: string | null, kind: ListOrderKind,
       }
       return succeeded;
     },
-    async move(visibleIds: () => readonly string[], id: string, targetId: string, edge: Edge): Promise<boolean> {
+    async move(visibleIds: () => readonly string[], id: string, targetId: string, edge: Edge, presentation?: { revision: number; ids: () => readonly string[] }): Promise<boolean> {
       if (!bound || retired || !ID.test(id) || !ID.test(targetId) || id === targetId || (edge !== "before" && edge !== "after")) return false;
       pending += 1;
       publish(snapshot.ids, "saving");
@@ -138,7 +151,19 @@ export function createListOrderStore(scope: string | null, kind: ListOrderKind,
           if (!visible.includes(id) || !visible.includes(targetId) || visible.some(value => !ID.test(value))) return false;
           const target = getStorage();
           const latest = read(target, key, scope!, kind);
-          const ids = [...latest.ids, ...visible.filter(value => !latest.ids.includes(value))].filter(value => value !== id);
+          if (presentation && latest.revision !== presentation.revision) {
+            publish(latest.ids, "saving", latest.updatedAt || null, latest.revision);
+            return false;
+          }
+          const presented = presentation ? [...new Set(presentation.ids())] : visible;
+          if (presented.some(value => !ID.test(value)) || visible.some(value => !presented.includes(value))) return false;
+          let base = [...latest.ids, ...presented.filter(value => !latest.ids.includes(value))];
+          if (presentation) {
+            const shown = new Set(presented);
+            let index = 0;
+            base = base.map(value => shown.has(value) ? presented[index++]! : value);
+          }
+          const ids = base.filter(value => value !== id);
           ids.splice(ids.indexOf(targetId) + (edge === "after" ? 1 : 0), 0, id);
           if (ids.length > MAX_IDS) throw new Error("Preference full");
           const body = JSON.stringify({ ...latest, revision: latest.revision + 1, updatedAt: new Date().toISOString(), ids });
@@ -147,7 +172,7 @@ export function createListOrderStore(scope: string | null, kind: ListOrderKind,
           // Includes uncertain setItem implementations: inspect the destination
           // before reporting completion; do not repeat a potentially saved move.
           if (target.getItem(key) !== body) throw new Error("Readback mismatch");
-          publish(ids, "saving");
+          publish(ids, "saving", JSON.parse(body).updatedAt, latest.revision + 1);
           return true;
         });
         if (succeeded) failures = 0;
@@ -155,7 +180,7 @@ export function createListOrderStore(scope: string | null, kind: ListOrderKind,
         failures += 1;
         // setItem may have committed before throwing. Read back authoritative
         // state without retrying; uncertainty remains visibly unsuccessful.
-        try { publish(read(getStorage(), key, scope!, kind).ids, "error"); } catch { /* last confirmed snapshot */ }
+        try { const value = read(getStorage(), key, scope!, kind); publish(value.ids, "error", value.updatedAt || null, value.revision); } catch { /* last confirmed snapshot */ }
       } finally {
         pending -= 1;
         if (!retired) publish(snapshot.ids, pending ? "saving" : failures ? "error" : "idle");
