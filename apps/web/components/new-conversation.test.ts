@@ -882,7 +882,7 @@ describe("authenticated home with a legacy conversation-home record", () => {
       createElement(WorkspaceNewConversation, READY),
     );
     expect(html).toContain("queued-conversation-composer");
-    expect(html).toContain("把没聊完的，接着聊。");
+    expect(html).toContain("从一段对话开始");
     expect(html).not.toContain("new-conversation-objective");
   });
 });

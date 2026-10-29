@@ -132,3 +132,21 @@ Responsive/theme/keyboard browser checks, latest-head CI, canonical PR/merge,
 clean resident activation and live acceptance, the new test run's cleanup and
 Linear readback remain open. UI acceptance does not require paid generation;
 the separately recorded Hao HTTP 402 must not be retried or bypassed here.
+
+
+Resumed integrated verification: Web typecheck, 38 focused files / 483 tests and
+production build passed. Real browser checks covered Add → Tools drafting without
+sending, sidebar navigation/reload retaining the ready draft, keyboard return,
+390px fresh entry without overflow, and reduced-motion light/dark themes.
+The first resize screenshot retained a stale painted header; a fresh entry had
+correct geometry and bottom navigation. A theme screenshot captured a pending
+0.01ms reduced-motion color transition. Bringing the page forward and waiting for
+the actual heading color settled light/dark in 76/43ms; no CSS change was needed.
+Both failed captures remain evidence alongside the corrected captures.
+
+Initial full CI found two server-render tests still expecting the old welcome
+copy (3,493 other tests passed). Their assertions now expect the new heading;
+the two files / 35 tests pass. Backend, CLI, hybrid boundary, native build/tests,
+repository policy/docs and Security required passed on the previous head. Latest
+head CI must still pass after this correction. Optional Vercel Web preview was
+rate limited; do not retry or change its account/billing scope.
