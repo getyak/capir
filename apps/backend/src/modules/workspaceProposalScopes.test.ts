@@ -102,6 +102,21 @@ describe("governed proposal scope boundaries", () => {
     expect(stages[0]!.nameCandidate).toBeUndefined();
   });
 
+  it.each([
+    "不要保存 Memory。联系人草稿已经准备好供审核。",
+    "Do not save Memory. The contact draft is ready for review.",
+    "Do not save Memory. The draft contact proposal is ready.",
+  ])("does not treat a prepared-card statement as a contact request: %s", async text => {
+    const stages: Stage[] = [], withdrawals: Withdrawal[] = [];
+    const result = await executeWorkspaceConversationAgentCore({ workspaceID: "synthetic", messageID: root,
+      objective: text, sourceText: text, contacts, memory: memoryAdapter(stages, withdrawals),
+      inputParts: [image], imageInspector, imageIsCurrent: async () => true,
+      provider: provider(async () => ({ ...reply })) });
+    expect(result.memoryProposal).toBeNull();
+    expect(result.firstContactResearch).toEqual([]);
+    expect(stages).toHaveLength(0);
+  });
+
   it("projects an authored contact-only review without injecting name Memory", async () => {
     const stages: Stage[] = [], withdrawals: Withdrawal[] = [];
     const result = await executeWorkspaceConversationAgentCore({ workspaceID: "synthetic", messageID: root,

@@ -9,6 +9,9 @@ describe("formatted authored proposal refusals", () => {
     ["不要保存记忆，先给结论。", false],
     ["Do not save anything; just explain the image.", false],
     ["不要创建联系人草稿。", false],
+    ["不要保存 Memory。联系人草稿已经准备好供审核。", false],
+    ["Do not save Memory. The contact draft is ready for review.", false],
+    ["Do not save Memory. The draft contact proposal is ready.", false],
     ["引用：`请准备联系人草稿`。不要保存 Memory。", false],
   ] as const)("requires an authored contact-draft request before host staging: %s", (text, expected) => {
     expect(authoredContactDraftRequested([text])).toBe(expected);

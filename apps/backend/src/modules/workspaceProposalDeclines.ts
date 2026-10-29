@@ -77,7 +77,7 @@ const globalDecline = /(?:仅供|只供)(?:分析|参考)|(?:只|仅仅?)(?:需�
 /** Host-created contact cards require an authored contact request when a
  * separate Memory refusal would otherwise be read as an invitation to help. */
 export function authoredContactDraftRequested(texts: readonly string[]): boolean {
-  const request = /(?:准备|创建|新建|添加|建立|起草|prepare|create|add|draft|review)[^，,。；;!?！？\n]{0,36}(?:联系人|人物|contacts?)[^，,。；;!?！？\n]{0,18}(?:草稿|建议|待确认|审核|review|draft)|(?:联系人|人物|contacts?)[^，,。；;!?！？\n]{0,18}(?:草稿|建议|待确认|审核|review|draft)[^，,。；;!?！？\n]{0,24}(?:准备|创建|新建|添加|建立|起草|prepare|create|add|draft|review)/iu;
+  const request = /(?:准备|创建|新建|添加|建立|起草|prepare|create|add)[^，,。；;!?！？\n]{0,36}(?:联系人|人物|contacts?)[^，,。；;!?！？\n]{0,18}(?:草稿|建议|待确认|审核|review|draft)/iu;
   return texts.some(text => {
     const policy = proposalDeclines([text]);
     return !policy.global && !policy.contact && request.test(authoredProposalText(text));

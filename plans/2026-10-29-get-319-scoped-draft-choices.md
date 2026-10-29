@@ -46,16 +46,17 @@ broader timeouts, synthetic-data exceptions or direct database writes.
    Agent seam before production edits, then verified the two additional
    inline-format refusal RED groups before their fixes.
 2. Completed locally: verify scoped refusal behavior and conservative
-   fallback. The latest parent run passed 260 relevant backend tests and backend
-   TypeScript; docs/architecture check passed. Independent final review is being
-   requested for the corrective host-fallback guard.
-3. Active: linked PR #483 was opened from commit e21a9d22. Its first exact-head
-   CI correctly caught a regression: a Memory-only refusal could permit an
-   automatic host contact card even without a contact request. The corrective
-   code now gates that host fallback on an authored contact-draft request when
-   Memory is declined. The former Vercel preview attempt was rate-limited for
-   24 hours. Reverify, commit/push the correction and wait on exact-head CI,
-   Security, and latest-main rebase before merge.
+   fallback. The latest parent run passed 266 relevant backend tests; direct
+   backend TypeScript and docs/architecture checks passed. Independent review
+   now passes the exact request-detection correction and regression coverage.
+3. Active: linked PR #483 was opened from commit e21a9d22 and has a follow-up
+   commit for the first CI regression. A second independent review found that
+   bare English `draft` could mistake an existing proposal statement for a
+   request; the term is removed from the request-verb allowlist, with helper and
+   host-fallback negative tests. Commit/push this final correction, then await
+   exact-head CI, Security, and latest-main rebase before merge. Vercel preview
+   is platform-rate-limited for 24 hours; determine from current required gates
+   whether that advisory preview check blocks merging, and record the limitation.
 4. From clean committed source deploy every affected resident service under the
    operations contract; verify runtime revision, dependencies, source/recovery
    pair, keeper, IPC and readiness. Reuse compatible artifacts; no rollback of
