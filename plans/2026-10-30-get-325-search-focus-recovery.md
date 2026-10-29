@@ -84,3 +84,19 @@ People search hydration files, with no overlap against this recovery's source
 paths. The 170-test and 24-test evidence belongs to the reviewed pre-merge
 source revision; this reconciliation does not claim those commands were rerun
 on the merge commit. Latest-head CI and compiled browser checks remain gates.
+
+## Full-suite follow-up
+
+The first locked GitHub run passed lint and full Web typecheck, then reported
+3620 passing tests and one failed Person-render assertion. That assertion required
+an exact heading tag without the newly intended focus attributes. It now still
+requires one complete title/name and the existing avatar/reference-column
+invariants, while separately checking the destination marker and negative tab
+index. No product code or test gate was changed for this follow-up.
+
+A separate explicit frozen offline installation used pnpm 11.18.0 and locked
+Next 16.4.3 in this owned worktree, reusing all 806 packages without downloads.
+The shared packages were built here rather than through resident dependency
+links. The Person render, search-dialog and focus-helper tests then passed all
+74 cases with one worker. Latest-head full CI and compiled browser/runtime
+verification remain required.
