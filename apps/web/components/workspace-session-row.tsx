@@ -22,6 +22,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import styles from "./workspace-shell.module.css";
 import { SessionRenameDialog, type SessionMenuTarget } from "./session-rename-dialog";
 import { SessionCopyAction } from "./session-copy-action";
+import { SessionShareAction } from "./session-share-action";
 import { ListOrderActions, type OrderControl } from "./workspace-list-order";
 
 /**
@@ -162,6 +163,7 @@ export function SessionRowMenu({
         </button>
         {organization.reorder ? <ListOrderActions control={organization.reorder} onMove={() => { setOpen(false); onOpenChange?.(false); }} /> : null}
         {organization.session && <SessionCopyAction target={organization.session} />}
+        {organization.session && <SessionShareAction id={organization.session.id} />}
         <span className={styles.sessionRowMenuNote}>{t(organization.reorder ? "listOrder.sessionLocal" : "sessionRow.localOrganization")}</span>
       </PopoverContent>
       </Popover>

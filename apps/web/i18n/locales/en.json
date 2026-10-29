@@ -2654,5 +2654,11 @@
   "sessionMenu.you": "You",
   "sessionMenu.copied": "Copied.",
   "sessionMenu.copyFailed": "Could not copy. Open the menu and try again.",
-  "sessionMenu.copying": "Copying…"
+  "sessionMenu.copying": "Copying…",
+  "sessionMenu.share": "Share link",
+  "sessionMenu.shareHint": "Opens only while signed in to this account. Sharing does not make the conversation public.",
+  "sessionMenu.copyLink": "Copy link",
+  "sessionMenu.linkCopied": "Link copied.",
+  "sessionMenu.shared": "Handed to system sharing.",
+  "sessionMenu.shareFailed": "Could not share. You can copy the link instead."
 }

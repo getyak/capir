@@ -2654,5 +2654,11 @@
   "sessionMenu.you": "あなた",
   "sessionMenu.copied": "コピーしました。",
   "sessionMenu.copyFailed": "コピーできませんでした。メニューから再試行してください。",
-  "sessionMenu.copying": "コピー中…"
+  "sessionMenu.copying": "コピー中…",
+  "sessionMenu.share": "リンクを共有",
+  "sessionMenu.shareHint": "このアカウントでログインした場合のみ開けます。会話は公開されません。",
+  "sessionMenu.copyLink": "リンクをコピー",
+  "sessionMenu.linkCopied": "リンクをコピーしました。",
+  "sessionMenu.shared": "システムの共有に渡しました。",
+  "sessionMenu.shareFailed": "共有できませんでした。リンクをコピーできます。"
 }

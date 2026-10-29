@@ -587,5 +587,11 @@
   "sessionMenu.you": "你",
   "sessionMenu.copied": "已复制。",
   "sessionMenu.copyFailed": "复制失败，请打开菜单重试。",
-  "sessionMenu.copying": "正在复制…"
+  "sessionMenu.copying": "正在复制…",
+  "sessionMenu.share": "分享链接",
+  "sessionMenu.shareHint": "仅登录此账号后可打开，分享链接不会公开对话。",
+  "sessionMenu.copyLink": "复制链接",
+  "sessionMenu.linkCopied": "链接已复制。",
+  "sessionMenu.shared": "已交给系统分享。",
+  "sessionMenu.shareFailed": "分享未完成，可以改为复制链接。"
 }

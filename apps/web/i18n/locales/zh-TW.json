@@ -2654,5 +2654,11 @@
   "sessionMenu.you": "你",
   "sessionMenu.copied": "已複製。",
   "sessionMenu.copyFailed": "複製失敗，請開啟選單重試。",
-  "sessionMenu.copying": "正在複製…"
+  "sessionMenu.copying": "正在複製…",
+  "sessionMenu.share": "分享連結",
+  "sessionMenu.shareHint": "僅登入此帳號後可開啟，分享連結不會公開對話。",
+  "sessionMenu.copyLink": "複製連結",
+  "sessionMenu.linkCopied": "連結已複製。",
+  "sessionMenu.shared": "已交給系統分享。",
+  "sessionMenu.shareFailed": "分享未完成，可以改為複製連結。"
 }
