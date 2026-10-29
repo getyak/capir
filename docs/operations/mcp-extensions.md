@@ -175,6 +175,22 @@ selected connection, and uses `read_tool` for its complete bounded schema before
 staging a call. Discovery metadata never proves execution or grants authority.
 Connect apps (`/workspace/extensions`) remains the connection and recovery entry.
 
+The connection check returns the current revision, tool count, completeness and
+next tool offset when its first 30 summaries omit tools. Continue through `list`
+with that connection ID and offset, or search the connection by name/description.
+`read_tool` preserves property/definition names, references and input constraints;
+credential-bearing defaults/examples are redacted. A malformed schema or a
+sensitive literal constraint that cannot be shown without changing valid inputs
+returns schema-unavailable rather than a fabricated callable schema. The original
+schema remains the approval/execution validator.
+
+Ordinary text workspace Runs use bounded ToolSearch over their admitted product
+catalog; remote MCP tools remain behind `mcp_connections`, not direct SDK tools.
+Image-input and JSON-output workspace Runs intentionally load the admitted catalog
+eagerly. Each Run's `tool_context` reports its mode, reason and discovery entry
+to the model. This policy does not expand the catalog or approval scope. Bounded
+Runs with subagent manifests remain rejected until scoped discovery can be proven.
+
 Approved raster image results use the same durable call receipt and conversation
 ownership as text results. The backend validates PNG/JPEG/WebP bytes and stores
 them separately from model-visible manifests; generated images never become
