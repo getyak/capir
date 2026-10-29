@@ -7,7 +7,8 @@ import {
 } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { beginWorkspaceSearchFocusHandoff, type WorkspaceSearchFocusHandoff } from "@/lib/workspace-search-focus";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   searchWorkspaceResults,
@@ -268,6 +269,39 @@ export function WorkspaceGlobalSearchDialog({
     if (!open) changeOpen(true);
   }, [open, changeOpen]);
   const close = useCallback(() => changeOpen(false), [changeOpen]);
+  const pendingFocus = useRef<{ href: string; binding: string } | null>(null);
+  const handoff = useRef<WorkspaceSearchFocusHandoff | null>(null);
+  const currentBinding = useRef(binding);
+  const scopeExpired = useRef(false);
+  const ownerMounted = useRef(false);
+  // Cancel before close autofocus or deferred DOM work can cross an account change.
+  useLayoutEffect(() => {
+    ownerMounted.current = true;
+    currentBinding.current = binding;
+    handoff.current?.cancel();
+    handoff.current = null;
+    pendingFocus.current = null;
+    scopeExpired.current = false;
+    return () => {
+      ownerMounted.current = false;
+      pendingFocus.current = null;
+      handoff.current?.cancel();
+    };
+  }, [binding]);
+  useEffect(() => {
+    const expire = () => {
+      scopeExpired.current = true;
+      handoff.current?.cancel();
+      handoff.current = null;
+      pendingFocus.current = null;
+    };
+    window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, expire);
+    return () => window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, expire);
+  }, []);
+  const select = useCallback((href: string) => {
+    if (binding && !scopeExpired.current) pendingFocus.current = { href, binding };
+    close();
+  }, [binding, close]);
 
   useEffect(() => {
     // Radix listens for Escape at document capture. Register before opening
@@ -332,6 +366,20 @@ export function WorkspaceGlobalSearchDialog({
           event.preventDefault();
           input.current?.focus();
         }}
+        onCloseAutoFocus={(event) => {
+          const pending = pendingFocus.current;
+          pendingFocus.current = null;
+          if (!ownerMounted.current || !pending || scopeExpired.current || currentBinding.current !== pending.binding) return;
+          // Only Link's accepted same-tab navigation changes the focus destination.
+          // Escape, cancellation and new-tab activation retain Radix's trigger return.
+          event.preventDefault();
+          handoff.current?.cancel();
+          handoff.current = beginWorkspaceSearchFocusHandoff({
+            href: pending.href,
+            isCurrent: () => !scopeExpired.current && currentBinding.current === pending.binding,
+            cancelOn: [WORKSPACE_SESSION_EXPIRED_EVENT],
+          });
+        }}
         ref={dialog}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
@@ -366,7 +414,7 @@ export function WorkspaceGlobalSearchDialog({
             </Button>
           </DialogClose>
         </div>
-        <WorkspaceSearchResults binding={binding} query={query} close={close} />
+        <WorkspaceSearchResults binding={binding} query={query} close={close} select={select} />
         <p className={styles.searchHint}>{t("↑ ↓ 选择 · Enter 打开 · Esc 关闭")}</p>
       </DialogContent>
     </Dialog>
@@ -376,10 +424,11 @@ export function WorkspaceGlobalSearchDialog({
 // Keep the authorized projection mounted for the surface's short exit fade,
 // rather than flashing an empty state as soon as controlled open becomes false.
 // Radix Presence unmounts it after the animation; scope/expiry still fail closed.
-function WorkspaceSearchResults({ binding, query, close }: {
+function WorkspaceSearchResults({ binding, query, close, select }: {
   binding: string | null;
   query: string;
   close: () => void;
+  select: (href: string) => void;
 }) {
   const t = useT();
   const { people, sessions, loading, failed, retry } = useWorkspaceSearchSources(binding, true);
@@ -414,6 +463,7 @@ function WorkspaceSearchResults({ binding, query, close }: {
                       href={`/workspace/people/${encodeURIComponent(person.id)}`}
                       key={person.id}
                       onClick={close}
+                      onNavigate={() => select(`/workspace/people/${encodeURIComponent(person.id)}`)}
                     >
                       <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} className={styles.avatar} dataSize="row" />
                       <span>
@@ -434,6 +484,7 @@ function WorkspaceSearchResults({ binding, query, close }: {
                       href={`/workspace/sessions/${encodeURIComponent(session.id)}`}
                       key={session.id}
                       onClick={close}
+                      onNavigate={() => select(`/workspace/sessions/${encodeURIComponent(session.id)}`)}
                     >
                       <ChatCircle aria-hidden="true" size={17} />
                       <span>

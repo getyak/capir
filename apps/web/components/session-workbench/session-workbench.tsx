@@ -1,5 +1,6 @@
 "use client";
 
+import { workspaceSearchFocusTargetProps } from "@/lib/workspace-search-focus";
 import { forgetSessionOrganization } from "@/lib/workspace-session-organization";
 
 import {
@@ -817,7 +818,7 @@ function LegacySessionWorkbench({
     >
       <header className={chatStyles.header}>
         <div className={chatStyles.headingText}>
-          <h1 className={chatStyles.title} id="session-title" title={sessionDisplayTitle(detail.title)}>
+          <h1 className={chatStyles.title} id="session-title" title={sessionDisplayTitle(detail.title)} {...workspaceSearchFocusTargetProps(`/workspace/sessions/${encodeURIComponent(detail.session_id)}`)}>
             {sessionDisplayTitle(detail.title)}
           </h1>
         </div>

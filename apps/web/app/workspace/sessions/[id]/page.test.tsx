@@ -47,7 +47,9 @@ describe("Session failure recovery", () => {
   it.each(locales)("renders an honest, localized read failure in %s", async (locale, title, message, _expired, back) => {
     state.locale = locale;
     const html = await render();
-    expect(html).toContain(`id="session-unavailable">${title}</h1>`);
+    expect(html).toContain(`>${title}</h1>`);
+    expect(html).toContain('id="session-unavailable"');
+    expect(html).toContain(`data-workspace-focus-href="/workspace/sessions/${sessionId}"`);
     expect(html).toContain(message);
     expect(html).toContain(`href="/workspace/sessions">${back}</a>`);
     expect(html).toContain('role="alert"');

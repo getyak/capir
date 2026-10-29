@@ -1,5 +1,6 @@
 "use client";
 
+import { workspaceSearchFocusTargetProps } from "@/lib/workspace-search-focus";
 import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
@@ -711,7 +712,7 @@ export function QueuedConversation(props: Props) {
   <ConversationInspectionContext.Provider value={inspection.controller}>
   <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label={t("conversation.canvas.label")} data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
     {admitted && <header className={styles.header}>
-      <div className={styles.headingText}><h1 title={chat.detail?.title || t("conversation.new")}>{chat.detail?.title || t("conversation.new")}</h1></div>
+      <div className={styles.headingText}><h1 {...(chat.detail ? workspaceSearchFocusTargetProps(`/workspace/sessions/${encodeURIComponent(chat.detail.session_id)}`) : {})} title={chat.detail?.title || t("conversation.new")}>{chat.detail?.title || t("conversation.new")}</h1></div>
       {personId && !chat.unavailable && <button className={styles.personContext} aria-label={t("conversation.person.view", { person: personLabel || t("conversation.person.fallback") })} onClick={event => personContextPanel.open(personId,event.currentTarget)}>{t("conversation.person.context")}</button>}
       <div className={styles.taskSlot}>{!chat.unavailable && <SessionTaskCapsule/>}</div>
       <details className={styles.details} onKeyDown={event => {

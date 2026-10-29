@@ -28,6 +28,7 @@ vi.mock("next/navigation", () => ({
 
 import { conversationHome, writeConversationMessage } from "@/lib/conversation-local";
 import { QueuedConversation } from "./queued-conversation";
+import { beginWorkspaceSearchFocusHandoff } from "@/lib/workspace-search-focus";
 import * as conversationModule from "./use-conversation";
 
 const SCOPE = "d".repeat(64);
@@ -391,4 +392,20 @@ it("drops stale refresh feedback on unmount", async () => {
   await flush(2);
   expect(document.querySelector("[data-conversation-work]")).toBeNull();
   expect(document.body.textContent).not.toContain("正在刷新…");
+});
+
+it("receives search focus on the current queued session title, not another route", async () => {
+  await renderConversation();
+  mount!.id = "workspace-content";
+  const heading = mount!.querySelector("h1")!;
+  // happy-dom cannot paint; model only the actual rendered title as visible.
+  vi.spyOn(heading, "getClientRects").mockReturnValue([new DOMRect(0, 0, 100, 24)] as unknown as DOMRectList);
+  const href = `/workspace/sessions/${SESSION}`;
+  window.history.replaceState(null, "", href);
+  const handoff = beginWorkspaceSearchFocusHandoff({ href });
+  try {
+    await vi.waitFor(() => expect(document.activeElement).toBe(heading));
+  } finally {
+    handoff.cancel();
+  }
 });
