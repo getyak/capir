@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, DotsSixVertical, DotsThreeVertical, PushPin, Tray } from "@phosphor-icons/react";
+import { Archive, DotsThree, PushPin, Tray } from "@phosphor-icons/react";
 import {
   Children,
   cloneElement,
@@ -118,7 +118,7 @@ export function SessionRowMenu({
             className={`${styles.sessionRowMenuTrigger} ${organization.reorder?.handleProps.className ?? ""}`}
             type="button"
           >
-            {organization.reorder ? <DotsSixVertical aria-hidden="true" size={16} /> : <DotsThreeVertical aria-hidden="true" size={15} />}
+            <DotsThree aria-hidden="true" size={18} />
           </button>
         </PopoverTrigger>
       <PopoverContent aria-label={t("sessionRow.moreForTitle", { title: rowLabel })}

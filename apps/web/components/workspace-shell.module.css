@@ -1752,6 +1752,14 @@
 .sessionRowShell:hover .sessionRowMenuTrigger,
 .sessionRowShell:focus-within .sessionRowMenuTrigger,
 .sessionRowMenu[data-open="true"] .sessionRowMenuTrigger { opacity: 1; }
+/* Management appears on intent. Keep the real target in the keyboard order;
+   touch keeps a visible menu because it has no hover discovery. */
+@media (hover: hover) and (pointer: fine) {
+  .sessionRowMenuTrigger { opacity: 0; }
+  .sessionRowShell .sessionRow :global([data-session-pin]) { opacity: 0; }
+  .sessionRowShell:hover .sessionRow :global([data-session-pin]),
+  .sessionRowShell:focus-within .sessionRow :global([data-session-pin]) { opacity: 1; }
+}
 .sessionRowMenuTrigger:hover { background: var(--hover, color-mix(in srgb, var(--ink) 7%, transparent)); color: var(--ink); }
 .sessionRowMenuTrigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .sessionRowMenuPopover[data-slot="popover-content"] {
@@ -1769,6 +1777,8 @@
   padding: 5px;
   z-index: 60;
   max-width: min(300px, calc(100vw - 32px));
+  max-height: var(--radix-popover-content-available-height, calc(100dvh - 32px));
+  overflow-y: auto;
 }
 .sessionRowMenuTitle { padding: 6px 10px; font-size: var(--workspace-meta-size, 0.8125rem); color: var(--ink); overflow-wrap: anywhere; }
 @media (hover: none), (pointer: coarse) {
