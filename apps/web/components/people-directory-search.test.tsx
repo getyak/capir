@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { act, startTransition, useLayoutEffect, useState } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { act, startTransition, StrictMode, useLayoutEffect, useState } from "react";
+import { createRoot, hydrateRoot, type Root } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
@@ -87,6 +88,55 @@ afterEach(async () => {
   host.remove(); vi.unstubAllGlobals();
 });
 async function mount(initial = "") { await act(async () => root.render(<Harness initial={initial} />)); }
+
+it.each([
+  { draft: "early unsent draft", strict: false },
+  { draft: "", strict: false },
+  { draft: "early StrictMode draft", strict: true },
+])("keeps the pre-hydration DOM draft $draft through a result refresh (StrictMode: $strict)", async ({ draft, strict }) => {
+  await act(async () => root.unmount());
+  const view = strict ? <StrictMode><Harness initial="first" /></StrictMode> : <Harness initial="first" />;
+  host.innerHTML = renderToString(view);
+  const field = input();
+  expect(field.value).toBe("first");
+  // The SSR field is usable before React attaches any input handler.
+  field.value = draft;
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  field.focus();
+  const caret = Math.min(3, draft.length);
+  field.setSelectionRange(caret, caret);
+  const recover = vi.fn();
+  await act(async () => { root = hydrateRoot(host, view, { onRecoverableError: recover }); });
+  expect(recover).not.toHaveBeenCalled();
+  expect(input()).toBe(field);
+  expect(input().value).toBe(draft);
+  await act(async () => restore("first"));
+  expect(input().value).toBe(draft);
+  expect(document.activeElement).toBe(field);
+  expect(field.selectionStart).toBe(caret);
+  expect(field.selectionEnd).toBe(caret);
+  expect(navigations).toHaveLength(0);
+  await send();
+  expect(navigations[0]?.query).toBe(draft);
+  await finish();
+  expect(input().value).toBe(draft);
+  await act(async () => restore("previous"));
+  expect(input().value).toBe("previous");
+});
+
+it("keeps the normal SSR query when there is no early edit and still restores history", async () => {
+  await act(async () => root.unmount());
+  const view = <Harness initial="first" />;
+  host.innerHTML = renderToString(view);
+  const field = input();
+  const recover = vi.fn();
+  await act(async () => { root = hydrateRoot(host, view, { onRecoverableError: recover }); });
+  expect(recover).not.toHaveBeenCalled();
+  expect(input()).toBe(field);
+  expect(input().value).toBe("first");
+  await act(async () => restore("previous"));
+  expect(input().value).toBe("previous");
+});
 
 it("keeps the actual input and a newer draft when a submitted query finishes late", async () => {
   await mount();

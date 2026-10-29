@@ -35,6 +35,17 @@ export function PeopleDirectorySearchProvider({ query, resultVersion, returnSess
   const clearing = useRef<{ id: symbol; opener: HTMLAnchorElement | null; focusOwned: boolean } | null>(null);
   const [state, setState] = useState<SearchState>(() => ({ query, resultVersion, draft: query, version: 0, composing: false, submissions: [], completed: null }));
 
+  // Hydration preserves text entered into the SSR field before handlers attach.
+  // Adopt it once, before a controlled update can restore the server query;
+  // an already handled edit or submission still owns its existing generation.
+  useLayoutEffect(() => {
+    const earlyDraft = input.current?.value;
+    if (earlyDraft === undefined) return;
+    setState(previous => previous.version === 0 && !previous.submissions.length && previous.draft !== earlyDraft
+      ? { ...previous, draft: earlyDraft, version: previous.version + 1 }
+      : previous);
+  }, []);
+
   // RSC readback supplies a fresh result array even for a repeated query.
   // Do not replace a newer draft with the older submission that just finished.
   // A same-query refresh owns results, never the local draft or another pending
