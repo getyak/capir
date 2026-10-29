@@ -27,9 +27,9 @@ application code. GET-251's shared shell remains the visual baseline.
 ## Milestones
 
 1. **Done:** implement scoped disclosure and navigation; focused tests pass (60).
-2. **Active:** render desktop/narrow, pointer, keyboard, touch, themes and reduced motion;
+2. **Done:** render desktop/narrow, pointer, keyboard, touch, themes and reduced motion;
    retain sanitized synthetic evidence outside source.
-3. Independent review, address findings, create the sole linked PR, verify latest
+3. **Active:** independent review, address findings, create the sole linked PR, verify latest
    applicable checks and repository gates, then ordinary merge.
 4. Serialize affected resident Web deployment from clean merged source; verify
    revision and behavior, clean owned temporary resources, update/read back Linear.
@@ -59,3 +59,10 @@ CI, local browser evidence and resident acceptance remain separate observations.
   latest-head applicable CI remains required.
 - Sanitized screenshots and interaction receipts will be retained in the task
   visualization directory; private credentials/browser state stay temporary.
+- Japanese navigation is complete at sidebar widths 236, 224 and 200px.
+  Touch checks passed for a resting row's trailing edge opening the exact Person,
+  explicit Arrange/menu moves, and a real touch drag. The test account retains
+  its system display-language preference; browser locale supplied Japanese.
+- Canonical PR: https://github.com/getyak/capir/pull/479 (linked/read back in Linear).
+- Final release and cleanup receipts supplement this plan in the task's external
+  delivery evidence after merge; they must not be inferred from the checkboxes.

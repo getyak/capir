@@ -2172,6 +2172,7 @@
 }
 .shell[data-sidebar-compact="true"] .railRow { flex-direction:column; align-items:stretch; }
 .shell[data-sidebar-compact="true"] .railPair { flex:1 1 auto; }
+.shell[data-sidebar-compact="true"] .brand { gap:4px; padding-inline:4px; }
 :global(html[data-desktop-surface="settings"]) .sidebarResizeHandle,
 :global(html[data-desktop-surface="settings"]) .sidebarRestoreFallback,
 :global(html[data-desktop-surface="settings"]) .sidebarRestore,
