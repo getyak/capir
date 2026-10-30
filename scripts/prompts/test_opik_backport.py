@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -416,6 +417,74 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
                 )
             fetch.assert_not_called()
             maven.assert_not_called()
+
+    def test_actual_maven_boundary_maps_private_bind_owner_and_writable_config_home(self):
+        module = self.runner()
+        run_maven = self.function("run_maven")
+        source = self.root / "source"
+        work = self.root / "work"
+        receipts = self.root / "receipts"
+        for directory in (source, work, receipts):
+            directory.mkdir(mode=0o700)
+        (source / "apps/opik-backend").mkdir(parents=True, mode=0o700)
+        manifest = json.loads((BACKPORT / "manifest.json").read_text(encoding="utf-8"))
+        commands = []
+
+        def docker_boundary(arguments, **kwargs):
+            self.assertEqual(arguments[0], "docker", "Only Docker process I/O may be substituted")
+            commands.append(list(arguments))
+            output = b""
+            if arguments[:3] == ["docker", "image", "inspect"]:
+                output = json.dumps([{
+                    "Id": "sha256:" + "f" * 64,
+                    "Architecture": "arm64", "Os": "linux", "RepoDigests": [],
+                }]).encode("utf-8")
+            return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr=b"")
+
+        # Exercise the real remote guard using fixture OS/CI metadata; this is not remote execution proof.
+        remote_metadata = {
+            "GITHUB_ACTIONS": "true", "CI": "true", "RUNNER_OS": "Linux",
+            "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_RUN_ID": "337", "GITHUB_RUN_ATTEMPT": "1",
+        }
+        with mock.patch.dict(os.environ, remote_metadata), \
+                mock.patch.object(module.platform, "system", return_value="Linux"), \
+                mock.patch.object(module.platform, "machine", return_value="aarch64"), \
+                mock.patch.object(module.subprocess, "run", side_effect=docker_boundary):
+            run_maven(source_dir=source, work_dir=work, receipt_dir=receipts,
+                      suite="health", manifest=manifest)
+
+        invocations = [command for command in commands if command[:2] == ["docker", "run"]]
+        self.assertEqual(len(invocations), 2, "Read versions and run tests through the same ownership contract")
+        cache = work / "maven-repository"
+        owner = source.stat()
+        self.assertEqual(source.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(cache.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((cache.stat().st_uid, cache.stat().st_gid), (owner.st_uid, owner.st_gid))
+
+        def option_values(command, option):
+            return [command[index + 1] for index, value in enumerate(command[:-1]) if value == option] + [
+                value.split("=", 1)[1] for value in command if value.startswith(option + "=")
+            ]
+
+        for index, command in enumerate(invocations):
+            environment = dict(value.split("=", 1) for value in option_values(command, "--env"))
+            with self.subTest(invocation=index, contract="private-bind-owner"):
+                self.assertEqual(option_values(command, "--user"), [f"{owner.st_uid}:{owner.st_gid}"])
+            with self.subTest(invocation=index, contract="maven-config"):
+                self.assertEqual(environment.get("MAVEN_CONFIG"), "/maven-repository")
+            with self.subTest(invocation=index, contract="jvm-user-home"):
+                java_options = " ".join(environment.get(key, "") for key in (
+                    "MAVEN_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS"
+                ))
+                self.assertIn("-Duser.home=/maven-repository", java_options.split())
+            with self.subTest(invocation=index, contract="writable-task-mount-and-unchanged-isolation"):
+                self.assertIn(
+                    f"type=bind,src={cache},dst=/maven-repository", option_values(command, "--mount")
+                )
+                self.assertNotIn("HOME", environment)
+                self.assertNotIn("--env-file", command)
+                self.assertEqual(option_values(command, "--cap-drop"), ["ALL"])
+                self.assertEqual(option_values(command, "--security-opt"), ["no-new-privileges"])
 
     def test_real_git_error_retains_safe_command_exit_without_raw_stderr(self):
         module = self.runner()

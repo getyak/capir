@@ -465,9 +465,25 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest):
         "repo_digests": image.get("RepoDigests", []),
         "selected_platform_manifest": expected_platform["digest"],
     }
-    _write_json(receipt_dir / "build-image.json", identity)
     cache = work_dir / "maven-repository"
     cache.mkdir(mode=0o700)
+    source_owner = source_dir.stat()
+    cache_owner = cache.stat()
+    container_user = str(source_owner.st_uid) + ":" + str(source_owner.st_gid)
+    identity.update({
+        "source_bind_owner": {"uid": source_owner.st_uid, "gid": source_owner.st_gid,
+                              "mode": format(stat.S_IMODE(source_owner.st_mode), "04o")},
+        "cache_bind_owner": {"uid": cache_owner.st_uid, "gid": cache_owner.st_gid,
+                             "mode": format(stat.S_IMODE(cache_owner.st_mode), "04o")},
+        "requested_container_user": container_user,
+        "maven_config": "/maven-repository",
+        "jvm_user_home": "/maven-repository",
+    })
+    _write_json(receipt_dir / "build-image.json", identity)
+    if (source_owner.st_uid, source_owner.st_gid) != (cache_owner.st_uid, cache_owner.st_gid):
+        raise ValueError("Private source and Maven cache bind owners differ")
+    if any(stat.S_IMODE(owner.st_mode) != 0o700 for owner in (source_owner, cache_owner)):
+        raise ValueError("Source and Maven cache binds must retain private mode 0700")
     reports = source_dir / "apps/opik-backend/target/surefire-reports"
     if reports.exists():
         raise ValueError("Surefire report directory existed before this Maven invocation")
@@ -477,6 +493,7 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest):
     token = uuid.uuid4().hex
     common = [
         "docker", "run", "--rm", "--init", "--pull=never",
+        "--user", container_user,
         "--network=bridge", "--cap-drop=ALL", "--security-opt=no-new-privileges",
         "--cpus=2", "--memory=3g", "--pids-limit=512",
         "--label", "capir.task=GET-337", "--label", "capir.run=" + token,
@@ -484,6 +501,8 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest):
         "--mount", "type=bind,src=" + str(cache) + ",dst=/maven-repository",
         "--workdir", "/workspace/apps/opik-backend",
         "--env", "MAVEN_OPTS=-Xmx1G -XX:MaxMetaspaceSize=265m",
+        "--env", "MAVEN_CONFIG=/maven-repository",
+        "--env", "JAVA_TOOL_OPTIONS=-Duser.home=/maven-repository",
     ]
 
     def container(arguments, log_name, timeout):
