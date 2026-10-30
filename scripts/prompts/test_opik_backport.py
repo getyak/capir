@@ -500,6 +500,10 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
         for directory in (source, work, receipts):
             directory.mkdir(mode=0o700)
         (source / "apps/opik-backend").mkdir(parents=True, mode=0o700)
+        (source / "LICENSE").write_bytes(b"Apache-2.0 synthetic compile-context fixture\n")
+        source_config = source / "apps/opik-backend/lombok.config"
+        source_config.write_bytes(b"lombok.anyConstructor.addConstructorProperties = true\n")
+        source_config.chmod(0o644)
         manifest = json.loads((BACKPORT / "manifest.json").read_text(encoding="utf-8"))
         commands = []
 
@@ -512,6 +516,28 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
                     "Id": "sha256:" + "f" * 64,
                     "Architecture": "arm64", "Os": "linux", "RepoDigests": [],
                 }]).encode("utf-8")
+            if "opik-compile-profile" in arguments:
+                # Only the Docker I/O boundary is synthetic. Read the actual
+                # private override and command mount, then emit the wrapper's
+                # first-line observation into that exact invocation's log.
+                offset = arguments.index("opik-compile-profile")
+                token, phase, target, _, _ = arguments[offset + 1:offset + 6]
+                override = receipts / "compile-profile/lombok.config"
+                material, metadata = override.read_bytes(), override.stat()
+                mount = f"type=bind,src={override},dst={target},readonly"
+                proof = {
+                    "schema": "capri.opik.compile-observation.v1",
+                    "profile_id": "opik-dd403-official-docker-build-v1",
+                    "run_token": token, "phase": phase, "observed_at_ns": time.time_ns(),
+                    "target": target, "sha256": hashlib.sha256(material).hexdigest(), "bytes": len(material),
+                    "file_type": "regular" if override.is_file() and not override.is_symlink() else "invalid",
+                    "uid": metadata.st_uid, "gid": metadata.st_gid,
+                    "mode": format(metadata.st_mode & 0o777, "04o"),
+                    "mount_read_only": mount in arguments,
+                }
+                marker = (b"CAPIR_OPIK_COMPILE_PROFILE_V1 "
+                          + json.dumps(proof, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+                kwargs["stdout"].write(marker + b"Synthetic toolchain/Maven boundary output\n")
             return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr=b"")
 
         # Exercise the real remote guard using fixture OS/CI metadata; this is not remote execution proof.

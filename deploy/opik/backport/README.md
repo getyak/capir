@@ -190,3 +190,138 @@ real readback. Preserve the prepared backend148 identity.
 `LICENSE.upstream` retains the exact Apache-2.0 license and Comet ML notice.
 All newly authored Java tests retain their SPDX header. Preserve that legal
 material when distributing a candidate.
+
+## Building an immutable JAR
+
+The package milestone is separate from an image, import, activation or resident
+recovery. The same Actions job first runs fresh fixed54, then passes its actual
+producer context to [the package helper](../../../scripts/prompts/package-opik-backport.py).
+Historical manifest observations never authorize this step. The context binds
+the clean checked-out Capir revision, job/run attempt, private source and Maven
+repository owners, actual staged index and applied-file hashes, start time and
+final regression receipt hash. Old receipts without these facts are rejected.
+
+### Explicit official-default compile profile
+
+The pinned official Docker build copies pom.xml, spotless.xml and src before
+compilation; it copies lombok.config only into the later runtime stage. A full
+source bind exposes that configuration during our build and is not the same
+compile context. Both new regression and package containers therefore use
+`opik-dd403-official-docker-build-v1`: one build-only read-only bind containing
+exactly `config.stopBubbling = true` plus LF at the project Lombok config path.
+The protected original configuration remains unchanged on the host.
+
+The [shared profile helper](../../../scripts/prompts/opik_compile_profile.py)
+preserves the private 0400 override in the fresh regression receipt directory.
+The original full source catalogue and the effective one-config-overlay
+catalogue have distinct hashes. A wrapper in each actual Maven container
+observes the effective regular file, exact bytes/hash, owner/mode and read-only
+mount before exec. Its first-line log proof binds the container ownership
+token, phase and observation time. Fresh54 receipt and same-job package context
+must carry the exact matching profile/proof; legacy no-profile receipts cannot
+be upgraded. The package archives this input evidence, emits its own container
+proofs and records the applicable catalogue when deriving only the root POM
+version. Known command outcomes and writer settlement precede proof parsing.
+The [profile admission tests](../../../scripts/prompts/test_opik_compile_profile.py)
+cover missing, changed and self-consistently rebound claims through the real
+fixed54 validator.
+
+This profile is an explicit compile-input correction, not proof of binary
+equivalence. The previous actual package remains admitted in its recorded
+scope. A new real fixed54/package run and independent full application-class
+comparison must explain all changes beyond the three declared Java source
+families before accepting runtime compatibility. No class post-processing,
+mixed JAR or resident change follows from a unit fixture or profile ID alone.
+
+Before deriving the release version, the helper preserves and rehashes all raw
+fixed54 reports and receipt material. The source POM's sole root project-version
+derivation is explicit; dependencies, plugins and all other bytes stay fixed.
+Standard clean/package regenerates the owned target using the same pinned
+toolchain and m2. Ordered runtime coordinates and actual artifact hashes must
+agree before and after; complete JAR entries, required classes and all 229
+source migration resources receive separate admission. The shaded Liquibase
+dependency shares the `liquibase/` namespace: its classes and library resources
+are separate from application migrations and require matching paths, bytes and
+hashes in the actual resolved dependency JARs. Extra namespace entries without
+that explicit graph remain rejected. The boundary is covered by the
+[namespace tests](../../../scripts/prompts/test_opik_package_namespace.py).
+This does not prove loaded classes or the resident JAR.
+
+Some pinned dependencies carry empty Maven metadata directories with the exact
+observed Unix attributes `0xffff0010`. Only that verified empty, stored directory
+shape under `META-INF/maven/` is compatible; its header and decoded emptiness
+are checked from the same opened archive, and dependency provenance records
+the original metadata. Files,
+symlinks, special types and other unknown directory shapes remain rejected.
+The [ZIP metadata tests](../../../scripts/prompts/test_opik_package_zip_metadata.py)
+cover the observed shape and malformed variants. This is not a general ZIP
+mode normalization or a filesystem extraction path.
+
+Owned-container settlement is a source-mutation boundary. A cleanup attempt,
+client exit, missing CID or failed inspect is insufficient on its own. Confirm
+the exact owned resources are gone; an unresolved writer blocks further
+commands and source POM restoration. Preserve unknown outcomes rather than
+overwriting a potentially active source. The deterministic contract lives in
+[cleanup tests](../../../scripts/prompts/test_opik_package_cleanup.py) and the
+helper, rather than duplicate runtime-state prose.
+
+CI retains the original regression receipt and the package output, including
+the archived raw reports when clean/package consumes the original target.
+Actual results belong to each invocation's artifacts. A package does not change
+the Compose pin or run a service. A later reviewed image and coherent clean
+Capir release must preserve the runtime, all stores, rollback references and
+actual Engine identity; config and manifest digests are distinct identities.
+
+## Using the imported local runtime image
+
+The next release's `deploy/opik/compose.json` pins only the backend service to
+the host-observed local Engine image ID
+`sha256:2a32f376556ff24a55db8d1fd8598aa6ed362aead6153967a22519d32814280a`
+with `pull_policy: never`. Other services, environment, networks, mounts and
+startup commands are unchanged. This is a local imported-image reference, not
+a registry image that another host can pull.
+
+The image producer is the clean Capir recipe revision
+`6739993141d8aa796f3999ef1ef7623a6b5ecf18`, bound to
+[input-lock.json](image/input-lock.json) SHA256
+`3106f7a1901b31217cbb9d4338b6c178da974cc5f2257344854421f168142a88`.
+It consumes artifact 12997662015's complete 192567739-byte JAR, SHA256
+`280f348e4e2ac6b8ef53f4a5377742214e9393260b8e067caa24c2d0a1d3687c`.
+The package's actual checkout, workflow head, upstream revision and image
+producer remain distinct provenance fields in the lock and external receipts.
+
+The parent completed one OCI load. The sanitized
+`get337-host-oci-load-command-receipt.json` has SHA256
+`4005ba5aab58b78521191ab6f432999a3f6cb401198c8c85c367e1d821b2b61c`;
+it records exit 0 and two actual Engine readbacks of this exact ID, Linux/arm64
+and producer/lock/JAR labels. The ID is not inferred from a config digest or a
+successful load exit alone. Reuse that import; do not repeat a build or load
+to restate an already known result. Another resident daemon needs the same
+verified offline artifact imported and read back before consuming this pin;
+`never` deliberately fails when the image is absent.
+If another daemon exposes a different Engine identity for the artifact, review
+that explicit binding instead of substituting a config digest or adding a pull.
+
+The whole-JAR COPY also changes the existing `/opt/opik` parent directory's
+mtime to Unix seconds `1793385755`. That is the narrowly recorded directory
+metadata delta, alongside the intended JAR replacement and provenance/build
+metadata. It does not allow extra payload changes or altered permissions.
+The parent subsequently completed the bounded cold nine-file inventory.
+`get337-cold-candidate-inventory-receipt.json`, SHA256
+`c8e93a5c4d6ef475e29d91415cc6086ce32fe6d090b074f05665d6c09b98ad70`,
+confirms every fixed file's hash, size, UID/GID and mode matches the lock; the
+exact stopped probe was removed and independently read back absent. Hashing
+necessarily reads file bytes: the probe did not interpret/capture original
+file bodies or credentials/environment values. The cold proof and imported
+image identity do not establish a started application JVM, applied database
+state, live health or recurrence recovery.
+
+`start-opik.sh` consumes the Compose file from its own checkout. It starts the
+stores and bucket initializer and may restart an existing unhealthy backend
+before the final backend/frontend up operation. The deployment owner must
+therefore verify the imported image in the selected daemon and assess those
+startup effects before calling it. Use a new coherent clean release that
+contains this pin. Do not execute the old prepared148 release: its own Compose
+source would assert the old base image again. Preserve current/rollback
+references and all data; follow the real migration-ledger, relevant-backup,
+affected-service and live-readback gates in the runtime-image plan and runbook.

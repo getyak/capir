@@ -1,0 +1,267 @@
+{
+  "schema": "capri.opik.runtime-image-input-lock.v1",
+  "purpose": "Consume one independently reviewed complete shaded JAR in the exact immutable upstream runtime base; do not recompile or mix JAR contents.",
+  "recipe": {
+    "path": "deploy/opik/backport/image/Dockerfile",
+    "sha256": "fa34a6b1f49ad1570e86ec9e511e882686c4e8ca1a8e6a507868d2f2af88741a",
+    "local_copy_source": "opik-backend-2.2.45.jar",
+    "filesystem_replacements": 1,
+    "no_run_instructions": true
+  },
+  "base": {
+    "reference": "ghcr.io/comet-ml/opik/opik-backend@sha256:2ea3198d94b010404cd7108d41471382aa6e280485f2e1aad038093bb0fafa83",
+    "platform": "linux/arm64",
+    "upstream_revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
+    "upstream_version": "2.2.45",
+    "expected_main_jar_before": {
+      "runtime_path": "/opt/opik/opik-backend-2.2.45.jar",
+      "bytes": 192566685,
+      "sha256": "a4d1d084945d4bb18cb3fc5864f6caf92fc0be26dcb18f77520a6a1f9463d588",
+      "uid": 1001,
+      "gid": 1001,
+      "mode": "0644"
+    },
+    "retained_selected_payloads": [
+      {
+        "runtime_path": "/opt/opik/original-opik-backend-2.2.45.jar",
+        "bytes": 5575962,
+        "sha256": "61df95e2dc395cf1a9fdca871fe23a5fb9d5dffd5e5f474913f61a8daade137c",
+        "uid": 1001,
+        "gid": 1001,
+        "mode": "0644"
+      },
+      {
+        "runtime_path": "/opt/opik/entrypoint.sh",
+        "bytes": 1725,
+        "sha256": "1753c68164f224b3aaf1695b7f54c37d2a5ef4fb1777163190821f6c11f46d73",
+        "uid": 1001,
+        "gid": 1001,
+        "mode": "0755"
+      },
+      {
+        "runtime_path": "/opt/opik/run_db_migrations.sh",
+        "bytes": 326,
+        "sha256": "9b53b970427f06ce1b1bc28b10f6dcd898c7e28c5a92c16b0405d0d0cdb814ac",
+        "uid": 1001,
+        "gid": 1001,
+        "mode": "0755"
+      },
+      {
+        "runtime_path": "/opt/opik/rebaseline_db_changelog.sh",
+        "bytes": 19990,
+        "sha256": "ecb2bc2076ee8b92083a23262f58f999cdf7710380f4ef314a4bdea7786e9db6",
+        "uid": 1001,
+        "gid": 1001,
+        "mode": "0755"
+      },
+      {
+        "runtime_path": "/opt/opik/provision_agent_insights_readonly_user.sh",
+        "bytes": 4001,
+        "sha256": "5d4622b4d755858dab0b2d918388a38658cc1bc240fb4c87a057307a0f56364e",
+        "uid": 1001,
+        "gid": 1001,
+        "mode": "0755"
+      },
+      {
+        "runtime_path": "/opt/opik/config.yml",
+        "bytes": 117496,
+        "sha256": "e499971bb668b6c8cd7c92c15553797741f64e5d13aecfedba0ea82f94755772",
+        "uid": 1001,
+        "gid": 1001,
+        "mode": "0644"
+      },
+      {
+        "runtime_path": "/opt/opik/lombok.config",
+        "bytes": 213,
+        "sha256": "2045fa0abc4ff7ee52d922c49402d66372d6d52ece84e67a671075418a1bc30f",
+        "uid": 1001,
+        "gid": 1001,
+        "mode": "0644"
+      },
+      {
+        "runtime_path": "/opt/opik/opik-otel-views.yaml",
+        "bytes": 2213,
+        "sha256": "793b1ab8dcd70e7cc9266065c475137d76129fea13f8664f07a3983912bd489b",
+        "uid": 1001,
+        "gid": 1001,
+        "mode": "0644"
+      }
+    ],
+    "configuration_inheritance": [
+      "Env",
+      "User",
+      "Cmd",
+      "Entrypoint",
+      "WorkingDir",
+      "Healthcheck",
+      "ExposedPorts",
+      "Volumes",
+      "StopSignal",
+      "upstream Labels"
+    ],
+    "rootfs_requirement": "Every base RootFS diffID remains an identical prefix. The only permitted effective filesystem replacement is the exact main JAR; added io.capir.opik labels and ordinary build creation/history metadata are recorded separately.",
+    "platform_selection": "The parent build must explicitly select linux/arm64 and inspect the actual result; the recipe does not encode a fixed FROM --platform flag or authorize another architecture."
+  },
+  "package": {
+    "repository": "getyak/capir",
+    "artifact_id": 12997662015,
+    "run_id": 41099210888,
+    "run_attempt": 1,
+    "job": "opik-backport",
+    "workflow_head_label": "8942eb8d3f93927cd1bf0d8e42e73fdb4241f4f6",
+    "actual_producing_checkout": "4bf3a18e0bd8928ac3f61a1c9084b56488c8b70c",
+    "artifact_name": "opik-regression-4bf3a18e0bd8928ac3f61a1c9084b56488c8b70c-41099210888-1",
+    "zip_bytes": 180610043,
+    "zip_sha256": "2a63aae7c3d9a8c06dc2d08236788423f772f9e2e5b0e435d06561dfc192e0b1",
+    "compile_profile_id": "opik-dd403-official-docker-build-v1",
+    "compile_override_sha256": "cef77f6e12c36c1efc67602e98e6012c742c9a2ccc552dc0df3334b670a024ef",
+    "proof_paths_are_archive_provenance_only": true
+  },
+  "jar": {
+    "build_context_path": "opik-backend-2.2.45.jar",
+    "runtime_path": "/opt/opik/opik-backend-2.2.45.jar",
+    "bytes": 192567739,
+    "sha256": "280f348e4e2ac6b8ef53f4a5377742214e9393260b8e067caa24c2d0a1d3687c",
+    "uid": 1001,
+    "gid": 1001,
+    "mode": "0644",
+    "complete_jar_entries": 102059,
+    "application_migration_resources": 229,
+    "ordered_runtime_dependencies": 311,
+    "application_class_deltas_to_saved_base": 4,
+    "allowed_modified_java_families": [
+      "apps/opik-backend/src/main/java/com/comet/opik/domain/DatasetItemVersionDAO.java",
+      "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java",
+      "apps/opik-backend/src/main/java/com/comet/opik/utils/AsyncUtils.java"
+    ],
+    "outside_modified_java_family_deltas": 0,
+    "note": "The nested DAO record differs only in LineNumberTable metadata. Full byte comparison is preserved in the accepted review; these counts do not establish runtime class loading or applied database state."
+  },
+  "backport_source": {
+    "upstream_revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
+    "manifest": {
+      "path": "deploy/opik/backport/manifest.json",
+      "sha256": "759582e6d381a56ab5496d37bec1889deb448a1e4fb9b4baa0f55c165b23a6d2"
+    },
+    "frozen_patches": [
+      {
+        "path": "deploy/opik/backport/0001-health-ownership-tests.patch",
+        "sha256": "0f13a0f7e2dce83c8595b1008f47c094bf0727e550549f41f26a992a0c114ed7"
+      },
+      {
+        "path": "deploy/opik/backport/0002-dataset-query-ownership-tests.patch",
+        "sha256": "1868137a4eb4ef7039d737d4916cd8e4e4d5c67dbf460237b8bb481f6f268855"
+      },
+      {
+        "path": "deploy/opik/backport/0003-health-late-response-fix.patch",
+        "sha256": "9d989e9d304094d1595b44afac3e39ccb533e3acfccd82fb3398fe4a709f002c"
+      },
+      {
+        "path": "deploy/opik/backport/0004-upstream-health-contract-tests.patch",
+        "sha256": "01d5e68c611ec5a5172a09ee0dd77d1919066718cf90e8500330ebf99c829e71"
+      },
+      {
+        "path": "deploy/opik/backport/0005-dataset-query-response-fix.patch",
+        "sha256": "aa7f49d6b2b1a59a157550366cba9815b79390dc65bbaffa3075fdb847ca2d83"
+      },
+      {
+        "path": "deploy/opik/backport/0006-http-pool-integration-tests.patch",
+        "sha256": "8085881a877988024414ef6af8c3eb95c40f16fad2f7e45680827c4b29cb6bef"
+      },
+      {
+        "path": "deploy/opik/backport/0007-dataset-cancel-handoff-tests.patch",
+        "sha256": "1762d37fdb01c641f8f31a644617d7c0650d9837b14b7190b225855e4c3b8def"
+      }
+    ],
+    "original_protected_source_entries": 1576,
+    "original_lombok_config_sha256": "2045fa0abc4ff7ee52d922c49402d66372d6d52ece84e67a671075418a1bc30f"
+  },
+  "accepted_proof_files": [
+    {
+      "role": "artifact-metadata",
+      "file": "get337-official-profile-artifact-12997662015-metadata.json",
+      "sha256": "00cbce9ed0df8b4316a68b7c7c9831ffebc735b25f8f0ce66e7d42bd044f8256"
+    },
+    {
+      "role": "independent-package-and-complete-binary-review",
+      "file": "get337-official-profile-package-12997662015-independent-review.json",
+      "sha256": "31de9a6148ac81ac8389c81becc01c0189276bf57055e0a587ee15ebb5811bce"
+    },
+    {
+      "role": "cold-immutable-base-file-inventory",
+      "file": "get337-cold-base-inventory-receipt.json",
+      "sha256": "dd208e4076635b169dfbdcf206138e15d55bb51b1a78c38226f054933c4534b1"
+    },
+    {
+      "role": "selected-base-non-jar-to-upstream-source-comparison",
+      "file": "get337-cold-base-selected-nonjar-source-comparison.json",
+      "sha256": "018ed107f5b711baf1c612adbbd800dfe7e2105ce997f2a6a4610d4ee1df3730"
+    },
+    {
+      "role": "complete-package-receipt",
+      "artifact_path": "opik-package-receipts-41099210888-1/package-receipt.json",
+      "sha256": "ca9705b46531c9d0cebf62905f3f435bf1bc4cec2dc3f1485102b9f2ad8f6b77"
+    },
+    {
+      "role": "complete-jar-entry-catalogue",
+      "artifact_path": "opik-package-receipts-41099210888-1/jar-catalogue.json",
+      "sha256": "2269030d03d23d23f2af55bc2061b416c7f2a1c8c5965f3ad41407f7eacdcb84"
+    },
+    {
+      "role": "ordered-runtime-graph-after-package",
+      "artifact_path": "opik-package-receipts-41099210888-1/runtime-after.json",
+      "sha256": "6a8d4bae6375e01ca282cce69ba504d990229b0257a0ba31a82b126a2df039b5"
+    },
+    {
+      "role": "ordered-runtime-graph-before-package",
+      "artifact_path": "opik-package-receipts-41099210888-1/runtime-before.json",
+      "sha256": "e3753e8dcc4ab53048023dc27b1e744cc9c4451c22ba03a62f114aa90ba196c9"
+    },
+    {
+      "role": "fixed54-receipt",
+      "artifact_path": "opik-package-receipts-41099210888-1/prerequisite/receipt/receipt.json",
+      "sha256": "58305531ed6bf025baa39511e036a7e7aed07da493e01c184083fa44910a3337"
+    }
+  ],
+  "producer_binding": {
+    "revision_label": "io.capir.opik.producer.revision",
+    "input_lock_label": "io.capir.opik.input-lock.sha256",
+    "rule": "The parent supplies the clean committed Capir recipe revision and this lock file SHA at build time and records them in an external image receipt. Neither value is the package checkout, the upstream revision, nor an assumed image ID. This file never contains its own SHA or the eventual image ID."
+  },
+  "licensing": {
+    "repository_notice": {
+      "path": "deploy/opik/backport/LICENSE.upstream",
+      "sha256": "0236cf0195e033d15c120e610d44943e8e478ffed5d60fbba1b5a6b96e778a47"
+    },
+    "policy": "Preserve the base runtime payload and complete shaded JAR, including their licenses/notices. Retain the upstream source notice alongside distribution evidence; no extra file is copied into the image by this recipe."
+  },
+  "build_context_policy": {
+    "required_relative_files": [
+      "Dockerfile",
+      "opik-backend-2.2.45.jar"
+    ],
+    "allowed_additional_private_evidence": [
+      "input-lock.json",
+      "LICENSE.upstream"
+    ],
+    "forbidden_payload_categories": [
+      "runner logs",
+      "raw test XML",
+      "Docker authentication configuration",
+      "source environment files",
+      "Git metadata",
+      "Maven cache",
+      "unrelated source trees"
+    ],
+    "evidence_may_be_held_outside_context": true
+  },
+  "acceptance_boundary": {
+    "stage": "reviewed_source_preparation_only",
+    "image_built": false,
+    "image_imported": false,
+    "entrypoint_started": false,
+    "migration_or_provision_executed": false,
+    "resident_accepted": false,
+    "future_required": "Fresh resource admission, independent source review, clean-commit build, actual base/layer/config/file verification, external OCI/image identity receipt and a coherent reviewed Capir release pin before any authorized resident activation."
+  }
+}

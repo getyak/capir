@@ -43,6 +43,12 @@ test("Opik source, pin, runner and gate edits require the actual Java regression
     "deploy/opik/compose.json", "deploy/opik/backport/test.patch",
     "scripts/prompts/test-opik-backport.py", "scripts/ci/has-opik-backport-changes.py",
     "scripts/prompts/test_opik_backport.py",
+    "scripts/prompts/package-opik-backport.py",
+    "scripts/prompts/opik_compile_profile.py",
+    "scripts/prompts/test_opik_package.py",
+    "scripts/prompts/test_opik_package_context.py",
+    "scripts/prompts/test_opik_package_cleanup.py",
+    "scripts/prompts/test_opik_package_outcome.py",
     ".github/workflows/ci.yml",
   ]) {
     fixture(({ base, commit, detect }) => assert.equal(detect(base, commit(path)), "true", path));
@@ -50,7 +56,13 @@ test("Opik source, pin, runner and gate edits require the actual Java regression
 });
 
 test("unrelated Web or documentation changes do not start the Java build", () => {
-  for (const path of ["docs/example.md", "apps/web/example.tsx", "docs/\ndeploy/opik/example.patch"]) {
+  for (const path of [
+    "docs/example.md", "apps/web/example.tsx", "docs/\ndeploy/opik/example.patch",
+    "scripts/prompts/package-opik-backport.py.md",
+    "scripts/prompts/test_opik_package.py.md",
+    "scripts/prompts/nested/test_opik_package.py",
+    "docs/scripts/prompts/test_opik_package.py",
+  ]) {
     fixture(({ base, commit, detect }) => assert.equal(detect(base, commit(path)), "false", path));
   }
 });
