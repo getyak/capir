@@ -46,8 +46,9 @@ working mechanics, not just palette.
 ## Ownership and fan-in
 
 One parent owns synthesis, direction, rendered verification, Linear/PR state and
-resident deployment. Current phase is read-only diagnosis; source writes require
-explicit non-overlapping file ownership after fan-in.
+resident deployment. Parallel diagnosis and implementation are complete; the
+current phase is final surface acceptance and two bounded responsive repairs.
+Source writes retain explicit non-overlapping file ownership.
 
 - `web_craft`: Web shell, navigation, search, account/preferences, shared layout.
 - `ios_craft`: shipped Mac native window, settings, appearance, capture/recovery.
@@ -64,7 +65,7 @@ builds or mutate the same source/external state.
 
 ## Direction and sequence
 
-1. **Active: evidence and diagnosis.** Capture current Web and safe native
+1. **Completed: evidence and diagnosis.** Capture current Web and safe native
    baselines, inspect meaningful interactions, consolidate at least 100 distinct
    findings and validate suspected consequential failures before fixes.
 2. Compare two structural directions at cheap visible fidelity: an evidence
@@ -173,3 +174,53 @@ focused image action. Ref cleanup now records only that exact focus owner and
 transfers focus to the retained preview only while the document remains active
 and no new focus choice exists. Both removed actions, keyboard continuation and
 non-stealing cases are covered;34 image checks passed after this repair.
+
+
+## Delivery and final responsive repairs
+
+PR489 merged normally as0580dbf6 after reviewed head5ad05dc7 passed CI, Security
+and Check macOS. Main source CI40994906120, Security40994906152 and native
+40994906111 passed. The successful raw native result was SHA256-verified and
+inspected independently: eight isolated component cases, three first-run cases
+and one Finder-drag case, each with zero failures/skips. They establish their
+explicit synthetic/component/published-app scope, not a user's installed client
+or full VoiceOver, physical trackpad, OS capture permission and backend upload.
+Release macOS40995777976 at0580 completed signed publication and empty-profile
+published-app verification. Release metadata and native GUI evidence live under
+the task artifact, separately from installed-device evidence.
+
+The clean committed resident0580 build XsW-4pi7pgNc1YBzpdYBn was activated and
+its served build manifest matches the clean source build. A sequential graceful
+restart retained the same authenticated browser document, Session, exact unsent
+server/visible draft and timeOrigin; stream502 recovered to200 without refresh.
+The old listener exited and the new listener was ready in5.6s. One later explicit
+synthetic prompt produced a real answer with table/code; this does not make its
+model wording a confirmed domain fact or an effect receipt.
+
+Actual1280x820,900x480 and375x812 browser checks covered reading, long draft,
+keyboard retrieval, destination heading focus, modal Tab/Escape, dark appearance
+and reduced-motion media. Independent review and actual DOM geometry identified
+OBS-001: the inline slash menu's216px budget at900x480 moved the editor and44px
+Send button beyond the480px viewport. This is a new observed P2 discovered in
+F021's validation scope, not a retroactive change to the136 candidate count.
+web_craft owns the smallest composer layout/geometry/test repair; normal CI,
+independent review, clean resident deployment and same-path red/green acceptance
+remain required.
+
+The same actual acceptance found OBS-002 in the extension custom frame: after
+Tab traversal the900x480 dialog remained24..456 while its focused44px Close
+button scrolled to7..51 and was clipped. The smaller375x812 layout stayed
+readable. This is the now-observed F020 custom-frame boundary, distinct from
+OBS-001. A separate CSS owner retains the header, Close and44px footer actions
+while giving the existing body its own scrollport. No client/token/connection
+was created during this inspection. Both repairs share one followup PR and
+clean Web activation; native source and its published0580 package are unchanged.
+
+One QA focus probe mistakenly captured BODY script content with an expiring
+synthetic-entry scope. The local record was sanitized and that entry was signed
+out through the normal UI; API401 was observed. The same single test identity
+was then reused for final acceptance. PR491 merged a narrow REVIEW.md prevention
+rule as127fbcec. At handoff, stop exact run786c6629-b83e-42cd-ab1e-3c20cbb2fecf,
+verify account/credential removal and denied access, preserve unique sanitized
+receipts, then remove only owned inactive temporary resources. Latest completion
+and recovery references are maintained in the external get329/control.md.
