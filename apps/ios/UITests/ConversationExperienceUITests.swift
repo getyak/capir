@@ -122,10 +122,21 @@ final class ConversationExperienceUITests: XCTestCase {
         app.launchEnvironment["TS_IOS_UI_TEST_PROGRESS_EXPIRY"] = "queued"
         openFixture()
         let progress = element("conversation-image-progress-a0000000-0000-4000-8000-000000000004")
-        reveal(progress)
+        // Navigation and XCTest's idle wait must finish before the fixture
+        // publishes its one queued observation and starts the real lifetime.
+        let observe = app.buttons["conversation-experience-observe-queue"]
+        reveal(observe)
+        XCTAssertTrue(observe.isEnabled)
+        XCTAssertGreaterThanOrEqual(observe.frame.height, 44)
+        XCTAssertTrue(progress.staticTexts["Message received. Waiting for reply status…"].exists)
+        XCTAssertFalse(progress.staticTexts["Queued for processing"].exists)
+        observe.tap()
+        XCTAssertFalse(observe.isEnabled, "The fixture must not renew the observation while the feed is silent.")
         XCTAssertTrue(progress.staticTexts["Queued for processing"].exists)
         XCTAssertFalse(progress.buttons["Check status"].exists)
-        XCTAssertTrue(progress.staticTexts["Reply status needs checking"].waitForExistence(timeout: 30),
+        // This starts with a fresh observation, so allow the unchanged 65s
+        // production lifetime plus Timeline/XCTest scheduling slack.
+        XCTAssertTrue(progress.staticTexts["Reply status needs checking"].waitForExistence(timeout: 90),
                       "A silent feed must stop claiming that the message is still queued.")
         let check = progress.buttons["Check status"]
         XCTAssertTrue(check.isHittable)

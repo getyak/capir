@@ -11,7 +11,7 @@ struct ConversationExperienceFixtureView: View {
     let onSource: () -> Void
     private let source: AskMediaDraft
     @StateObject private var reviewStore: ConversationMemoryReviewStore
-    @State private var progressObservedAt = Date()
+    @State private var progressObservedAt: Date?
 
     init(language: AppLanguage, mode: String, compact: Bool, onSource: @escaping () -> Void) {
         self.language = language; self.mode = mode; self.compact = compact
@@ -38,6 +38,17 @@ struct ConversationExperienceFixtureView: View {
                     .id("conversation-experience-source")
                 if mode == "processing" {
                     ConversationImageProgressView(state: processingState, language: language, onCheck: {})
+                    if isQueuedExpiryFixture {
+                        Button {
+                            guard progressObservedAt == nil else { return }
+                            progressObservedAt = Date()
+                        } label: {
+                            Text(verbatim: "Observe queued status")
+                                .frame(minHeight: 44)
+                        }
+                        .disabled(progressObservedAt != nil)
+                        .accessibilityIdentifier("conversation-experience-observe-queue")
+                    }
                 } else {
                     Text(language.text("Review the contact and the detail you want to keep."))
                         .font(.body).fixedSize(horizontal: false, vertical: true)
@@ -50,22 +61,27 @@ struct ConversationExperienceFixtureView: View {
             .accessibilityIdentifier("conversation-experience-fixture")
     }
 
+    private var isQueuedExpiryFixture: Bool {
+        ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_PROGRESS_EXPIRY"] == "queued"
+    }
+
     private var processingState: ConversationImageProgressState {
         let manifest = try? ConversationImageUpload(id: source.id, data: source.data,
             fileName: source.fileName, mediaType: source.mediaType).manifest
         let pending = PendingImageConversation(messageID: ConversationExperienceFixtureClient.messageID,
             idempotencyKey: "synthetic-preview-only", objective: "", images: manifest.map { [$0] } ?? [],
             createdAt: Date(), timeZone: "Asia/Shanghai", queueEntryID: nil, state: .admitted)
-        if ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_PROGRESS_EXPIRY"] == "queued",
+        if isQueuedExpiryFixture, let progressObservedAt,
            let images = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(pending.images)),
            let data = try? JSONSerialization.data(withJSONObject: [
                "queue_entry_id": ConversationExperienceFixtureClient.messageID.uuidString,
                "message_id": pending.messageID.uuidString, "status": "queued", "images": images,
            ]), let entry = try? JSONDecoder().decode(ConversationImageQueueEntry.self, from: data) {
-            // A fixed observation, with no tracker updates after this view is
-            // opened, exercises natural expiry in the production component.
+            // Navigation does not consume this observation's lifetime. The
+            // one-shot fixture action publishes it only once the test is ready;
+            // no later tracker update drives the production component's expiry.
             return .derive(pending: pending, isSending: false, isChecking: false,
-                entry: entry, observedAt: progressObservedAt.addingTimeInterval(-45))
+                entry: entry, observedAt: progressObservedAt)
         }
         return .derive(pending: pending, isSending: false, isChecking: true)
     }
