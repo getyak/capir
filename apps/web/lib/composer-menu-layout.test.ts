@@ -160,10 +160,10 @@ describe("composerMenuPlacement", () => {
     };
     const placement = composerMenuPlacement(scenario);
     expect(placement.side).toBe("inline");
-    expect(placement.maxHeight).toBe(140);
+    expect(placement.maxHeight).toBe(0);
   });
 
-  it("keeps the inline fallback capped at 220 in a full viewport", () => {
+  it("reserves the existing composer body before budgeting an inline menu", () => {
     const placement = composerMenuPlacement({
       outer: { top: 130, bottom: 700 },
       viewport: { top: 0, height: 844 },
@@ -171,7 +171,38 @@ describe("composerMenuPlacement", () => {
       mobile: false,
     });
     expect(placement.side).toBe("inline");
-    expect(placement.maxHeight).toBe(220);
+    expect(placement.maxHeight).toBeLessThanOrEqual(124);
+    expect(130 + 570 + COMPOSER_MENU_GAP + placement.maxHeight).toBeLessThanOrEqual(832);
+  });
+
+  it.each([480, 420, 360])("keeps the measured 900px short-window editor and Send row inside a %spx dock", bottom => {
+    // FINAL-VISUAL-01: the 480px resident dock clips at 480, composer starts
+    // 256.53125 and its 290px inline box contains a 216px menu. The remaining
+    // 74px is the real editor/Send/padding/border/gap, not a guessed row size.
+    const top = 256.53125;
+    const retainedBody = 74;
+    const placement = composerMenuPlacement({
+      outer: { top, bottom: 546.53125 },
+      viewport: { top: 0, height: 480 },
+      clip: { top: 244.53125, bottom },
+      mobile: false,
+      inlineContentHeight: retainedBody,
+    });
+    expect(placement.side).toBe("inline");
+    expect(placement.maxHeight).toBeGreaterThan(0);
+    expect(top + retainedBody + placement.maxHeight).toBeLessThanOrEqual(bottom - COMPOSER_MENU_GAP);
+    if (bottom < 480) expect(placement.maxHeight).toBeLessThan(140);
+  });
+
+  it("does not invent an inline minimum when the existing editor fills the visible clip", () => {
+    const placement = composerMenuPlacement({
+      outer: { top: 280, bottom: 460 },
+      viewport: { top: 0, height: 480 },
+      clip: { top: 250, bottom: 380 },
+      mobile: false,
+      inlineContentHeight: 180,
+    });
+    expect(placement).toEqual({ side: "inline", maxHeight: 0 });
   });
 
   it("applies the mobile dock clearance below the visual viewport", () => {
@@ -182,7 +213,7 @@ describe("composerMenuPlacement", () => {
     };
     expect(composerMenuPlacement({ ...scenario, mobile: true })).toEqual({
       side: "inline",
-      maxHeight: 220,
+      maxHeight: 112,
     });
     expect(composerMenuPlacement({ ...scenario, mobile: false })).toEqual({
       side: "below",

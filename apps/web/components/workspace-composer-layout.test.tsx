@@ -78,8 +78,8 @@ let canvas: HTMLDivElement;
 let root: Root | null = null;
 const submit = vi.fn();
 
-function Harness() {
-  const [value, setValue] = useState("/");
+function Harness({ layout = "stacked", initialValue = "/" }: { layout?: "stacked" | "inline"; initialValue?: string }) {
+  const [value, setValue] = useState(initialValue);
   return (
     <WorkspaceComposer
       binding="account-one"
@@ -92,6 +92,8 @@ function Harness() {
       onValueChange={setValue}
       placeholder="输入"
       variant="home"
+      layout={layout}
+      footerEnd={<button aria-label="Send" type="button" onClick={submit}>Send</button>}
       value={value}
     />
   );
@@ -147,11 +149,15 @@ beforeEach(async () => {
       }
     },
   );
-  vi.spyOn(window, "addEventListener").mockImplementation((type, fn) => {
+  const addWindowListener = window.addEventListener.bind(window);
+  const removeWindowListener = window.removeEventListener.bind(window);
+  vi.spyOn(window, "addEventListener").mockImplementation((type, fn, options) => {
     windowAdded.push({ type, fn });
+    addWindowListener(type, fn, options);
   });
-  vi.spyOn(window, "removeEventListener").mockImplementation((type, fn) => {
+  vi.spyOn(window, "removeEventListener").mockImplementation((type, fn, options) => {
     windowRemoved.push({ type, fn });
+    removeWindowListener(type, fn, options);
   });
   Object.defineProperty(window, "innerWidth", {
     value: 390,
@@ -215,6 +221,125 @@ it("repositions an open popup when a clipping ancestor is resized by a health ba
   expect(assignedMaxHeight()).toBe(180);
   const menuTop = OUTER.bottom + GAP;
   expect(menuTop + assignedMaxHeight()).toBeLessThanOrEqual(CANVAS.bottom);
+  mockBox(canvas, { top: 200, bottom: CANVAS.bottom });
+  await act(async () => canvas.dispatchEvent(new Event("scroll")));
+  expect(popup.dataset.side).toBe("above");
+  expect(assignedMaxHeight()).toBe(226);
+});
+
+it("budgets the resident 900×480 inline menu without pushing the editor/Send row out of its dock", async () => {
+  viewport.height = 480;
+  Object.defineProperty(window, "innerWidth", { value: 900, configurable: true });
+  await act(async () => root?.render(<Harness key="short-window" layout="inline" />));
+  const composer = canvas.querySelector<HTMLElement>(`.${styles.composer}`)!;
+  composer.style.rowGap = "8px";
+  mockBox(canvas, { top: 244.53125, bottom: 480 });
+  mockBox(composer, { top: 256.53125, bottom: 546.53125 });
+  const input = await openMenu();
+  mockBox(menu(), { top: 267.53125, bottom: 483.53125 });
+  const observer = observers.findLast(entry => entry.targets.has(canvas))!;
+  await act(async () => observer.callback([], observer as unknown as ResizeObserver));
+  const budget = assignedMaxHeight();
+  expect(menu().dataset.side).toBe("inline");
+  expect(budget).toBeGreaterThan(0);
+  expect(256.53125 + 74 + budget).toBeLessThanOrEqual(472);
+  expect(menu().querySelectorAll('[role="option"]').length).toBeGreaterThan(3);
+  expect(document.activeElement).toBe(input);
+  expect(canvas.querySelector('[aria-label="Send"]')).not.toBeNull();
+
+  // The observer sees the settled, smaller composer on its next callback.
+  // Deducting the menu's own previous contribution must preserve the same
+  // editor reserve instead of repeatedly shrinking the menu toward zero.
+  mockBox(menu(), { top: 267.53125, bottom: 267.53125 + budget });
+  mockBox(composer, { top: 256.53125, bottom: 256.53125 + 74 + budget });
+  await act(async () => observer.callback([], observer as unknown as ResizeObserver));
+  expect(assignedMaxHeight()).toBe(budget);
+  expect(submit).not.toHaveBeenCalled();
+});
+
+it.each([420, 360])("scrolls keyboard selection inside a constrained %spx dock, leaving its editor focus in place", async bottom => {
+  viewport.height = 480;
+  Object.defineProperty(window, "innerWidth", { value: 900, configurable: true });
+  await act(async () => root?.render(<Harness key="constrained-menu" layout="inline" />));
+  const composer = canvas.querySelector<HTMLElement>(`.${styles.composer}`)!;
+  composer.style.rowGap = "8px";
+  mockBox(canvas, { top: 244.53125, bottom });
+  mockBox(composer, { top: 256.53125, bottom: 546.53125 });
+  const input = await openMenu();
+  const popup = menu();
+  mockBox(popup, { top: 267.53125, bottom: 483.53125 });
+  const observer = observers.findLast(entry => entry.targets.has(canvas))!;
+  await act(async () => observer.callback([], observer as unknown as ResizeObserver));
+  expect(assignedMaxHeight()).toBeGreaterThan(0);
+  expect(assignedMaxHeight()).toBeLessThan(140);
+  expect(256.53125 + 74 + assignedMaxHeight()).toBeLessThanOrEqual(bottom - GAP);
+  mockBox(popup, { top: 267.53125, bottom: 267.53125 + assignedMaxHeight() });
+  mockBox(composer, { top: 256.53125, bottom: 256.53125 + 74 + assignedMaxHeight() });
+  const options = [...popup.querySelectorAll<HTMLElement>('[role="option"]')];
+  options.forEach((option, index) => {
+    option.getBoundingClientRect = () => ({
+      top: 274.53125 + index * 60 - popup.scrollTop,
+      bottom: 334.53125 + index * 60 - popup.scrollTop,
+      height: 60,
+    }) as DOMRect;
+  });
+  canvas.scrollTop = 19;
+  const accidentalScroll = vi.spyOn(options[1], "scrollIntoView");
+  popup.scrollTop = 97;
+  await act(async () => popup.dispatchEvent(new Event("scroll")));
+  expect(popup.scrollTop).toBe(97);
+  const list = popup.querySelector<HTMLElement>(`.${styles.list}`)!;
+  list.scrollTop = 28;
+  popup.scrollTop = 110;
+  await act(async () => list.dispatchEvent(new Event("scroll")));
+  expect(popup.scrollTop).toBe(110);
+  expect(list.scrollTop).toBe(28);
+  await act(async () => {
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  });
+  expect(input.value).toBe("/");
+  expect(options[0].getAttribute("aria-selected")).toBe("true");
+  await act(async () => input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
+  await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+  expect(options[1].getAttribute("aria-selected")).toBe("true");
+  expect(popup.scrollTop).toBeGreaterThan(0);
+  expect(popup.scrollTop).not.toBe(110);
+  expect(canvas.scrollTop).toBe(19);
+  expect(accidentalScroll).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(input);
+  await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(menu()).toBeNull();
+  expect(input.value).toBe("/");
+  expect(document.activeElement).toBe(input);
+  expect(submit).not.toHaveBeenCalled();
+});
+
+it("keeps a long draft and caret intact when a short-window menu closes", async () => {
+  const draft = `${"保留正在编辑的原文。".repeat(40)}\n/`;
+  viewport.height = 480;
+  Object.defineProperty(window, "innerWidth", { value: 900, configurable: true });
+  await act(async () => root?.render(<Harness key="long-draft" layout="inline" initialValue={draft} />));
+  const composer = canvas.querySelector<HTMLElement>(`.${styles.composer}`)!;
+  composer.style.rowGap = "8px";
+  mockBox(canvas, { top: 244.53125, bottom: 480 });
+  mockBox(composer, { top: 256.53125, bottom: 622.53125 });
+  const input = canvas.querySelector("textarea")!;
+  await act(async () => { input.setSelectionRange(draft.length, draft.length); input.focus(); });
+  mockBox(menu(), { top: 267.53125, bottom: 483.53125 });
+  input.scrollTop = 72;
+  const observer = observers.findLast(entry => entry.targets.has(canvas))!;
+  await act(async () => observer.callback([], observer as unknown as ResizeObserver));
+  // A larger 150px retained editor body gets the budget left after that body,
+  // rather than being replaced, truncated or silently reset to a short draft.
+  expect(256.53125 + 150 + assignedMaxHeight()).toBeLessThanOrEqual(472);
+  await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(input.value).toBe(draft);
+  expect(input.selectionStart).toBe(draft.length);
+  expect(input.selectionEnd).toBe(draft.length);
+  expect(input.scrollTop).toBe(72);
+  expect(document.activeElement).toBe(input);
+  expect(submit).not.toHaveBeenCalled();
 });
 
 it("keeps keyboard focus in the editor while the menu is open and after choosing", async () => {

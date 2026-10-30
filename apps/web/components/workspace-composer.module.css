@@ -418,7 +418,15 @@
   bottom: auto;
   width: 100%;
   box-shadow: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
+
+/* A short inline menu scrolls as a whole, including mention annotations and
+   errors. These must not squeeze the option list to zero visible height. */
+.menu[data-side="inline"] .list { flex: 0 0 auto; overflow: visible; }
+.menu[data-side="inline"] > :not(.list) { flex: 0 0 auto; }
 
 .composer[data-dragging="true"] {
   border-color: color-mix(in srgb, var(--focus) 60%, var(--line));

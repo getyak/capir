@@ -490,11 +490,12 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 12px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
   left: 50%;
   max-height: calc(100dvh - 48px);
-  overflow: auto;
+  overflow: hidden;
   padding: 22px;
   position: fixed;
   top: 50%;
@@ -502,7 +503,19 @@
   width: min(480px, calc(100vw - 40px));
 }
 
-.dialogBody { display: grid; gap: 14px; min-width: 0; }
+.dialogBody {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 14px;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  /* Retain offset focus rings inside the body-owned scrolling clip. */
+  margin: -5px;
+  padding: 5px;
+  scroll-padding-block: 8px;
+}
 .dialogBody:empty { display: none; }
 
 .dialogWide {
@@ -512,6 +525,7 @@
 .dialogHeader {
   align-items: start;
   display: flex;
+  flex: 0 0 auto;
   gap: 14px;
   justify-content: space-between;
 }
@@ -657,9 +671,11 @@
 .dialogFooter {
   align-items: center;
   display: flex;
+  flex: 0 0 auto;
   gap: 10px;
   justify-content: flex-end;
 }
+.dialogFooter button { min-height: 44px; }
 
 .reveal {
   background: var(--surface-muted);

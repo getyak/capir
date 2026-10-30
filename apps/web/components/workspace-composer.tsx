@@ -323,6 +323,21 @@ export function WorkspaceComposer({
     };
   }, [value, variant, layout]);
 
+  const revealMenuSelection = useCallback(() => {
+    const popup = menu.current;
+    const selected = popup?.querySelector<HTMLElement>('[aria-selected="true"]');
+    const scrollport = popup?.dataset.side === "inline" ? popup : popup?.querySelector<HTMLElement>(`.${styles.list}`);
+    if (!selected || !scrollport || scrollport.clientHeight <= 0) return;
+    const bounds = scrollport.getBoundingClientRect();
+    const option = selected.getBoundingClientRect();
+    const top = bounds.top + scrollport.clientTop;
+    const bottom = top + scrollport.clientHeight;
+    // Scroll only the menu owner. scrollIntoView can also move the dock/page
+    // and displace the editor whose active descendant this option remains.
+    if (option.height > scrollport.clientHeight || option.top < top) scrollport.scrollTop += option.top - top;
+    else if (option.bottom > bottom) scrollport.scrollTop += option.bottom - bottom;
+  }, []);
+
   // Fit the popup into the region a reader can actually see: the visual
   // viewport intersected with every clipping ancestor's scrollport, anchored
   // to the outer composer the popup's `calc(100% + 8px)` gap is measured from.
@@ -337,6 +352,12 @@ export function WorkspaceComposer({
     function position() {
       if (!popup || !anchor) return;
       const rect = anchor.getBoundingClientRect();
+      const gap = Number.parseFloat(window.getComputedStyle(anchor).rowGap) || 0;
+      // Recover the unchanged composer body from an already-inline layout;
+      // the menu's previous height must not become its next minimum/reserve.
+      const inline = popup.dataset.side === "inline";
+      const menuHeight = inline ? popup.getBoundingClientRect().height : 0;
+      const inlineContentHeight = Math.max(0, rect.height - menuHeight + (inline ? 0 : gap));
       const viewport = window.visualViewport;
       const placement = composerMenuPlacement({
         outer: { top: rect.top, bottom: rect.bottom },
@@ -346,9 +367,17 @@ export function WorkspaceComposer({
         },
         clip: composerMenuClipBounds(clips),
         mobile: window.innerWidth <= 760,
+        inlineContentHeight,
       });
       popup.dataset.side = placement.side;
       popup.style.maxHeight = `${placement.maxHeight}px`;
+      revealMenuSelection();
+    }
+    function onScroll(event: Event) {
+      // Wheel/touch scrolling belongs to the menu, including its list and
+      // annotations; it must not reveal an older keyboard selection again.
+      if (event.target instanceof Node && popup?.contains(event.target)) return;
+      position();
     }
     position();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(position);
@@ -357,21 +386,21 @@ export function WorkspaceComposer({
     observer?.observe(anchor);
     for (const clip of clips) observer?.observe(clip);
     window.addEventListener("resize", position);
-    window.addEventListener("scroll", position, true);
+    window.addEventListener("scroll", onScroll, true);
     window.visualViewport?.addEventListener("resize", position);
-    window.visualViewport?.addEventListener("scroll", position);
+    window.visualViewport?.addEventListener("scroll", onScroll);
     return () => {
       observer?.disconnect();
       window.removeEventListener("resize", position);
-      window.removeEventListener("scroll", position, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.visualViewport?.removeEventListener("resize", position);
-      window.visualViewport?.removeEventListener("scroll", position);
+      window.visualViewport?.removeEventListener("scroll", onScroll);
     };
-  }, [menuOpen, value]);
+  }, [menuOpen, value, revealMenuSelection]);
 
   useEffect(() => {
-    if (menuOpen) menu.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
-  }, [menuOpen, highlighted]);
+    if (menuOpen) revealMenuSelection();
+  }, [menuOpen, highlighted, revealMenuSelection]);
 
   // Keep DOM focus and the caret inside the textarea after a suggestion edit.
   useLayoutEffect(() => {
