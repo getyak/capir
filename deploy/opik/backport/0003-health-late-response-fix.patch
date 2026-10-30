@@ -1,0 +1,104 @@
+diff --git a/apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java b/apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java
+index 698e5fe4fb3abf1b5a7dd410b45445f8d4552ef6..bf7822c891f45f6213f2aba6840d26f4334e0505 100644
+--- a/apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java
++++ b/apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java
+@@ -5,6 +5,7 @@
+ import com.google.common.base.Preconditions;
+ import lombok.Getter;
+ import lombok.NonNull;
++import lombok.extern.slf4j.Slf4j;
+ import org.apache.commons.lang3.StringUtils;
+ import ru.vyarus.dropwizard.guice.module.installer.feature.health.NamedHealthCheck;
+ 
+@@ -16,15 +17,16 @@
+ /**
+  * Shared probe shape for ClickHouse v2 HTTP health checks: bounded {@code SELECT 1} with a
+  * server-side {@code max_execution_time} cap aligned to the configured deadline, plus
+- * interrupt-aware cancellation on failure.
++ * late-response cleanup after timeout or interruption.
+  *
+  * <p>Subclasses pass their name via the constructor and may override {@link #check()} to
+  * short-circuit before delegating to {@code super.check()} (e.g. when a feature toggle disables
+  * the underlying capability), or override {@link #newQuerySettings()} when their user runs under
+  * a profile that forbids per-query setting changes. Subclasses running a different query drive it
+- * through {@link #executeProbe(CompletableFuture, Function)} so the timeout, cancellation and
++ * through {@link #executeProbe(CompletableFuture, Function)} so the timeout, abandonment and
+  * {@code log_comment} handling live in one place.
+  */
++@Slf4j
+ abstract class AbstractClickHouseHealthCheck extends NamedHealthCheck {
+ 
+     protected static final String SELECT_1_QUERY = "SELECT 1";
+@@ -45,7 +47,7 @@
+ 
+     /**
+      * Server-side ceiling aligned with the call-site deadline so ClickHouse aborts a stuck probe
+-     * within the same budget, even if {@code cancel(true)} is a no-op on the in-flight HTTP
++     * within the same budget. Abandoning a client-side wait does not stop the in-flight HTTP
+      * request. Whole seconds rounded up from {@link #healthCheckTimeout}, with a 1 s floor so the
+      * cap stays meaningful below sub-second timeouts.
+      */
+@@ -71,21 +73,26 @@
+     }
+ 
+     /**
+-     * Runs a probe query under the shared deadline and cancellation contract: the caller-side
+-     * {@code future.get(healthCheckTimeout)} bounds the wait, {@code onResult} maps the (auto-closed)
+-     * result to a {@link Result}, and any interrupt/failure cancels the in-flight query so it doesn't
+-     * keep running server-side. Subclasses supply the future (via {@link #newQuerySettings()}) and the
+-     * result mapping; the flow lives here so timeout and cancellation fixes stay in one place.
++     * Bounds acquisition by the probe deadline. Only acquisition failure abandons the future:
++     * once acquired, try-with-resources owns mapping and close, including their failure paths.
++     * Keeping those blocks separate prevents an already-owned response from being closed twice.
+      */
+     protected <T extends AutoCloseable> Result executeProbe(CompletableFuture<T> queryFuture,
+             Function<? super T, Result> onResult) {
+-        try (var result = queryFuture.get(healthCheckTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
+-            return onResult.apply(result);
++        T result;
++        try {
++            result = queryFuture.get(healthCheckTimeout.toMillis(), TimeUnit.MILLISECONDS);
+         } catch (InterruptedException exception) {
+             Thread.currentThread().interrupt();
+-            return getUnhealthyAndCancelQuery(queryFuture, exception);
++            return releaseAbandonedQuery(queryFuture, exception);
+         } catch (Exception exception) {
+-            return getUnhealthyAndCancelQuery(queryFuture, exception);
++            return releaseAbandonedQuery(queryFuture, exception);
++        }
++
++        try (result) {
++            return onResult.apply(result);
++        } catch (Exception exception) {
++            return Result.unhealthy(exception);
+         }
+     }
+ 
+@@ -108,10 +115,24 @@
+     }
+ 
+     /**
+-     * Cancel on failure so the query doesn't keep running server-side.
++     * Keep the future able to deliver its late response, then close that response exactly once.
++     * CompletableFuture cancellation does not stop the client's blocking HTTP supplier and can
++     * discard its eventual response without closing it (OPIK-8576). This handler is registered
++     * only when acquisition failed; delivered responses remain owned by try-with-resources.
+      */
+-    protected Result getUnhealthyAndCancelQuery(CompletableFuture<?> queryFuture, Exception exception) {
+-        queryFuture.cancel(true);
++    protected <T extends AutoCloseable> Result releaseAbandonedQuery(CompletableFuture<T> queryFuture,
++            Exception exception) {
++        queryFuture.whenComplete((result, throwable) -> {
++            if (result != null) {
++                try {
++                    result.close();
++                } catch (Exception closeFailure) {
++                    // Report a bounded type, never a transport message or response payload.
++                    log.warn("Failed to close abandoned '{}' health response ({})",
++                            name, closeFailure.getClass().getSimpleName());
++                }
++            }
++        });
+         return Result.unhealthy(exception);
+     }
+ }

@@ -1,0 +1,436 @@
+{
+  "schema": "capri.opik.backport-tests.v1",
+  "issue": "GET-337",
+  "state": "Health-fixed39 GREEN and DAO baseline10/four assertion failures independently reviewed; responses-fixed/all49 candidate awaits runner GREEN, source review and remote Java execution.",
+  "upstream": {
+    "repository": "https://github.com/comet-ml/opik",
+    "revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
+    "version": "2.2.45",
+    "license": "Apache-2.0"
+  },
+  "sources": [
+    {
+      "path": "apps/opik-backend/pom.xml",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/pom.xml",
+      "git_blob_sha1": "0965e28667b8c40fbaee3f18ef4b6c2220cefc50",
+      "sha256": "c75d368bab24235c347ed86fdecacd71cc7badb4c07fd1076c1f853b90dc7b71",
+      "bytes": 28615,
+      "hash_verified": true
+    },
+    {
+      "path": "apps/opik-backend/Dockerfile",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/Dockerfile",
+      "git_blob_sha1": "cc31e71c5dfa9c3cebf447bd6be607b78d76c0e0",
+      "sha256": "3e24c206895aaf4f33d8c00d99d47a193b019e58848ba3aa77eaf30646eae6ee",
+      "bytes": 3674,
+      "hash_verified": true
+    },
+    {
+      "path": "apps/opik-backend/spotless.xml",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/spotless.xml",
+      "git_blob_sha1": "2386b914c05d60d017492f65c8d59209e669a493",
+      "sha256": "4ae195f1296dc4635bb65bb8cf37dbcac30a4d1c0b4f7220963eb77b017655a6",
+      "bytes": 2005,
+      "hash_verified": true
+    },
+    {
+      "path": "apps/opik-backend/lombok.config",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/lombok.config",
+      "git_blob_sha1": "d7ce707cbf886bd5064a9f94ebb42c8fdc02adff",
+      "sha256": "2045fa0abc4ff7ee52d922c49402d66372d6d52ece84e67a671075418a1bc30f",
+      "bytes": 213,
+      "hash_verified": true
+    },
+    {
+      "path": "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java",
+      "git_blob_sha1": "698e5fe4fb3abf1b5a7dd410b45445f8d4552ef6",
+      "sha256": "38b9239634047ab629eba97c77252a6ce731fc0cfbcedf6cb32f0631b1411deb",
+      "bytes": 5795,
+      "hash_verified": true
+    },
+    {
+      "path": "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/ClickHouseHealthCheck.java",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/ClickHouseHealthCheck.java",
+      "git_blob_sha1": "b7bfc0b9d4ca0c2e17380dc60ea0a1f0c208ba41",
+      "sha256": "c2281b5474d51e931935d19a74f0465c7ea563a411c9c062b7b0d05daa0ba4f9",
+      "bytes": 1018,
+      "hash_verified": true
+    },
+    {
+      "path": "apps/opik-backend/src/main/java/com/comet/opik/domain/DatasetItemVersionDAO.java",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/src/main/java/com/comet/opik/domain/DatasetItemVersionDAO.java",
+      "git_blob_sha1": "a7240e243550b6b3b95f812fcbc1fdd1fc4a16f0",
+      "sha256": "ccc8744c57b71a6e0f1704d346a9cdd2402b2c521f6e244bff2b87b4551054d0",
+      "bytes": 232878,
+      "hash_verified": true
+    },
+    {
+      "path": "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/ZeroRowsRetryPolicy.java",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/ZeroRowsRetryPolicy.java",
+      "git_blob_sha1": "854f45cfd7e6dfb8c96bdbe4d2f04043876501ac",
+      "sha256": "2d9ffc013c6c55d740eb12a430f6c4de537124626018fe7f95e1a7a427db6baf",
+      "bytes": 2725,
+      "hash_verified": true
+    },
+    {
+      "path": "apps/opik-backend/src/main/java/com/comet/opik/utils/AsyncUtils.java",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/src/main/java/com/comet/opik/utils/AsyncUtils.java",
+      "git_blob_sha1": "a6aa32545bbe21566737742996e3a44815dcc0df",
+      "sha256": "217cd67ec919af93194a545d6c673604b00d2ca31a66029ca67074603975fa02",
+      "bytes": 2990,
+      "hash_verified": true
+    },
+    {
+      "path": "apps/opik-backend/src/main/java/com/comet/opik/api/DatasetItemEdit.java",
+      "url": "https://raw.githubusercontent.com/comet-ml/opik/dd40343a223ec8d0ab11eafc5f88cbf18532c0ac/apps/opik-backend/src/main/java/com/comet/opik/api/DatasetItemEdit.java",
+      "git_blob_sha1": "8be713f6485c29aba9e55e01599580d03f7771aa",
+      "sha256": "9b6a413d8532b4d55cf1a5ae090e4b04d4fa101add87bde731f6f751954876b3",
+      "bytes": 2147,
+      "hash_verified": true
+    }
+  ],
+  "dependency_sources": [
+    {
+      "path": "client-v2/src/main/java/com/clickhouse/client/api/query/QueryResponse.java",
+      "url": "https://raw.githubusercontent.com/ClickHouse/clickhouse-java/6b9cb69f3e35e8857abd1fbd26e00ee54a43a766/client-v2/src/main/java/com/clickhouse/client/api/query/QueryResponse.java",
+      "repository": "https://github.com/ClickHouse/clickhouse-java",
+      "revision": "6b9cb69f3e35e8857abd1fbd26e00ee54a43a766",
+      "version": "0.10.0",
+      "hash_verified": true,
+      "sha256": "43035745aa75c24d88798851e8eab8382cb13f3b885f85f481edec9b6ea27796",
+      "git_blob_sha1": "6c0de2e3e6e6319e7d83cb664bd727497cadb6bd",
+      "bytes": 6426,
+      "hash_input": "Fresh fixed-commit official Raw bytes and GitHub Contents API bytes/blob independently agree; prior cached-text attribution was incorrect and is retained in the local GET-337 evidence history."
+    },
+    {
+      "path": "client-v2/src/main/java/com/clickhouse/client/api/transport/internal/TransportResponse.java",
+      "url": "https://raw.githubusercontent.com/ClickHouse/clickhouse-java/6b9cb69f3e35e8857abd1fbd26e00ee54a43a766/client-v2/src/main/java/com/clickhouse/client/api/transport/internal/TransportResponse.java",
+      "repository": "https://github.com/ClickHouse/clickhouse-java",
+      "revision": "6b9cb69f3e35e8857abd1fbd26e00ee54a43a766",
+      "version": "0.10.0",
+      "sha256": "b1cde3e29fcad627140186be283466eba6e3352e1a5c8a3ba92953cb3464d1af",
+      "git_blob_sha1": "beecea34d8b1181fb76651163a1577f67d96ad8a",
+      "bytes": 1063,
+      "hash_verified": true
+    },
+    {
+      "path": "client-v2/src/main/java/com/clickhouse/client/api/metrics/OperationMetrics.java",
+      "url": "https://raw.githubusercontent.com/ClickHouse/clickhouse-java/6b9cb69f3e35e8857abd1fbd26e00ee54a43a766/client-v2/src/main/java/com/clickhouse/client/api/metrics/OperationMetrics.java",
+      "repository": "https://github.com/ClickHouse/clickhouse-java",
+      "revision": "6b9cb69f3e35e8857abd1fbd26e00ee54a43a766",
+      "version": "0.10.0",
+      "sha256": "0ef584933bf8d8800c72cd850069f5da7c33722837ec9181f5c1e31631663f2d",
+      "git_blob_sha1": "dfb28325915958ea00a3894c6af5bf9d9336a65a",
+      "bytes": 1938,
+      "hash_verified": true
+    }
+  ],
+  "patch_order": [
+    "0001-health-ownership-tests.patch",
+    "0002-dataset-query-ownership-tests.patch"
+  ],
+  "tests": {
+    "health_class": "Get337ClickHouseHealthCheckOwnershipTest",
+    "health_cases": 6,
+    "dao_class": "Get337DatasetItemVersionResponseOwnershipTest",
+    "dao_operations": [
+      "copyVersionItems",
+      "editItemsViaSelectInsert"
+    ],
+    "dao_parameterized_instances": 10,
+    "responses_fixed_required_instances": 49,
+    "responses_fixed_health_instances": 39
+  },
+  "observed": {
+    "health_baseline": {
+      "executed": true,
+      "upstream_revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
+      "capir_revision": "b4b98c9cd8121a401dd5c633f4ae59df6229f11e",
+      "ci_run_id": 41021382879,
+      "artifact_id": 12961264941,
+      "artifact_sha256": "80bef05e527feeaaf0aeb0674e1dfc9f6d179c4d616fa83bdf4757c39bee3880",
+      "tests": 6,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "source_fingerprints": 13,
+      "failing_methods": [
+        "timedOutProbeClosesTheResponseThatArrivesAfterTheDeadline",
+        "interruptedProbePreservesInterruptAndClosesItsLateResponse"
+      ],
+      "failure_type": "org.opentest4j.AssertionFailedError",
+      "java_red": true
+    },
+    "health_fixed": {
+      "executed": true,
+      "ci_run_id": 41028979099,
+      "artifact_id": 12964489776,
+      "artifact_sha256": "25c926a7fd20c9dd114aa90ac32be0ba90efde84bcb75ad0e914b3504601321d",
+      "stage": "health-fixed",
+      "tests": 39,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true,
+      "maven_exit_code": 0,
+      "source_fingerprints": 13,
+      "failing_methods": [],
+      "java_red": false
+    },
+    "dao_baseline": {
+      "executed": true,
+      "ci_run_id": 41028979099,
+      "artifact_id": 12964489776,
+      "artifact_sha256": "25c926a7fd20c9dd114aa90ac32be0ba90efde84bcb75ad0e914b3504601321d",
+      "stage": "baseline",
+      "tests": 10,
+      "failures": 4,
+      "errors": 0,
+      "skipped": 0,
+      "passed": false,
+      "maven_exit_code": 1,
+      "source_fingerprints": 13,
+      "failing_methods": [
+        "cancellationBeforeDeliveryClosesTheLateQueryResponse(Operation)[1]",
+        "cancellationBeforeDeliveryClosesTheLateQueryResponse(Operation)[2]",
+        "cleanupFailureDoesNotTurnACompletedWriteIntoAFailedOrRetriedWrite(Operation)[1]",
+        "cleanupFailureDoesNotTurnACompletedWriteIntoAFailedOrRetriedWrite(Operation)[2]"
+      ],
+      "java_red": true
+    },
+    "image_built": false,
+    "live_mutation": false,
+    "responses_fixed": {
+      "executed": false
+    }
+  },
+  "production_hunks": 10,
+  "migration_hunks": 0,
+  "unchanged_migration_requirement": "All exact-source Liquibase files must retain byte hashes in any later production candidate.",
+  "known_gaps": [
+    "Combined responses-fixed/all49 candidate has not been compiled or run.",
+    "No actual post-delivery/pre-mapper cancellation-window test or real SDK HTTP-pool recovery evidence.",
+    "No R2DBC acceptance, patched image build or resident deployment/acceptance."
+  ],
+  "runner": {
+    "sparse_checkout": [
+      "apps/opik-backend",
+      "LICENSE"
+    ],
+    "standalone_pom": true,
+    "java_source_target": 25,
+    "official_build_maven": "3.9.16",
+    "official_runtime_java": "Amazon Corretto 25.0.3",
+    "compiler_plugin": "3.15.0",
+    "test_dependency_edit_required": false,
+    "execution_owner": "parent",
+    "build_image_resolution": {
+      "official_pinned_build_image_tag": "maven:3.9.16-amazoncorretto-25-al2023",
+      "source_dockerfile_has_digest": false,
+      "image_layers_pulled": false,
+      "container_started": false,
+      "registry_manifest_url": "https://registry-1.docker.io/v2/library/maven/manifests/3.9.16-amazoncorretto-25-al2023",
+      "index_digest": "sha256:1a15a026421093fa86053b17b116ede95acfa28346e5cf3e154943bc01db7119",
+      "index_digest_matches_response_bytes": true,
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "platforms": [
+        {
+          "digest": "sha256:c02b9533db6aec9026c1c3c7669bf6ea64a0fb1f1bc3cddca43dbf7caeadc27b",
+          "platform": {
+            "architecture": "amd64",
+            "os": "linux"
+          }
+        },
+        {
+          "digest": "sha256:92babffc1a92a5bd15ddba0fed9b3b7686cc373d0d5f32753a4f9d118dcbe203",
+          "platform": {
+            "architecture": "arm64",
+            "os": "linux",
+            "variant": "v8"
+          }
+        }
+      ],
+      "maven_download_checksum": {
+        "url": "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz.sha512",
+        "algorithm": "sha512",
+        "value": "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6",
+        "verified_checksum_document_only": true,
+        "binary_downloaded": false
+      }
+    },
+    "stage_execution_status": "Health-fixed39 passed; separate DAO baseline10 had four assertion failures. Combined responses-fixed/all49 awaits parent-owned execution."
+  },
+  "local_artifacts": [
+    {
+      "path": "0001-health-ownership-tests.patch",
+      "sha256": "0f13a0f7e2dce83c8595b1008f47c094bf0727e550549f41f26a992a0c114ed7",
+      "bytes": 9750
+    },
+    {
+      "path": "0002-dataset-query-ownership-tests.patch",
+      "sha256": "1868137a4eb4ef7039d737d4916cd8e4e4d5c67dbf460237b8bb481f6f268855",
+      "bytes": 9006
+    },
+    {
+      "path": "0003-health-late-response-fix.patch",
+      "sha256": "9d989e9d304094d1595b44afac3e39ccb533e3acfccd82fb3398fe4a709f002c",
+      "bytes": 5656
+    },
+    {
+      "path": "0004-upstream-health-contract-tests.patch",
+      "sha256": "01d5e68c611ec5a5172a09ee0dd77d1919066718cf90e8500330ebf99c829e71",
+      "bytes": 6882
+    },
+    {
+      "path": "0005-dataset-query-response-fix.patch",
+      "sha256": "aa7f49d6b2b1a59a157550366cba9815b79390dc65bbaffa3075fdb847ca2d83",
+      "bytes": 6687
+    },
+    {
+      "path": "README.md",
+      "sha256": "f75178a59e4df9e6d3128c8700080214f67b631d6b00a086feef9b2fcacbf43f",
+      "bytes": 8923
+    },
+    {
+      "path": "LICENSE.upstream",
+      "sha256": "0236cf0195e033d15c120e610d44943e8e478ffed5d60fbba1b5a6b96e778a47",
+      "bytes": 11391
+    }
+  ],
+  "recorded_at": "2026-10-30T06:03:36.369679+00:00",
+  "source_fingerprint_correction": {
+    "at": "2026-10-30T06:17:31.505061+00:00",
+    "issue": "GET-337",
+    "scope": "QueryResponse immutable source fingerprint corrected; three dependency entries independently reverified. No test or production code changed.",
+    "cached_text_hash_is_not_fixed_commit_verification": true
+  },
+  "fixed_patches": {
+    "0003-health-late-response-fix.patch": {
+      "role": "production-health-only",
+      "sha256": "9d989e9d304094d1595b44afac3e39ccb533e3acfccd82fb3398fe4a709f002c",
+      "changes": {
+        "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java": {
+          "before": {
+            "bytes": 5795,
+            "sha256": "38b9239634047ab629eba97c77252a6ce731fc0cfbcedf6cb32f0631b1411deb",
+            "git_blob_sha1": "698e5fe4fb3abf1b5a7dd410b45445f8d4552ef6"
+          },
+          "after": {
+            "bytes": 6579,
+            "sha256": "b01651a575980b69d265491e59231c49e562653635d47a0e1b8c50ca9a65dfee",
+            "git_blob_sha1": "bf7822c891f45f6213f2aba6840d26f4334e0505"
+          }
+        }
+      },
+      "upstream_reference": "https://github.com/comet-ml/opik/commit/d1b1d62fdc55e77fa0d088e33609fb1ee3c169b3",
+      "adaptation": "The health lifecycle fix is local to this class; cleanup logging retains only the exception type. No AsyncUtils/DAO/POM/dependency/schema change."
+    },
+    "0004-upstream-health-contract-tests.patch": {
+      "role": "upstream-health-test-contract-adaptation",
+      "sha256": "01d5e68c611ec5a5172a09ee0dd77d1919066718cf90e8500330ebf99c829e71",
+      "changes": {
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheckTest.java": {
+          "before": {
+            "bytes": 7351,
+            "sha256": "fb31ca8feaa2ba93bd666ecf13039b7c7f16bab200d7b3fddb51e88e8dc14acd",
+            "git_blob_sha1": "12d55866818eacf163d4d9495ea38a5c45e6a419"
+          },
+          "after": {
+            "bytes": 7481,
+            "sha256": "0dd5fab9580bfd1064db2adcdeba8cd44c13c5e4bc8c712bec4beebdee03448e",
+            "git_blob_sha1": "f8b05df31d44cc1ca1027798abd6e51849742b48"
+          }
+        },
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/ClickHouseExistenceHealthCheckTest.java": {
+          "before": {
+            "bytes": 10287,
+            "sha256": "8dd297a4ed732e5f29b47aa2cdf494a957c8a8560ad19af6e0c793dcc6b4fdcd",
+            "git_blob_sha1": "e94702e0360efc100eacd4fdeda9ebbd882ddac3"
+          },
+          "after": {
+            "bytes": 10424,
+            "sha256": "f0a7c026fb5fc24d69d3a7ceeb8b50ea9065c105655dc604fde98907cf972b8c",
+            "git_blob_sha1": "3dfe2bbc3ad41e38fb6d0b5b4c4f340b0a7ad902"
+          }
+        },
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/ClickHouseTracesTopologyHealthCheckTest.java": {
+          "before": {
+            "bytes": 12097,
+            "sha256": "2eb364319b04df7769f43c5c1953a3a0b5735bdc4d3cce49e92ce682bf359ee4",
+            "git_blob_sha1": "4fb2dd965e32d61f0d85682fd0592bf8803e8aee"
+          },
+          "after": {
+            "bytes": 12226,
+            "sha256": "efcf0791223be6ecae2ff46961a045d660da757e8844234ff5004104bdba26bb",
+            "git_blob_sha1": "a643049e625181e795c10afffd96a61c6ab6c4f2"
+          }
+        }
+      },
+      "rationale": "Five old source assertions required cancel(true); the timeout/interruption ownership contract now requires no cancellation. Other health/topology/read-only assertions remain.",
+      "new_regression_patches_frozen": true
+    },
+    "0005-dataset-query-response-fix.patch": {
+      "role": "production-dataset-query-response-ownership",
+      "sha256": "aa7f49d6b2b1a59a157550366cba9815b79390dc65bbaffa3075fdb847ca2d83",
+      "changes": {
+        "apps/opik-backend/src/main/java/com/comet/opik/domain/DatasetItemVersionDAO.java": {
+          "before": {
+            "bytes": 232878,
+            "sha256": "ccc8744c57b71a6e0f1704d346a9cdd2402b2c521f6e244bff2b87b4551054d0",
+            "git_blob_sha1": "a7240e243550b6b3b95f812fcbc1fdd1fc4a16f0"
+          },
+          "after": {
+            "bytes": 232746,
+            "sha256": "402cdafedc45261a6c697af37f654a74c28aafb3984f5c6338057c034f86cd5d",
+            "git_blob_sha1": "e31f4ebd5495d050b03c947a279fcd00e789e143"
+          }
+        },
+        "apps/opik-backend/src/main/java/com/comet/opik/utils/AsyncUtils.java": {
+          "before": {
+            "bytes": 2990,
+            "sha256": "217cd67ec919af93194a545d6c673604b00d2ca31a66029ca67074603975fa02",
+            "git_blob_sha1": "a6aa32545bbe21566737742996e3a44815dcc0df"
+          },
+          "after": {
+            "bytes": 4973,
+            "sha256": "5412b1d1cf856c6a78834bc8ca04a1046d4d6027cc74461ebfaf2f68fee4ea85",
+            "git_blob_sha1": "d70190e91b612266b716d895836c3bef16c548b1"
+          }
+        }
+      },
+      "upstream_reference": "https://github.com/comet-ml/opik/commit/d1b1d62fdc55e77fa0d088e33609fb1ee3c169b3",
+      "adaptation": "QueryResponse-only helper in AsyncUtils; called only by executeCopyVersionItems and executeEditOneItem. Preserve scheduled mapping, context, SQL, instrumentation and ZeroRowsRetryPolicy. Suppress future cancellation, own delivered responses with usingWhen, close inline and log only exception class. Remove the two competing try-with-resources owners. No insert, POM, dependency or migration change."
+    }
+  },
+  "stages": {
+    "baseline": {
+      "suites": [
+        "health",
+        "dao",
+        "all"
+      ],
+      "fixed_patches": []
+    },
+    "health-fixed": {
+      "suites": [
+        "health"
+      ],
+      "fixed_patches": [
+        "0003-health-late-response-fix.patch",
+        "0004-upstream-health-contract-tests.patch"
+      ]
+    },
+    "responses-fixed": {
+      "suites": [
+        "all"
+      ],
+      "fixed_patches": [
+        "0003-health-late-response-fix.patch",
+        "0004-upstream-health-contract-tests.patch",
+        "0005-dataset-query-response-fix.patch"
+      ]
+    }
+  },
+  "updated_at": "2026-10-30T09:14:05.574258+00:00"
+}
