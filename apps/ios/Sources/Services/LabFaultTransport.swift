@@ -170,11 +170,73 @@ final class LabFaultURLProtocol: URLProtocol, @unchecked Sendable {
     }
 }
 
+/// Owns complete workspace operations, including their structured request
+/// children. Admission and registration happen before the first suspension.
+actor LabFaultSessionLifecycle {
+    private let onClose: @Sendable () async -> Void
+    private var reads: [UUID: Task<PursuitWorkspaceSnapshot, Error>] = [:]
+    private var closeTask: Task<Void, Never>?
+
+    init(onClose: @escaping @Sendable () async -> Void) { self.onClose = onClose }
+
+    func load(_ operation: @escaping @Sendable () async throws -> PursuitWorkspaceSnapshot) async throws -> PursuitWorkspaceSnapshot {
+        guard closeTask == nil else { throw URLError(.unsupportedURL) }
+        try Task.checkCancellation()
+        let id = UUID()
+        let task = Task {
+            try Task.checkCancellation()
+            return try await operation()
+        }
+        reads[id] = task
+        defer { reads.removeValue(forKey: id) }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func close() async {
+        if let closeTask { await closeTask.value; return }
+        let admitted = Array(reads.values), onClose = onClose
+        // Installing the task closes admission before any await. A cancelled
+        // waiter cannot cancel this shared cleanup operation.
+        let task = Task {
+            for read in admitted { _ = await read.result }
+            await onClose()
+        }
+        closeTask = task
+        admitted.forEach { $0.cancel() }
+        await task.value
+    }
+}
+
+/// The lifecycle's cleanup closure retains these resources until admitted
+/// reads settle. Deinit provides the same one-time cleanup if close was omitted.
+private final class LabFaultSessionResources: @unchecked Sendable {
+    private let session: URLSession
+    private let host: String
+    private let lock = NSLock()
+    private var invalidated = false
+
+    init(session: URLSession, host: String) { self.session = session; self.host = host }
+    deinit { invalidate() }
+
+    func invalidate() {
+        lock.lock()
+        guard !invalidated else { lock.unlock(); return }
+        invalidated = true
+        lock.unlock()
+        session.invalidateAndCancel()
+        LabFaultRegistry.shared.remove(host: host)
+    }
+}
+
 final class LabFaultWorkspaceService: PursuitWorkspaceServing {
     let engine: LabFaultEngine
     let baseURL: URL
     private let client: URLPursuitWorkspaceClient
-    private let session: URLSession
+    private let lifecycle: LabFaultSessionLifecycle
     init(preset: LabFaultPreset, seconds: Double, enabled: Bool = DeviceLabAvailability.enabled,
          clock: @escaping () -> Double = LabDiagnosticsEngine.clock) throws {
         guard enabled, seconds > 0, seconds <= 300 else { throw URLError(.unsupportedURL) }
@@ -187,12 +249,19 @@ final class LabFaultWorkspaceService: PursuitWorkspaceServing {
         configuration.protocolClasses = [LabFaultURLProtocol.self]
         configuration.httpCookieStorage = nil; configuration.urlCredentialStorage = nil; configuration.urlCache = nil
         configuration.timeoutIntervalForRequest = 10
-        session = URLSession(configuration: configuration, delegate: RuntimeRedirectGuard(), delegateQueue: nil)
+        let session = URLSession(configuration: configuration, delegate: RuntimeRedirectGuard(), delegateQueue: nil)
+        let resources = LabFaultSessionResources(session: session, host: engine.host)
         client = URLPursuitWorkspaceClient(baseURL: baseURL, accessToken: LabFaultFixtures.token,
             accountID: LabFaultFixtures.workspaceID, userID: LabFaultFixtures.userID, userDisplayName: "Lab tester", session: session)
+        lifecycle = LabFaultSessionLifecycle { [engine, resources] in
+            await engine.end(.closed)
+            resources.invalidate()
+        }
     }
-    deinit { session.invalidateAndCancel(); LabFaultRegistry.shared.remove(host: baseURL.host!) }
-    func loadWorkspace() async throws -> PursuitWorkspaceSnapshot { try await client.loadWorkspace() }
+    func loadWorkspace() async throws -> PursuitWorkspaceSnapshot {
+        let client = client
+        return try await lifecycle.load { try await client.loadWorkspace() }
+    }
     func end(_ reason: LabFaultEnd) async { await engine.end(reason) }
-    func close() async { await engine.end(.closed); session.invalidateAndCancel(); LabFaultRegistry.shared.remove(host: baseURL.host!) }
+    func close() async { await lifecycle.close() }
 }

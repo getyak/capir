@@ -77,8 +77,8 @@ final class LabFaultStore: ObservableObject {
         read = nil; isWorking = false
         service = nil; workspace = nil; state = nil; sessionID = nil; error = nil
         oldRead?.cancel()
-        await oldService?.close()
         await oldRead?.value
+        await oldService?.close()
     }
 }
 
