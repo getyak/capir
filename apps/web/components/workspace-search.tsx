@@ -295,6 +295,12 @@ export function WorkspaceGlobalSearchDialog({
       handoff.current?.cancel();
     };
   }, [binding]);
+  useLayoutEffect(() => {
+    // Presence can reopen the same Content before its exit finishes, without
+    // remounting Radix's FocusScope or firing onOpenAutoFocus again. Restore
+    // the input on this open commit only; ordinary rerenders keep user focus.
+    if (open) input.current?.focus();
+  }, [open]);
   useEffect(() => {
     const expire = () => {
       scopeExpired.current = true;
