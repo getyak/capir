@@ -20,6 +20,17 @@ and Maven exit 0. Independent review checked the raw XML and exact protected
 source catalogue. PR #498 merged as `353297697054392efefc9d393984645a19ad4339`.
 No patched image or resident repair is established by that source result.
 
+The new test-only baseline ran in CI 41039992804, artifact 12969528485, from
+PR #501 head `1379144e18a53d0a6bf5c75168259c5330fc7ee1`. All 21 instances
+executed: nine assertion failures, zero errors and zero skips, Maven exit 1.
+Both real HTTP controls passed. The HTTP regression failed at the final second
+healthy-probe assertion after its connection-timeout/server-request checks;
+both DAO handoff instances failed at the paused-close assertion after delivery
+and barrier entry. The original health two and DAO four failures remained.
+All 1576 protected entries were unchanged before, after patching and after
+Maven. This is meaningful pinned-source and real HTTP-boundary RED; it does not
+establish the resident incident's cause. The failed baseline remains retained.
+
 ## Patch roles
 
 1. `0001-health-ownership-tests.patch`: frozen new health tests and their real
@@ -105,12 +116,11 @@ upstream commit, the locked Maven/Corretto image, private bind-owner UID:GID and
 task-owned cache. Source/dependency fingerprints, actual index paths/modes,
 toolchain/image identity and fresh raw/parsed JUnit evidence remain separate.
 
-The parent owns workflow integration and serial execution. This follow-up first
-collects the test-only `all/baseline` in a fresh checkout. Its predicted nine
-failures are not observed evidence. Both HTTP controls must pass and each failure
-must be at its intended assertion; compilation, fixture, parsing or unrelated
-deadline failures cannot establish the intended RED. That failed job remains
-failed. Only after reviewing its retained result does the final job switch to:
+The parent owns workflow integration and serial execution. The test-only
+`all/baseline` was collected in a fresh checkout and independently reviewed at
+the exact failure sites above. Both HTTP controls passed; compilation, fixture,
+parsing or unrelated deadline failures cannot establish the intended RED. That
+failed job remains failed. The final required job now selects:
 
 ```sh
 python3 scripts/prompts/test-opik-backport.py \
@@ -146,8 +156,9 @@ local Docker/Maven/build is needed for this source work.
 
 The original tests use real production classes and futures/responses with a
 controlled Client query boundary. Patch 0006 additionally exercises the actual
-SDK/HTTP pool; patch 0007 adds the scheduler cancellation boundary. Neither new
-patch has been compiled or executed at this checkpoint. They cannot establish
+SDK/HTTP pool; patch 0007 adds the scheduler cancellation boundary. Both new
+patches compiled and ran in the test-only baseline. Their fixed-stage execution
+is still pending at this checkpoint. They cannot establish
 the host incident's root cause, R2DBC safety, a resident shaded JAR or live
 recovery. Those gates remain separate. Existing upstream tests with the old
 cancellation contract are explicitly adapted rather than ignored.

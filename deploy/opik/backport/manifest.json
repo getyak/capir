@@ -1,7 +1,7 @@
 {
   "schema": "capri.opik.backport-tests.v1",
   "issue": "GET-337",
-  "state": "Original source49 GREEN retained separately; test-only HTTP3 and DAO handoff2 expansion requires actual all/baseline21 and responses-fixed/all54. No integration execution or resident acceptance yet.",
+  "state": "Source49 GREEN and actual baseline21/nine expected assertions independently reviewed; final fixed54 candidate awaits actual remote execution. No image/live recovery.",
   "upstream": {
     "repository": "https://github.com/comet-ml/opik",
     "revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
@@ -237,6 +237,31 @@
     "all_baseline_21": {
       "executed": false,
       "required_instances": 21
+    },
+    "http_handoff_baseline": {
+      "executed": true,
+      "capir_revision": "1379144e18a53d0a6bf5c75168259c5330fc7ee1",
+      "tested_merge_revision": "4118bd5c2eb3e91fb9ab316cbc5d9e8ec58e2e23",
+      "ci_run_id": 41039992804,
+      "artifact_id": 12969528485,
+      "artifact_sha256": "4f01742c6c4676f756027ff0108678c3327954250d32edf1f38588862fd49060",
+      "stage": "baseline",
+      "suite": "all",
+      "tests": 21,
+      "failures": 9,
+      "errors": 0,
+      "skipped": 0,
+      "maven_exit_code": 1,
+      "http_controls_passed": 2,
+      "health_failures": 2,
+      "dao_failures": 4,
+      "handoff_failures": 2,
+      "http_pool_failures": 1,
+      "protected_entries": 1576,
+      "protected_catalogues_identical": true,
+      "production_changes": 0,
+      "java_red": true,
+      "resident_cause_or_recovery": false
     }
   },
   "production_hunks": 10,
@@ -334,8 +359,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "688f1beffb98253279bb2b87afa73e1bd7d7572713e987747f2846ed44e9d4f3",
-      "bytes": 10585
+      "sha256": "9272a0ae08f523a542ac6faeb9a5f7a23dffc643340180ac3d15f03b1631f2a9",
+      "bytes": 11315
     },
     {
       "path": "LICENSE.upstream",
@@ -477,7 +502,7 @@
       ]
     }
   },
-  "updated_at": "2026-10-30T10:15:46.699338+00:00",
+  "updated_at": "2026-10-30T10:29:26.968759+00:00",
   "integration_patches": {
     "0006-http-pool-integration-tests.patch": {
       "role": "test-only-real-sdk-loopback-http-pool",

@@ -578,15 +578,12 @@ jobs:
       - name: Verify the regression harness boundaries
         run: python3 -m unittest discover -s scripts/prompts -p test_opik_backport.py -v
 
-      # First collect the real test-only baseline; do not turn its failures into
-      # a successful check. Replace this explicit stage only after reviewing the
-      # actual HTTP controls and precise failure sites from its retained XML.
-      - name: Collect HTTP pool and scheduler handoff baseline
+      - name: Test fixed response ownership and HTTP pool recovery
         run: |
           python3 scripts/prompts/test-opik-backport.py \
             --work-dir "$RUNNER_TEMP/opik-responses-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --receipt-dir "$RUNNER_TEMP/opik-responses-receipts-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
-            --suite all --stage baseline
+            --suite all --stage responses-fixed
 
       - name: Retain public-source regression evidence
         if: always()

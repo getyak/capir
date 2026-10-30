@@ -121,7 +121,7 @@ replaying a source change. New patch 0006 is frozen at
 and 0007 at
 `1762d37fdb01c641f8f31a644617d7c0650d9837b14b7190b225855e4c3b8def`.
 The two tests received independent static review with no confirmed P0/P1/P2.
-No integration Java has run.
+The baseline21 execution below is the first actual run of these integration tests.
 
 Parent observed the old runner reject the new 21/54 contracts: 24 guard tests
 produced 14 assertion failures, zero errors. One earlier tamper fixture used a
@@ -129,7 +129,24 @@ symlinked temporary parent and is preserved as a harness failure, not behavioral
 RED; the actual resolved-parent run is separate. After the minimal extension,
 all 24 stdlib guard tests passed, and all seven CI scope/aggregate tests passed.
 The runner still verifies exact paths, file modes, source fingerprints, protected
-production/migration catalogues and post-Maven state. The current workflow
-explicitly selects the 21-instance test-only baseline and preserves its failure.
-It cannot merge in this temporary state. Actual controls and failure sites must
-be reviewed before changing the final required job to fixed54.
+production/migration catalogues and post-Maven state. The initial workflow at1379144e explicitly selected baseline21 and preserved its failure.
+After the actual independent review below, the final candidate selects fixed54;
+it cannot merge until that latest applicable CI succeeds.
+
+## Actual HTTP/handoff baseline and final candidate
+
+CI 41039992804 / artifact 12969528485 ran all21: failures9, errors0, skipped0,
+Maven1. Both HTTP controls passed. The HTTP failure reached the final second
+healthy assertion after proving the public connection-acquisition failure and
+one server request. Both handoff instances reached the paused-close assertion
+after their response delivery and actual scheduler barrier. Health2 and DAO4
+remain the known baseline assertion failures. Only five new regular tests were
+applied; all1576 protected entries were identical before/after patching and
+after Maven, with no production change. Raw artifact SHA256:
+`4f01742c6c4676f756027ff0108678c3327954250d32edf1f38588862fd49060`.
+
+Independent review confirmed those exact sites and controls. The final workflow
+now selects responses-fixed/all54; no integration patch or production patch was
+changed to obtain this baseline. Its actual result and latest applicable CI are
+pending. Meaningful baseline RED is not fixed54 GREEN, image provenance, resident
+503 attribution, ingestion/recovery or original product acceptance.
