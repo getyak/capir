@@ -39,6 +39,8 @@ HEALTH_CLASS = (
     "Get337ClickHouseHealthCheckOwnershipTest"
 )
 OTHER_CLASS = "com.comet.opik.domain.Get337DatasetItemVersionResponseOwnershipTest"
+HTTP_CLASS = "com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHttpPoolLifecycleTest"
+HANDOFF_CLASS = "com.comet.opik.domain.Get337DatasetQueryHandoffOwnershipTest"
 # Reviewed literals from the frozen Java test patches; deliberately independent of runner tables.
 HEALTH_METHODS = (
     "timedOutProbeClosesTheResponseThatArrivesAfterTheDeadline",
@@ -55,6 +57,13 @@ DAO_METHODS = (
     "writtenRowsMappingFailureClosesItsResponseExactlyOnce",
     "cleanupFailureDoesNotTurnACompletedWriteIntoAFailedOrRetriedWrite",
 )
+# Independent literals from frozen patches 0006/0007, not runner selection tables.
+HTTP_METHODS = (
+    "realSdkReaderRoundTripsTheCompleteNativeCompressedSelectOneResponse",
+    "unreadRealResponseHoldsTheOnlyLeaseUntilItsPublicClose",
+    "timedOutProductionProbeReleasesItsLateRealResponseForTheNextProbe",
+)
+HANDOFF_METHOD = "cancellationAfterDeliveryClosesResponseBeforeTheQueuedMapperRuns"
 HEALTH_JAVA = (
     "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/"
     "healthchecks/Get337ClickHouseHealthCheckOwnershipTest.java"
@@ -77,6 +86,14 @@ DAO_TEST_JAVA = (
     "Get337DatasetItemVersionResponseOwnershipTest.java"
 )
 RESPONSES_PATCH = "0005-dataset-query-response-fix.patch"
+HTTP_PATCH = "0006-http-pool-integration-tests.patch"
+HANDOFF_PATCH = "0007-dataset-cancel-handoff-tests.patch"
+HTTP_JAVA = (
+    "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/"
+    "Get337ClickHouseHttpPoolLifecycleTest.java"
+)
+HANDOFF_JAVA = "apps/opik-backend/src/test/java/com/comet/opik/domain/Get337DatasetQueryHandoffOwnershipTest.java"
+ALL_NEW_PATHS = EXPECTED_PATHS | {DAO_TEST_JAVA, HTTP_JAVA, HANDOFF_JAVA}
 RESPONSES_PRODUCTION_PATHS = {HEALTH_FIX_JAVA, DAO_FIX_JAVA, ASYNC_FIX_JAVA}
 LEGACY_OUTER = "com.comet.opik.infrastructure.db.healthchecks.AbstractClickHouseHealthCheckTest"
 LEGACY_METHOD_COUNTS = {
@@ -193,6 +210,13 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
             not_before_ns=self.started_ns,
             maven_exit_code=code,
         )
+
+    def integration_xml(self, reports):
+        pool = self.xml(reports, name=HTTP_CLASS, outcomes=["success"] * 3,
+                        case_names=list(HTTP_METHODS))
+        handoff = self.xml(reports, name=HANDOFF_CLASS, outcomes=["success"] * 2,
+                           case_names=[f"{HANDOFF_METHOD}(Operation)[1]", f"{HANDOFF_METHOD}(Operation)[2]"])
+        return pool, handoff
 
     def git(self, repository, *arguments, input_text=None):
         command = [
@@ -631,13 +655,14 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
         except ValueError as error:
             self.fail("The reviewed responses-fixed/all stage is not admitted: " + str(error))
         self.assertEqual(names, [PATCH_ONE, PATCH_TWO, "0003-health-late-response-fix.patch",
-                                 "0004-upstream-health-contract-tests.patch", RESPONSES_PATCH])
-        self.assertEqual(paths, EXPECTED_PATHS | {DAO_TEST_JAVA})
-        self.assertEqual(classes, {HEALTH_CLASS, OTHER_CLASS} | set(LEGACY_METHOD_COUNTS))
+                                 "0004-upstream-health-contract-tests.patch", RESPONSES_PATCH,
+                                 HTTP_PATCH, HANDOFF_PATCH])
+        self.assertEqual(paths, ALL_NEW_PATHS)
+        self.assertEqual(classes, {HEALTH_CLASS, OTHER_CLASS, HTTP_CLASS, HANDOFF_CLASS} | set(LEGACY_METHOD_COUNTS))
         for suite in ("health", "dao"):
             with self.subTest(suite=suite), self.assertRaises(ValueError):
                 selection(suite, "responses-fixed")
-        self.assertEqual(selection("all", "baseline")[0], [PATCH_ONE, PATCH_TWO])
+        self.assertEqual(selection("all", "baseline")[0], [PATCH_ONE, PATCH_TWO, HTTP_PATCH, HANDOFF_PATCH])
         self.assertEqual(selection("health", "health-fixed")[0],
                          [PATCH_ONE, "0003-health-late-response-fix.patch",
                           "0004-upstream-health-contract-tests.patch"])
@@ -657,7 +682,7 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
             modifications[relative] = {"before": fingerprint(path.read_bytes())}
         self.git(repository, "add", ".")
         self.git(repository, "commit", "--quiet", "-m", "Synthetic response-stage baseline")
-        self.apply_new_tests(repository, paths=EXPECTED_PATHS | {DAO_TEST_JAVA})
+        self.apply_new_tests(repository, paths=ALL_NEW_PATHS)
         for relative, claim in modifications.items():
             path = repository / relative
             path.write_bytes(b"class AfterResponseFixture {}\n")
@@ -671,7 +696,7 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
         except ValueError as error:
             self.fail("Exact response-stage Git diff was rejected: " + str(error))
         self.assertEqual({row["path"] for row in rows if row["status"] == "A"},
-                         EXPECTED_PATHS | {DAO_TEST_JAVA})
+                         ALL_NEW_PATHS)
         self.assertEqual({row["path"] for row in rows if row["status"] == "M"},
                          LEGACY_TEST_PATHS | RESPONSES_PRODUCTION_PATHS)
         self.assertEqual({row["mode"] for row in rows}, {"100644"})
@@ -734,16 +759,17 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
             validate(before=before, after={**after, "apps/opik-backend/pom.xml": "f" * 64},
                      modifications=broadened)
 
-    def test_responses_fixed_requires_all_49_real_method_instances_and_preserves_maven_exit(self):
+    def test_responses_fixed_requires_all_54_real_method_instances_and_preserves_maven_exit(self):
         try:
             _, _, selected = self.function("_stage_selection")("all", "responses-fixed")
         except ValueError as error:
             self.fail("Cannot assess the combined fixed JUnit stage: " + str(error))
-        expected = {HEALTH_CLASS, OTHER_CLASS} | set(LEGACY_METHOD_COUNTS)
+        expected = {HEALTH_CLASS, OTHER_CLASS, HTTP_CLASS, HANDOFF_CLASS} | set(LEGACY_METHOD_COUNTS)
         self.assertEqual(selected, expected)
         reports = self.root / "responses-fixed-reports"
         health_xml = self.xml(reports)
         dao_xml = self.xml(reports, name=OTHER_CLASS, outcomes=["success"] * 10)
+        pool_xml, handoff_xml = self.integration_xml(reports)
         legacy_paths = []
         for suite_class, methods in LEGACY_METHOD_COUNTS.items():
             names = [method if count == 1 else f"{method}[{index}]"
@@ -754,18 +780,181 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
         result = self.evaluate(reports, expected_classes=selected)
         self.assertTrue(result["passed"])
         self.assertEqual((result["tests"], result["errors"], result["failures"], result["skipped"]),
-                         (49, 0, 0, 0))
+                         (54, 0, 0, 0))
         failed_process = self.evaluate(reports, code=23, expected_classes=selected)
         self.assertFalse(failed_process["passed"])
         self.assertEqual(failed_process["maven_exit_code"], 23)
-        for missing in (health_xml, dao_xml, legacy_paths[0]):
+        for missing in (health_xml, dao_xml, legacy_paths[0], pool_xml, handoff_xml):
             data = missing.read_bytes()
             missing.unlink()
             with self.subTest(missing=missing.name):
                 self.assertFalse(self.evaluate(reports, expected_classes=selected)["passed"])
             missing.write_bytes(data)
+        old49 = self.root / "retained-49-cannot-satisfy-54"
+        old49.mkdir()
+        for report in reports.glob("*.xml"):
+            if report not in (pool_xml, handoff_xml):
+                shutil.copyfile(report, old49 / report.name)
+        self.assertFalse(self.evaluate(old49, expected_classes=selected)["passed"])
         self.xml(reports, name=OTHER_CLASS, outcomes=["success"] * 9 + ["skipped"])
         self.assertFalse(self.evaluate(reports, expected_classes=selected)["passed"])
+
+    def test_all_baseline_selects_both_integration_boundaries_without_expanding_narrow_stages(self):
+        selection = self.function("_stage_selection")
+        names, paths, classes = selection("all", "baseline")
+        self.assertEqual(names, [PATCH_ONE, PATCH_TWO, HTTP_PATCH, HANDOFF_PATCH])
+        self.assertEqual(paths, ALL_NEW_PATHS)
+        self.assertEqual(classes, {HEALTH_CLASS, OTHER_CLASS, HTTP_CLASS, HANDOFF_CLASS})
+        for suite, patches, expected_paths, expected_classes in (
+            ("health", [PATCH_ONE], EXPECTED_PATHS, {HEALTH_CLASS}),
+            ("dao", [PATCH_ONE, PATCH_TWO], EXPECTED_PATHS | {DAO_TEST_JAVA}, {OTHER_CLASS}),
+        ):
+            with self.subTest(narrow_suite=suite):
+                self.assertEqual(selection(suite, "baseline"), (patches, expected_paths, expected_classes))
+        self.assertEqual(selection("health", "health-fixed"), (
+            [PATCH_ONE, "0003-health-late-response-fix.patch", "0004-upstream-health-contract-tests.patch"],
+            EXPECTED_PATHS, {HEALTH_CLASS} | set(LEGACY_METHOD_COUNTS),
+        ))
+        for suite in ("health", "dao"):
+            with self.subTest(invalid_fixed_suite=suite), self.assertRaises(ValueError):
+                selection(suite, "responses-fixed")
+
+    def test_all_baseline_real_git_admission_requires_five_new_regular_tests_and_no_production_change(self):
+        repository = self.repository("integration-baseline-stage")
+        self.apply_new_tests(repository, paths=ALL_NEW_PATHS)
+        validate = self.function("validate_applied_stage")
+        try:
+            rows = validate(source_dir=repository, suite="all", stage="baseline", modifications={})
+        except ValueError as error:
+            self.fail("Exact five-file TEST-ONLY baseline diff was rejected: " + str(error))
+        self.assertEqual({row["path"] for row in rows}, ALL_NEW_PATHS)
+        self.assertEqual({(row["status"], row["mode"]) for row in rows}, {("A", "100644")})
+        for missing in (HTTP_JAVA, HANDOFF_JAVA):
+            self.git(repository, "rm", "--cached", "--quiet", missing)
+            (repository / missing).unlink()
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                validate(source_dir=repository, suite="all", stage="baseline", modifications={})
+            self.apply_new_tests(repository, paths={missing})
+        for executable in (HTTP_JAVA, HANDOFF_JAVA):
+            self.git(repository, "update-index", "--chmod=+x", executable)
+            with self.subTest(executable=executable), self.assertRaises(ValueError):
+                validate(source_dir=repository, suite="all", stage="baseline", modifications={})
+            self.git(repository, "update-index", "--chmod=-x", executable)
+        for forbidden in ("apps/opik-backend/src/main/java/Production.java",
+                          "apps/opik-backend/pom.xml",
+                          "apps/opik-backend/src/main/resources/liquibase/changelog.xml"):
+            path = repository / forbidden
+            original = path.read_bytes()
+            path.write_bytes(original + b"Unapproved integration-baseline edit\n")
+            self.git(repository, "add", forbidden)
+            with self.subTest(forbidden=forbidden), self.assertRaises(ValueError):
+                validate(source_dir=repository, suite="all", stage="baseline", modifications={})
+            path.write_bytes(original)
+            self.git(repository, "add", forbidden)
+        extra = "apps/opik-backend/src/test/java/com/comet/opik/UnexpectedIntegrationTest.java"
+        self.apply_new_tests(repository, paths={extra})
+        with self.assertRaises(ValueError):
+            validate(source_dir=repository, suite="all", stage="baseline", modifications={})
+
+    def test_all_21_junit_instances_require_both_http_controls_and_both_handoff_instances(self):
+        selected = {HEALTH_CLASS, OTHER_CLASS, HTTP_CLASS, HANDOFF_CLASS}
+
+        def complete_reports(name):
+            reports = self.root / name
+            self.xml(reports)
+            self.xml(reports, name=OTHER_CLASS, outcomes=["success"] * 10)
+            pool, handoff = self.integration_xml(reports)
+            return reports, pool, handoff
+
+        reports, _, _ = complete_reports("integration-baseline-21")
+        result = self.evaluate(reports, expected_classes=selected)
+        self.assertTrue(result["passed"], result.get("admission_errors"))
+        self.assertEqual((result["tests"], result["failures"], result["errors"], result["skipped"]),
+                         (21, 0, 0, 0))
+        failed_process = self.evaluate(reports, code=27, expected_classes=selected)
+        self.assertFalse(failed_process["passed"])
+        self.assertEqual(failed_process["maven_exit_code"], 27)
+        for scenario in ("missing-wire-control", "missing-lease-control", "missing-lifecycle",
+                         "missing-handoff-instance", "skipped-wire-control", "failed-lease-control",
+                         "error-lifecycle", "unknown-http-method", "unknown-handoff-method",
+                         "stale-http-report", "missing-handoff-report", "unexpected-suite"):
+            with self.subTest(scenario=scenario):
+                reports, pool, handoff = complete_reports(scenario)
+                if scenario in ("missing-wire-control", "missing-lease-control", "missing-lifecycle"):
+                    index = {"missing-wire-control": 0, "missing-lease-control": 1, "missing-lifecycle": 2}[scenario]
+                    names = [method for offset, method in enumerate(HTTP_METHODS) if offset != index]
+                    self.xml(reports, name=HTTP_CLASS, outcomes=["success"] * 2, case_names=names)
+                elif scenario == "missing-handoff-instance":
+                    self.xml(reports, name=HANDOFF_CLASS, outcomes=["success"],
+                             case_names=[HANDOFF_METHOD + "(Operation)[1]"])
+                elif scenario in ("skipped-wire-control", "failed-lease-control", "error-lifecycle"):
+                    outcomes = {"skipped-wire-control": ["skipped", "success", "success"],
+                                "failed-lease-control": ["success", "failure", "success"],
+                                "error-lifecycle": ["success", "success", "error"]}[scenario]
+                    self.xml(reports, name=HTTP_CLASS, outcomes=outcomes, case_names=list(HTTP_METHODS))
+                elif scenario == "unknown-http-method":
+                    self.xml(reports, name=HTTP_CLASS, outcomes=["success"] * 3,
+                             case_names=[HTTP_METHODS[0], HTTP_METHODS[1], "unknownLifecycle"])
+                elif scenario == "unknown-handoff-method":
+                    self.xml(reports, name=HANDOFF_CLASS, outcomes=["success"] * 2,
+                             case_names=[HANDOFF_METHOD + "(Operation)[1]", "unknownHandoff(Operation)[2]"])
+                elif scenario == "stale-http-report":
+                    os.utime(pool, ns=(self.started_ns - 1, self.started_ns - 1))
+                elif scenario == "missing-handoff-report":
+                    handoff.unlink()
+                else:
+                    self.xml(reports, name="com.comet.opik.UnexpectedIntegrationTest",
+                             outcomes=["success"], case_names=["unexpectedMethod"])
+                self.assertFalse(self.evaluate(reports, expected_classes=selected)["passed"])
+
+    def test_both_integration_patch_locks_reject_tamper_before_fetch_or_maven(self):
+        module = self.runner()
+        verify = self.function("verify_patch_locks")
+        execute = self.function("run_backport")
+        fixture_parent = self.root.resolve(strict=True)
+        names = [PATCH_ONE, PATCH_TWO, "0003-health-late-response-fix.patch",
+                 "0004-upstream-health-contract-tests.patch", RESPONSES_PATCH, HTTP_PATCH, HANDOFF_PATCH]
+        expected_hashes = {
+            HTTP_PATCH: "8085881a877988024414ef6af8c3eb95c40f16fad2f7e45680827c4b29cb6bef",
+            HANDOFF_PATCH: "1762d37fdb01c641f8f31a644617d7c0650d9837b14b7190b225855e4c3b8def",
+        }
+        remote_metadata = {
+            "GITHUB_ACTIONS": "true", "CI": "true", "RUNNER_OS": "Linux",
+            "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_RUN_ID": "337", "GITHUB_RUN_ATTEMPT": "1",
+        }
+        for stage, expected_names in (("baseline", {PATCH_ONE, PATCH_TWO, HTTP_PATCH, HANDOFF_PATCH}),
+                                      ("responses-fixed", set(names))):
+            for tampered in (HTTP_PATCH, HANDOFF_PATCH):
+                with self.subTest(stage=stage, tampered=tampered):
+                    patch_directory = self.root / (stage + "-" + tampered)
+                    patch_directory.mkdir()
+                    for name in names:
+                        original = BACKPORT / name
+                        self.assertTrue(original.is_file(), "The frozen input patch must exist: " + name)
+                        shutil.copyfile(original, patch_directory / name)
+                    with self.subTest(phase="untampered-lock-selection"):
+                        locks = verify(patch_dir=patch_directory, suite="all", stage=stage)
+                        self.assertEqual(set(locks), expected_names)
+                        self.assertEqual({name: locks.get(name) for name in expected_hashes}, expected_hashes)
+                    with (patch_directory / tampered).open("a", encoding="utf-8") as output:
+                        output.write("\n# unapproved integration test patch bytes\n")
+                    with mock.patch.dict(os.environ, remote_metadata), \
+                            mock.patch.object(module.platform, "system", return_value="Linux"), \
+                            mock.patch.object(module, "PATCH_DIR", patch_directory), \
+                            mock.patch.object(module, "fetch_upstream", side_effect=AssertionError("Fetch must not run")) as fetch, \
+                            mock.patch.object(module, "run_maven", side_effect=AssertionError("Maven must not run")) as maven:
+                        try:
+                            execute(work_dir=fixture_parent / (stage + "-work-" + tampered),
+                                    receipt_dir=fixture_parent / (stage + "-receipt-" + tampered),
+                                    suite="all", stage=stage)
+                        except ValueError as error:
+                            self.assertRegex(str(error), r"(?i)patch.*(hash|digest|lock|tamper)")
+                        except Exception as error:
+                            self.fail("Tampered patch reached a different admission boundary: " + type(error).__name__)
+                        else:
+                            self.fail("Tampered integration patch was not refused at the hash-lock boundary")
+                        fetch.assert_not_called()
+                        maven.assert_not_called()
 
     def test_real_git_error_retains_safe_command_exit_without_raw_stderr(self):
         module = self.runner()

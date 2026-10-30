@@ -1,7 +1,7 @@
 {
   "schema": "capri.opik.backport-tests.v1",
   "issue": "GET-337",
-  "state": "Health-fixed39 GREEN and DAO baseline10/four assertion failures independently reviewed; responses-fixed/all49 candidate awaits runner GREEN, source review and remote Java execution.",
+  "state": "Original source49 GREEN retained separately; test-only HTTP3 and DAO handoff2 expansion requires actual all/baseline21 and responses-fixed/all54. No integration execution or resident acceptance yet.",
   "upstream": {
     "repository": "https://github.com/comet-ml/opik",
     "revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
@@ -128,7 +128,9 @@
   ],
   "patch_order": [
     "0001-health-ownership-tests.patch",
-    "0002-dataset-query-ownership-tests.patch"
+    "0002-dataset-query-ownership-tests.patch",
+    "0006-http-pool-integration-tests.patch",
+    "0007-dataset-cancel-handoff-tests.patch"
   ],
   "tests": {
     "health_class": "Get337ClickHouseHealthCheckOwnershipTest",
@@ -139,8 +141,13 @@
       "editItemsViaSelectInsert"
     ],
     "dao_parameterized_instances": 10,
-    "responses_fixed_required_instances": 49,
-    "responses_fixed_health_instances": 39
+    "responses_fixed_required_instances": 54,
+    "responses_fixed_health_instances": 39,
+    "http_class": "com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHttpPoolLifecycleTest",
+    "http_required_instances": 3,
+    "handoff_class": "com.comet.opik.domain.Get337DatasetQueryHandoffOwnershipTest",
+    "handoff_required_instances": 2,
+    "all_baseline_required_instances": 21
   },
   "observed": {
     "health_baseline": {
@@ -202,15 +209,43 @@
     "image_built": false,
     "live_mutation": false,
     "responses_fixed": {
-      "executed": false
+      "executed": false,
+      "required_instances": 54,
+      "scope": "Expanded profile including real HTTP pool and DAO scheduler handoff tests."
+    },
+    "responses_fixed_49_historical": {
+      "executed": true,
+      "ci_run_id": 41033225919,
+      "artifact_id": 12967141149,
+      "artifact_sha256": "af4ed6ae1e4675aff4ecf42bf820944038378a544f692bef8109f54e54facc2f",
+      "patches": [
+        "0001-health-ownership-tests.patch",
+        "0002-dataset-query-ownership-tests.patch",
+        "0003-health-late-response-fix.patch",
+        "0004-upstream-health-contract-tests.patch",
+        "0005-dataset-query-response-fix.patch"
+      ],
+      "tests": 49,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true,
+      "maven_exit_code": 0,
+      "source_fingerprints": 13,
+      "cannot_satisfy_expanded_54_profile": true
+    },
+    "all_baseline_21": {
+      "executed": false,
+      "required_instances": 21
     }
   },
   "production_hunks": 10,
   "migration_hunks": 0,
   "unchanged_migration_requirement": "All exact-source Liquibase files must retain byte hashes in any later production candidate.",
   "known_gaps": [
-    "Combined responses-fixed/all49 candidate has not been compiled or run.",
-    "No actual post-delivery/pre-mapper cancellation-window test or real SDK HTTP-pool recovery evidence.",
+    "Expanded all/baseline21 and responses-fixed/all54 have not been compiled or executed.",
+    "Real SDK HTTP controls/lifecycle and post-delivery DAO scheduler cancellation window are static tests awaiting actual evidence; source assertions are not integration proof.",
+    "Historical49 GREEN cannot satisfy the expanded54 profile.",
     "No R2DBC acceptance, patched image build or resident deployment/acceptance."
   ],
   "runner": {
@@ -259,7 +294,7 @@
         "binary_downloaded": false
       }
     },
-    "stage_execution_status": "Health-fixed39 passed; separate DAO baseline10 had four assertion failures. Combined responses-fixed/all49 awaits parent-owned execution."
+    "stage_execution_status": "Historical health-fixed39 and responses-fixed49 passed; independent DAO baseline10 had four assertion failures. Expanded all baseline21 and fixed54 await parent-owned execution."
   },
   "local_artifacts": [
     {
@@ -288,9 +323,19 @@
       "bytes": 6687
     },
     {
+      "path": "0006-http-pool-integration-tests.patch",
+      "sha256": "8085881a877988024414ef6af8c3eb95c40f16fad2f7e45680827c4b29cb6bef",
+      "bytes": 21291
+    },
+    {
+      "path": "0007-dataset-cancel-handoff-tests.patch",
+      "sha256": "1762d37fdb01c641f8f31a644617d7c0650d9837b14b7190b225855e4c3b8def",
+      "bytes": 13106
+    },
+    {
       "path": "README.md",
-      "sha256": "f75178a59e4df9e6d3128c8700080214f67b631d6b00a086feef9b2fcacbf43f",
-      "bytes": 8923
+      "sha256": "688f1beffb98253279bb2b87afa73e1bd7d7572713e987747f2846ed44e9d4f3",
+      "bytes": 10585
     },
     {
       "path": "LICENSE.upstream",
@@ -432,5 +477,52 @@
       ]
     }
   },
-  "updated_at": "2026-10-30T09:14:05.574258+00:00"
+  "updated_at": "2026-10-30T10:15:46.699338+00:00",
+  "integration_patches": {
+    "0006-http-pool-integration-tests.patch": {
+      "role": "test-only-real-sdk-loopback-http-pool",
+      "sha256": "8085881a877988024414ef6af8c3eb95c40f16fad2f7e45680827c4b29cb6bef",
+      "bytes": 21291,
+      "new_test_paths": [
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHttpPoolLifecycleTest.java"
+      ],
+      "new_test_sources": {
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHttpPoolLifecycleTest.java": {
+          "bytes": 20415,
+          "sha256": "ac68b64ea55f1203a0dcbb92158ed83ea9fb216e73bb7b755fe4817591cbe984",
+          "git_blob_sha1": "cde29e6231b66fb28ef0fe44173287551f7ace78"
+        }
+      },
+      "junit_class": "com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHttpPoolLifecycleTest",
+      "method_multiplicities": {
+        "realSdkReaderRoundTripsTheCompleteNativeCompressedSelectOneResponse": 1,
+        "unreadRealResponseHoldsTheOnlyLeaseUntilItsPublicClose": 1,
+        "timedOutProductionProbeReleasesItsLateRealResponseForTheNextProbe": 1
+      },
+      "required_instances": 3,
+      "execution_status": "Static source review only; no integration Java execution yet."
+    },
+    "0007-dataset-cancel-handoff-tests.patch": {
+      "role": "test-only-real-dao-post-delivery-scheduler-handoff",
+      "sha256": "1762d37fdb01c641f8f31a644617d7c0650d9837b14b7190b225855e4c3b8def",
+      "bytes": 13106,
+      "new_test_paths": [
+        "apps/opik-backend/src/test/java/com/comet/opik/domain/Get337DatasetQueryHandoffOwnershipTest.java"
+      ],
+      "new_test_sources": {
+        "apps/opik-backend/src/test/java/com/comet/opik/domain/Get337DatasetQueryHandoffOwnershipTest.java": {
+          "bytes": 11324,
+          "sha256": "267ce883297ca6592949a08e5427372141c4781ff897779d666484c0bb09636b",
+          "git_blob_sha1": "dd5e74b3fb89127d6086bbc62ff3104a7e0770a6"
+        }
+      },
+      "junit_class": "com.comet.opik.domain.Get337DatasetQueryHandoffOwnershipTest",
+      "method_multiplicities": {
+        "cancellationAfterDeliveryClosesResponseBeforeTheQueuedMapperRuns": 2
+      },
+      "required_instances": 2,
+      "execution_status": "Static source review only; no integration Java execution yet."
+    }
+  },
+  "patch_order_scope": "all/baseline; responses-fixed/all applies0001 through0007. Narrow health, DAO and health-fixed selections retain their original scope."
 }

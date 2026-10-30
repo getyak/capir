@@ -42,6 +42,12 @@ PATCH_HASHES = {
     "0002-dataset-query-ownership-tests.patch":
         "1868137a4eb4ef7039d737d4916cd8e4e4d5c67dbf460237b8bb481f6f268855",
 }
+INTEGRATION_PATCH_HASHES = {
+    "0006-http-pool-integration-tests.patch":
+        "8085881a877988024414ef6af8c3eb95c40f16fad2f7e45680827c4b29cb6bef",
+    "0007-dataset-cancel-handoff-tests.patch":
+        "1762d37fdb01c641f8f31a644617d7c0650d9837b14b7190b225855e4c3b8def",
+}
 FIXED_PATCH_HASHES = {
     "0003-health-late-response-fix.patch":
         "9d989e9d304094d1595b44afac3e39ccb533e3acfccd82fb3398fe4a709f002c",
@@ -78,10 +84,18 @@ HEALTH_PATH = TEST_ROOT + (
 )
 FIXTURE_PATH = TEST_ROOT + "com/comet/opik/testutil/Get337QueryResponseFixture.java"
 DAO_PATH = TEST_ROOT + "com/comet/opik/domain/Get337DatasetItemVersionResponseOwnershipTest.java"
+HTTP_PATH = TEST_ROOT + "com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHttpPoolLifecycleTest.java"
+HANDOFF_PATH = TEST_ROOT + "com/comet/opik/domain/Get337DatasetQueryHandoffOwnershipTest.java"
+INTEGRATION_PATCH_PATHS = {
+    "0006-http-pool-integration-tests.patch": {HTTP_PATH},
+    "0007-dataset-cancel-handoff-tests.patch": {HANDOFF_PATH},
+}
 HEALTH_CLASS = (
     "com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHealthCheckOwnershipTest"
 )
 DAO_CLASS = "com.comet.opik.domain.Get337DatasetItemVersionResponseOwnershipTest"
+HTTP_CLASS = "com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHttpPoolLifecycleTest"
+HANDOFF_CLASS = "com.comet.opik.domain.Get337DatasetQueryHandoffOwnershipTest"
 UPSTREAM_HEALTH_CLASS = "com.comet.opik.infrastructure.db.healthchecks.AbstractClickHouseHealthCheckTest"
 UPSTREAM_HEALTH_METHODS = {
     UPSTREAM_HEALTH_CLASS + "$ClickHouseHealthCheckTests": {
@@ -130,6 +144,14 @@ METHOD_MULTIPLICITIES = {
         "writtenRowsMappingFailureClosesItsResponseExactlyOnce": 2,
         "cleanupFailureDoesNotTurnACompletedWriteIntoAFailedOrRetriedWrite": 2,
     },
+    HTTP_CLASS: {
+        "realSdkReaderRoundTripsTheCompleteNativeCompressedSelectOneResponse": 1,
+        "unreadRealResponseHoldsTheOnlyLeaseUntilItsPublicClose": 1,
+        "timedOutProductionProbeReleasesItsLateRealResponseForTheNextProbe": 1,
+    },
+    HANDOFF_CLASS: {
+        "cancellationAfterDeliveryClosesResponseBeforeTheQueuedMapperRuns": 2,
+    },
 }
 METHOD_MULTIPLICITIES.update(UPSTREAM_HEALTH_METHODS)
 BACKEND_SOURCES = {
@@ -154,7 +176,9 @@ def _selection(suite):
     if suite == "health":
         return list(PATCH_HASHES)[:1], {HEALTH_PATH, FIXTURE_PATH}, {HEALTH_CLASS}
     if suite == "all":
-        return list(PATCH_HASHES), {HEALTH_PATH, FIXTURE_PATH, DAO_PATH}, {HEALTH_CLASS, DAO_CLASS}
+        return (list(PATCH_HASHES) + list(INTEGRATION_PATCH_HASHES),
+                {HEALTH_PATH, FIXTURE_PATH, DAO_PATH, HTTP_PATH, HANDOFF_PATH},
+                {HEALTH_CLASS, DAO_CLASS, HTTP_CLASS, HANDOFF_CLASS})
     if suite == "dao":
         return list(PATCH_HASHES), {HEALTH_PATH, FIXTURE_PATH, DAO_PATH}, {DAO_CLASS}
     raise ValueError("Unknown suite; expected health, dao or all")
@@ -167,7 +191,8 @@ def _stage_selection(suite, stage):
     if stage == "health-fixed" and suite == "health":
         return names + list(HEALTH_FIXED_PATCHES), paths, classes | set(UPSTREAM_HEALTH_METHODS)
     if stage == "responses-fixed" and suite == "all":
-        return names + list(FIXED_PATCH_HASHES), paths, classes | set(UPSTREAM_HEALTH_METHODS)
+        ordered = list(PATCH_HASHES) + list(FIXED_PATCH_HASHES) + list(INTEGRATION_PATCH_HASHES)
+        return ordered, paths, classes | set(UPSTREAM_HEALTH_METHODS)
     raise ValueError("Fixed stages require health/health-fixed or all/responses-fixed")
 
 
@@ -206,7 +231,7 @@ def verify_source_fingerprint(*, path, claim):
 
 def verify_patch_locks(*, patch_dir, suite, stage="baseline"):
     names, _, _ = _stage_selection(suite, stage)
-    hashes = {**PATCH_HASHES, **FIXED_PATCH_HASHES}
+    hashes = {**PATCH_HASHES, **FIXED_PATCH_HASHES, **INTEGRATION_PATCH_HASHES}
     result = {}
     for name in names:
         path = Path(patch_dir) / name
@@ -269,6 +294,15 @@ def _manifest_stage_modifications(manifest, suite, stage):
     }
     if manifest.get("stages") != expected_stages:
         raise ValueError("Manifest stage authorization differs from the fixed runner contract")
+    integration = manifest.get("integration_patches", {})
+    if set(integration) != set(INTEGRATION_PATCH_HASHES):
+        raise ValueError("Unexpected integration test patch catalogue")
+    for name, digest in INTEGRATION_PATCH_HASHES.items():
+        entry = integration[name]
+        if (entry.get("sha256") != digest
+                or set(entry.get("new_test_paths", [])) != INTEGRATION_PATCH_PATHS[name]
+                or set(entry.get("new_test_sources", {})) != INTEGRATION_PATCH_PATHS[name]):
+            raise ValueError("Integration test patch hash/path contract mismatch")
     entries = manifest.get("fixed_patches", {})
     if set(entries) != set(FIXED_PATCH_HASHES):
         raise ValueError("Unexpected fixed patch catalogue")
@@ -761,6 +795,11 @@ def run_backport(*, work_dir, receipt_dir, suite="health", stage="baseline"):
         changes = validate_applied_stage(
             source_dir=source, suite=suite, stage=stage, modifications=modifications
         )
+        receipt["integration_test_fingerprints"] = [
+            verify_source_fingerprint(path=source / path, claim={"path": path, **claim})
+            for name in patches if name in INTEGRATION_PATCH_HASHES
+            for path, claim in manifest["integration_patches"][name]["new_test_sources"].items()
+        ]
         receipt["applied_test_changes"] = [row for row in changes if row["path"].startswith(TEST_ROOT)]
         receipt["applied_production_changes"] = [row for row in changes if not row["path"].startswith(TEST_ROOT)]
         receipt["modified_source_fingerprints"] = modifications
