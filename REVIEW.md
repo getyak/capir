@@ -62,6 +62,12 @@ scroll on the real surface rather than assuming another available branch runs.
 Read back the active element after focus restoration: a visible target or a
 completed `focus()` call does not establish that the browser accepted focus.
 
+For browser focus and geometry evidence, collect bounded metadata from rendered
+controls. Do not serialize the document body, scripts, full HTML, cookies, request
+headers or storage: a server-rendered page can embed purpose-bound admission
+grants. Keep raw authentication state private, sanitize artifacts before sharing,
+and revoke an exposed test entry through its normal lifecycle.
+
 For browser focus, scroll, and motion checks, allow the actual user-triggered
 transition to settle within a bounded observation window before judging final
 visibility. Bound font readiness and animation promises themselves; wait on
