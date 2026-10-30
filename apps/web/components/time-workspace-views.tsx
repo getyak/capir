@@ -12,10 +12,11 @@ export function TimeActivityIcon({ kind }: { kind: TimeActivity["kind"] }) {
 }
 export function TimeActivityRow({ activity, zone, selected, onSelect }: { activity: TimeActivity; zone: string; selected?: boolean; onSelect: (activity: TimeActivity) => void }) {
   const t = useT(), locale = useLocale();
+  const personLabel = activity.person_label?.trim() === activity.title.trim() ? null : activity.person_label;
   return <button type="button" className={styles.activity} aria-pressed={selected} onClick={() => onSelect(activity)}>
     <time className={styles.activityTime} dateTime={activity.occurred_at}>{dateInZone(activity.occurred_at, zone) !== activity.local_day ? <small>{dateInZone(activity.occurred_at, zone).slice(5).replace("-", "/")}<br /></small> : null}{activity.all_day ? t("全天") : formatTime(activity.occurred_at, zone, locale)}</time>
     <span className={styles.activityIcon} data-kind={activity.kind}><TimeActivityIcon kind={activity.kind} /></span>
-    <span className={styles.activityBody}><strong>{activity.title}</strong><span>{activity.person_label ? `${activity.person_label} · ` : ""}{timeActivitySummary(activity, locale) || t(TIME_KINDS[activity.kind])}</span></span>
+    <span className={styles.activityBody}><strong>{activity.title}</strong><span>{personLabel ? `${personLabel} · ` : ""}{timeActivitySummary(activity, locale) || t(TIME_KINDS[activity.kind])}</span></span>
     <span className={styles.activityStatus} data-status={activity.status}>{t(TIME_STATUSES[activity.status])}</span><ArrowUpRight className={styles.rowArrow} aria-hidden="true" size={15} />
   </button>;
 }
