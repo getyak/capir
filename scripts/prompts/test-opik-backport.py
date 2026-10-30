@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the fixed Opik TEST-ONLY regression on an isolated GitHub-hosted runner.
+"""Run pinned Opik baseline or explicit backport stages on GitHub-hosted runners.
 
 Pure admission helpers are importable by local stdlib tests. Actual fetch,
 Docker and Maven execution is guarded by run_backport and never runs at import.
@@ -47,12 +47,20 @@ FIXED_PATCH_HASHES = {
         "9d989e9d304094d1595b44afac3e39ccb533e3acfccd82fb3398fe4a709f002c",
     "0004-upstream-health-contract-tests.patch":
         "01d5e68c611ec5a5172a09ee0dd77d1919066718cf90e8500330ebf99c829e71",
+    "0005-dataset-query-response-fix.patch":
+        "aa7f49d6b2b1a59a157550366cba9815b79390dc65bbaffa3075fdb847ca2d83",
 }
+HEALTH_FIXED_PATCHES = (
+    "0003-health-late-response-fix.patch", "0004-upstream-health-contract-tests.patch",
+)
 TEST_ROOT = "apps/opik-backend/src/test/java/"
 HEALTH_FIX_SOURCE = (
     "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/"
     "AbstractClickHouseHealthCheck.java"
 )
+DAO_FIX_SOURCE = "apps/opik-backend/src/main/java/com/comet/opik/domain/DatasetItemVersionDAO.java"
+ASYNC_FIX_SOURCE = "apps/opik-backend/src/main/java/com/comet/opik/utils/AsyncUtils.java"
+PRODUCTION_FIX_PATHS = {HEALTH_FIX_SOURCE, DAO_FIX_SOURCE, ASYNC_FIX_SOURCE}
 UPSTREAM_TEST_ROOT = TEST_ROOT + "com/comet/opik/infrastructure/db/healthchecks/"
 UPSTREAM_TEST_PATHS = {
     UPSTREAM_TEST_ROOT + name + ".java" for name in (
@@ -63,6 +71,7 @@ UPSTREAM_TEST_PATHS = {
 FIXED_PATCH_PATHS = {
     "0003-health-late-response-fix.patch": {HEALTH_FIX_SOURCE},
     "0004-upstream-health-contract-tests.patch": UPSTREAM_TEST_PATHS,
+    "0005-dataset-query-response-fix.patch": {DAO_FIX_SOURCE, ASYNC_FIX_SOURCE},
 }
 HEALTH_PATH = TEST_ROOT + (
     "com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHealthCheckOwnershipTest.java"
@@ -156,8 +165,10 @@ def _stage_selection(suite, stage):
     if stage == "baseline":
         return names, paths, classes
     if stage == "health-fixed" and suite == "health":
+        return names + list(HEALTH_FIXED_PATCHES), paths, classes | set(UPSTREAM_HEALTH_METHODS)
+    if stage == "responses-fixed" and suite == "all":
         return names + list(FIXED_PATCH_HASHES), paths, classes | set(UPSTREAM_HEALTH_METHODS)
-    raise ValueError("Only the health suite may select the health-fixed production patch stage")
+    raise ValueError("Fixed stages require health/health-fixed or all/responses-fixed")
 
 
 def _sha256(data):
@@ -250,10 +261,11 @@ def _fingerprint_bytes(data):
 
 
 def _manifest_stage_modifications(manifest, suite, stage):
-    _stage_selection(suite, stage)
+    selected, _, _ = _stage_selection(suite, stage)
     expected_stages = {
         "baseline": {"suites": ["health", "dao", "all"], "fixed_patches": []},
-        "health-fixed": {"suites": ["health"], "fixed_patches": list(FIXED_PATCH_HASHES)},
+        "health-fixed": {"suites": ["health"], "fixed_patches": list(HEALTH_FIXED_PATCHES)},
+        "responses-fixed": {"suites": ["all"], "fixed_patches": list(FIXED_PATCH_HASHES)},
     }
     if manifest.get("stages") != expected_stages:
         raise ValueError("Manifest stage authorization differs from the fixed runner contract")
@@ -269,8 +281,11 @@ def _manifest_stage_modifications(manifest, suite, stage):
         for path, claim in changes.items():
             if set(claim) != {"before", "after"}:
                 raise ValueError("Unexpected modified-file fingerprint contract")
-            modifications[path] = claim
-    return modifications if stage == "health-fixed" else {}
+            if name in selected:
+                if path in modifications:
+                    raise ValueError("Overlapping fixed patch source paths")
+                modifications[path] = claim
+    return modifications
 
 
 def validate_applied_tests(*, source_dir, expected_paths):
@@ -278,8 +293,8 @@ def validate_applied_tests(*, source_dir, expected_paths):
 
 
 def validate_applied_stage(*, source_dir, suite, stage, modifications):
-    _, paths, _ = _stage_selection(suite, stage)
-    required = set().union(*FIXED_PATCH_PATHS.values()) if stage == "health-fixed" else set()
+    names, paths, _ = _stage_selection(suite, stage)
+    required = set().union(*(FIXED_PATCH_PATHS[name] for name in names if name in FIXED_PATCH_PATHS))
     if set(modifications) != required:
         raise ValueError("Modified paths do not equal the explicitly selected stage")
     return _validate_applied_changes(source_dir=source_dir, expected_paths=paths, modifications=modifications)
@@ -290,8 +305,10 @@ def _validate_applied_changes(*, source_dir, expected_paths, modifications):
     expected = {_relative(path) for path in expected_paths}
     if not expected or any(not p.startswith(TEST_ROOT) or not p.endswith(".java") for p in expected):
         raise ValueError("Expected scope must contain only explicit Java test paths")
-    if modifications and set(modifications) != set().union(*FIXED_PATCH_PATHS.values()):
-        raise ValueError("Modified source scope is not the fixed health backport")
+    health_scope = set().union(*(FIXED_PATCH_PATHS[name] for name in HEALTH_FIXED_PATCHES))
+    responses_scope = set().union(*FIXED_PATCH_PATHS.values())
+    if modifications and set(modifications) not in (health_scope, responses_scope):
+        raise ValueError("Modified source scope is not an exact fixed backport stage")
     if _git(source_dir, "diff", "--name-only", "-z"):
         raise ValueError("Unstaged source/index drift")
     # Deliberately do not exclude ignored paths: hidden extra compilation inputs are still inputs.
@@ -335,7 +352,7 @@ def validate_protected_catalogue(*, before, after, modifications):
     for path, claim in modifications.items():
         if path.startswith(TEST_ROOT):
             continue
-        if path != HEALTH_FIX_SOURCE or before.get(path) != claim["before"]["sha256"]:
+        if path not in PRODUCTION_FIX_PATHS or before.get(path) != claim["before"]["sha256"]:
             raise ValueError("Unexpected protected production-source baseline/change")
         expected[path] = claim["after"]["sha256"]
     if after != expected:
@@ -802,7 +819,7 @@ def main():
     parser.add_argument("--work-dir", required=True, type=Path)
     parser.add_argument("--receipt-dir", required=True, type=Path)
     parser.add_argument("--suite", choices=("health", "dao", "all"), default="health")
-    parser.add_argument("--stage", choices=("baseline", "health-fixed"), default="baseline")
+    parser.add_argument("--stage", choices=("baseline", "health-fixed", "responses-fixed"), default="baseline")
     arguments = parser.parse_args()
     try:
         return run_backport(

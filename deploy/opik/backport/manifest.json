@@ -1,7 +1,7 @@
 {
   "schema": "capri.opik.backport-tests.v1",
   "issue": "GET-337",
-  "state": "Health baseline Java RED observed; health-only fixed candidate and upstream-test adapters await execution; DAO baseline unrun.",
+  "state": "Health-fixed39 GREEN and DAO baseline10/four assertion failures independently reviewed; responses-fixed/all49 candidate awaits runner GREEN, source review and remote Java execution.",
   "upstream": {
     "repository": "https://github.com/comet-ml/opik",
     "revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
@@ -138,7 +138,9 @@
       "copyVersionItems",
       "editItemsViaSelectInsert"
     ],
-    "dao_parameterized_instances": 10
+    "dao_parameterized_instances": 10,
+    "responses_fixed_required_instances": 49,
+    "responses_fixed_health_instances": 39
   },
   "observed": {
     "health_baseline": {
@@ -161,22 +163,55 @@
       "java_red": true
     },
     "health_fixed": {
-      "executed": false
+      "executed": true,
+      "ci_run_id": 41028979099,
+      "artifact_id": 12964489776,
+      "artifact_sha256": "25c926a7fd20c9dd114aa90ac32be0ba90efde84bcb75ad0e914b3504601321d",
+      "stage": "health-fixed",
+      "tests": 39,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true,
+      "maven_exit_code": 0,
+      "source_fingerprints": 13,
+      "failing_methods": [],
+      "java_red": false
     },
     "dao_baseline": {
-      "executed": false
+      "executed": true,
+      "ci_run_id": 41028979099,
+      "artifact_id": 12964489776,
+      "artifact_sha256": "25c926a7fd20c9dd114aa90ac32be0ba90efde84bcb75ad0e914b3504601321d",
+      "stage": "baseline",
+      "tests": 10,
+      "failures": 4,
+      "errors": 0,
+      "skipped": 0,
+      "passed": false,
+      "maven_exit_code": 1,
+      "source_fingerprints": 13,
+      "failing_methods": [
+        "cancellationBeforeDeliveryClosesTheLateQueryResponse(Operation)[1]",
+        "cancellationBeforeDeliveryClosesTheLateQueryResponse(Operation)[2]",
+        "cleanupFailureDoesNotTurnACompletedWriteIntoAFailedOrRetriedWrite(Operation)[1]",
+        "cleanupFailureDoesNotTurnACompletedWriteIntoAFailedOrRetriedWrite(Operation)[2]"
+      ],
+      "java_red": true
     },
     "image_built": false,
-    "live_mutation": false
+    "live_mutation": false,
+    "responses_fixed": {
+      "executed": false
+    }
   },
-  "production_hunks": 5,
+  "production_hunks": 10,
   "migration_hunks": 0,
   "unchanged_migration_requirement": "All exact-source Liquibase files must retain byte hashes in any later production candidate.",
   "known_gaps": [
-    "Health fixed stage has not run.",
-    "DAO baseline has not run; no DAO production fix is included.",
-    "No actual HTTP-pool recovery, post-delivery cancellation-window or R2DBC acceptance.",
-    "No patched image build or resident deployment/acceptance."
+    "Combined responses-fixed/all49 candidate has not been compiled or run.",
+    "No actual post-delivery/pre-mapper cancellation-window test or real SDK HTTP-pool recovery evidence.",
+    "No R2DBC acceptance, patched image build or resident deployment/acceptance."
   ],
   "runner": {
     "sparse_checkout": [
@@ -224,7 +259,7 @@
         "binary_downloaded": false
       }
     },
-    "stage_execution_status": "Only the original health baseline was executed; fixed-health and DAO invocations await parent-owned runs."
+    "stage_execution_status": "Health-fixed39 passed; separate DAO baseline10 had four assertion failures. Combined responses-fixed/all49 awaits parent-owned execution."
   },
   "local_artifacts": [
     {
@@ -248,9 +283,14 @@
       "bytes": 6882
     },
     {
+      "path": "0005-dataset-query-response-fix.patch",
+      "sha256": "aa7f49d6b2b1a59a157550366cba9815b79390dc65bbaffa3075fdb847ca2d83",
+      "bytes": 6687
+    },
+    {
       "path": "README.md",
-      "sha256": "6bb755b97dc1c6f96eec7628234d662feb898a22d9e2d176f2524178b3b4eb29",
-      "bytes": 7296
+      "sha256": "f75178a59e4df9e6d3128c8700080214f67b631d6b00a086feef9b2fcacbf43f",
+      "bytes": 8923
     },
     {
       "path": "LICENSE.upstream",
@@ -329,6 +369,38 @@
       },
       "rationale": "Five old source assertions required cancel(true); the timeout/interruption ownership contract now requires no cancellation. Other health/topology/read-only assertions remain.",
       "new_regression_patches_frozen": true
+    },
+    "0005-dataset-query-response-fix.patch": {
+      "role": "production-dataset-query-response-ownership",
+      "sha256": "aa7f49d6b2b1a59a157550366cba9815b79390dc65bbaffa3075fdb847ca2d83",
+      "changes": {
+        "apps/opik-backend/src/main/java/com/comet/opik/domain/DatasetItemVersionDAO.java": {
+          "before": {
+            "bytes": 232878,
+            "sha256": "ccc8744c57b71a6e0f1704d346a9cdd2402b2c521f6e244bff2b87b4551054d0",
+            "git_blob_sha1": "a7240e243550b6b3b95f812fcbc1fdd1fc4a16f0"
+          },
+          "after": {
+            "bytes": 232746,
+            "sha256": "402cdafedc45261a6c697af37f654a74c28aafb3984f5c6338057c034f86cd5d",
+            "git_blob_sha1": "e31f4ebd5495d050b03c947a279fcd00e789e143"
+          }
+        },
+        "apps/opik-backend/src/main/java/com/comet/opik/utils/AsyncUtils.java": {
+          "before": {
+            "bytes": 2990,
+            "sha256": "217cd67ec919af93194a545d6c673604b00d2ca31a66029ca67074603975fa02",
+            "git_blob_sha1": "a6aa32545bbe21566737742996e3a44815dcc0df"
+          },
+          "after": {
+            "bytes": 4973,
+            "sha256": "5412b1d1cf856c6a78834bc8ca04a1046d4d6027cc74461ebfaf2f68fee4ea85",
+            "git_blob_sha1": "d70190e91b612266b716d895836c3bef16c548b1"
+          }
+        }
+      },
+      "upstream_reference": "https://github.com/comet-ml/opik/commit/d1b1d62fdc55e77fa0d088e33609fb1ee3c169b3",
+      "adaptation": "QueryResponse-only helper in AsyncUtils; called only by executeCopyVersionItems and executeEditOneItem. Preserve scheduled mapping, context, SQL, instrumentation and ZeroRowsRetryPolicy. Suppress future cancellation, own delivered responses with usingWhen, close inline and log only exception class. Remove the two competing try-with-resources owners. No insert, POM, dependency or migration change."
     }
   },
   "stages": {
@@ -348,7 +420,17 @@
         "0003-health-late-response-fix.patch",
         "0004-upstream-health-contract-tests.patch"
       ]
+    },
+    "responses-fixed": {
+      "suites": [
+        "all"
+      ],
+      "fixed_patches": [
+        "0003-health-late-response-fix.patch",
+        "0004-upstream-health-contract-tests.patch",
+        "0005-dataset-query-response-fix.patch"
+      ]
     }
   },
-  "updated_at": "2026-10-30T08:18:11.063487+00:00"
+  "updated_at": "2026-10-30T09:14:05.574258+00:00"
 }

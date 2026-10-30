@@ -70,6 +70,14 @@ HEALTH_FIX_JAVA = (
     "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/"
     "AbstractClickHouseHealthCheck.java"
 )
+DAO_FIX_JAVA = "apps/opik-backend/src/main/java/com/comet/opik/domain/DatasetItemVersionDAO.java"
+ASYNC_FIX_JAVA = "apps/opik-backend/src/main/java/com/comet/opik/utils/AsyncUtils.java"
+DAO_TEST_JAVA = (
+    "apps/opik-backend/src/test/java/com/comet/opik/domain/"
+    "Get337DatasetItemVersionResponseOwnershipTest.java"
+)
+RESPONSES_PATCH = "0005-dataset-query-response-fix.patch"
+RESPONSES_PRODUCTION_PATHS = {HEALTH_FIX_JAVA, DAO_FIX_JAVA, ASYNC_FIX_JAVA}
 LEGACY_OUTER = "com.comet.opik.infrastructure.db.healthchecks.AbstractClickHouseHealthCheckTest"
 LEGACY_METHOD_COUNTS = {
     LEGACY_OUTER + "$ClickHouseHealthCheckTests": {
@@ -615,6 +623,149 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
         self.xml(incomplete, name=LEGACY_OUTER, outcomes=[], case_names=[])
         self.assertFalse(self.evaluate(incomplete, expected_classes=classes)["passed"])
         self.assertFalse(self.evaluate(incomplete)["passed"])
+
+    def test_responses_fixed_is_explicit_all_only_with_both_regressions_and_legacy_health(self):
+        selection = self.function("_stage_selection")
+        try:
+            names, paths, classes = selection("all", "responses-fixed")
+        except ValueError as error:
+            self.fail("The reviewed responses-fixed/all stage is not admitted: " + str(error))
+        self.assertEqual(names, [PATCH_ONE, PATCH_TWO, "0003-health-late-response-fix.patch",
+                                 "0004-upstream-health-contract-tests.patch", RESPONSES_PATCH])
+        self.assertEqual(paths, EXPECTED_PATHS | {DAO_TEST_JAVA})
+        self.assertEqual(classes, {HEALTH_CLASS, OTHER_CLASS} | set(LEGACY_METHOD_COUNTS))
+        for suite in ("health", "dao"):
+            with self.subTest(suite=suite), self.assertRaises(ValueError):
+                selection(suite, "responses-fixed")
+        self.assertEqual(selection("all", "baseline")[0], [PATCH_ONE, PATCH_TWO])
+        self.assertEqual(selection("health", "health-fixed")[0],
+                         [PATCH_ONE, "0003-health-late-response-fix.patch",
+                          "0004-upstream-health-contract-tests.patch"])
+
+    def test_responses_fixed_checks_actual_three_production_paths_and_each_fingerprint(self):
+        repository = self.repository("responses-fixed-stage")
+        modifications = {}
+
+        def fingerprint(data):
+            return {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                    "git_blob_sha1": hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()}
+
+        for relative in LEGACY_TEST_PATHS | RESPONSES_PRODUCTION_PATHS:
+            path = repository / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"class BeforeResponseFixture {}\n")
+            modifications[relative] = {"before": fingerprint(path.read_bytes())}
+        self.git(repository, "add", ".")
+        self.git(repository, "commit", "--quiet", "-m", "Synthetic response-stage baseline")
+        self.apply_new_tests(repository, paths=EXPECTED_PATHS | {DAO_TEST_JAVA})
+        for relative, claim in modifications.items():
+            path = repository / relative
+            path.write_bytes(b"class AfterResponseFixture {}\n")
+            claim["after"] = fingerprint(path.read_bytes())
+            self.git(repository, "add", relative)
+
+        validate = self.function("validate_applied_stage")
+        try:
+            rows = validate(source_dir=repository, suite="all", stage="responses-fixed",
+                            modifications=modifications)
+        except ValueError as error:
+            self.fail("Exact response-stage Git diff was rejected: " + str(error))
+        self.assertEqual({row["path"] for row in rows if row["status"] == "A"},
+                         EXPECTED_PATHS | {DAO_TEST_JAVA})
+        self.assertEqual({row["path"] for row in rows if row["status"] == "M"},
+                         LEGACY_TEST_PATHS | RESPONSES_PRODUCTION_PATHS)
+        self.assertEqual({row["mode"] for row in rows}, {"100644"})
+        for relative in RESPONSES_PRODUCTION_PATHS:
+            for side, field, value in (("before", "git_blob_sha1", "0" * 40),
+                                       ("after", "sha256", "0" * 64)):
+                with self.subTest(path=relative, side=side):
+                    corrupt = json.loads(json.dumps(modifications))
+                    corrupt[relative][side][field] = value
+                    with self.assertRaises(ValueError):
+                        validate(source_dir=repository, suite="all", stage="responses-fixed",
+                                 modifications=corrupt)
+        for relative in (DAO_FIX_JAVA, ASYNC_FIX_JAVA):
+            with self.subTest(missing_scope=relative), self.assertRaises(ValueError):
+                validate(source_dir=repository, suite="all", stage="responses-fixed",
+                         modifications={path: claim for path, claim in modifications.items() if path != relative})
+        self.git(repository, "update-index", "--chmod=+x", ASYNC_FIX_JAVA)
+        with self.assertRaises(ValueError):
+            validate(source_dir=repository, suite="all", stage="responses-fixed", modifications=modifications)
+        self.git(repository, "update-index", "--chmod=-x", ASYNC_FIX_JAVA)
+        for relative in ("apps/opik-backend/pom.xml",
+                         "apps/opik-backend/src/main/java/Production.java",
+                         "apps/opik-backend/src/main/resources/liquibase/changelog.xml"):
+            original = (repository / relative).read_bytes()
+            (repository / relative).write_bytes(original + b"Unapproved response-stage edit\n")
+            self.git(repository, "add", relative)
+            with self.subTest(forbidden=relative), self.assertRaises(ValueError):
+                validate(source_dir=repository, suite="all", stage="responses-fixed", modifications=modifications)
+            (repository / relative).write_bytes(original)
+            self.git(repository, "add", relative)
+
+    def test_responses_fixed_preserves_full_protected_catalogue_and_migrations(self):
+        validate = self.function("validate_protected_catalogue")
+        protected = {
+            "apps/opik-backend/pom.xml": "7" * 64,
+            "apps/opik-backend/src/main/resources/liquibase/changelog.xml": "8" * 64,
+            "apps/opik-backend/src/main/java/OtherProduction.java": "9" * 64,
+        }
+        before = {**protected, **dict.fromkeys(RESPONSES_PRODUCTION_PATHS, "a" * 64)}
+        after = {**protected, **dict.fromkeys(RESPONSES_PRODUCTION_PATHS, "b" * 64)}
+        modifications = {path: {"before": {"sha256": "a" * 64}, "after": {"sha256": "b" * 64}}
+                         for path in RESPONSES_PRODUCTION_PATHS}
+        try:
+            accepted = validate(before=before, after=after, modifications=modifications)
+        except ValueError as error:
+            self.fail("Exact three-file protected replacement was rejected: " + str(error))
+        self.assertTrue(accepted)
+        for relative in protected:
+            with self.subTest(changed=relative), self.assertRaises(ValueError):
+                validate(before=before, after={**after, relative: "f" * 64}, modifications=modifications)
+            with self.subTest(removed=relative), self.assertRaises(ValueError):
+                validate(before=before, after={p: d for p, d in after.items() if p != relative},
+                         modifications=modifications)
+        with self.assertRaises(ValueError):
+            validate(before=before, after={**after, "apps/opik-backend/src/main/resources/new.sql": "e" * 64},
+                     modifications=modifications)
+        broadened = {**modifications, "apps/opik-backend/pom.xml": {
+            "before": {"sha256": "7" * 64}, "after": {"sha256": "f" * 64}}}
+        with self.assertRaises(ValueError):
+            validate(before=before, after={**after, "apps/opik-backend/pom.xml": "f" * 64},
+                     modifications=broadened)
+
+    def test_responses_fixed_requires_all_49_real_method_instances_and_preserves_maven_exit(self):
+        try:
+            _, _, selected = self.function("_stage_selection")("all", "responses-fixed")
+        except ValueError as error:
+            self.fail("Cannot assess the combined fixed JUnit stage: " + str(error))
+        expected = {HEALTH_CLASS, OTHER_CLASS} | set(LEGACY_METHOD_COUNTS)
+        self.assertEqual(selected, expected)
+        reports = self.root / "responses-fixed-reports"
+        health_xml = self.xml(reports)
+        dao_xml = self.xml(reports, name=OTHER_CLASS, outcomes=["success"] * 10)
+        legacy_paths = []
+        for suite_class, methods in LEGACY_METHOD_COUNTS.items():
+            names = [method if count == 1 else f"{method}[{index}]"
+                     for method, count in methods.items() for index in range(1, count + 1)]
+            legacy_paths.append(self.xml(reports, name=suite_class,
+                                         outcomes=["success"] * len(names), case_names=names))
+        self.xml(reports, name=LEGACY_OUTER, outcomes=[], case_names=[])
+        result = self.evaluate(reports, expected_classes=selected)
+        self.assertTrue(result["passed"])
+        self.assertEqual((result["tests"], result["errors"], result["failures"], result["skipped"]),
+                         (49, 0, 0, 0))
+        failed_process = self.evaluate(reports, code=23, expected_classes=selected)
+        self.assertFalse(failed_process["passed"])
+        self.assertEqual(failed_process["maven_exit_code"], 23)
+        for missing in (health_xml, dao_xml, legacy_paths[0]):
+            data = missing.read_bytes()
+            missing.unlink()
+            with self.subTest(missing=missing.name):
+                self.assertFalse(self.evaluate(reports, expected_classes=selected)["passed"])
+            missing.write_bytes(data)
+        self.xml(reports, name=OTHER_CLASS, outcomes=["success"] * 9 + ["skipped"])
+        self.assertFalse(self.evaluate(reports, expected_classes=selected)["passed"])
 
     def test_real_git_error_retains_safe_command_exit_without_raw_stderr(self):
         module = self.runner()

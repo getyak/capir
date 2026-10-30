@@ -206,3 +206,46 @@ checked by the source worker; no Docker/Maven/install/clone/test/model/service/C
 execution or Git commit was performed. The production health candidate still
 needs independent review, actual39-case GREEN, image/runtime proof and the normal
 clean complete-release/data/rollback gates.
+
+2026-10-30: CI41028979099/artifact12964489776 supplied the next real source
+evidence: health-fixed passed all39 instances with errors0/skips0; the separate
+DAO baseline ran10 with four assertion failures, errors0/skips0. Copy/edit each
+cancelled the real future before late delivery, and each surfaced a response-close
+failure after a completed write. The other six DAO cases passed. Independent
+review get337-dao-actual-red-review.json (SHA0a8506a9...) confirmed this is Java
+assertion RED, with the protected source closure retained. It does not establish
+the resident JVM pool owner, original timeout trigger or transport recovery.
+
+The four new combined-stage Python guard tests were observed against the old
+runner:20 run/four failures/errors0, original16 passed (logSHA6304a36f...). That
+is runner-stage RED only. The frozen20 test file has SHA5a5fb553...;0001/0002 and
+health0003/0004 remain byte-identical. No old Java assertion was weakened.
+
+The authorized next candidate is0005, limited to a QueryResponse helper in
+AsyncUtils and the two existing dataset copy/edit query calls. Future cancellation
+is suppressed; a typed discard handler owns responses arriving after cancellation.
+Once delivered, Mono.usingWhen owns completion/error/cancel cleanup even while the
+boundedElastic mapper is queued. The DAO call sites no longer close responses
+themselves. Cleanup runs inline and records only an exception class; its own
+Exception cannot replace successful written-row counts or original acquire/map
+errors. Existing SQL, context helpers, instrumentation, edit-count mapping and
+ZeroRowsRetryPolicy are unchanged. Insert and R2DBC paths are outside this patch.
+
+The explicit responses-fixed/all profile applies0001 through0005 and requires
+health39 plus DAO10, exactly49 non-skipped instances with the existing method
+families. Baseline and health-fixed retain their prior scope. The actual index
+must contain exactly three production modifications (health, AsyncUtils, DAO),
+the three declared existing health-test modifications and three new test files,
+all mode100644. Each modified file has exact before/after byte/SHA256/Gitblob
+claims. Full production/POM/schema/copy-resource catalogues remain present; only
+the three declared source fingerprints may change before Maven, and none during
+Maven. No POM/dependency/migration/startup/image pin was changed.
+
+Only Python AST parsing and static source/patch fingerprints were checked by the
+source worker. Parent owns20-case GREEN, independent review, current-main merge,
+remote49 execution and all later image/runtime gates. The helper's ownership
+structure does not replace actual post-delivery/pre-mapper cancellation coverage:
+after49 GREEN, add a separate0006 DAO test patch and observe its baseline RED and
+fixed GREEN. Actual pinned SDK/loopback HTTP pool recovery is another required
+gate. Neither extension is implemented or executed in this source slice; there
+was no local Java/Maven/Docker/test/install/clone/service/model/CI/Git write.
