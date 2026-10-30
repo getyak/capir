@@ -606,21 +606,22 @@
 }
 
 /* One review seam keeps source, change and action together without nested cards. */
-.actionCard { max-width:620px; margin:0; padding:20px 0; border:0; border-top:1px solid var(--line-soft); border-radius:0; background:transparent; color:var(--ink); }
+.actionCard { max-width:none; min-width:0; margin:12px 0 20px; padding:22px 0; border:0; border-block:1px solid var(--line); border-radius:0; background:transparent; color:var(--ink); }
 .actionHead { display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); flex-wrap: wrap; }
-.actionHead span:last-child { flex:none; }
-.actionChange { display:grid; gap:12px; margin:12px 0; font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; }
-.actionValue { display:grid; gap:2px; min-width:0; }
+.actionHead span:first-child { color:var(--ink); font-weight:500; min-width:0; overflow-wrap:anywhere; }
+.actionHead span:last-child { flex:0 1 auto; border:1px solid var(--line); border-radius:999px; padding:2px 8px; overflow-wrap:anywhere; }
+.actionChange { display:grid; gap:16px; margin:18px 0; font-size:var(--conversation-reading-size,var(--ts-type-body,0.9375rem)); line-height:1.75; overflow-wrap: anywhere; }
+.actionValue { display:grid; gap:5px; min-width:0; }
 .actionValue dt { color:var(--muted); font-size:var(--ts-type-meta, 0.8125rem); line-height:var(--ts-leading-meta, 1.5); }
 .actionValue dd { margin:0; }
 .actionValue:first-child dd { color:var(--muted-strong,var(--ink)); }
-.actionChange strong { font-weight:600; }
-.actionSource { margin:0 0 12px; padding:0 0 0 12px; border-inline-start:1px solid var(--line); border-radius:0; background:transparent; }
-.actionSource blockquote { margin:0; color:var(--muted-strong,var(--ink)); font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; white-space:pre-wrap; }
+.actionChange strong { font-size:1.0625em; font-weight:600; line-height:1.65; }
+.actionSource { margin:18px 0; padding:2px 0 2px 16px; max-inline-size:65ch; border-inline-start:1px solid var(--line-strong); border-radius:0; background:transparent; }
+.actionSource blockquote { margin:0; color:var(--muted-strong,var(--ink)); font-size:var(--conversation-reading-size,var(--ts-type-body,0.9375rem)); line-height:1.75; overflow-wrap: anywhere; white-space:pre-wrap; }
 .actionSource blockquote[data-collapsed="true"] { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
 .actionSource button { margin-top:5px; padding:4px 0; border:0; background:none; color:var(--ink); font:inherit; font-size: var(--ts-type-nav, 0.875rem); cursor:pointer; min-height: 44px; }
 .actionButtons,.actionEdit > div,.actionReceipt { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
-.actionButtons button,.actionEdit button,.actionReceipt button { min-height:44px; padding:7px 11px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--ink); font:inherit; font-size:var(--ts-type-nav, 0.875rem); cursor:pointer; transition:background 180ms var(--ease-out,ease); }
+.actionButtons button,.actionEdit button,.actionReceipt button { max-inline-size:100%; white-space:normal; overflow-wrap:anywhere; min-height:44px; padding:7px 11px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--ink); font:inherit; font-size:var(--ts-type-nav, 0.875rem); cursor:pointer; transition:background 180ms var(--ease-out,ease); }
 .actionButtons button:hover:not(:disabled),.actionEdit button:hover:not(:disabled),.actionReceipt button:hover:not(:disabled) { background:var(--surface-muted); }
 .actionButtons button:active:not(:disabled),.actionEdit button:active:not(:disabled),.actionReceipt button:active:not(:disabled) { background:var(--surface-selected,var(--surface-muted)); }
 .actionButtons button:disabled,.actionEdit button:disabled { opacity:.45; cursor:default; }
@@ -635,8 +636,9 @@
 .actionReceipt button { min-height: 44px; margin-left:auto; font-size: var(--ts-type-nav, 0.875rem); }
 .actionHint { margin:0; font-size: var(--ts-type-meta, 0.8125rem); color:var(--muted); }
 @media(max-width:640px) { .actionCard { padding:18px 0; } .actionButtons .actionComment { margin-left:0; } }
-.actionStack { display:grid; justify-items:stretch; gap:2px; width:min(100%,620px); }
+.actionStack { display:grid; justify-items:stretch; gap:0; width:100%; min-width:0; }
 .actionStack .actionCard { width:100%; box-sizing:border-box; }
+.actionStack .actionCard + .actionCard { border-block-start:0; margin-block-start:0; }
 .actionStack > .actionHint { margin:5px 0 8px; }
 .actionMore { border:0; background:none; color:var(--muted); font:inherit; font-size: var(--ts-type-nav, 0.875rem); min-height: 44px; padding:5px 2px; cursor:pointer; }
 .actionMore:hover { color:var(--ink); }

@@ -6,12 +6,20 @@ import { ConversationProvenance, ConversationResponse } from "./conversation-res
 describe("conversation reading boundary", () => {
   it("renders paragraphs, emphasis, lists and bounded tables semantically", () => {
     const html = renderToStaticMarkup(createElement(ConversationResponse, null, "## 沟通提纲\n\n先确认 **时间**。\n\n1. 明确目标\n2. 约定回复\n\n| 项目 | 状态 |\n| --- | --- |\n| 时间 | 待确认 |"));
-    expect(html).toContain("<h3>沟通提纲</h3>");
+    expect(html).toContain("<h4>沟通提纲</h4>");
     expect(html).toContain("<strong>时间</strong>");
     expect(html).toContain("<ol>");
     expect(html).toContain("<table>");
     expect(html).toContain('tabindex="0"');
     expect(html).not.toContain("<h1>");
+  });
+
+  it("retains nested answer heading depth below the page heading", () => {
+    const html = renderToStaticMarkup(createElement(ConversationResponse, null, "# 合作概览\n\n## 责任变化\n\n### 原话时间\n\n逐项核对。"));
+    expect(html).toContain("<h3>合作概览</h3>");
+    expect(html).toContain("<h4>责任变化</h4>");
+    expect(html).toContain("<h5>原话时间</h5>");
+    expect(html).not.toMatch(/<h[12]>/);
   });
 
   it("never executes HTML, loads remote images, or promotes model links to citations", () => {

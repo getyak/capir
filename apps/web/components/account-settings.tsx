@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useActionState, useId, useState } from 'react';
+import { createContext, useContext, useActionState, useId, useRef, useState } from 'react';
 import { useLocale, useT } from "@/components/locale-provider";
 import type { AccountSettings } from '@talent-signal/contracts';
 import Link from 'next/link';
@@ -11,6 +11,7 @@ import { AccountDataSync, AccountSignInMethods } from './account-sign-in-methods
 import { AccountConflictRecovery } from './account-conflict-recovery';
 
 const WorkspaceScope = createContext({workspaceId:'',userId:''});
+type MutationActionState = AccountActionState & {generation:number};
 const eventNames: Record<string,string> = {profile:'更新个人资料',workspace:'更新空间名称',member:'调整成员访问',transfer:'移交空间所有权',revoke_session:'退出其他会话',onboarding:'更新个人资料引导'};
 function date(value:string,locale:string){return new Date(value).toLocaleString(locale,{timeZone:'Asia/Shanghai',dateStyle:'medium',timeStyle:'short'});}
 
@@ -18,15 +19,24 @@ function MutationForm({children, kind, revision, confirmation, onSaved}:{childre
   const t = useT();
   const {workspaceId,userId}=useContext(WorkspaceScope);
   const [operationId,setOperationId]=useState('');
+  const editGeneration=useRef(0);
+  const [generation,setGeneration]=useState(0);
   // A new snapshot can refresh idle controls, but must not silently rebase an
   // edited or uncertain operation onto a revision the user did not review.
   const [draftRevision,setDraftRevision]=useState<number|null>(null);
-  const [state,action,pending]=useActionState(async(previous:AccountActionState,form:FormData)=>{
+  const [state,action,pending]=useActionState<MutationActionState,FormData>(async(previous,form)=>{
+    const submittedGeneration=editGeneration.current;
     const result=await saveAccountSettings(previous,form);
     if(result.data){onSaved(result.data);setOperationId('');setDraftRevision(null);}
-    return result;
-  },{});
-  return <form action={action} className={styles.form} onChange={()=>setDraftRevision(current=>current??revision??1)} onSubmit={event=>{
+    return {...result,generation:submittedGeneration};
+  },{generation:0});
+  const feedback=state.generation===generation?state:null;
+  return <form action={action} className={styles.form} onChange={()=>{
+    editGeneration.current+=1;
+    setGeneration(editGeneration.current);
+    setOperationId('');
+    setDraftRevision(current=>current??revision??1);
+  }} onSubmit={event=>{
     if(pending){event.preventDefault();return;}
     if(confirmation&&!window.confirm(confirmation)){event.preventDefault();return;}
     setDraftRevision(current=>current??revision??1);
@@ -37,7 +47,7 @@ function MutationForm({children, kind, revision, confirmation, onSaved}:{childre
     <input type="hidden" name="operationId" defaultValue={operationId}/>
     <input type="hidden" name="workspaceId" value={workspaceId}/><input type="hidden" name="actorUserId" value={userId}/><input type="hidden" name="kind" value={kind}/><input type="hidden" name="revision" value={draftRevision??revision??1}/>
     <fieldset key={draftRevision??revision??1} disabled={pending}>{children}</fieldset>
-    <p aria-live="polite" className={state.error?styles.error:styles.notice}>{pending?t("正在保存…"):state.error??(state.saved?t("已保存并核验。"):"")}</p>
+    <p aria-live="polite" className={!pending&&feedback?.error?styles.error:styles.notice}>{pending?t("正在保存…"):feedback?.error??(feedback?.saved?t("已保存并核验。"):"")}</p>
   </form>;
 }
 function NameForm({name,kind,revision,label,onSaved}:{name:string;kind:string;revision:number;label:string;onSaved:(data:AccountSettings)=>void}){

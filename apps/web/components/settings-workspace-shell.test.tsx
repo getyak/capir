@@ -341,6 +341,27 @@ describe("settings search", () => {
 });
 
 describe("appearance", () => {
+  it("uses one radio tab stop and previews keyboard selection without persisting it", async () => {
+    await render({ section: "appearance" });
+    const options = [...host.querySelectorAll<HTMLButtonElement>('[data-theme-option]')];
+    expect(options.map(option => option.tabIndex)).toEqual([0, -1, -1]);
+    options[0]!.focus();
+    await press(options[0]!, "ArrowRight");
+    expect(document.activeElement).toBe(options[1]);
+    expect(options.map(option => option.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+    expect(options.map(option => option.tabIndex)).toEqual([-1, 0, -1]);
+    await press(options[1]!, "End");
+    expect(document.activeElement).toBe(options[2]);
+    expect(options[2]!.getAttribute("aria-checked")).toBe("true");
+    await press(options[2]!, "ArrowDown");
+    expect(document.activeElement).toBe(options[0]);
+    await press(options[0]!, "ArrowLeft");
+    expect(document.activeElement).toBe(options[2]);
+    await press(options[2]!, "Home");
+    expect(options[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(localStorage.getItem("talent-signal-theme")).toBeNull();
+  });
+
   it("previews, cancels and saves a theme draft, then reloads the saved choice", async () => {
     await render({ section: "appearance" });
     expect(host.textContent).toContain("下面是示例，不会使用真实联系人内容。");
@@ -419,8 +440,8 @@ describe("appearance", () => {
   it("pairs browser and Mac persistence copy without granting capability", async () => {
     await render({ section: "appearance" });
     // Both copies are in the DOM; CSS shows the one that matches the surface.
-    expect(host.textContent).toContain("仅此浏览器 · 本机保存");
-    expect(host.textContent).toContain("仅此 Mac · 本机保存");
+    expect(host.querySelector("[data-settings-scope]")?.textContent).toBe("账号语言 · 本机外观");
+    expect(host.querySelector("[data-settings-scope]")?.textContent).not.toContain("仅此浏览器");
     expect(host.textContent).toContain("偏好只保存在这台设备的浏览器中");
     expect(host.textContent).toContain("偏好只保存在这台 Mac 的应用中");
 

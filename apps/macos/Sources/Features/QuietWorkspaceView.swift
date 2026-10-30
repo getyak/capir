@@ -828,6 +828,205 @@ struct WorkspaceWebSurface: NSViewRepresentable {
     }
 }
 
+struct WorkspaceStatusAction: Identifiable {
+    let id: String
+    let title: String
+    var role: ButtonRole? = nil
+    let perform: () -> Void
+}
+
+struct WorkspaceStatusNotice: Identifiable {
+    enum Kind: String, Hashable {
+        case workbench, accountBrowser, calendarDownload
+
+        var title: String {
+            switch self {
+            case .workbench: String(localized: "Workspace notice", bundle: .main)
+            case .accountBrowser: String(localized: "Account and Preferences", bundle: .main)
+            case .calendarDownload: String(localized: "Calendar file", bundle: .main)
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .workbench: "text.badge.checkmark"
+            case .accountBrowser: "safari"
+            case .calendarDownload: "calendar"
+            }
+        }
+
+        var identifier: String {
+            switch self {
+            case .workbench: "workspace.settingsRecoveryNotice"
+            case .accountBrowser: "workspace.browserLaunchFailure"
+            case .calendarDownload: "workspace.calendarDownloadNotice"
+            }
+        }
+    }
+
+    let kind: Kind
+    let message: String
+    let actions: [WorkspaceStatusAction]
+    var id: Kind { kind }
+}
+
+/// One in-flow owner for native status. It respects the window's safe area and
+/// reserves space above the work surface instead of covering its header.
+struct WorkspaceStatusLayout<Content: View>: View {
+    let loading: Bool
+    let notices: [WorkspaceStatusNotice]
+    let content: Content
+
+    init(loading: Bool, notices: [WorkspaceStatusNotice], @ViewBuilder content: () -> Content) {
+        self.loading = loading
+        self.notices = notices
+        self.content = content()
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                if loading || !notices.isEmpty {
+                    WorkspaceStatusStack(loading: loading, notices: notices)
+                        .frame(maxHeight: max(0, min(280, geometry.size.height * 0.42)))
+                }
+                ZStack { content }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+}
+
+struct WorkspaceStatusStack: View {
+    let loading: Bool
+    let notices: [WorkspaceStatusNotice]
+
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            rows.fixedSize(horizontal: false, vertical: true)
+            ScrollView { rows }
+                .scrollBounceBehavior(.basedOnSize)
+        }
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("workspace.nativeStatusRegion")
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if loading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small).accessibilityHidden(true)
+                    Text(String(localized: "Loading workspace…", bundle: .main))
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("workspace.loading")
+            }
+            ForEach(notices) { notice in
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: notice.kind.symbol)
+                        .font(.body).foregroundStyle(.secondary)
+                        .frame(width: 20).padding(.top, 2)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(notice.kind.title).font(.callout.weight(.semibold)).accessibilityAddTraits(.isHeader)
+                        Text(notice.message).font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) { actions(for: notice) }
+                            VStack(alignment: .leading, spacing: 8) { actions(for: notice) }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier(notice.kind.identifier)
+                if notice.id != notices.last?.id { Divider() }
+            }
+        }
+        .padding(.horizontal, 24).padding(.vertical, 12)
+        .frame(maxWidth: 880, alignment: .leading)
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder private func actions(for notice: WorkspaceStatusNotice) -> some View {
+        ForEach(notice.actions) { action in
+            Button(role: action.role, action: action.perform) { Text(action.title) }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("\(notice.kind.identifier).\(action.id)")
+        }
+    }
+}
+
+enum WorkspaceRecoveryPresentation: Equatable {
+    case restoringSignIn
+    case failed(String)
+
+    var isFailure: Bool { if case .failed = self { true } else { false } }
+}
+
+struct WorkspaceRecoverySurface: View {
+    let presentation: WorkspaceRecoveryPresentation
+    let reload: () -> Void
+    let connectionSettings: () -> Void
+    @FocusState private var reloadFocused: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    switch presentation {
+                    case .restoringSignIn:
+                        ProgressView().controlSize(.regular).accessibilityHidden(true)
+                        Text(String(localized: "Restoring sign-in…", bundle: .main))
+                            .font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
+                        Text(String(localized: "Checking this Mac’s saved sign-in.", bundle: .main))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    case .failed(let reason):
+                        Image(systemName: "network.slash").font(.title2).foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text(WorkspaceRecoveryText.title).font(.title2.weight(.semibold))
+                            .accessibilityAddTraits(.isHeader)
+                        Text(reason).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("workspace.recovery.reason")
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) { recoveryActions }
+                            VStack(alignment: .leading, spacing: 10) { recoveryActions }
+                        }
+                    }
+                }
+                .font(.body)
+                .padding(32)
+                .frame(maxWidth: 640, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: max(0, geometry.size.height), alignment: .center)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .background(.background)
+        .accessibilityIdentifier("workspace.recovery")
+        .onAppear { reloadFocused = presentation.isFailure }
+        .onChange(of: presentation) { _, state in reloadFocused = state.isFailure }
+    }
+
+    private var recoveryActions: some View {
+        Group {
+            Button(String(localized: "Reload", bundle: .main), action: reload)
+                .buttonStyle(.borderedProminent)
+                .focused($reloadFocused)
+                .accessibilityIdentifier("workspace.recovery.reload")
+            Button(String(localized: "Connection and Diagnostics", bundle: .main), action: connectionSettings)
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("workspace.recovery.connection")
+        }
+    }
+}
+
 private struct ConnectedQuietWorkspace: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var navigation = WorkspaceNavigation.shared
@@ -864,15 +1063,62 @@ private struct ConnectedQuietWorkspace: View {
         browser.navigate(destination)
     }
 
+    private var nativeNotices: [WorkspaceStatusNotice] {
+        var notices: [WorkspaceStatusNotice] = []
+        if let message = browser.visibleWorkbenchNotice {
+            let drafts = login.visibleRetainedDrafts
+            var actions: [WorkspaceStatusAction] = []
+            for (index, retained) in drafts.enumerated() {
+                let copyTitle = drafts.count == 1
+                    ? String(localized: "Copy retained text", bundle: .main)
+                    : String(format: String(localized: "Copy text %lld", bundle: .main), Int64(index + 1))
+                let discardTitle = drafts.count == 1
+                    ? String(localized: "Discard this recovery", bundle: .main)
+                    : String(format: String(localized: "Discard recovery %lld", bundle: .main), Int64(index + 1))
+                actions.append(WorkspaceStatusAction(id: "copy.\(retained.id)", title: copyTitle) {
+                    Task { @MainActor in
+                        let copied = await login.copyRetainedDraft(retained.id, verifying: { await browser.verifiedCurrentDraftOwner() })
+                        browser.workbenchNotice = copied
+                            ? String(localized: "Text copied. Paste it into the conversation and review before sending.", bundle: .main)
+                            : String(localized: "Text was not copied. Check sign-in, draft retention or clipboard permission, then retry.", bundle: .main)
+                    }
+                })
+                actions.append(WorkspaceStatusAction(id: "discard.\(retained.id)", title: discardTitle, role: .destructive) {
+                    login.discardRetainedDraft(retained.id)
+                })
+            }
+            if drafts.isEmpty {
+                actions.append(WorkspaceStatusAction(id: "dismiss", title: String(localized: "Close", bundle: .main)) {
+                    browser.dismissWorkbenchNotice()
+                })
+            }
+            notices.append(.init(kind: .workbench, message: message, actions: actions))
+        }
+        if let message = browser.browserLaunchFailure {
+            notices.append(.init(kind: .accountBrowser, message: message, actions: [
+                WorkspaceStatusAction(id: "retry", title: String(localized: "Retry", bundle: .main)) { browser.requestAccountSettings() },
+                WorkspaceStatusAction(id: "dismiss", title: String(localized: "Close", bundle: .main)) { browser.browserLaunchFailure = nil },
+            ]))
+        }
+        if let message = browser.downloadStatus {
+            notices.append(.init(kind: .calendarDownload, message: message, actions: [
+                WorkspaceStatusAction(id: "dismiss", title: String(localized: "Close", bundle: .main)) { browser.downloadStatus = nil },
+            ]))
+        }
+        return notices
+    }
+
     var body: some View {
-        ZStack(alignment: .top) {
+        let notices = nativeNotices
+        return WorkspaceStatusLayout(loading: browser.loading && !browser.restoringSession && !browser.signedOut && browser.failure == nil,
+                                     notices: notices) {
             // A covering view leaves WebKit controls reachable by accessibility
             // and keyboard. Detach only its presentation; browser retains the
             // same WebView and navigation/session ownership for recovery.
             if !browser.signedOut && browser.failure == nil && !browser.restoringSession {
                 WorkspaceWebSurface(browser: browser, zoom: zoom,
                                     appearance: presentationAppearance ?? .system)
-                    .ignoresSafeArea(.container, edges: .top)
+                    .ignoresSafeArea(.container, edges: notices.isEmpty && !browser.loading ? .top : [])
             }
             if browser.signedOut && !browser.restoringSession && browser.failure == nil {
                 // Native signed-out surface only: the Web login page never
@@ -882,66 +1128,13 @@ private struct ConnectedQuietWorkspace: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(TSBrand.canvas)
             }
-            if browser.loading {
-                ProgressView().controlSize(.mini).padding(6)
-                    .accessibilityLabel("正在载入工作区").allowsHitTesting(false)
-            }
-            if let status = browser.downloadStatus {
-                HStack {
-                    Text(status).font(.callout)
-                    Button("关闭") { browser.downloadStatus = nil }
-                }.padding(12).background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 8))
-                    .padding().accessibilityElement(children: .contain)
-            }
-            if let notice = browser.visibleWorkbenchNotice {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(notice).font(.callout).fixedSize(horizontal: false, vertical: true)
-                        ForEach(Array(login.visibleRetainedDrafts.enumerated()), id: \.element.id) { index, retained in
-                            HStack {
-                                Button(login.visibleRetainedDrafts.count == 1 ? "复制保留的文字" : "复制第\(index + 1)份文字") {
-                                    Task { @MainActor in
-                                        let copied = await login.copyRetainedDraft(retained.id, verifying: { await browser.verifiedCurrentDraftOwner() })
-                                        browser.workbenchNotice = copied ? "文字已复制。可粘贴到当前对话，核对后再发送。" : "未复制。请核对登录状态、草稿保留期限或剪贴板权限后重试。"
-                                    }
-                                }
-                                Button("放弃这份恢复") { login.discardRetainedDraft(retained.id) }
-                            }
-                        }
-                    }
-                    if login.visibleRetainedDrafts.isEmpty {
-                        Button("关闭") { browser.dismissWorkbenchNotice() }
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: 560, alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                .padding()
-                .accessibilityIdentifier("workspace.settingsRecoveryNotice")
-            }
-            if let notice = browser.browserLaunchFailure {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "safari").foregroundStyle(.secondary)
-                    Text(notice).font(.callout).fixedSize(horizontal: false, vertical: true)
-                    Button("重试") { browser.requestAccountSettings() }
-                    Button("关闭") { browser.browserLaunchFailure = nil }
-                }
-                .padding(12)
-                .frame(maxWidth: 560, alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                .padding()
-                .accessibilityIdentifier("workspace.browserLaunchFailure")
-            }
             if let failure = browser.failure {
-                VStack(spacing: 18) {
-                    Image(systemName: "network.slash").font(.title)
-                    Text(WorkspaceRecoveryText.title).font(.title2)
-                    Text(failure).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button("Reload", action: browser.retry).buttonStyle(TSPrimaryButtonStyle())
+                WorkspaceRecoverySurface(presentation: .failed(failure), reload: browser.retry) {
+                    WorkspaceSettingsNavigation.shared.selection = .connection
+                    browser.requestSettingsOpen()
                 }
-                .padding(40).frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(TSBrand.canvas)
+            } else if browser.restoringSession {
+                WorkspaceRecoverySurface(presentation: .restoringSignIn, reload: {}, connectionSettings: {})
             }
         }
         .modifier(WorkspaceAppearancePresentation(preference: presentationAppearance))

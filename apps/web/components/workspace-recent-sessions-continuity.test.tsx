@@ -26,12 +26,14 @@ let binding: string;
 let hold: boolean;
 let pending: Pending[];
 let rows: ReturnType<typeof session>[];
+let directoryComplete: unknown;
+let nextCursor: unknown;
 
 function session(id = SESSION, title = "Synthetic conversation") {
   return { session_id: id, title, state: "active", expires_at: "2030-01-01T00:00:00Z", person_label: "", person_id: null, is_unread: false };
 }
 function response(url: string, value = rows, owner = binding) {
-  return Response.json(url.includes("/people") ? { people: [{ id: "synthetic-private-person", display_label: "Synthetic private person" }] } : { session_version: owner, sessions: value });
+  return Response.json(url.includes("/people") ? { people: [{ id: "synthetic-private-person", display_label: "Synthetic private person" }] } : { session_version: owner, sessions: value, complete: directoryComplete, next_cursor: nextCursor });
 }
 function PeopleReadback({ owner }: { owner: string }) {
   const directory = useWorkspaceDirectory(owner, true);
@@ -63,7 +65,7 @@ beforeEach(() => {
   localStorage.clear();
   resetSessionOrganizationStores();
   invalidateWorkspaceDirectory(undefined, "discard");
-  binding = "account-a"; hold = false; pending = []; rows = [session()];
+  binding = "account-a"; hold = false; pending = []; rows = [session()]; directoryComplete = true; nextCursor = null;
   navigation.pathname = `/workspace/sessions/${SESSION}`;
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -228,4 +230,23 @@ it("keeps the row and focus through a successful title mutation and directory re
   expect(link()).toBe(selected);
   expect(selected.textContent).toContain("Renamed synthetic title");
   expect(document.activeElement).toBe(selected);
+});
+
+it.each([
+  { complete: true, cursor: null, label: "Archived" },
+  { complete: false, cursor: "next", label: "Loaded archive" },
+  { complete: undefined, cursor: undefined, label: "Loaded archive" },
+])("counts loaded archived Sessions before the eight-row preview: $label ($complete)", async ({ complete, cursor, label }) => {
+  directoryComplete = complete; nextCursor = cursor;
+  rows = Array.from({ length: 12 }, (_, index) => session(`${String(index + 1).padStart(8, "0")}-1111-4111-8111-111111111111`, `Archived synthetic ${index + 1}`));
+  for (const row of rows) sessionOrganizationStore(STORAGE_SCOPE).setFlag(row.session_id, "archived", true);
+  await render();
+  const disclosure = host.querySelector<HTMLButtonElement>('button[aria-expanded][aria-controls]')!;
+  expect(disclosure.textContent).toContain(label);
+  expect(disclosure.textContent).toContain("(12)");
+  await act(() => disclosure.click());
+  const archived = document.getElementById(disclosure.getAttribute("aria-controls")!)!;
+  expect(archived.querySelectorAll('a[href^="/workspace/sessions/"]')).toHaveLength(8);
+  expect(archived.textContent).toContain("Showing the first 8");
+  expect(host.querySelector('a[href="/workspace/sessions"]')).not.toBeNull();
 });

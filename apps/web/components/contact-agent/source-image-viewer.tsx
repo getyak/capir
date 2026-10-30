@@ -1,10 +1,10 @@
 "use client";
 
-import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowsOut, WarningCircle, X } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { workspaceSessionFetch } from "@/components/workspace-session-request";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "../ui/dialog";
 
 import styles from "./contact-agent.module.css";
 
@@ -114,8 +114,8 @@ export function SourceImageViewer({
   }
 
   return (
-    <Dialog.Root onOpenChange={handleOpenChange} open={open}>
-      <Dialog.Trigger asChild>
+    <Dialog onOpenChange={handleOpenChange} open={open}>
+      <DialogTrigger asChild>
         <button
           className={compact ? styles.imageViewLink : styles.imageViewButton}
           type="button"
@@ -123,61 +123,60 @@ export function SourceImageViewer({
           {!compact ? <ArrowsOut aria-hidden size={14} /> : null}
           {compact ? title : `查看${title}`}
         </button>
-      </Dialog.Trigger>
-      <Dialog.Portal>
-        <Dialog.Overlay className={styles.viewerBackdrop} />
-        <Dialog.Content
-          aria-label={title}
-          className={styles.viewer}
-          onOpenAutoFocus={(event) => {
-            // The close button is the safest first stop; the decoded image has
-            // no intrinsic focus target.
-            event.preventDefault();
-            dialogFocus.current?.focus({ preventScroll: true });
-          }}
-        >
-          <header className={styles.viewerHeader}>
-            <Dialog.Title asChild>
-              <h2>{title}</h2>
-            </Dialog.Title>
-            <Dialog.Close asChild>
-              <button aria-label="关闭原图" ref={dialogFocus} type="button">
-                <X aria-hidden size={18} />
-              </button>
-            </Dialog.Close>
-          </header>
-          {state.status === "loading" ? (
-            <p className={styles.viewerStatus} role="status">
-              正在打开原图…
-            </p>
-          ) : null}
-          {state.status === "error" ? (
-            <div className={styles.viewerError} role="alert">
-              <WarningCircle aria-hidden size={18} />
-              <p>{state.message}</p>
-              <button onClick={beginLoad} type="button">
-                重试
-              </button>
-            </div>
-          ) : null}
-          {state.status === "ready" ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              alt={title}
-              onError={() =>
-                setState({
-                  status: "error",
-                  message: "图片无法显示，可能不是有效的图片。",
-                })
-              }
-              src={state.url}
-            />
-          ) : null}
-          <p className={styles.viewerNote}>
-            原图来自这次来源，最多保留 30 天；可随时删除这次采集。
+      </DialogTrigger>
+      <DialogContent
+        layout="custom"
+        showCloseButton={false}
+        aria-label={title}
+        className={styles.viewer}
+        onOpenAutoFocus={(event) => {
+          // The close button is the safest first stop; the decoded image has
+          // no intrinsic focus target.
+          event.preventDefault();
+          dialogFocus.current?.focus({ preventScroll: true });
+        }}
+      >
+        <header className={styles.viewerHeader}>
+          <DialogTitle asChild>
+            <h2>{title}</h2>
+          </DialogTitle>
+          <DialogClose asChild>
+            <button aria-label="关闭原图" ref={dialogFocus} type="button">
+              <X aria-hidden size={18} />
+            </button>
+          </DialogClose>
+        </header>
+        {state.status === "loading" ? (
+          <p className={styles.viewerStatus} role="status">
+            正在打开原图…
           </p>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        ) : null}
+        {state.status === "error" ? (
+          <div className={styles.viewerError} role="alert">
+            <WarningCircle aria-hidden size={18} />
+            <p>{state.message}</p>
+            <button onClick={beginLoad} type="button">
+              重试
+            </button>
+          </div>
+        ) : null}
+        {state.status === "ready" ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            alt={title}
+            onError={() =>
+              setState({
+                status: "error",
+                message: "图片无法显示，可能不是有效的图片。",
+              })
+            }
+            src={state.url}
+          />
+        ) : null}
+        <DialogDescription className={styles.viewerNote}>
+          原图来自这次来源，最多保留 30 天；可随时删除这次采集。
+        </DialogDescription>
+      </DialogContent>
+    </Dialog>
   );
 }

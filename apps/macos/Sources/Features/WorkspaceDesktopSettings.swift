@@ -301,6 +301,214 @@ final class WorkspaceSettingsNavigation: ObservableObject {
     @Published var selection: WorkspaceSettingsSection = .general
 }
 
+struct WorkspaceSettingsPage<Content: View>: View {
+    let title: String?
+    let summary: String?
+    let content: Content
+
+    init(title: String? = nil, summary: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.summary = summary
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                if title != nil || summary != nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let title {
+                            Text(title).font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
+                        }
+                        if let summary {
+                            Text(summary).font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                content
+            }
+            .padding(28)
+            .frame(maxWidth: 680, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .background(.background)
+    }
+}
+
+/// Value-driven native controls, shared by Settings and its isolated GUI host.
+struct WorkspaceGeneralControls: View {
+    @Binding var zoom: Double
+    @Binding var floating: Bool
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 16) {
+                Picker(String(localized: "Content Size", bundle: .main), selection: $zoom) {
+                    ForEach(WorkspaceContentZoom.steps, id: \.self) { value in
+                        Text("\(Int((value * 100).rounded()))%").tag(value)
+                    }
+                }
+                .accessibilityIdentifier("settings.general.contentSize")
+                Toggle(String(localized: "Keep the workspace window on top", bundle: .main), isOn: $floating)
+                    .accessibilityIdentifier("settings.general.floating")
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Text(String(localized: "Workspace window", bundle: .main)).font(.headline)
+        }
+    }
+}
+
+struct WorkspaceSettingsSearchResults: View {
+    let query: String
+    let results: [WorkspaceSettingsSearchEntry]
+    let activeID: String?
+    let message: String?
+    let activate: (WorkspaceSettingsSearchEntry) -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack(alignment: .firstTextBaseline, spacing: 16) {
+                        Text(String(localized: "Search settings", bundle: .main))
+                            .font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
+                        Spacer(minLength: 0)
+                        Button(String(localized: "Close", bundle: .main), action: dismiss)
+                            .accessibilityIdentifier("settings.search.close")
+                            .help(String(localized: "Esc Close", bundle: .main))
+                    }
+                    if results.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(String(format: String(localized: "No settings match “%@”.", bundle: .main), query.trimmingCharacters(in: .whitespacesAndNewlines)))
+                                .font(.body)
+                            Text(String(localized: "Try General, Permissions, Connection, Software Updates, Account, or Screenshots and Documents. Relationship records are not included in settings search.", bundle: .main))
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .accessibilityIdentifier("settings.search.empty")
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(results) { entry in
+                                row(entry).id(entry.id)
+                            }
+                        }
+                    }
+                    if let message {
+                        Text(message).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("settings.search.message")
+                    }
+                }
+                .padding(28)
+                .frame(maxWidth: 680, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .onChange(of: activeID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
+            .onChange(of: query) { _, _ in if let activeID { proxy.scrollTo(activeID, anchor: .center) } }
+        }
+        .background(.background)
+        .onExitCommand(perform: dismiss)
+        .accessibilityIdentifier("settings.search.results")
+    }
+
+    private func row(_ entry: WorkspaceSettingsSearchEntry) -> some View {
+        let active = entry.id == activeID
+        return Button { activate(entry) } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(entry.title).font(.body.weight(.medium))
+                Text(entry.detail).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("\(entry.scope) · \(entry.destination)")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(active ? Color.accentColor.opacity(0.12) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("settings.search.result.\(entry.id)")
+        .accessibilityAddTraits(active ? .isSelected : [])
+    }
+}
+
+/// The actual section controls share the caller's focus binding; no settings
+/// service or preference store is needed to present or exercise this rail.
+struct WorkspaceSettingsSections: View {
+    let selection: WorkspaceSettingsSection
+    let focus: FocusState<WorkspaceSettingsSection?>.Binding
+    let select: (WorkspaceSettingsSection) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(WorkspaceSettingsSection.groups) { group in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(group.title).font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 14).padding(.bottom, 3)
+                    ForEach(group.sections) { section in
+                        row(section)
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(_ section: WorkspaceSettingsSection) -> some View {
+        let selected = selection == section
+        return Button { select(section) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: section.symbol).frame(width: 18).foregroundStyle(.secondary)
+                Text(section.title).font(.body.weight(selected ? .medium : .regular))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(selected ? Color.primary.opacity(0.075) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable()
+        .focused(focus, equals: section)
+        .accessibilityIdentifier("settings.section.\(section.rawValue)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Search owns the visible pane while preserving the mounted pane's local
+/// input. Hidden device controls cannot receive pointer, keyboard or AX input.
+struct WorkspaceSettingsContent<Pane: View, Search: View>: View {
+    let searching: Bool
+    let pane: Pane
+    let search: Search
+
+    init(searching: Bool, @ViewBuilder pane: () -> Pane, @ViewBuilder search: () -> Search) {
+        self.searching = searching
+        self.pane = pane()
+        self.search = search()
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            pane.opacity(searching ? 0 : 1)
+                .disabled(searching)
+                .allowsHitTesting(!searching)
+                .accessibilityHidden(searching)
+            if searching { search }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 /// Native settings. It never embeds a WebView and never probes the Web, so it
 /// stays usable when the workspace service is offline or on an old release.
 struct WorkspaceDesktopSettings: View {
@@ -328,9 +536,9 @@ struct WorkspaceDesktopSettings: View {
             Divider()
             content
         }
-        .frame(minWidth: 820,
+        .frame(minWidth: 760,
                idealWidth: navigation.selection == .companion ? 1040 : 900,
-               maxWidth: .infinity, minHeight: 600, idealHeight: 680, maxHeight: .infinity)
+               maxWidth: .infinity, minHeight: 520, idealHeight: 680, maxHeight: .infinity)
         .background(SettingsWindowTitle(title: String(localized: "This Mac Settings", bundle: .main)))
         .task { updater.start() }
         .onAppear { connectionProbe.reset(for: connection.origin) }
@@ -348,38 +556,31 @@ struct WorkspaceDesktopSettings: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 16)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    ForEach(WorkspaceSettingsSection.groups) { group in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(group.title)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 14).padding(.bottom, 3)
-                            ForEach(group.sections) { section in
-                                railButton(section)
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        WorkspaceSettingsSections(selection: navigation.selection, focus: $focusedSection,
+                                                  select: selectSection)
+                        .padding(.horizontal, 8)
+                        Spacer(minLength: 20)
+                        Divider().padding(.horizontal, 16)
+                        accountRow.padding(.horizontal, 16).padding(.vertical, 14)
+                        Divider().padding(.horizontal, 16)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(String(format: String(localized: "This Mac · %@", bundle: .main), updater.appVersion))
+                                .font(.caption).foregroundStyle(.secondary)
+                            if updater.presentation.offerID != nil {
+                                Text(String(localized: "Update available", bundle: .main))
+                                    .font(.caption).foregroundStyle(.primary)
                             }
                         }
+                        .padding(.horizontal, 18).padding(.vertical, 14)
+                        .accessibilityIdentifier("settings.installedVersion")
                     }
+                    .frame(minHeight: max(0, geometry.size.height), alignment: .top)
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 12)
+                .scrollBounceBehavior(.basedOnSize)
             }
-
-            Spacer(minLength: 0)
-
-            Divider().padding(.horizontal, 16)
-            accountRow.padding(.horizontal, 12).padding(.vertical, 12)
-            Divider().padding(.horizontal, 16)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(String(format: String(localized: "This Mac · %@", bundle: .main), updater.appVersion))
-                    .font(.caption2).foregroundStyle(.secondary)
-                if updater.presentation.offerID != nil {
-                    Text(String(localized: "Update available", bundle: .main)).font(.caption2).foregroundStyle(.primary)
-                }
-            }
-            .padding(.horizontal, 18).padding(.vertical, 12)
-            .accessibilityIdentifier("settings.installedVersion")
 
             Button(String(localized: "Search settings", bundle: .main)) { searchFocused = true }
                 .keyboardShortcut("f", modifiers: [.command])
@@ -387,7 +588,7 @@ struct WorkspaceDesktopSettings: View {
                 .opacity(0)
                 .accessibilityHidden(true)
         }
-        .frame(width: 244)
+        .frame(width: 228)
         .frame(maxHeight: .infinity)
         .background(.bar)
         .onMoveCommand { direction in
@@ -424,14 +625,15 @@ struct WorkspaceDesktopSettings: View {
             Text(connection.origin == nil
                  ? String(localized: "Connect to a workspace before opening account settings in the browser.", bundle: .main)
                  : String(localized: "The browser uses its own signed-in account, which may differ from this app's account.", bundle: .main))
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if accountLaunchFailed {
                 Text(connection.origin == nil
                      ? String(localized: "No workspace is connected, so account settings cannot be opened yet.", bundle: .main)
                      : String(localized: "The default browser could not be opened. Check your default browser and try again.", bundle: .main))
-                    .font(.caption2).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
                 if connection.origin != nil {
                     Button(String(localized: "Retry", bundle: .main)) { openAccountSettings(.overview) }
                         .controlSize(.small)
@@ -466,9 +668,9 @@ struct WorkspaceDesktopSettings: View {
                 return .handled
             }
             if search.query.isEmpty {
-                Text("⌘F").font(.system(size: 10)).foregroundStyle(.tertiary)
+                Text("⌘F").font(.caption).foregroundStyle(.secondary)
             } else {
-                Button { search.reset(); searchMessage = nil } label: {
+                Button { search.reset(); searchMessage = nil; searchFocused = true } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 12))
                         .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
@@ -481,37 +683,12 @@ struct WorkspaceDesktopSettings: View {
         .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
     }
 
-    private func railButton(_ section: WorkspaceSettingsSection) -> some View {
-        let selected = navigation.selection == section
-        return Button {
-            selectSection(section)
-        } label: {
-            Text(section.title)
-                .font(.system(size: 13, weight: selected ? .medium : .regular))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(selected ? Color.primary.opacity(0.075) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
-                .overlay(alignment: .leading) {
-                    if selected {
-                        RoundedRectangle(cornerRadius: 2).fill(Color.accentColor)
-                            .frame(width: 3, height: 15).offset(x: 2)
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .focusable()
-        .focused($focusedSection, equals: section)
-        .accessibilityIdentifier("settings.section.\(section.rawValue)")
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
     private var content: some View {
-        ZStack(alignment: .top) {
+        WorkspaceSettingsContent(searching: search.isSearching) {
             paneContent
-            if search.isSearching { searchOverlay }
+        } search: {
+            searchOverlay
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -526,19 +703,9 @@ struct WorkspaceDesktopSettings: View {
     }
 
     private var generalPane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Text(String(localized: "General", bundle: .main)).font(.title2.weight(.semibold))
-                Text(String(localized: "These controls affect only this Mac and remain available offline.", bundle: .main))
-                    .font(.callout).foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 16) {
-                    Picker(String(localized: "Content Size", bundle: .main), selection: $zoom) {
-                        ForEach(WorkspaceContentZoom.steps, id: \.self) { value in
-                            Text("\(Int((value * 100).rounded()))%").tag(value)
-                        }
-                    }
-                    Toggle(String(localized: "Keep the workspace window on top", bundle: .main), isOn: $floating)
-                }
+        WorkspaceSettingsPage(title: String(localized: "General", bundle: .main),
+                              summary: String(localized: "These controls affect only this Mac and remain available offline.", bundle: .main)) {
+                WorkspaceGeneralControls(zoom: $zoom, floating: $floating)
                 Divider()
                 CaptureDeviceSettings()
                 Divider()
@@ -551,18 +718,14 @@ struct WorkspaceDesktopSettings: View {
                         LabeledContent(String(localized: "Reload", bundle: .main), value: "⌘ R")
                     }.padding(.top, 12)
                 }
-            }.padding(32).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
-        }.background(.background)
+        }
     }
 
     /// Real macOS permission status plus an intentional System Settings link.
     /// The app never claims a permission was granted from the link click alone.
     private var permissionsPane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text(String(localized: "Permissions", bundle: .main)).font(.title2.weight(.semibold))
-                Text(String(localized: "Screenshots and documents require Screen Recording permission managed by macOS. The status shown is current; permission can only be granted in System Settings.", bundle: .main))
-                    .font(.callout).foregroundStyle(.secondary)
+        WorkspaceSettingsPage(title: String(localized: "Permissions", bundle: .main),
+                              summary: String(localized: "Screenshots and documents require Screen Recording permission managed by macOS. The status shown is current; permission can only be granted in System Settings.", bundle: .main)) {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         LabeledContent(String(localized: "Screen Recording", bundle: .main)) {
@@ -587,19 +750,18 @@ struct WorkspaceDesktopSettings: View {
                 } label: {
                     Text(String(localized: "Managed by macOS", bundle: .main)).font(.callout.weight(.medium))
                 }
-            }.padding(32).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
-        }.background(.background)
+        }
     }
 
     /// Connection and diagnostics live under an advanced disclosure and never
     /// print secrets. Account reading and saving happen in the browser.
     private var connectionPane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text(String(localized: "Connection and Diagnostics", bundle: .main)).font(.title2.weight(.semibold))
+        WorkspaceSettingsPage {
+                WorkspaceConnectionForm(mode: .settings) { openWindow(id: "workspace") }
+                Divider()
                 Text(String(localized: "Local controls do not require a connection. Open the browser to read or save account settings.", bundle: .main))
                     .font(.callout).foregroundStyle(.secondary)
-                WorkspaceConnectionForm(mode: .settings) { openWindow(id: "workspace") }
+                    .fixedSize(horizontal: false, vertical: true)
                 DisclosureGroup(String(localized: "Advanced Diagnostics", bundle: .main)) {
                     VStack(alignment: .leading, spacing: 12) {
                         LabeledContent(String(localized: "Current Workspace", bundle: .main), value: connection.origin?.url.host ?? String(localized: "Not Connected", bundle: .main))
@@ -620,111 +782,66 @@ struct WorkspaceDesktopSettings: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }.padding(.top, 12)
                 }
-            }.padding(32).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
-        }.background(.background)
+        }
     }
 
     private var updatesPane: some View {
-        Form {
-            Section {
-                LabeledContent(String(localized: "Current Version", bundle: .main), value: updater.appVersion)
-                Text(updater.status).foregroundStyle(.secondary)
-                if let checked = updater.presentation.lastChecked {
-                    LabeledContent(String(localized: "Last Verified Update Source", bundle: .main), value: checked.formatted(date: .abbreviated, time: .shortened))
+        WorkspaceSettingsPage(title: String(localized: "Software Updates", bundle: .main)) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 14) {
+                    LabeledContent(String(localized: "Current Version", bundle: .main), value: updater.appVersion)
+                    Text(updater.status).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    if let checked = updater.presentation.lastChecked {
+                        LabeledContent(String(localized: "Last Verified Update Source", bundle: .main), value: checked.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    if let offerID = updater.presentation.offerID {
+                        Button(String(localized: "Update and Restart", bundle: .main)) { updater.installUpdate(offerID: offerID) }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("updates.install")
+                    } else {
+                        Button(String(localized: "Check for Updates", bundle: .main)) { updater.checkForUpdates() }
+                            .disabled(!updater.isConfigured || !updater.canCheck || updater.presentation.busy)
+                            .accessibilityIdentifier("updates.check")
+                    }
+                    if updater.canRetryRelaunch { Button(String(localized: "Retry Relaunch", bundle: .main)) { updater.retryRelaunch() } }
                 }
-                if let offerID = updater.presentation.offerID {
-                    Button(String(localized: "Update and Restart", bundle: .main)) { updater.installUpdate(offerID: offerID) }
-                        .accessibilityIdentifier("updates.install")
-                } else {
-                    Button(String(localized: "Check for Updates", bundle: .main)) { updater.checkForUpdates() }
-                        .disabled(!updater.isConfigured || !updater.canCheck || updater.presentation.busy)
-                        .accessibilityIdentifier("updates.check")
+                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                Text(String(localized: "Update status", bundle: .main)).font(.headline)
+            }
+            GroupBox {
+                VStack(alignment: .leading, spacing: 14) {
+                    Toggle(String(localized: "Automatically check for updates", bundle: .main), isOn: $updater.automaticChecks).disabled(!updater.isConfigured)
+                    Toggle(String(localized: "Receive preview releases", bundle: .main), isOn: $updater.includesPreview)
+                        .disabled(!updater.isConfigured || updater.sessionInProgress)
+                    Text(String(localized: "New versions appear at the lower left. Update and Restart downloads, verifies and reopens the app without another confirmation. Nothing is installed or restarted until you click it.", bundle: .main))
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                if updater.canRetryRelaunch { Button(String(localized: "Retry Relaunch", bundle: .main)) { updater.retryRelaunch() } }
+                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                Text(String(localized: "Automatic updates", bundle: .main)).font(.headline)
             }
-            Section {
-                Toggle(String(localized: "Automatically check for updates", bundle: .main), isOn: $updater.automaticChecks).disabled(!updater.isConfigured)
-                Toggle(String(localized: "Receive preview releases", bundle: .main), isOn: $updater.includesPreview)
-                    .disabled(!updater.isConfigured || updater.sessionInProgress)
-            } footer: {
-                Text(String(localized: "New versions appear at the lower left. Update and Restart downloads, verifies and reopens the app without another confirmation. Nothing is installed or restarted until you click it.", bundle: .main))
-            }
-            Section {
+            VStack(alignment: .leading, spacing: 8) {
                 Link(String(localized: "Release History and Installation Help", bundle: .main), destination: URL(string: "https://github.com/getyak/talent-signal/releases")!)
                 if !updater.isConfigured {
                     Text(String(localized: "Signed updates are not configured yet. Published installers are available in the release history.", bundle: .main))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-        }.formStyle(.grouped)
+        }
     }
 
     private var searchOverlay: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(String(localized: "Search settings", bundle: .main)).font(.headline)
-                Spacer()
-                Text(String(localized: "Esc Close", bundle: .main)).font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 10)
-
-            if search.results.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(String(format: String(localized: "No settings match “%@”.", bundle: .main), search.query.trimmingCharacters(in: .whitespacesAndNewlines)))
-                        .font(.callout)
-                    Text(String(localized: "Try General, Permissions, Connection, Software Updates, Account, or Screenshots and Documents. Relationship records are not included in settings search.", bundle: .main))
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.horizontal, 20).padding(.bottom, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(search.results.enumerated()), id: \.element.id) { index, entry in
-                            searchRow(entry, active: index == search.activeIndex)
-                        }
-                    }
-                    .padding(.horizontal, 10).padding(.bottom, 12)
-                }
-            }
-
-            if let searchMessage {
-                Text(searchMessage)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .padding(.horizontal, 20).padding(.bottom, 14)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        WorkspaceSettingsSearchResults(query: search.query, results: search.results,
+                                      activeID: search.activeEntry?.id, message: searchMessage,
+                                      activate: { activate($0) }) {
+            search.reset()
+            searchMessage = nil
+            searchFocused = true
         }
-        .frame(maxWidth: 520, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.separator) }
-        .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
-        .padding(.top, 24).padding(.horizontal, 24)
-    }
-
-    private func searchRow(_ entry: WorkspaceSettingsSearchEntry, active: Bool) -> some View {
-        Button { activate(entry) } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Text(entry.title).font(.system(size: 13, weight: .medium))
-                    Text(entry.scope)
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Color.primary.opacity(0.07), in: Capsule())
-                }
-                Text(entry.detail).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(entry.destination).font(.system(size: 10)).foregroundStyle(.tertiary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(active ? Color.accentColor.opacity(0.14) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("settings.search.result.\(entry.id)")
     }
 
     /// Routes a search result to its real owner. Native sections stay in place;

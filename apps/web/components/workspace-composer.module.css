@@ -9,10 +9,8 @@
 .composer {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 18px;
-  box-shadow:
-    0 1px 0 color-mix(in srgb, var(--surface) 90%, transparent),
-    0 5px 20px color-mix(in srgb, var(--ink) 4%, transparent);
+  border-radius: 12px;
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--ink) 4%, transparent);
   display: grid;
   gap: 8px;
   padding: 16px 16px 12px;
@@ -72,23 +70,25 @@
 
 .composer[data-variant="session"] textarea { min-height: 64px; }
 
-/* The conversation canvas starts at 62px and grows with the actual draft. */
+/* Inline editing grows with the draft; its controls retain their full targets. */
 .composer[data-layout="inline"] {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  min-height: 62px;
+  min-height: 68px;
+  min-width: 0;
   gap: 8px;
-  padding: 8px 10px;
-  border-radius: 16px;
+  padding: 10px 12px;
+  border-radius: 12px;
   box-shadow: none;
 }
 .composer[data-layout="inline"] textarea {
-  min-height: 24px;
-  font-size: 15px;
-  line-height: 24px;
+  min-height: 1.65em;
+  min-width: 0;
+  font-size: 1rem;
+  line-height: 1.65;
   padding: 0;
 }
-.composer[data-layout="inline"] .mirror { font-size: 15px; line-height: 24px; padding: 0; }
+.composer[data-layout="inline"] .mirror { font-size: 1rem; line-height: 1.65; padding: 0; }
 .inlineLeading, .inlineTrailing { display:flex; align-items:center; min-width:0; min-height:44px; }
 .inlineLeading { min-width:44px; justify-content:center; align-self:end; }
 .inlineTrailing { align-self:end; }
@@ -141,11 +141,12 @@
    focus, so the quiet canvas is not covered in permanent instructions. */
 .hint {
   color: var(--muted);
-  font-size: 0.75rem;
-  letter-spacing: 0.01em;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  letter-spacing: 0;
   opacity: 0;
   transition: opacity 180ms var(--ease-out);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .composer:focus-within .hint {

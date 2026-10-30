@@ -305,9 +305,18 @@ hosting parent and direct controller calls. This avoids granting additional
 CoreAX authority to an untrusted disposable runner; it does not prove the
 cross-process CoreAX transport used by an installed assistive client. A direct
 controller call or an AppKit container-only walk cannot substitute for that
-assertion. The script retains its result bundle and requires both tests with
-zero failures or skips; this component proof does not establish installed-app
-or complete workspace acceptance.
+assertion. Two additional cases operate the real capture selection and preview
+views with synthetic images and injected in-memory dependencies. They verify
+preview intent, crop and redaction retention through resizing, and an explicit
+send into a local recorder; recorder output does not prove backend admission or
+the system window picker. Four further cases exercise the real value-driven
+workspace status, recovery, settings sections and search components in short
+fixture windows. They verify separate notices, scroll access, explicit in-memory
+callbacks and hidden device controls without constructing account, connection,
+permission or updater services. The script retains window PNGs and its result
+bundle and requires all eight component tests with zero failures or skips. This
+proof does not establish installed-app, system-effect or complete workspace
+acceptance.
 
 `CFFIXED_USER_HOME` alone is not a preferences boundary on macOS: the preferences
 daemon can still use the real user's app domain. Published-app acceptance instead

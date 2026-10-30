@@ -1,44 +1,48 @@
-.response { color: var(--ink); font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); min-width: 0; overflow-wrap: anywhere; }
-.response[data-lead="true"] > p:first-child { font-size: var(--ts-type-body, 0.9375rem); font-weight: 500; line-height: var(--ts-leading-body, 1.667); }
-.provenance { color: var(--muted); font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); margin: 16px 0 0; overflow-wrap: anywhere; }
-.response > :first-child { margin-top: 0; }
-.response > :last-child { margin-bottom: 0; }
-.response p { margin: 0 0 16px; white-space: pre-wrap; }
-.response ol { list-style: decimal; margin: 16px 0; padding-left: 1.75em; }
-.response ol > li { color: var(--ink); font-size: var(--ts-type-body, 0.9375rem); font-weight: 400; line-height: var(--ts-leading-body, 1.667); margin: 8px 0; padding-left: .25em; }
-.response ol > li::marker { color: var(--muted-strong); font-variant-numeric: tabular-nums; }
-.response li :is(ol, ul) { margin: 8px 0; }
-.response ol > li > p { margin: 0; }
-.response ol > li > p:first-child { margin-bottom: 5px; }
-.response ol > li > p + p { font-weight: 400; }
-.response ol > li strong { color: var(--ink); font-weight: 600; }
-.response :is(h3, h4, h5, h6) { color: var(--ink); font-size: var(--ts-type-body, 0.9375rem); font-weight: 600; line-height: var(--ts-leading-heading, 1.4); margin: 16px 0 8px; }
-.response ul { list-style: disc; margin: 16px 0; padding-left: 1.5em; }
-.response ul li { margin: 0.35em 0; padding-left: 0.2em; }
-.response ul li p { margin-bottom: 0.5em; }
-.response strong { font-weight: 600; }
-.response blockquote { border-left: 2px solid var(--line-strong); color: var(--muted-strong); margin: 1em 0; padding: 0.15em 0 0.15em 1em; }
-.response blockquote p:last-child { margin-bottom: 0; }
-.response code { background: var(--surface-muted); border-radius: 4px; font-family: var(--font-mono, monospace); font-size: 1em; padding: 0.12em 0.35em; }
-.response pre { background: var(--surface-muted); border: 1px solid var(--line-soft); border-radius: 12px; line-height: 1.65; max-width: 100%; overflow-x: auto; padding: 16px 18px; white-space: pre; }
-.response pre code { background: transparent; padding: 0; }
-.tableScroll { margin: 1em 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
-.response table { border-collapse: collapse; font-size: var(--ts-type-body, 0.9375rem); text-align: left; width: 100%; }
-.response :is(th, td) { border-bottom: 1px solid var(--line); min-width: 100px; padding: 10px 12px; vertical-align: top; }
-.response th { font-weight: 600; }
-.response hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
-.destination { color: var(--muted-strong); font-size: var(--ts-type-meta, 0.8125rem); overflow-wrap: anywhere; }
-.response :is(pre, [tabindex]):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+/* One answer remains a readable document inside the conversation's object axis. */
+.response { color:var(--ink); font-size:var(--conversation-reading-size,var(--ts-type-body,0.9375rem)); line-height:1.75; min-width:0; overflow-wrap:anywhere; }
+.response > :is(p,ol,ul,blockquote,h3,h4,h5,h6) { max-inline-size:65ch; }
+.response[data-lead="true"] > p:first-child { font-weight:500; }
+.response > :first-child { margin-top:0; }
+.response > :last-child { margin-bottom:0; }
+.response p { margin:0 0 1em; white-space:pre-wrap; }
+.response ol,.response ul { margin:1em 0; padding-inline-start:1.6em; }
+.response ol { list-style:decimal; }
+.response ul { list-style:disc; }
+.response li { margin:0.45em 0; padding-inline-start:0.2em; }
+.response li :is(ol,ul) { margin:0.5em 0; }
+.response li > p { margin-bottom:0.35em; }
+.response ol > li { color:inherit; font-size:inherit; font-weight:400; line-height:inherit; }
+.response ol > li::marker { color:var(--muted-strong); font-variant-numeric:tabular-nums; }
+.response :is(h3,h4,h5,h6) { color:var(--ink); line-height:1.5; margin:1.5em 0 0.6em; }
+.response h3 { font-size:1.125rem; font-weight:600; }
+.response h4 { font-size:1rem; font-weight:600; }
+.response :is(h5,h6) { font-size:inherit; font-weight:550; }
+.response strong { font-weight:600; }
+.response blockquote { border-inline-start:1px solid var(--line-strong); color:var(--muted-strong); margin:1.25em 0; padding:0.2em 0 0.2em 1em; }
+.response blockquote p:last-child { margin-bottom:0; }
+.response code { background:var(--surface-muted); border-radius:4px; font-family:var(--font-mono,monospace); font-size:1em; padding:0.1em 0.3em; }
+.response pre { background:var(--surface-muted); border:1px solid var(--line-soft); border-radius:8px; line-height:1.65; max-inline-size:100%; max-block-size:min(55dvh,30rem); overflow:auto; overscroll-behavior:contain; padding:1em; white-space:pre; }
+.response pre code { background:transparent; overflow-wrap:normal; padding:0; }
+.tableScroll { margin:1.25em 0; min-width:0; max-inline-size:100%; overflow-x:auto; overscroll-behavior-x:contain; scroll-padding-inline:8px; }
+.response table { border-collapse:collapse; font-size:inherit; line-height:1.6; text-align:start; width:100%; }
+.response :is(th,td) { border-bottom:1px solid var(--line); min-width:7.5rem; padding:0.75em; vertical-align:top; overflow-wrap:anywhere; }
+.response th { font-weight:600; }
+.response hr { border:0; border-top:1px solid var(--line); margin:1.75em 0; }
+.destination { color:var(--muted-strong); font-size:var(--ts-type-meta,0.8125rem); overflow-wrap:anywhere; }
+.provenance { color:var(--muted); font-size:var(--ts-type-meta,0.8125rem); line-height:1.6; margin:12px 0 0; max-inline-size:65ch; overflow-wrap:anywhere; }
+.tableScroll:focus-visible,.response pre:focus-visible { outline:2px solid var(--focus); outline-offset:3px; }
 
-/* Extractive reading fold for completed long answers. The full text stays in
-   the DOM; folding only reveals the answer's own leading prose. */
-.foldSurface { min-width: 0; }
-.foldPreview { color: var(--muted-strong); font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); margin: 0; overflow-wrap: anywhere; }
-.foldFooter { align-items: center; display: flex; justify-content: flex-end; gap: 8px; margin: 0; min-height: 44px; flex-wrap: wrap; }
-.foldBadge { color: var(--muted); font-size: var(--ts-type-meta, 0.8125rem); }
-.foldToggle { align-items: center; display: inline-flex; justify-content: center; background: transparent; border: 0; border-radius: var(--ts-radius-control, 8px); color: var(--muted-strong); cursor: pointer; font: inherit; font-size: var(--ts-type-nav, 0.875rem); min-width: 44px; min-height: 44px; padding: 4px 8px; }
-.foldToggle:hover { background: var(--hover, color-mix(in srgb, var(--ink) 7%, transparent)); color: var(--ink); }
-.foldToggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { .foldSurface, .foldPreview, .foldToggle { transition: none; } }
-@media (forced-colors: active) { .foldToggle { border: 1px solid ButtonText; } }
-[data-conversation-canvas] .response ol > li { font-weight:400; margin:var(--ts-space-sm, 8px) 0; }
+/* Folding is explicit. Native magnification never changes the document. */
+.foldSurface { min-width:0; }
+.foldPreview { color:var(--muted-strong); font-size:var(--conversation-reading-size,var(--ts-type-body,0.9375rem)); line-height:1.75; margin:0; max-inline-size:65ch; overflow-wrap:anywhere; }
+.foldFooter { align-items:center; display:flex; justify-content:flex-end; gap:8px; margin:4px 0 0; min-height:44px; flex-wrap:wrap; }
+.foldBadge { color:var(--muted); font-size:var(--ts-type-meta,0.8125rem); }
+.foldToggle { align-items:center; display:inline-flex; justify-content:center; gap:6px; background:transparent; border:0; border-radius:var(--ts-radius-control,8px); color:var(--muted-strong); cursor:pointer; font:inherit; font-size:var(--ts-type-meta,0.8125rem); min-width:44px; min-height:44px; padding:4px 8px; }
+.foldToggle:hover { background:var(--surface-muted); color:var(--ink); }
+.foldToggle:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+@media (forced-colors:active) {
+  .response pre,.response blockquote,.response :is(th,td) { border-color:CanvasText; }
+  .response code { background:Canvas; color:CanvasText; }
+  .foldToggle { border:1px solid ButtonText; }
+  .tableScroll:focus-visible,.response pre:focus-visible,.foldToggle:focus-visible { outline-color:Highlight; }
+}

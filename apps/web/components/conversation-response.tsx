@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useId, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CaretUp } from "@phosphor-icons/react";
@@ -36,97 +36,11 @@ export function ConversationProvenance({
   );
 }
 
-type WebKitGestureEvent = Event & { scale?: number };
-
-/** Code, tables and scrollable regions keep their own gestures. */
-function insideProtectedRegion(target: EventTarget | null): boolean {
-  return target instanceof Element &&
-    Boolean(target.closest("pre, table, [data-no-fold]"));
-}
-
-/** Never fold while the reader has text selected. */
-function hasTextSelection(): boolean {
-  try {
-    const selection = window.getSelection();
-    return Boolean(selection && !selection.isCollapsed && selection.toString().length > 0);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Two-finger pinch plus a scoped ctrl-wheel path (Chromium trackpad pinch).
- * All listeners are element-scoped: nothing global competes with native
- * back/forward navigation gestures or browser zoom elsewhere on the page.
- */
-function usePinchFold(
-  surface: RefObject<HTMLElement | null>,
-  enabled: boolean,
-  setFolded: (folded: boolean) => void,
-) {
-  useEffect(() => {
-    const element = surface.current;
-    if (!element || !enabled) return;
-    let armed = false;
-    let decided = false;
-    const onGestureStart = (event: Event) => {
-      armed = !insideProtectedRegion(event.target) && !hasTextSelection();
-      if (armed) event.preventDefault();
-      decided = false;
-    };
-    const onGestureChange = (event: Event) => {
-      if (!armed || hasTextSelection() || insideProtectedRegion(event.target)) return;
-      event.preventDefault();
-      if (decided) return;
-      const scale = (event as WebKitGestureEvent).scale;
-      if (typeof scale !== "number") return;
-      if (scale <= 0.85) {
-        decided = true;
-        setFolded(true);
-      } else if (scale >= 1.15) {
-        decided = true;
-        setFolded(false);
-      }
-    };
-    const onGestureEnd = (event: Event) => {
-      if (armed) event.preventDefault();
-      armed = false;
-    };
-    let wheelTotal = 0;
-    let lastWheel = 0;
-    const onWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey) return;
-      if (insideProtectedRegion(event.target)) return;
-      if (hasTextSelection()) return;
-      if (!event.deltaY || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-      event.preventDefault();
-      const now = performance.now();
-      if (now - lastWheel > 220 || Math.sign(wheelTotal) !== Math.sign(event.deltaY)) wheelTotal = 0;
-      lastWheel = now;
-      wheelTotal += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1);
-      if (Math.abs(wheelTotal) >= 24) {
-        setFolded(wheelTotal > 0);
-        wheelTotal = 0;
-      }
-    };
-    element.addEventListener("gesturestart", onGestureStart);
-    element.addEventListener("gesturechange", onGestureChange);
-    element.addEventListener("gestureend", onGestureEnd);
-    element.addEventListener("wheel", onWheel, { passive: false });
-    return () => {
-      element.removeEventListener("gesturestart", onGestureStart);
-      element.removeEventListener("gesturechange", onGestureChange);
-      element.removeEventListener("gestureend", onGestureEnd);
-      element.removeEventListener("wheel", onWheel);
-    };
-  }, [surface, enabled, setFolded]);
-}
-
 /**
  * The foldable reading surface for one completed, long answer. Folding shows
  * an extractive preview of the answer's own leading text; the exact full text
- * stays in the DOM and unfolds verbatim. Only this surface handles pinch — the
- * streaming preview and short answers keep plain rendering.
+ * stays in the DOM and unfolds verbatim. Platform zoom/scroll gestures remain
+ * native; the explicit control alone changes answer visibility.
  */
 function FoldableResponse({
   children,
@@ -136,7 +50,6 @@ function FoldableResponse({
   lead: boolean;
 }) {
   const t = useT();
-  const surface = useRef<HTMLDivElement>(null);
   const fullTextId = useId();
   const [reading, setReading] = useState({ body: children, folded: false });
   if (reading.body !== children) setReading({ body: children, folded: false });
@@ -144,7 +57,6 @@ function FoldableResponse({
   const setFolded = useCallback((value: boolean | ((previous: boolean) => boolean)) => {
     setReading(current => ({ body: children, folded: typeof value === "function" ? value(current.body === children && current.folded) : value }));
   }, [children]);
-  usePinchFold(surface, true, setFolded);
   const preview = extractiveReadingPreview(children);
   const truncated = preview.length > 0 && preview.length < children.trim().length;
   return (
@@ -152,7 +64,6 @@ function FoldableResponse({
       aria-label={t("response.body")}
       className={styles.foldSurface}
       data-folded={folded ? "true" : "false"}
-      ref={surface}
     >
       <div hidden={folded} id={fullTextId}>
         <ResponseBody lead={lead}>{children}</ResponseBody>
@@ -174,7 +85,7 @@ function FoldableResponse({
           onClick={() => setFolded((value) => !value)}
           type="button"
         >
-          {folded ? t("response.expand") : <CaretUp aria-hidden size={16}/>}
+          {folded ? t("response.expand") : <><CaretUp aria-hidden size={16}/><span>{t("response.collapse")}</span></>}
         </button>
       </div>
     </div>
@@ -195,8 +106,11 @@ function ResponseBody({
         remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ children }) => <h3>{children}</h3>,
-          h2: ({ children }) => <h3>{children}</h3>,
-          h3: ({ children }) => <h3>{children}</h3>,
+          h2: ({ children }) => <h4>{children}</h4>,
+          h3: ({ children }) => <h5>{children}</h5>,
+          h4: ({ children }) => <h6>{children}</h6>,
+          h5: ({ children }) => <h6>{children}</h6>,
+          h6: ({ children }) => <h6>{children}</h6>,
           a: ({ children, href }) => (
             <span>{children}{href && children !== href ? <span className={styles.destination}> ({href})</span> : null}</span>
           ),
@@ -231,7 +145,7 @@ export const ConversationResponse = memo(function ConversationResponse({
   children?: string;
   /** First line plays the response lead (larger emphasis) when no block title stands in for it. */
   lead?: boolean;
-  /** Completed long answers earn the extractive pinch fold. */
+  /** Completed long answers may be folded through an explicit reading control. */
   foldable?: boolean;
 }) {
   const body = children ?? "";

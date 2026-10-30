@@ -153,4 +153,23 @@ describe("source image viewer", () => {
     });
     expect(createObjectURL).not.toHaveBeenCalled();
   });
+
+  it("closes by Escape, cancels a pending image and returns to its source control", async () => {
+    let resolveFetch: ((response: Response) => void) | undefined;
+    fetcher.mockImplementation(() => new Promise<Response>(resolve => { resolveFetch = resolve; }));
+    await render();
+    const opener = trigger();
+    opener.focus();
+    await act(async () => opener.click());
+    const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
+    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(opener));
+    await act(async () => {
+      resolveFetch?.(new Response(new Blob([new Uint8Array([1])], { type: "image/png" })));
+      await Promise.resolve();
+    });
+    expect(document.querySelector("img")).toBeNull();
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
 });

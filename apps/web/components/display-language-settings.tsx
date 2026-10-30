@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useActionState, useState } from "react";
+import { startTransition, useActionState, useRef, useState } from "react";
 import {
   LOCALE_ENDONYMS,
   SUPPORTED_LOCALES,
@@ -12,6 +12,7 @@ import { useT } from "@/components/marketing/locale-provider";
 import styles from "./settings-workspace.module.css";
 
 type DisplayChoice = "system" | LocaleTag;
+type DisplayLanguageActionState = AccountActionState & { generation: number };
 
 /**
  * Account-scoped display language (docs/internationalization.md).
@@ -28,12 +29,15 @@ export function DisplayLanguageSettings({
 }) {
   const t = useT();
   const [operationId, setOperationId] = useState("");
+  const editGeneration = useRef(0);
+  const [generation, setGeneration] = useState(0);
   const [receipt, setReceipt] = useState<{ source: AccountSettings; value: AccountSettings } | null>(null);
   const confirmed = receipt?.source === account ? receipt.value : account;
   const [draft, setDraft] = useState<{ choice: DisplayChoice; revision: number } | null>(null);
   const choice = draft?.choice ?? confirmed.preferences?.display_language ?? "system";
   const revision = draft?.revision ?? confirmed.user.revision;
-  const [state, action, pending] = useActionState(async (previous: AccountActionState, form: FormData) => {
+  const [state, action, pending] = useActionState<DisplayLanguageActionState, FormData>(async (previous, form) => {
+    const submittedGeneration = editGeneration.current;
     const result = await saveAccountSettings(previous, form);
     if (result.data) setReceipt({ source: account, value: result.data });
     if (result.saved) {
@@ -41,11 +45,12 @@ export function DisplayLanguageSettings({
       setDraft(null);
       const savedChoice = result.data?.preferences?.display_language ?? "system";
       if (savedChoice !== form.get("display_language")) {
-        return { ...result, saved: false, error: "界面语言已在另一端改变，已显示最新设置。请核对后再保存。" };
+        return { ...result, generation: submittedGeneration, saved: false, error: "界面语言已在另一端改变，已显示最新设置。请核对后再保存。" };
       }
     }
-    return { ...result, data: result.data ?? previous.data };
-  }, {} as AccountActionState);
+    return { ...result, generation: submittedGeneration, data: result.data ?? previous.data };
+  }, { generation: 0 });
+  const feedback = state.generation === generation ? state : null;
   return (
     <form
       onSubmit={(event) => {
@@ -74,6 +79,8 @@ export function DisplayLanguageSettings({
         name="display_language"
         value={choice}
         onChange={(event) => {
+          editGeneration.current += 1;
+          setGeneration(editGeneration.current);
           setDraft(current => ({
             choice: event.target.value as DisplayChoice,
             revision: current?.revision ?? confirmed.user.revision,
@@ -90,7 +97,7 @@ export function DisplayLanguageSettings({
       </select>
       <p>{t("language.display.hint")}</p>
       <p aria-live="polite">
-        {pending ? "…" : state.error ? t(state.error) : state.saved ? t("language.saved") : ""}
+        {pending ? "…" : feedback?.error ? t(feedback.error) : feedback?.saved ? t("language.saved") : ""}
       </p>
       <button type="submit" className={styles.primaryButton} disabled={pending}>
         {t("language.save")}

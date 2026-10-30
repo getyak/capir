@@ -173,7 +173,7 @@ describe("expanded and collapsed workspace navigation", () => {
     expect(collapsed.querySelector(`a[href="/workspace/sessions/${id(2)}"]`)?.getAttribute("aria-label")).toBe("Pilot scope");
     expect(collapsed.querySelector(`a[href="/workspace/sessions/${id(3)}"]`)?.getAttribute("aria-label")).toBe("Next meeting");
     await act(async () => button("归档：Pilot scope").click());
-    const archived = [...host.querySelectorAll("button")].find(item => item.textContent?.startsWith("已归档"))!;
+    const archived = [...host.querySelectorAll("button")].find(item => item.textContent?.startsWith("已载入归档"))!;
     await act(async () => archived.click());
     expect(recent.querySelector(`a[data-archived="true"][href="/workspace/sessions/${id(2)}"] [data-avatar-style]`)).toBeTruthy();
   });
@@ -204,7 +204,7 @@ describe("expanded and collapsed workspace navigation", () => {
     const shortcuts = () => [...host.querySelectorAll<HTMLAnchorElement>('[data-collapsed-only="true"] a[aria-label^="Conversation"]')].map(link => link.getAttribute("aria-label"));
     await act(async () => button("归档：Conversation 1").click());
     expect(shortcuts()).not.toContain("Conversation 1");
-    const archiveDisclosure = [...host.querySelectorAll("button")].find(item => item.textContent?.startsWith("已归档"))!;
+    const archiveDisclosure = [...host.querySelectorAll("button")].find(item => item.textContent?.startsWith("已载入归档"))!;
     await act(async () => archiveDisclosure.click());
     await act(async () => button("恢复：Conversation 1").click());
     expect(shortcuts()[0]).toBe("Conversation 1");

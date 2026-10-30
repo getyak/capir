@@ -64,6 +64,11 @@ export function WorkspaceRecentSessions({
   });
   const visibleRows = order.visible;
   const archivedRows = current?.state === "ready" ? current.rows.archived : [];
+  const archivedCount = current?.state === "ready" ? organized?.archived.length ?? 0 : 0;
+  // Missing/partial coverage can count only this authorized loaded projection.
+  const directory = data?.sessions;
+  const complete = Boolean(directory && "complete" in directory && directory.complete === true &&
+    "next_cursor" in directory && directory.next_cursor === null && (directory.sessions?.length ?? 0) <= 200);
   const arrival = useArrivalRegistry(projected?.map((row) => row.id) ?? [], current?.state === "ready");
 
   function organizationFor(row: { id: string; title: string }): SessionRowOrganization {
@@ -161,10 +166,11 @@ export function WorkspaceRecentSessions({
               onClick={() => setArchiveExpanded((value) => !value)}
               type="button"
             >
-              <span>{t("sessions.archived", { count: archivedRows.length })}</span>
+              <span>{t(complete ? "sessions.archived" : "sessions.archivedLoaded", { count: archivedCount })}</span>
               <CaretRight aria-hidden="true" className={styles.personCaret} size={12} />
             </button>
             <div hidden={!archiveExpanded} id={archiveId}>
+              {archivedCount > archivedRows.length ? <p className={styles.orgNotice}>{t("sessions.archivedPreview", { count: archivedRows.length })}</p> : null}
               <ul className={styles.rowList}>
                 {archivedRows.map((row) => (
                   <li key={row.id}>

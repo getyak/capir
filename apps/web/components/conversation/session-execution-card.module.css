@@ -1,12 +1,12 @@
-.completed > summary { color: var(--muted); width: fit-content; max-width: 100%; }
-.diagnostics { margin-top: 8px; }
+.completed > summary { color: var(--muted); width: fit-content; max-width: 100%; font-size: var(--ts-type-meta, 0.8125rem); }
+.diagnostics { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .diagnostics > summary { align-items: center; cursor: pointer; display: flex; gap: 8px; list-style: none; min-height: 44px; width: fit-content; }
 .diagnostics > summary::-webkit-details-marker { display: none; }
 .diagnostics > summary::after { content: "›"; }
 .diagnostics[open] > summary::after { transform: rotate(90deg); }
 .diagnostics > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.diagnostics code { font: inherit; overflow-wrap: anywhere; }
+.diagnostics code { font: inherit; overflow-wrap: anywhere; white-space: pre-wrap; }
 @media (forced-colors: active) { .completed > summary { color: CanvasText; } .diagnostics > summary:focus-visible { outline-color: Highlight; } }
-.progress { min-width: 0; }
-.stage { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; min-height: 44px; color: var(--muted-strong, var(--ink)); font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; }
+.progress { display: grid; gap: 10px; min-width: 0; margin: 4px 0 12px; }
+.stage { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; min-height: 44px; color: var(--muted-strong, var(--ink)); font-size: var(--ts-type-nav, 0.875rem); line-height: var(--ts-leading-meta, 1.5); overflow-wrap: anywhere; }
 .draftLabel { margin: 0 0 8px; color: var(--muted); font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }

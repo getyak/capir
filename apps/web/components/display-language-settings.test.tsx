@@ -132,3 +132,23 @@ it.each([
   expect(backend.update.mock.calls.at(-1)![0]).toEqual(attempt);
   expect(stored.preferences?.display_language).toBe("en");
 });
+
+it("withdraws an older language success after another selection without reviving it on a round trip", async () => {
+  await choose("ja"); await save();
+  expect(host.querySelector("[aria-live=polite]")?.textContent).toBe("已保存。");
+  await choose("ko");
+  expect(host.querySelector("[aria-live=polite]")?.textContent).toBe("");
+  await choose("ja");
+  expect(host.querySelector("[aria-live=polite]")?.textContent).toBe("");
+});
+it("withdraws an older language failure when a different intent begins", async () => {
+  backend.update.mockRejectedValueOnce(new Error("connection lost"));
+  await choose("ja"); await save();
+  const first = backend.update.mock.calls[0]![0];
+  expect(host.textContent).toContain("暂时无法核验保存结果");
+  await choose("ko");
+  expect(host.querySelector("[aria-live=polite]")?.textContent).toBe("");
+  await save();
+  expect(stored.preferences?.display_language).toBe("ko");
+  expect(backend.update.mock.calls[1]![0].id).not.toBe(first.id);
+});
