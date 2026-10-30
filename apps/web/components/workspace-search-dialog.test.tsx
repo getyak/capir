@@ -100,13 +100,13 @@ async function finishSearchExit(content: HTMLElement): Promise<void> {
   expect(document.querySelector("[data-slot=dialog-content]")).toBeNull();
 }
 
-async function reopenBeforeSearchExit(): Promise<{ trigger: HTMLButtonElement; content: HTMLElement; oldHeading: HTMLHeadingElement }> {
+async function reopenBeforeSearchExit(href = `/workspace/people/${PERSON_ID}`): Promise<{ trigger: HTMLButtonElement; content: HTMLElement; oldHeading: HTMLHeadingElement }> {
   retainSearchExitAnimation();
   directory.people = [{ id: PERSON_ID, display_label: "林夏" }];
   directory.sessions = [{ session_id: SESSION_ID, title: "林氏周会", state: "active", expires_at: "2099-01-01T00:00:00.000Z" }];
   const trigger = await openSearch();
   await typeQuery("林");
-  const selected = resultLink(`/workspace/people/${PERSON_ID}`);
+  const selected = resultLink(href);
   await act(async () => { selected.focus(); selected.click(); });
   const content = document.querySelector<HTMLElement>("[data-slot=dialog-content]")!;
   expect(content, "real Presence retains Content during its exit").not.toBeNull();
@@ -116,10 +116,32 @@ async function reopenBeforeSearchExit(): Promise<{ trigger: HTMLButtonElement; c
   expect(document.querySelector("[data-slot=dialog-content]")).toBe(content);
   expect(content.dataset.state).toBe("open");
   expect(content.querySelector("input")).toHaveProperty("value", "");
-  const oldHeading = destination(`/workspace/people/${PERSON_ID}`, "Previous selection");
+  const oldHeading = destination(href, "Previous selection");
   workspace.append(oldHeading);
   return { trigger, content, oldHeading };
 }
+
+it.each([
+  ["Person navigation", `/workspace/people/${PERSON_ID}`],
+  ["same-address Session", `/workspace/sessions/${SESSION_ID}`],
+])("focuses the empty input when reopening retained Content after %s", async (_scenario, href) => {
+  if (href.includes("/sessions/")) window.history.replaceState(null, "", href);
+  const { content } = await reopenBeforeSearchExit(href);
+  const input = content.querySelector("input")!;
+  expect(document.activeElement).toBe(input);
+  await settle();
+  expect(document.activeElement).toBe(input);
+});
+
+it("does not retake result focus when an already open search rerenders", async () => {
+  directory.people = [{ id: PERSON_ID, display_label: "林夏" }];
+  await openSearch();
+  await typeQuery("林");
+  const link = resultLink(`/workspace/people/${PERSON_ID}`);
+  await act(async () => link.focus());
+  await act(async () => root.render(createElement(WorkspaceGlobalSearchDialog, { binding: "scope", label: "Updated search trigger" })));
+  expect(document.activeElement).toBe(link);
+});
 
 it.each(["Escape", "close control", "ctrlKey", "metaKey", "shiftKey", "altKey", "_blank"] as const)("forgets an earlier selection when reopened during exit then dismissed with %s", async (activation) => {
   const { trigger, content, oldHeading } = await reopenBeforeSearchExit();
