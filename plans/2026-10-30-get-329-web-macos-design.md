@@ -250,3 +250,24 @@ after screenshots at equal viewport, plus narrow/short views and read-position
 continuity. Do not inject application scroll/focus/layout to make acceptance
 pass. Retain old evidence as history; user feedback invalidates its visual
 signoff. Close this run and verify deletion/credential removal before handoff.
+
+
+## User correction: compact chat groups (active)
+
+The next human review rejects the dispersed reply rhythm, including gaps
+between messages and between identity and text. Supersede the earlier identity-
+above-document direction with one compact chat group per assistant message:
+24px identity beside the first line, 8px column gap, one quiet response surface,
+16px turn spacing and 12px after a user send. Keep body text at16px with1.6
+leading, 8px paragraph spacing and compact lists, tables and code blocks.
+Preserve semantic decision/provenance boundaries and44px controls, selectable
+text, bounded overflow, exact time, drafts, scroll and native titlebar ownership.
+
+The shipped macOS host loads the same protected Web origin; do not create a
+second density stylesheet or change its pageZoom. Parent owns both CSS modules,
+PR, normal gates, clean resident Web deployment and one new isolated acceptance
+run. Independent agents review the source, narrow-window risks and actual
+captures. Compare identical multi-turn synthetic content at1280,900x480 and375
+before/after; use real user events and exact Session route guards. Native host
+source consistency is distinct from actual installed WebKit acceptance.
+Active evidence: external get329/compact-chat/control.md. Prior runs are deleted.
