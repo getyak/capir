@@ -225,7 +225,7 @@ describe("local organization in the recent list", () => {
     expect(visibleLinks[0]!.textContent).toContain("整理试点记录");
     // The archived conversation stays reachable in the labeled local archive.
     const archiveToggle = [...host!.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.includes("已归档 · 本机整理"));
+      .find((button) => button.textContent?.includes("已载入归档 · 本机整理"));
     expect(archiveToggle).toBeDefined();
     expect(archiveToggle!.textContent).toContain("（1）");
     act(() => archiveToggle!.click());
