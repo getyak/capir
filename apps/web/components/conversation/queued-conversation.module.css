@@ -265,7 +265,7 @@
 .messageFooter:empty { display:none; }
 .messageFooter > .execution { flex:0 1 auto; min-width:0; max-width:100%; margin:0; }
 .messageFooter:has(> .execution:not([data-phase="completed"])) { flex-direction:column; align-items:stretch; }
-.messageFooter [data-message-actions="assistant"] { position:static; flex:none; align-self:flex-start; }
+.messageFooter [data-message-actions="assistant"] { position:static; flex:0 1 auto; min-width:0; max-width:100%; align-self:flex-start; }
 .answerBody .messageFooter [data-message-actions="assistant"] > * { opacity:1; }
 .messageFooter .executionSummary { min-height:44px; padding-inline:4px; }
 

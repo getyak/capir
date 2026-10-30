@@ -308,3 +308,22 @@ length heuristics. Streamed and plain text use the same prose surface with
 provisional status kept distinct. Independent boundary/source review and real
 short-answer, disclosure, keyboard, media and viewport acceptance are required.
 One existing isolated run/two messages continues; no account/model recreation.
+
+
+### Localized copy-failure width followup (active)
+
+The final CSS boundary fixture uses the actual2e089 production styles and
+unchanged Actions failure DOM, without authentication or a new test account.
+Japanese failure text makes a361.4px action row inside the311px message area,
+extending34.4px beyond the375px viewport (OBS-005/P2). Korean fits; do not report
+it as broken. Let the action row shrink and cap its width at100%, retaining the
+original44x44 Copy button. Proposed geometry wraps Japanese to two lines with
+zero horizontal overflow; Copy payload/handlers and Session state are unchanged.
+
+The sole run43def1a1 is already deleted with credential removal and old-entry401;
+do not resurrect/recreate it. Verify the new clean production stylesheet in the
+same unauthenticated fixture, separately from real Clipboard dispatch or signed-
+in runtime evidence. Normal-layout screenshots and keyboard proof at2e089 remain
+version-bound evidence; the final change is a CSS width constraint only. Require
+current gates, normal merge and one clean committed resident activation. Keep
+frozen history and source/fixture/installed-Mac evidence distinct.
