@@ -66,6 +66,47 @@ FIXTURE_JAVA = (
 EXPECTED_PATHS = {HEALTH_JAVA, FIXTURE_JAVA}
 PATCH_ONE = "0001-health-ownership-tests.patch"
 PATCH_TWO = "0002-dataset-query-ownership-tests.patch"
+HEALTH_FIX_JAVA = (
+    "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/"
+    "AbstractClickHouseHealthCheck.java"
+)
+LEGACY_OUTER = "com.comet.opik.infrastructure.db.healthchecks.AbstractClickHouseHealthCheckTest"
+LEGACY_METHOD_COUNTS = {
+    LEGACY_OUTER + "$ClickHouseHealthCheckTests": {
+        "check__whenQuerySucceeds__thenHealthy": 1,
+        "check__whenQueryFails__thenUnhealthy": 1,
+        "check__whenQueryInterrupted__thenUnhealthyAndRestoresInterruptFlag": 1,
+    },
+    LEGACY_OUTER + "$ClickHouseReadOnlyFreeFormSqlHealthCheckTests": {
+        "check__whenToggleOff__thenHealthyWithoutTouchingClient": 1,
+        "check__whenToggleOnAndQuerySucceeds__thenHealthyAndProbeCarriesNoPerCallSettings": 1,
+    },
+    "com.comet.opik.infrastructure.db.healthchecks.ClickHouseExistenceHealthCheckTest": {
+        "check__whenDisabled__thenHealthyWithoutTouchingClient": 2,
+        "check__whenEnabledAndResourcePresent__thenHealthy": 2,
+        "check__whenEnabledAndCountIsZero__thenUnhealthy": 2,
+        "check__whenEnabledAndNoRows__thenUnhealthy": 2,
+        "check__whenEnabledAndQueryFails__thenUnhealthyWithoutCancellingQuery": 2,
+        "check__whenEnabledAndInterrupted__thenUnhealthyAndRestoresInterruptFlag": 2,
+    },
+    "com.comet.opik.infrastructure.db.healthchecks.ClickHouseTracesTopologyHealthCheckTest": {
+        "check__whenWrapEnabledAndTracesIsDistributedOverTracesLocal__thenHealthy": 1,
+        "check__whenWrapDisabledAndTracesIsAMergeTree__thenHealthy": 3,
+        "check__whenWrapEnabledButTracesIsNotWrapped__thenUnhealthyNamingTheObservedEngine": 1,
+        "check__whenWrapEnabledButTracesLocalCannotTakeMutations__thenUnhealthy": 3,
+        "check__whenWrapEnabledAndTracesIsDistributedButTracesLocalIsMissing__thenUnhealthy": 1,
+        "check__whenWrapDisabledButTracesIsDistributed__thenUnhealthy": 1,
+        "check__whenWrapDisabledAndTracesIsNeitherDistributedNorAMergeTree__thenUnhealthy": 1,
+        "check__whenTracesIsMissingEntirely__thenUnhealthyRegardlessOfTheFlag": 2,
+        "check__whenQueryFails__thenUnhealthyWithoutCancellingQuery": 2,
+        "check__whenInterrupted__thenRestoresTheInterruptFlag": 1,
+    },
+}
+LEGACY_TEST_PATHS = {
+    "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/" + name + ".java"
+    for name in ("AbstractClickHouseHealthCheckTest", "ClickHouseExistenceHealthCheckTest",
+                 "ClickHouseTracesTopologyHealthCheckTest")
+}
 
 
 class BackportRunnerAdmissionTests(unittest.TestCase):
@@ -485,6 +526,95 @@ class BackportRunnerAdmissionTests(unittest.TestCase):
                 self.assertNotIn("--env-file", command)
                 self.assertEqual(option_values(command, "--cap-drop"), ["ALL"])
                 self.assertEqual(option_values(command, "--security-opt"), ["no-new-privileges"])
+
+    def test_fixed_stage_is_explicit_health_only_and_dao_baseline_is_separate(self):
+        selection = self.function("_stage_selection")
+        names, paths, classes = selection("health", "health-fixed")
+        self.assertEqual(names, [PATCH_ONE, "0003-health-late-response-fix.patch",
+                                 "0004-upstream-health-contract-tests.patch"])
+        self.assertEqual(paths, EXPECTED_PATHS)
+        self.assertEqual(classes, {HEALTH_CLASS} | set(LEGACY_METHOD_COUNTS))
+        names, paths, classes = selection("dao", "baseline")
+        self.assertEqual(names, [PATCH_ONE, PATCH_TWO])
+        self.assertEqual(classes, {OTHER_CLASS})
+        for suite in ("dao", "all"):
+            with self.subTest(suite=suite), self.assertRaises(ValueError):
+                selection(suite, "health-fixed")
+
+    def test_fixed_stage_requires_exact_modified_paths_modes_and_fingerprints(self):
+        repository = self.repository("fixed-stage")
+        modifications = {}
+
+        def fingerprint(data):
+            return {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                    "git_blob_sha1": hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()}
+
+        for relative in LEGACY_TEST_PATHS | {HEALTH_FIX_JAVA}:
+            path = repository / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"class BeforeFixture {}\n")
+            modifications[relative] = {"before": fingerprint(path.read_bytes())}
+        self.git(repository, "add", ".")
+        self.git(repository, "commit", "--quiet", "-m", "Synthetic fixed-stage baseline")
+        self.apply_new_tests(repository)
+        for relative, claim in modifications.items():
+            path = repository / relative
+            path.write_bytes(b"class AfterFixture {}\n")
+            claim["after"] = fingerprint(path.read_bytes())
+            self.git(repository, "add", relative)
+
+        validate = self.function("validate_applied_stage")
+        rows = validate(source_dir=repository, suite="health", stage="health-fixed",
+                        modifications=modifications)
+        self.assertEqual({row["path"] for row in rows if row["status"] == "A"}, EXPECTED_PATHS)
+        self.assertEqual({row["path"] for row in rows if row["status"] == "M"},
+                         LEGACY_TEST_PATHS | {HEALTH_FIX_JAVA})
+        with self.assertRaises(ValueError):
+            self.validate_scope(repository)
+        corrupted = json.loads(json.dumps(modifications))
+        corrupted[HEALTH_FIX_JAVA]["after"]["sha256"] = "0" * 64
+        with self.assertRaises(ValueError):
+            validate(source_dir=repository, suite="health", stage="health-fixed", modifications=corrupted)
+        with (repository / "apps/opik-backend/pom.xml").open("a") as output:
+            output.write("Unapproved POM mutation\n")
+        self.git(repository, "add", "apps/opik-backend/pom.xml")
+        with self.assertRaises(ValueError):
+            validate(source_dir=repository, suite="health", stage="health-fixed",
+                     modifications=modifications)
+
+    def test_fixed_stage_keeps_full_protected_and_migration_closure(self):
+        validate = self.function("validate_protected_catalogue")
+        migration = "apps/opik-backend/src/main/resources/liquibase/changelog.xml"
+        pom = "apps/opik-backend/pom.xml"
+        before = {HEALTH_FIX_JAVA: "a" * 64, migration: "b" * 64, pom: "c" * 64}
+        after = {**before, HEALTH_FIX_JAVA: "d" * 64}
+        modifications = {HEALTH_FIX_JAVA: {"before": {"sha256": "a" * 64},
+                                          "after": {"sha256": "d" * 64}}}
+        self.assertTrue(validate(before=before, after=after, modifications=modifications))
+        for changed in (migration, pom):
+            with self.subTest(path=changed), self.assertRaises(ValueError):
+                validate(before=before, after={**after, changed: "e" * 64}, modifications=modifications)
+        missing = {path: digest for path, digest in after.items() if path != migration}
+        with self.assertRaises(ValueError):
+            validate(before=before, after=missing, modifications=modifications)
+
+    def test_fixed_health_requires_all_39_instances_and_zero_container_is_not_a_pass(self):
+        reports = self.root / "fixed-reports"
+        self.xml(reports)
+        for suite_class, methods in LEGACY_METHOD_COUNTS.items():
+            names = [method if multiplicity == 1 else f"{method}[{index}]"
+                     for method, multiplicity in methods.items() for index in range(1, multiplicity + 1)]
+            self.xml(reports, name=suite_class, outcomes=["success"] * len(names), case_names=names)
+        self.xml(reports, name=LEGACY_OUTER, outcomes=[], case_names=[])
+        classes = {HEALTH_CLASS} | set(LEGACY_METHOD_COUNTS)
+        result = self.evaluate(reports, expected_classes=classes)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["tests"], 39)
+        self.assertEqual(result["skipped"], 0)
+        incomplete = self.root / "empty-container-only"
+        self.xml(incomplete, name=LEGACY_OUTER, outcomes=[], case_names=[])
+        self.assertFalse(self.evaluate(incomplete, expected_classes=classes)["passed"])
+        self.assertFalse(self.evaluate(incomplete)["passed"])
 
     def test_real_git_error_retains_safe_command_exit_without_raw_stderr(self):
         module = self.runner()

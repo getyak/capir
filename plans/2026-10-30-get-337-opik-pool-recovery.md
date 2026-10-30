@@ -167,3 +167,42 @@ Prior false-green/error source and tests remain in immutable local history.
 First remote health baseline is now ready for a draft PR after clean commit/base
 update. It is not Java RED, a production fix, or deployment authority. Do not
 merge this initial test-only draft before the defect is fixed and all gates pass.
+
+
+2026-10-30 16:23 China: the settled b4 remote baseline (CI41021382879, artifact12961264941)
+ran the six frozen health tests after source13 fingerprints and compilation.
+Timeout/interruption rejected the late response completion with two actual
+AssertionFailedError failures; four other cases passed, errors0/skipped0.
+The protected1576 catalogue was unchanged. This is source-level Java RED, not
+proof of the resident pool owner or original tail-latency trigger.
+
+This source round adds0003, a health-only production patch for
+AbstractClickHouseHealthCheck: acquisition failure preserves the future and
+closes a late response; acquired mapping/close stays under one owner. It also
+adds0004, an explicit test-only adaptation of the three existing upstream health
+test files whose old expectations required cancellation. Frozen0001/0002 bytes
+remain unchanged. No DAO production fix, POM/dependency or migration edit exists.
+
+The runner now has an explicit baseline versus health-fixed stage. Baseline
+permits only selected new test additions. health-fixed is health-only and locks
+one modified production file plus three modified existing test files, each with
+exact before/after fingerprints and mode100644. The complete protected catalogue
+is retained: only the declared production health-file hash may change before
+Maven, and nothing may change during Maven. No schema path is exempted.
+
+The fixed-health profile requires new6 plus existing33 instances, including
+read-only/toggle/topology/error cases. Its nested-suite names are derived from
+the exact Java source; actual provider XML remains a required acceptance gate.
+The parent owns precise raw XML upload and actual stage execution. DAO baseline
+can run separately with suite dao/stage baseline in a fresh independent checkout;
+its failure remains a real failing gate, never expected-RED-as-success.
+
+Four Python stage/scope/JUnit guard cases were added (16 total). The stage
+support was written with those tests before an isolated stage-runner RED was
+observed: this round does not claim completed stage-runner TDD or GREEN. Parent
+must establish the old baseline result and review/run these new guard cases
+serially before a new remote run. Only AST syntax and static fingerprints were
+checked by the source worker; no Docker/Maven/install/clone/test/model/service/CI
+execution or Git commit was performed. The production health candidate still
+needs independent review, actual39-case GREEN, image/runtime proof and the normal
+clean complete-release/data/rollback gates.

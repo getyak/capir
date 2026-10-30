@@ -42,7 +42,28 @@ PATCH_HASHES = {
     "0002-dataset-query-ownership-tests.patch":
         "1868137a4eb4ef7039d737d4916cd8e4e4d5c67dbf460237b8bb481f6f268855",
 }
+FIXED_PATCH_HASHES = {
+    "0003-health-late-response-fix.patch":
+        "9d989e9d304094d1595b44afac3e39ccb533e3acfccd82fb3398fe4a709f002c",
+    "0004-upstream-health-contract-tests.patch":
+        "01d5e68c611ec5a5172a09ee0dd77d1919066718cf90e8500330ebf99c829e71",
+}
 TEST_ROOT = "apps/opik-backend/src/test/java/"
+HEALTH_FIX_SOURCE = (
+    "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/"
+    "AbstractClickHouseHealthCheck.java"
+)
+UPSTREAM_TEST_ROOT = TEST_ROOT + "com/comet/opik/infrastructure/db/healthchecks/"
+UPSTREAM_TEST_PATHS = {
+    UPSTREAM_TEST_ROOT + name + ".java" for name in (
+        "AbstractClickHouseHealthCheckTest", "ClickHouseExistenceHealthCheckTest",
+        "ClickHouseTracesTopologyHealthCheckTest",
+    )
+}
+FIXED_PATCH_PATHS = {
+    "0003-health-late-response-fix.patch": {HEALTH_FIX_SOURCE},
+    "0004-upstream-health-contract-tests.patch": UPSTREAM_TEST_PATHS,
+}
 HEALTH_PATH = TEST_ROOT + (
     "com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHealthCheckOwnershipTest.java"
 )
@@ -52,6 +73,38 @@ HEALTH_CLASS = (
     "com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHealthCheckOwnershipTest"
 )
 DAO_CLASS = "com.comet.opik.domain.Get337DatasetItemVersionResponseOwnershipTest"
+UPSTREAM_HEALTH_CLASS = "com.comet.opik.infrastructure.db.healthchecks.AbstractClickHouseHealthCheckTest"
+UPSTREAM_HEALTH_METHODS = {
+    UPSTREAM_HEALTH_CLASS + "$ClickHouseHealthCheckTests": {
+        "check__whenQuerySucceeds__thenHealthy": 1,
+        "check__whenQueryFails__thenUnhealthy": 1,
+        "check__whenQueryInterrupted__thenUnhealthyAndRestoresInterruptFlag": 1,
+    },
+    UPSTREAM_HEALTH_CLASS + "$ClickHouseReadOnlyFreeFormSqlHealthCheckTests": {
+        "check__whenToggleOff__thenHealthyWithoutTouchingClient": 1,
+        "check__whenToggleOnAndQuerySucceeds__thenHealthyAndProbeCarriesNoPerCallSettings": 1,
+    },
+    "com.comet.opik.infrastructure.db.healthchecks.ClickHouseExistenceHealthCheckTest": {
+        "check__whenDisabled__thenHealthyWithoutTouchingClient": 2,
+        "check__whenEnabledAndResourcePresent__thenHealthy": 2,
+        "check__whenEnabledAndCountIsZero__thenUnhealthy": 2,
+        "check__whenEnabledAndNoRows__thenUnhealthy": 2,
+        "check__whenEnabledAndQueryFails__thenUnhealthyWithoutCancellingQuery": 2,
+        "check__whenEnabledAndInterrupted__thenUnhealthyAndRestoresInterruptFlag": 2,
+    },
+    "com.comet.opik.infrastructure.db.healthchecks.ClickHouseTracesTopologyHealthCheckTest": {
+        "check__whenWrapEnabledAndTracesIsDistributedOverTracesLocal__thenHealthy": 1,
+        "check__whenWrapDisabledAndTracesIsAMergeTree__thenHealthy": 3,
+        "check__whenWrapEnabledButTracesIsNotWrapped__thenUnhealthyNamingTheObservedEngine": 1,
+        "check__whenWrapEnabledButTracesLocalCannotTakeMutations__thenUnhealthy": 3,
+        "check__whenWrapEnabledAndTracesIsDistributedButTracesLocalIsMissing__thenUnhealthy": 1,
+        "check__whenWrapDisabledButTracesIsDistributed__thenUnhealthy": 1,
+        "check__whenWrapDisabledAndTracesIsNeitherDistributedNorAMergeTree__thenUnhealthy": 1,
+        "check__whenTracesIsMissingEntirely__thenUnhealthyRegardlessOfTheFlag": 2,
+        "check__whenQueryFails__thenUnhealthyWithoutCancellingQuery": 2,
+        "check__whenInterrupted__thenRestoresTheInterruptFlag": 1,
+    },
+}
 METHOD_MULTIPLICITIES = {
     HEALTH_CLASS: {
         "timedOutProbeClosesTheResponseThatArrivesAfterTheDeadline": 1,
@@ -69,6 +122,7 @@ METHOD_MULTIPLICITIES = {
         "cleanupFailureDoesNotTurnACompletedWriteIntoAFailedOrRetriedWrite": 2,
     },
 }
+METHOD_MULTIPLICITIES.update(UPSTREAM_HEALTH_METHODS)
 BACKEND_SOURCES = {
     "pom.xml", "Dockerfile", "spotless.xml", "lombok.config",
     "src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java",
@@ -92,7 +146,18 @@ def _selection(suite):
         return list(PATCH_HASHES)[:1], {HEALTH_PATH, FIXTURE_PATH}, {HEALTH_CLASS}
     if suite == "all":
         return list(PATCH_HASHES), {HEALTH_PATH, FIXTURE_PATH, DAO_PATH}, {HEALTH_CLASS, DAO_CLASS}
-    raise ValueError("Unknown suite; expected health or all")
+    if suite == "dao":
+        return list(PATCH_HASHES), {HEALTH_PATH, FIXTURE_PATH, DAO_PATH}, {DAO_CLASS}
+    raise ValueError("Unknown suite; expected health, dao or all")
+
+
+def _stage_selection(suite, stage):
+    names, paths, classes = _selection(suite)
+    if stage == "baseline":
+        return names, paths, classes
+    if stage == "health-fixed" and suite == "health":
+        return names + list(FIXED_PATCH_HASHES), paths, classes | set(UPSTREAM_HEALTH_METHODS)
+    raise ValueError("Only the health suite may select the health-fixed production patch stage")
 
 
 def _sha256(data):
@@ -128,15 +193,16 @@ def verify_source_fingerprint(*, path, claim):
     return {"path": str(claim.get("path", path.name)), **actual, "hash_verified": True}
 
 
-def verify_patch_locks(*, patch_dir, suite):
-    names, _, _ = _selection(suite)
+def verify_patch_locks(*, patch_dir, suite, stage="baseline"):
+    names, _, _ = _stage_selection(suite, stage)
+    hashes = {**PATCH_HASHES, **FIXED_PATCH_HASHES}
     result = {}
     for name in names:
         path = Path(patch_dir) / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_SOURCE_BYTES:
             raise ValueError("Patch lock requires a regular bounded file: " + name)
         digest = _sha256(path.read_bytes())
-        if digest != PATCH_HASHES[name]:
+        if digest != hashes[name]:
             raise ValueError("Patch hash lock mismatch: " + name)
         result[name] = digest
     return result
@@ -169,7 +235,7 @@ def _git(source_dir, *arguments):
     if result.returncode:
         safe_kinds = {
             "init", "remote", "sparse-checkout", "fetch", "checkout", "rev-parse",
-            "status", "diff", "ls-files", "apply",
+            "status", "diff", "ls-files", "apply", "show",
         }
         kind = next((argument for argument in arguments if argument in safe_kinds), "operation")
         raise ValueError(
@@ -178,11 +244,54 @@ def _git(source_dir, *arguments):
     return result.stdout
 
 
+def _fingerprint_bytes(data):
+    return {"bytes": len(data), "sha256": _sha256(data),
+            "git_blob_sha1": hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()}
+
+
+def _manifest_stage_modifications(manifest, suite, stage):
+    _stage_selection(suite, stage)
+    expected_stages = {
+        "baseline": {"suites": ["health", "dao", "all"], "fixed_patches": []},
+        "health-fixed": {"suites": ["health"], "fixed_patches": list(FIXED_PATCH_HASHES)},
+    }
+    if manifest.get("stages") != expected_stages:
+        raise ValueError("Manifest stage authorization differs from the fixed runner contract")
+    entries = manifest.get("fixed_patches", {})
+    if set(entries) != set(FIXED_PATCH_HASHES):
+        raise ValueError("Unexpected fixed patch catalogue")
+    modifications = {}
+    for name, digest in FIXED_PATCH_HASHES.items():
+        entry = entries[name]
+        changes = entry.get("changes", {})
+        if entry.get("sha256") != digest or set(changes) != FIXED_PATCH_PATHS[name]:
+            raise ValueError("Fixed patch hash/path contract mismatch")
+        for path, claim in changes.items():
+            if set(claim) != {"before", "after"}:
+                raise ValueError("Unexpected modified-file fingerprint contract")
+            modifications[path] = claim
+    return modifications if stage == "health-fixed" else {}
+
+
 def validate_applied_tests(*, source_dir, expected_paths):
+    return _validate_applied_changes(source_dir=source_dir, expected_paths=expected_paths, modifications={})
+
+
+def validate_applied_stage(*, source_dir, suite, stage, modifications):
+    _, paths, _ = _stage_selection(suite, stage)
+    required = set().union(*FIXED_PATCH_PATHS.values()) if stage == "health-fixed" else set()
+    if set(modifications) != required:
+        raise ValueError("Modified paths do not equal the explicitly selected stage")
+    return _validate_applied_changes(source_dir=source_dir, expected_paths=paths, modifications=modifications)
+
+
+def _validate_applied_changes(*, source_dir, expected_paths, modifications):
     source_dir = Path(source_dir)
     expected = {_relative(path) for path in expected_paths}
     if not expected or any(not p.startswith(TEST_ROOT) or not p.endswith(".java") for p in expected):
         raise ValueError("Expected scope must contain only explicit Java test paths")
+    if modifications and set(modifications) != set().union(*FIXED_PATCH_PATHS.values()):
+        raise ValueError("Modified source scope is not the fixed health backport")
     if _git(source_dir, "diff", "--name-only", "-z"):
         raise ValueError("Unstaged source/index drift")
     # Deliberately do not exclude ignored paths: hidden extra compilation inputs are still inputs.
@@ -197,24 +306,48 @@ def validate_applied_tests(*, source_dir, expected_paths):
     for offset in range(0, len(fields), 2):
         metadata = fields[offset].decode("ascii").split()
         path = fields[offset + 1].decode("utf-8", "surrogateescape")
-        if len(metadata) != 5 or metadata[0] != ":000000" or metadata[1] != "100644" or metadata[4] != "A":
-            raise ValueError("Patch must add new mode-100644 files only")
+        if len(metadata) != 5 or metadata[1] != "100644":
+            raise ValueError("Patch must preserve regular mode-100644 files")
+        status = metadata[4]
+        if status == "A" and metadata[0] == ":000000" and path in expected:
+            pass
+        elif status == "M" and metadata[0] == ":100644" and path in modifications:
+            before = _fingerprint_bytes(_git(source_dir, "show", "HEAD:" + path))
+            if before != modifications[path]["before"]:
+                raise ValueError("Modified-file baseline fingerprint mismatch: " + path)
+            verify_source_fingerprint(path=source_dir / path, claim={"path": path, **modifications[path]["after"]})
+        else:
+            raise ValueError("Unapproved actual index status/path in the selected stage")
         actual_path = source_dir / path
-        if path not in expected or actual_path.is_symlink() or not actual_path.is_file():
+        if actual_path.is_symlink() or not actual_path.is_file():
             raise ValueError("Unexpected or non-regular patch path: " + path)
         if stat.S_IMODE(actual_path.stat().st_mode) & 0o111:
             raise ValueError("Executable test input: " + path)
-        rows.append({"path": path, "status": "A", "mode": "100644"})
-    if {row["path"] for row in rows} != expected or len(rows) != len(expected):
-        raise ValueError("Actual applied test paths do not equal the selected new-file scope")
+        rows.append({"path": path, "status": status, "mode": "100644"})
+    complete = expected | set(modifications)
+    if {row["path"] for row in rows} != complete or len(rows) != len(complete):
+        raise ValueError("Actual applied paths do not equal the complete selected stage")
     return rows
+
+
+def validate_protected_catalogue(*, before, after, modifications):
+    expected = dict(before)
+    for path, claim in modifications.items():
+        if path.startswith(TEST_ROOT):
+            continue
+        if path != HEALTH_FIX_SOURCE or before.get(path) != claim["before"]["sha256"]:
+            raise ValueError("Unexpected protected production-source baseline/change")
+        expected[path] = claim["after"]["sha256"]
+    if after != expected:
+        raise ValueError("Protected source/schema closure differs beyond the exact fixed fingerprint")
+    return True
 
 
 def evaluate_test_results(*, report_dir, expected_classes, not_before_ns, maven_exit_code):
     result = {
         "passed": False, "maven_exit_code": maven_exit_code,
         "tests": 0, "failures": 0, "errors": 0, "skipped": 0,
-        "suites": [], "admission_errors": [],
+        "suites": [], "container_suites": [], "admission_errors": [],
     }
     problems = result["admission_errors"]
     if not expected_classes or not set(expected_classes).issubset(METHOD_MULTIPLICITIES):
@@ -238,9 +371,10 @@ def evaluate_test_results(*, report_dir, expected_classes, not_before_ns, maven_
                 raise ValueError("Unbounded or externally defined JUnit XML")
             root = ET.fromstring(data)
             name = root.get("name", "")
-            if root.tag != "testsuite" or name not in expected_classes or name in seen:
+            children = {name for name in UPSTREAM_HEALTH_METHODS if name.startswith(UPSTREAM_HEALTH_CLASS + "$")}
+            container = name == UPSTREAM_HEALTH_CLASS and children.issubset(expected_classes)
+            if root.tag != "testsuite" or (name not in expected_classes and not container) or name in seen:
                 raise ValueError("Unexpected, duplicate or unsupported selected JUnit suite")
-            seen.add(name)
             counts = {}
             for key in ("tests", "failures", "errors", "skipped"):
                 value = root.get(key, "")
@@ -248,6 +382,12 @@ def evaluate_test_results(*, report_dir, expected_classes, not_before_ns, maven_
                     raise ValueError("Invalid JUnit count: " + key)
                 counts[key] = int(value)
             cases = root.findall("testcase")
+            if container:
+                if cases or any(counts.values()) or result["container_suites"]:
+                    raise ValueError("Nested-suite container must be empty and appear at most once")
+                result["container_suites"].append({"class": name, "report_sha256": _sha256(data)})
+                continue
+            seen.add(name)
             actual = {"tests": len(cases), "failures": 0, "errors": 0, "skipped": 0}
             expected_methods = METHOD_MULTIPLICITIES[name]
             method_counts = dict.fromkeys(expected_methods, 0)
@@ -423,10 +563,10 @@ def _logged_command(arguments, *, environment, log_path, timeout):
     return completed.returncode
 
 
-def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest):
+def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest, stage="baseline"):
     _require_remote_execution()
     work_dir, receipt_dir, source_dir = Path(work_dir), Path(receipt_dir), Path(source_dir)
-    _, _, classes = _selection(suite)
+    _, _, classes = _stage_selection(suite, stage)
     image_claim = manifest.get("runner", {}).get("build_image_resolution", {})
     if image_claim.get("index_digest") != IMAGE.split("@", 1)[1]:
         raise ValueError("Manifest build image does not match the locked image digest")
@@ -534,7 +674,7 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest):
     )
     if versions_code:
         raise RuntimeError("Build-container toolchain readback failed")
-    selectors = ",".join(sorted(name.rsplit(".", 1)[-1] for name in classes))
+    selectors = ",".join(sorted({name.split("$", 1)[0].rsplit(".", 1)[-1] for name in classes}))
     started_ns = time.time_ns()
     code = container(
         ["mvn", "-B", "-ntp", "-Dspotless.skip=true", "-Dtest=" + selectors,
@@ -548,11 +688,11 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest):
             "maven_log_sha256": _sha256((receipt_dir / "maven.log").read_bytes())}
 
 
-def run_backport(*, work_dir, receipt_dir, suite="health"):
+def run_backport(*, work_dir, receipt_dir, suite="health", stage="baseline"):
     if os.environ.get("GITHUB_ACTIONS") != "true":
         raise RuntimeError("Actual execution is remote GitHub Actions only")
     # Lock rejection precedes all public-source fetch and Maven/container activity.
-    patches = verify_patch_locks(patch_dir=PATCH_DIR, suite=suite)
+    patches = verify_patch_locks(patch_dir=PATCH_DIR, suite=suite, stage=stage)
     _require_remote_execution()
     work_dir, receipt_dir = Path(work_dir), Path(receipt_dir)
     if work_dir == receipt_dir or work_dir in receipt_dir.parents or receipt_dir in work_dir.parents:
@@ -564,7 +704,7 @@ def run_backport(*, work_dir, receipt_dir, suite="health"):
     work_dir = _new_directory(work_dir)
     receipt_dir = _new_directory(receipt_dir)
     receipt = {
-        "schema": "capri.opik.regression-run.v1", "suite": suite, "passed": False,
+        "schema": "capri.opik.regression-run.v1", "suite": suite, "patch_stage": stage, "passed": False,
         "classification": "infrastructure_or_provenance_failure", "maven_exit_code": None,
         "upstream_revision": REVISION, "patch_sha256": patches,
         "github_run_id": os.environ["GITHUB_RUN_ID"],
@@ -581,15 +721,17 @@ def run_backport(*, work_dir, receipt_dir, suite="health"):
                 or manifest.get("upstream", {}).get("repository") != "https://github.com/comet-ml/opik"):
             raise ValueError("Manifest upstream revision changed")
         receipt["manifest_sha256"] = _sha256(manifest_bytes)
+        modifications = _manifest_stage_modifications(manifest, suite, stage)
         source = fetch_upstream(work_dir=work_dir)
         receipt["stage"] = "source_fingerprint_verification"
         receipt["source_fingerprints"] = _verify_sources(source, work_dir, manifest)
+        receipt["source_fingerprints_stage"] = "verified_upstream_baseline_before_patches"
         _write_json(receipt_dir / "source-fingerprints.json", receipt["source_fingerprints"])
         protected = _protected_catalogue(source)
         _write_json(receipt_dir / "protected-source-before.json", protected)
         locked_dir = work_dir / "locked-patches"
         locked_dir.mkdir(mode=0o700)
-        verify_patch_locks(patch_dir=PATCH_DIR, suite=suite)
+        verify_patch_locks(patch_dir=PATCH_DIR, suite=suite, stage=stage)
         for name, digest in patches.items():
             data = (PATCH_DIR / name).read_bytes()
             if _sha256(data) != digest:
@@ -598,18 +740,23 @@ def run_backport(*, work_dir, receipt_dir, suite="health"):
             with target.open("xb") as output:
                 output.write(data)
             _git(source, "apply", "--index", str(target))
-        _, expected_paths, classes = _selection(suite)
-        receipt["applied_test_changes"] = validate_applied_tests(
-            source_dir=source, expected_paths=expected_paths
+        _, expected_paths, classes = _stage_selection(suite, stage)
+        changes = validate_applied_stage(
+            source_dir=source, suite=suite, stage=stage, modifications=modifications
         )
-        applied_hashes = {path: _sha256((source / path).read_bytes()) for path in expected_paths}
+        receipt["applied_test_changes"] = [row for row in changes if row["path"].startswith(TEST_ROOT)]
+        receipt["applied_production_changes"] = [row for row in changes if not row["path"].startswith(TEST_ROOT)]
+        receipt["modified_source_fingerprints"] = modifications
+        applied_hashes = {row["path"]: _sha256((source / row["path"]).read_bytes()) for row in changes}
         initial_index = _git(source, "diff", "--cached", "--raw", "--no-renames", "-z", "HEAD")
-        if _protected_catalogue(source) != protected:
-            raise ValueError("Test patch modified protected production/schema resources")
+        patched_protected = _protected_catalogue(source)
+        validate_protected_catalogue(before=protected, after=patched_protected, modifications=modifications)
+        _write_json(receipt_dir / "protected-source-patched.json", patched_protected)
         receipt["stage"] = "maven"
         _write_json(result_path, receipt)
         execution = run_maven(
-            source_dir=source, work_dir=work_dir, receipt_dir=receipt_dir, suite=suite, manifest=manifest
+            source_dir=source, work_dir=work_dir, receipt_dir=receipt_dir, suite=suite,
+            manifest=manifest, stage=stage
         )
         receipt["maven_exit_code"] = execution["maven_exit_code"]
         receipt["build_image"] = execution["build_image"]
@@ -627,7 +774,7 @@ def run_backport(*, work_dir, receipt_dir, suite="health"):
         unexpected_after = [path for path in untracked_after if path and
                             not path.startswith(b"apps/opik-backend/target/")]
         if (
-            after != protected
+            after != patched_protected
             or unexpected_after
             or _git(source, "rev-parse", "HEAD").decode().strip() != REVISION
             or _git(source, "diff", "--name-only", "-z")
@@ -654,11 +801,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", required=True, type=Path)
     parser.add_argument("--receipt-dir", required=True, type=Path)
-    parser.add_argument("--suite", choices=("health", "all"), default="health")
+    parser.add_argument("--suite", choices=("health", "dao", "all"), default="health")
+    parser.add_argument("--stage", choices=("baseline", "health-fixed"), default="baseline")
     arguments = parser.parse_args()
     try:
         return run_backport(
-            work_dir=arguments.work_dir, receipt_dir=arguments.receipt_dir, suite=arguments.suite
+            work_dir=arguments.work_dir, receipt_dir=arguments.receipt_dir,
+            suite=arguments.suite, stage=arguments.stage
         )
     except Exception as error:
         # Preflight refusal does not acquire or write a preexisting receipt directory.

@@ -1,7 +1,7 @@
 {
   "schema": "capri.opik.backport-tests.v1",
   "issue": "GET-337",
-  "state": "test-only; RED not yet observed",
+  "state": "Health baseline Java RED observed; health-only fixed candidate and upstream-test adapters await execution; DAO baseline unrun.",
   "upstream": {
     "repository": "https://github.com/comet-ml/opik",
     "revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
@@ -141,22 +141,42 @@
     "dao_parameterized_instances": 10
   },
   "observed": {
-    "patch_apply_check": false,
-    "compiled": false,
-    "tests_run": false,
-    "red": false,
-    "green": false,
-    "build": false,
+    "health_baseline": {
+      "executed": true,
+      "upstream_revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
+      "capir_revision": "b4b98c9cd8121a401dd5c633f4ae59df6229f11e",
+      "ci_run_id": 41021382879,
+      "artifact_id": 12961264941,
+      "artifact_sha256": "80bef05e527feeaaf0aeb0674e1dfc9f6d179c4d616fa83bdf4757c39bee3880",
+      "tests": 6,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "source_fingerprints": 13,
+      "failing_methods": [
+        "timedOutProbeClosesTheResponseThatArrivesAfterTheDeadline",
+        "interruptedProbePreservesInterruptAndClosesItsLateResponse"
+      ],
+      "failure_type": "org.opentest4j.AssertionFailedError",
+      "java_red": true
+    },
+    "health_fixed": {
+      "executed": false
+    },
+    "dao_baseline": {
+      "executed": false
+    },
+    "image_built": false,
     "live_mutation": false
   },
-  "production_hunks": 0,
+  "production_hunks": 5,
   "migration_hunks": 0,
   "unchanged_migration_requirement": "All exact-source Liquibase files must retain byte hashes in any later production candidate.",
   "known_gaps": [
-    "No actual client/HTTP pool recovery proof.",
-    "No deterministic post-delivery/pre-mapper scheduler cancellation test.",
-    "No R2DBC regression or attribution.",
-    "Exact resolved JUnit/Mockito/JDK binary versions not locally attested."
+    "Health fixed stage has not run.",
+    "DAO baseline has not run; no DAO production fix is included.",
+    "No actual HTTP-pool recovery, post-delivery cancellation-window or R2DBC acceptance.",
+    "No patched image build or resident deployment/acceptance."
   ],
   "runner": {
     "sparse_checkout": [
@@ -170,7 +190,6 @@
     "compiler_plugin": "3.15.0",
     "test_dependency_edit_required": false,
     "execution_owner": "parent",
-    "commands_proposed_only": true,
     "build_image_resolution": {
       "official_pinned_build_image_tag": "maven:3.9.16-amazoncorretto-25-al2023",
       "source_dockerfile_has_digest": false,
@@ -204,7 +223,8 @@
         "verified_checksum_document_only": true,
         "binary_downloaded": false
       }
-    }
+    },
+    "stage_execution_status": "Only the original health baseline was executed; fixed-health and DAO invocations await parent-owned runs."
   },
   "local_artifacts": [
     {
@@ -218,9 +238,19 @@
       "bytes": 9006
     },
     {
+      "path": "0003-health-late-response-fix.patch",
+      "sha256": "9d989e9d304094d1595b44afac3e39ccb533e3acfccd82fb3398fe4a709f002c",
+      "bytes": 5656
+    },
+    {
+      "path": "0004-upstream-health-contract-tests.patch",
+      "sha256": "01d5e68c611ec5a5172a09ee0dd77d1919066718cf90e8500330ebf99c829e71",
+      "bytes": 6882
+    },
+    {
       "path": "README.md",
-      "sha256": "7ccb7448df883ea6ea08f50a64f81ae6dd307638792820895d0bdb4ebeed369b",
-      "bytes": 7085
+      "sha256": "6bb755b97dc1c6f96eec7628234d662feb898a22d9e2d176f2524178b3b4eb29",
+      "bytes": 7296
     },
     {
       "path": "LICENSE.upstream",
@@ -234,5 +264,91 @@
     "issue": "GET-337",
     "scope": "QueryResponse immutable source fingerprint corrected; three dependency entries independently reverified. No test or production code changed.",
     "cached_text_hash_is_not_fixed_commit_verification": true
-  }
+  },
+  "fixed_patches": {
+    "0003-health-late-response-fix.patch": {
+      "role": "production-health-only",
+      "sha256": "9d989e9d304094d1595b44afac3e39ccb533e3acfccd82fb3398fe4a709f002c",
+      "changes": {
+        "apps/opik-backend/src/main/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheck.java": {
+          "before": {
+            "bytes": 5795,
+            "sha256": "38b9239634047ab629eba97c77252a6ce731fc0cfbcedf6cb32f0631b1411deb",
+            "git_blob_sha1": "698e5fe4fb3abf1b5a7dd410b45445f8d4552ef6"
+          },
+          "after": {
+            "bytes": 6579,
+            "sha256": "b01651a575980b69d265491e59231c49e562653635d47a0e1b8c50ca9a65dfee",
+            "git_blob_sha1": "bf7822c891f45f6213f2aba6840d26f4334e0505"
+          }
+        }
+      },
+      "upstream_reference": "https://github.com/comet-ml/opik/commit/d1b1d62fdc55e77fa0d088e33609fb1ee3c169b3",
+      "adaptation": "The health lifecycle fix is local to this class; cleanup logging retains only the exception type. No AsyncUtils/DAO/POM/dependency/schema change."
+    },
+    "0004-upstream-health-contract-tests.patch": {
+      "role": "upstream-health-test-contract-adaptation",
+      "sha256": "01d5e68c611ec5a5172a09ee0dd77d1919066718cf90e8500330ebf99c829e71",
+      "changes": {
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/AbstractClickHouseHealthCheckTest.java": {
+          "before": {
+            "bytes": 7351,
+            "sha256": "fb31ca8feaa2ba93bd666ecf13039b7c7f16bab200d7b3fddb51e88e8dc14acd",
+            "git_blob_sha1": "12d55866818eacf163d4d9495ea38a5c45e6a419"
+          },
+          "after": {
+            "bytes": 7481,
+            "sha256": "0dd5fab9580bfd1064db2adcdeba8cd44c13c5e4bc8c712bec4beebdee03448e",
+            "git_blob_sha1": "f8b05df31d44cc1ca1027798abd6e51849742b48"
+          }
+        },
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/ClickHouseExistenceHealthCheckTest.java": {
+          "before": {
+            "bytes": 10287,
+            "sha256": "8dd297a4ed732e5f29b47aa2cdf494a957c8a8560ad19af6e0c793dcc6b4fdcd",
+            "git_blob_sha1": "e94702e0360efc100eacd4fdeda9ebbd882ddac3"
+          },
+          "after": {
+            "bytes": 10424,
+            "sha256": "f0a7c026fb5fc24d69d3a7ceeb8b50ea9065c105655dc604fde98907cf972b8c",
+            "git_blob_sha1": "3dfe2bbc3ad41e38fb6d0b5b4c4f340b0a7ad902"
+          }
+        },
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/ClickHouseTracesTopologyHealthCheckTest.java": {
+          "before": {
+            "bytes": 12097,
+            "sha256": "2eb364319b04df7769f43c5c1953a3a0b5735bdc4d3cce49e92ce682bf359ee4",
+            "git_blob_sha1": "4fb2dd965e32d61f0d85682fd0592bf8803e8aee"
+          },
+          "after": {
+            "bytes": 12226,
+            "sha256": "efcf0791223be6ecae2ff46961a045d660da757e8844234ff5004104bdba26bb",
+            "git_blob_sha1": "a643049e625181e795c10afffd96a61c6ab6c4f2"
+          }
+        }
+      },
+      "rationale": "Five old source assertions required cancel(true); the timeout/interruption ownership contract now requires no cancellation. Other health/topology/read-only assertions remain.",
+      "new_regression_patches_frozen": true
+    }
+  },
+  "stages": {
+    "baseline": {
+      "suites": [
+        "health",
+        "dao",
+        "all"
+      ],
+      "fixed_patches": []
+    },
+    "health-fixed": {
+      "suites": [
+        "health"
+      ],
+      "fixed_patches": [
+        "0003-health-late-response-fix.patch",
+        "0004-upstream-health-contract-tests.patch"
+      ]
+    }
+  },
+  "updated_at": "2026-10-30T08:18:11.063487+00:00"
 }

@@ -578,12 +578,19 @@ jobs:
       - name: Verify the regression harness boundaries
         run: python3 -m unittest discover -s scripts/prompts -p test_opik_backport.py -v
 
-      - name: Test the exact pinned Opik health response ownership
+      - name: Test fixed health response ownership and existing health contracts
         run: |
           python3 scripts/prompts/test-opik-backport.py \
-            --work-dir "$RUNNER_TEMP/opik-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
-            --receipt-dir "$RUNNER_TEMP/opik-receipts-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
-            --suite health
+            --work-dir "$RUNNER_TEMP/opik-health-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --receipt-dir "$RUNNER_TEMP/opik-health-receipts-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --suite health --stage health-fixed
+
+      - name: Characterize the unchanged DAO response ownership baseline
+        run: |
+          python3 scripts/prompts/test-opik-backport.py \
+            --work-dir "$RUNNER_TEMP/opik-dao-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --receipt-dir "$RUNNER_TEMP/opik-dao-receipts-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --suite dao --stage baseline
 
       - name: Retain public-source regression evidence
         if: always()
@@ -591,8 +598,13 @@ jobs:
         with:
           name: opik-regression-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/opik-receipts-${{ github.run_id }}-${{ github.run_attempt }}/
-            ${{ runner.temp }}/opik-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-*Get337*.xml
+            ${{ runner.temp }}/opik-health-receipts-${{ github.run_id }}-${{ github.run_attempt }}/
+            ${{ runner.temp }}/opik-dao-receipts-${{ github.run_id }}-${{ github.run_attempt }}/
+            ${{ runner.temp }}/opik-health-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHealthCheckOwnershipTest.xml
+            ${{ runner.temp }}/opik-health-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.infrastructure.db.healthchecks.AbstractClickHouseHealthCheckTest*.xml
+            ${{ runner.temp }}/opik-health-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.infrastructure.db.healthchecks.ClickHouseExistenceHealthCheckTest.xml
+            ${{ runner.temp }}/opik-health-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.infrastructure.db.healthchecks.ClickHouseTracesTopologyHealthCheckTest.xml
+            ${{ runner.temp }}/opik-dao-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.domain.Get337DatasetItemVersionResponseOwnershipTest.xml
           if-no-files-found: warn
           retention-days: 14
 
