@@ -7,6 +7,7 @@ import type { ConversationImageManifest } from "@talent-signal/contracts";
 
 import { workspaceSessionFetch } from "../workspace-session-request";
 import { useT } from "../locale-provider";
+import { useDesktopChrome } from "../desktop-chrome";
 import { loadConversationImages } from "@/lib/conversation-image-store";
 import styles from "./queued-conversation.module.css";
 import imageStyles from "./conversation-images.module.css";
@@ -38,9 +39,11 @@ function imageKey(images: readonly ConversationImageManifest[]): string {
  * binding changes. Sent images share aligned cells with a count and explicit
  * expand/collapse. Clicking an
  * exact thumbnail opens only that image in the viewer, with previous/next
- * navigation in the original manifest order. The viewer opens or downloads
- * the original bytes only from the object URL and only on an explicit user
- * click, always naming the original file. Partial, unavailable and decode
+ * navigation in the original manifest order. In ordinary browsers the viewer
+ * opens or downloads original bytes only from the object URL on an explicit
+ * click, always naming the original file. The known desktop host exposes
+ * inspection only: its current protocol carries no image open/download contract.
+ * Partial, unavailable and decode
  * failures keep their manifest position and stay honest and retryable; a
  * rejected local durable read ends in the same retryable state instead of an
  * indefinite loading placeholder.
@@ -62,6 +65,7 @@ function LoadedConversationImageStrip({
   onRetry,
 }: Props & { onRetry: () => void }) {
   const t = useT();
+  const hostedDesktop = useDesktopChrome() !== null;
   const inspection = useConversationInspection();
   const inspectionLease = useRef<ReturnType<NonNullable<typeof inspection>["begin"]>>(null);
   const [urls, setUrls] = useState<Array<string | null>>(() => images.map(() => null));
@@ -81,9 +85,15 @@ function LoadedConversationImageStrip({
   const expandRef = useRef<HTMLButtonElement | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLElement | null>(null);
+  const removedActionFocus = useRef<HTMLButtonElement | null>(null);
   const previewId = useId();
   const restoreFocus = useRef(false);
   const keys = imageKey(images);
+  const trackOriginalAction = useCallback((button: HTMLButtonElement | null) => {
+    if (!button) return;
+    // Ref cleanup runs before removal, while the exact focused owner exists.
+    return () => { if (document.activeElement === button) removedActionFocus.current = button; };
+  }, []);
 
   const markFailed = (position: number) => {
     const url = current.current[position];
@@ -203,6 +213,16 @@ function LoadedConversationImageStrip({
       (visible ? trigger : expandRef.current ?? stripRef.current?.querySelector<HTMLButtonElement>("button"))?.focus({ preventScroll: true });
     }
   }, [open, expanded, images.length]);
+
+  useLayoutEffect(() => {
+    const removed = removedActionFocus.current;
+    removedActionFocus.current = null;
+    if (!hostedDesktop || !open || !removed || removed.isConnected || !document.hasFocus()) return;
+    const active = document.activeElement;
+    // A later focus choice, including another viewer control, remains owned.
+    if (active && active !== document.body && active !== document.documentElement && active !== removed) return;
+    previewRef.current?.focus({ preventScroll: true });
+  }, [hostedDesktop, open]);
 
   useLayoutEffect(() => () => {
     inspectionLease.current?.dispose();
@@ -344,16 +364,19 @@ function LoadedConversationImageStrip({
               <button aria-label={zoomDescription} className={styles.imageZoom} onClick={() => setZoom((value) => (value === "actual" ? "fit" : "actual"))} type="button">
                 {zoomLabel}
               </button>
-              <button aria-label={t("conversation.image.openTab")} className={styles.imageControl} disabled={!urls[index]} onClick={openOriginal} type="button">
-                <ArrowSquareOut aria-hidden size={16} />
-              </button>
-              <button aria-label={t("conversation.image.download")} className={styles.imageControl} disabled={!urls[index]} onClick={downloadOriginal} type="button">
-                <DownloadSimple aria-hidden size={16} />
-              </button>
+              {!hostedDesktop && <>
+                <button aria-label={t("conversation.image.openTab")} className={styles.imageControl} disabled={!urls[index]} onClick={openOriginal} ref={trackOriginalAction} type="button">
+                  <ArrowSquareOut aria-hidden size={16} />
+                </button>
+                <button aria-label={t("conversation.image.download")} className={styles.imageControl} disabled={!urls[index]} onClick={downloadOriginal} ref={trackOriginalAction} type="button">
+                  <DownloadSimple aria-hidden size={16} />
+                </button>
+              </>}
                 <button aria-label={t("conversation.image.close")} className={styles.imageClose} onClick={close} type="button">
                   <X aria-hidden size={17} />
                 </button>
             </div>
+            {hostedDesktop && <p className={imageStyles.hostNotice}>{t("conversation.image.desktopViewOnly")}</p>}
             <div aria-label={t(zoom === "actual" ? "conversation.image.previewActual" : "conversation.image.preview")} className={`${styles.imageStage} ${imageStyles.stage}`} data-zoom={zoom} ref={stageRef} role="region" tabIndex={zoom === "actual" ? 0 : -1}>
               {urls[index] ? (
                 // eslint-disable-next-line @next/next/no-img-element

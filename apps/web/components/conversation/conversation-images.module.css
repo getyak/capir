@@ -5,4 +5,5 @@
 .preview .stage { flex: 1 1 auto; min-height: 0; }
 .toolbar button { background: transparent; }
 .toolbar button:hover:not(:disabled) { background: var(--surface-muted); }
+.hostNotice { color: var(--muted-strong); font-size: var(--ts-type-meta, 0.8125rem); line-height: 1.5; margin: 0; overflow-wrap: anywhere; }
 @media (forced-colors: active) { .toolbar button { background: Canvas; } .toolbar button:hover:not(:disabled) { background: Highlight; color: HighlightText; } }

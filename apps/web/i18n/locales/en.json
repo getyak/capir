@@ -2693,5 +2693,6 @@
   "搜索条件无效，请只使用一个搜索条件。": "The search query is invalid. Use one search query.",
   "账号语言 · 本机外观": "Account language · Local appearance",
   "sessions.archivedLoaded": "Loaded archive · On this device ({count})",
-  "sessions.archivedPreview": "Showing the first {count}"
+  "sessions.archivedPreview": "Showing the first {count}",
+  "conversation.image.desktopViewOnly": "You can view original images in this desktop window."
 }

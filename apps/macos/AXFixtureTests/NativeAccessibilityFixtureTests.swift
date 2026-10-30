@@ -158,6 +158,184 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
         add(report)
     }
 
+    func testWorkspaceStatusNoticesRemainSeparateAndReachableInShortWindow() throws {
+        let app = try launchWorkspaceFixture("status")
+        let window = app.windows["Native accessibility fixture"]
+        shortenFixtureWindow(window)
+        let notices = ["workspace.settingsRecoveryNotice", "workspace.browserLaunchFailure", "workspace.calendarDownloadNotice"]
+        let messages = [
+            "SYNTHETIC workspace notice: the draft is local. Keep raw text %@ and its separate recovery action visible while other notices remain.",
+            "SYNTHETIC account notice: the browser handoff was not confirmed. This fixture records a click only; no browser or account is opened.",
+            "SYNTHETIC calendar notice: a fictional file needs attention. This fixture records a click only; no calendar file is opened or imported."
+        ]
+        XCTAssertTrue(workspaceNode(app, "workspace.loading").exists)
+        for (identifier, message) in zip(notices, messages) {
+            XCTAssertEqual(app.descendants(matching: .any).matching(identifier: identifier).count, 1)
+            let value = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR value == %@", message, message)).firstMatch
+            XCTAssertTrue(value.exists, "Each independent notice must retain its own raw message.")
+        }
+        let viewport = try fixtureScrollView(in: workspaceNode(app, "workspace.nativeStatusRegion"))
+        let heading = app.staticTexts["fixture.workspace.contentHeading"]
+        XCTAssertLessThanOrEqual(viewport.frame.maxY, heading.frame.minY + 1, "Native notices must reserve space above content.")
+        retainWindow(window, name: "synthetic-workspace-three-notices-short-window")
+        for (identifier, counter) in zip(notices, ["workbenchCalls", "accountCalls", "calendarCalls"]) {
+            let action = app.buttons[identifier + ".record"]
+            revealFixtureElement(action, in: viewport)
+            XCTAssertEqual(text(app.staticTexts["fixture.workspace." + counter]), "0")
+            action.click()
+            waitForText(app.staticTexts["fixture.workspace." + counter], "1")
+        }
+        app.buttons["fixture.workspace.contentAction"].click()
+        waitForText(app.staticTexts["fixture.workspace.contentCalls"], "1")
+        for identifier in notices { XCTAssertTrue(workspaceNode(app, identifier).exists) }
+        retainWindow(window, name: "synthetic-workspace-last-notice-and-uncovered-content")
+    }
+
+    func testWorkspaceRecoveryButtonsStayReachableAndOnlyRecordExplicitCallbacks() throws {
+        let app = try launchWorkspaceFixture("recovery")
+        let window = app.windows["Native accessibility fixture"]
+        shortenFixtureWindow(window)
+        let reason = Array(repeating: "SYNTHETIC failure detail — preserve raw %@ text. No account, network, saved sign-in or real connection is read by this presentation fixture.", count: 8).joined(separator: "\n")
+        XCTAssertEqual(text(workspaceNode(app, "workspace.recovery.reason")), reason)
+        XCTAssertEqual(text(app.staticTexts["fixture.workspace.reloadCalls"]), "0")
+        XCTAssertEqual(text(app.staticTexts["fixture.workspace.connectionCalls"]), "0")
+        let viewport = try fixtureScrollView(in: workspaceNode(app, "workspace.recovery"))
+        retainWindow(window, name: "synthetic-workspace-long-failure-short-window")
+        for (identifier, counter) in [("workspace.recovery.reload", "reloadCalls"), ("workspace.recovery.connection", "connectionCalls")] {
+            let button = app.buttons[identifier]
+            revealFixtureElement(button, in: viewport)
+            button.click()
+            waitForText(app.staticTexts["fixture.workspace." + counter], "1")
+        }
+        retainWindow(window, name: "synthetic-workspace-recovery-actions-reachable")
+        app.buttons["fixture.workspace.restore"].click()
+        waitForText(app.staticTexts["fixture.workspace.recoveryMode"], "restoring")
+        XCTAssertFalse(app.buttons["workspace.recovery.reload"].exists)
+        XCTAssertFalse(app.buttons["workspace.recovery.connection"].exists)
+        XCTAssertFalse(workspaceNode(app, "workspace.recovery.reason").exists)
+        XCTAssertEqual(text(app.staticTexts["fixture.workspace.reloadCalls"]), "1")
+        XCTAssertEqual(text(app.staticTexts["fixture.workspace.connectionCalls"]), "1")
+        retainWindow(window, name: "synthetic-workspace-restoring-has-no-recovery-actions")
+    }
+
+    func testSettingsSearchOwnsVisiblePaneAndPreservesIsolatedControlValues() throws {
+        let app = try launchWorkspaceFixture("settings")
+        let window = app.windows["Native accessibility fixture"]
+        shortenFixtureWindow(window)
+        let floating = workspaceNode(app, "settings.general.floating")
+        let pane = try fixtureScrollView(in: workspaceNode(app, "fixture.settings.pane"))
+        revealFixtureElement(floating, in: pane)
+        floating.click()
+        waitForText(app.staticTexts["fixture.settings.floating"], "true")
+        let query = app.textFields["fixture.settings.query"]
+        query.click()
+        query.typeText("general")
+        XCTAssertTrue(workspaceNode(app, "settings.search.results").waitForExistence(timeout: 5))
+        XCTAssertFalse(floating.exists, "The mounted device control must leave the AX tree while search owns the pane.")
+        retainWindow(window, name: "synthetic-settings-search-hides-mounted-device-controls")
+        app.buttons["settings.search.close"].click()
+        XCTAssertTrue(floating.waitForExistence(timeout: 5))
+        XCTAssertEqual(text(app.staticTexts["fixture.settings.floating"]), "true")
+        query.click()
+        query.typeText("unmatched-synthetic-329")
+        XCTAssertTrue(workspaceNode(app, "settings.search.empty").waitForExistence(timeout: 5))
+        XCTAssertFalse(floating.exists)
+        retainWindow(window, name: "synthetic-settings-empty-search-has-one-visible-owner")
+        app.buttons["settings.search.close"].click()
+        XCTAssertTrue(floating.waitForExistence(timeout: 5))
+        XCTAssertEqual(text(app.staticTexts["fixture.settings.floating"]), "true")
+        XCTAssertEqual(text(app.staticTexts["fixture.settings.selectionCalls"]), "0")
+        retainWindow(window, name: "synthetic-settings-local-control-value-restored")
+    }
+
+    func testSettingsSearchAndSectionButtonsEmitOnlySelectedFixtureDestination() throws {
+        let app = try launchWorkspaceFixture("settings")
+        let window = app.windows["Native accessibility fixture"]
+        shortenFixtureWindow(window)
+        let query = app.textFields["fixture.settings.query"]
+        query.click()
+        query.typeText("permission")
+        let result = app.buttons["settings.search.result.permissions"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        XCTAssertEqual(text(app.staticTexts["fixture.settings.activated"]), "none")
+        result.click()
+        waitForText(app.staticTexts["fixture.settings.selection"], "permissions")
+        XCTAssertEqual(text(app.staticTexts["fixture.settings.activated"]), "permissions")
+        XCTAssertEqual(text(app.staticTexts["fixture.settings.selectionCalls"]), "1")
+        XCTAssertTrue(app.buttons["settings.section.permissions"].isSelected)
+        XCTAssertFalse(workspaceNode(app, "settings.search.results").exists)
+        let sections = try fixtureScrollView(in: workspaceNode(app, "fixture.settings.sections"))
+        for (section, count) in [("connection", "2"), ("general", "3")] {
+            let button = app.buttons["settings.section." + section]
+            revealFixtureElement(button, in: sections)
+            button.click()
+            waitForText(app.staticTexts["fixture.settings.selection"], section)
+            XCTAssertTrue(button.isSelected)
+            XCTAssertEqual(text(app.staticTexts["fixture.settings.selectionCalls"]), count)
+        }
+        XCTAssertTrue(workspaceNode(app, "settings.general.floating").exists)
+        retainWindow(window, name: "synthetic-settings-search-and-real-section-selection")
+        let report = XCTAttachment(string: "Pure presentation callbacks only. permissions search result → permissions; section buttons → connection → general. No System Settings, permission probe, browser, updater or connection service was constructed.")
+        report.name = "synthetic-settings-destination-callback-report"
+        report.lifetime = .keepAlways
+        add(report)
+    }
+
+    private func launchWorkspaceFixture(_ mode: String) throws -> XCUIApplication {
+        continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["CAPIR_NATIVE_AX_DISPOSABLE_HOST"] == "1" else {
+            throw XCTSkip("Use native-accessibility-acceptance.sh on a disposable hosted Mac.")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
+                               "-ApplePersistenceIgnoreState", "YES", "--synthetic-workspace-\(mode)-fixture"]
+        client = app
+        app.launch()
+        XCTAssertTrue(app.staticTexts["fixture.workspace.ready"].waitForExistence(timeout: 15))
+        let expected = try XCTUnwrap(ProcessInfo.processInfo.environment["CAPIR_NATIVE_AX_APP_PATH"])
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: "com.getyak.acceptance.native-ax")
+        XCTAssertEqual(running.count, 1)
+        XCTAssertEqual(running.first?.bundleURL?.resolvingSymlinksInPath(),
+                       URL(fileURLWithPath: expected).resolvingSymlinksInPath())
+        return app
+    }
+
+    private func workspaceNode(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    private func shortenFixtureWindow(_ window: XCUIElement) {
+        XCTAssertTrue(window.exists)
+        let before = window.frame
+        if before.height > 440 {
+            let corner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -1, dy: -1))
+            corner.click(forDuration: 0.2, thenDragTo: corner.withOffset(
+                CGVector(dx: min(0, 760 - before.width), dy: 420 - before.height)))
+        }
+        let short = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in window.frame.height <= 440 }, object: window)
+        XCTAssertEqual(XCTWaiter.wait(for: [short], timeout: 5), .completed)
+        XCTAssertGreaterThanOrEqual(window.frame.height, 320)
+    }
+
+    private func fixtureScrollView(in region: XCUIElement) throws -> XCUIElement {
+        XCTAssertTrue(region.waitForExistence(timeout: 5))
+        let scroll = region.elementType == .scrollView ? region : region.scrollViews.firstMatch
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5), "The real short-window surface must provide native scrolling.")
+        return scroll
+    }
+
+    private func revealFixtureElement(_ target: XCUIElement, in viewport: XCUIElement) {
+        // Real wheel events only. Try both directions because the recovery
+        // surface's real focus state may already have scrolled to its actions.
+        for step in 0..<32 {
+            if target.isHittable && viewport.frame.insetBy(dx: -1, dy: -1).contains(target.frame) { return }
+            viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .scroll(byDeltaX: 0, deltaY: step < 16 ? -60 : 60)
+        }
+        XCTAssertTrue(target.isHittable, "The actual scroll surface must expose this action.")
+        XCTAssertTrue(viewport.frame.insetBy(dx: -1, dy: -1).contains(target.frame), "The full action must be inside its scroll viewport.")
+    }
+
     private func openSyntheticPreview(_ app: XCUIApplication) throws -> XCUIElement {
         XCTAssertEqual(text(app.staticTexts["fixture.capture.submissions"]), "0")
         app.buttons["fixture.capture.start"].click()
@@ -209,8 +387,12 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
         for y in 0..<bitmap.pixelsHigh {
             autoreleasepool {
                 for x in 0..<bitmap.pixelsWide {
-                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-                          color.redComponent > 0.85, color.greenComponent < 0.15, color.blueComponent > 0.85 else { continue }
+                    // ICC conversion can add green to a painted magenta marker.
+                    // Require bright red/blue and a large chroma gap; white and
+                    // blue controls cannot satisfy this source-only predicate.
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                          color.redComponent > 0.85, color.blueComponent > 0.85,
+                          min(color.redComponent, color.blueComponent) - color.greenComponent > 0.6 else { continue }
                     left = min(left, x); top = min(top, y)
                     right = max(right, x); bottom = max(bottom, y)
                 }

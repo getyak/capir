@@ -135,6 +135,7 @@ function positionText(): string {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  delete window.talentSignalDesktop;
   localStorage.clear();
   createdUrls = [];
   revokedUrls = [];
@@ -161,6 +162,7 @@ afterEach(async () => {
   mount?.remove();
   mount = null;
   setConversationImageStoreForTest(undefined);
+  delete window.talentSignalDesktop;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -379,6 +381,106 @@ it("downloads and opens the exact original bytes only on explicit clicks with th
   expect(opened).toHaveLength(1);
   expect(String(opened[0]![0])).toBe(createdUrls[1]);
   expect(String(opened[0]![0]).startsWith("blob:")).toBe(true);
+  expect(dialog().textContent).not.toContain("当前桌面窗口支持查看原图。");
+});
+
+it("keeps exact-image inspection in the known desktop host without offering unsupported open or download actions", async () => {
+  window.talentSignalDesktop = { protocolVersion: 1, availableVersion: null };
+  const opened = vi.spyOn(window, "open");
+  const downloaded = vi.spyOn(HTMLAnchorElement.prototype, "click");
+  await renderStrip({ images: [imageManifest(0, "first.png"), imageManifest(1, "second.png")] });
+  const trigger = button("查看原图 2");
+  await act(async () => trigger.click());
+
+  expect(dialogImage().alt).toBe("second.png");
+  expect(positionText()).toBe("2 / 2");
+  expect(dialog().querySelector('[aria-label="在新标签页打开原图"]')).toBeNull();
+  expect(dialog().querySelector('[aria-label="下载原图"]')).toBeNull();
+  expect(dialog().textContent).toContain("当前桌面窗口支持查看原图。");
+  await act(async () => button("缩放 适应窗口，点击切换为原始 100%").click());
+  expect(dialogImage().dataset.zoom).toBe("actual");
+  await act(async () => button("上一张图片").click());
+  expect(dialogImage().alt).toBe("first.png");
+  await act(async () => button("下一张图片").click());
+  expect(dialogImage().alt).toBe("second.png");
+  await act(async () => button("关闭原图").click());
+  expect(document.querySelector("[data-evidence-preview]")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(opened).not.toHaveBeenCalled();
+  expect(downloaded).not.toHaveBeenCalled();
+});
+
+it("applies a late desktop chrome projection without replacing the current image, zoom or inspection", async () => {
+  await renderStrip({ images: [imageManifest(0, "source.png")] });
+  await act(async () => button("查看原图 1").click());
+  expect(button("在新标签页打开原图")).toBeTruthy();
+  expect(button("下载原图")).toBeTruthy();
+  await act(async () => button("缩放 适应窗口，点击切换为原始 100%").click());
+  const preview = dialog();
+  const image = dialogImage();
+  const reads = fetcher.mock.calls.length;
+  await act(async () => {
+    window.talentSignalDesktop = { protocolVersion: 1, availableVersion: null };
+    window.dispatchEvent(new Event("talent-signal-desktop"));
+  });
+  expect(dialog()).toBe(preview);
+  expect(dialogImage()).toBe(image);
+  expect(dialogImage().dataset.zoom).toBe("actual");
+  expect(fetcher).toHaveBeenCalledTimes(reads);
+  expect(dialog().querySelector('[aria-label="在新标签页打开原图"]')).toBeNull();
+  expect(dialog().querySelector('[aria-label="下载原图"]')).toBeNull();
+  expect(dialog().textContent).toContain("当前桌面窗口支持查看原图。");
+});
+
+it.each(["在新标签页打开原图", "下载原图"])("keeps keyboard inspection reachable when a late desktop projection removes the focused %s action", async action => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  await renderStrip({ images: [imageManifest(0), imageManifest(1)] });
+  const trigger = button("查看原图 1");
+  await act(async () => trigger.click());
+  const preview = dialog();
+  const removed = button(action);
+  removed.focus();
+  expect(document.activeElement).toBe(removed);
+  await act(async () => {
+    window.talentSignalDesktop = { protocolVersion: 1, availableVersion: null };
+    window.dispatchEvent(new Event("talent-signal-desktop"));
+  });
+  expect(removed.isConnected).toBe(false);
+  expect(document.activeElement).toBe(preview);
+  await act(async () => document.activeElement!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
+  expect(dialogImage().alt).toBe("photo-2.png");
+  await act(async () => document.activeElement!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(document.querySelector("[data-evidence-preview]")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+});
+
+it.each(["preview control", "other work"])("does not move focus from %s when a late desktop projection removes image actions", async target => {
+  await renderStrip({ images: [imageManifest(0)] });
+  await act(async () => button("查看原图 1").click());
+  button("下载原图").focus();
+  const chosen = target === "preview control" ? button("缩放 适应窗口，点击切换为原始 100%") : document.createElement("button");
+  if (target === "other work") mount!.append(chosen);
+  chosen.focus();
+  await act(async () => {
+    window.talentSignalDesktop = { protocolVersion: 1, availableVersion: null };
+    window.dispatchEvent(new Event("talent-signal-desktop"));
+  });
+  expect(document.activeElement).toBe(chosen);
+});
+
+it.each([
+  ["en", "You can view original images in this desktop window."],
+  ["zh-TW", "目前的桌面視窗支援檢視原圖。"],
+  ["ja", "このデスクトップウインドウで元の画像を表示できます。"],
+  ["ko", "이 데스크톱 창에서 원본 이미지를 볼 수 있습니다."],
+] as const)("uses the account's %s language for the desktop inspection notice", async (locale, notice) => {
+  window.talentSignalDesktop = { protocolVersion: 1, availableVersion: null };
+  await renderStrip({ images: [imageManifest(0, "source.png")], locale });
+  await act(async () => mount!.querySelector<HTMLButtonElement>("button")!.click());
+  expect(dialogImage().alt).toBe("source.png");
+  expect(dialog().textContent).toContain(notice);
+  expect(dialog().textContent).not.toContain("conversation.image.");
+  expect(dialog().querySelectorAll(`.${styles.imageControl}`)).toHaveLength(0);
 });
 
 it("keeps an unavailable image honest, in place and retryable inside the viewer", async () => {

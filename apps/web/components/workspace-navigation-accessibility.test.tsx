@@ -43,7 +43,7 @@ describe("workspace navigation accessibility and reachability", () => {
     expect(html).toContain('aria-label="搜索人物或对话"');
   });
 
-  it("renders the compact desktop order and preserves the collapsed history destination", () => {
+  it("orders named search and new conversation before the desktop destinations", () => {
     const html = render();
     expect(html).not.toContain("更多");
     expect(html).toContain('href="/workspace/sessions"');
@@ -56,8 +56,14 @@ describe("workspace navigation accessibility and reachability", () => {
       "/workspace/people",
       "/workspace/meetings",
     ].map((href) => primary.indexOf(`href="${href}"`));
-    // Search remains directly available beside the brand, leaving this row
-    // for four stable, named destinations.
+    const tools = html.match(/<div\b[^>]*data-sidebar-tools[^>]*>[\s\S]*?<\/div>/)?.[0] ?? "";
+    expect(tools).toContain('aria-label="搜索人物或对话"');
+    expect(tools).toContain("搜索人物或对话</span>");
+    expect(tools).toContain('data-sidebar-compose="true"');
+    expect(tools).toContain("新对话</span>");
+    expect(tools.indexOf('aria-label="搜索人物或对话"')).toBeLessThan(tools.indexOf("data-sidebar-compose"));
+    expect(html.indexOf("data-sidebar-tools")).toBeLessThan(html.indexOf(primary));
+    // Search and compose stay available whichever object browser is selected.
     expect(primary).not.toContain('aria-label="搜索人物或对话"');
     expect(indices.every((index) => index > -1)).toBe(true);
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
@@ -91,7 +97,7 @@ describe("workspace navigation accessibility and reachability", () => {
       <WorkspaceShellNav binding={null} />
       <WorkspaceMobileSourcesLink />
     </LocaleProvider>);
-    for (const label of ["Workspace navigation", "Today", "Chat (Conversation)", "People", "Time", "Search people or conversations", "Open the conversation log", "Open extensions"]) {
+    for (const label of ["Workspace navigation", "Today", "Conversation", "People", "Time", "Search people or conversations", "Open the conversation log", "Open extensions"]) {
       expect(html).toContain(`aria-label="${label}"`);
     }
     for (const href of ["/workspace/today", "/workspace", "/workspace/people", "/workspace/meetings", "/workspace/sessions", "/workspace/extensions"]) {

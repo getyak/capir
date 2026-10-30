@@ -2693,5 +2693,6 @@
   "搜索条件无效，请只使用一个搜索条件。": "검색 조건이 잘못되었습니다. 검색 조건을 하나만 입력하세요.",
   "账号语言 · 本机外观": "계정 언어 · 이 기기의 모양",
   "sessions.archivedLoaded": "불러온 보관 대화 · 이 기기 ({count})",
-  "sessions.archivedPreview": "처음 {count}개 표시"
+  "sessions.archivedPreview": "처음 {count}개 표시",
+  "conversation.image.desktopViewOnly": "이 데스크톱 창에서 원본 이미지를 볼 수 있습니다."
 }

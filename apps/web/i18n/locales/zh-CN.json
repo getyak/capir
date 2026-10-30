@@ -627,5 +627,6 @@
   "搜索条件无效，请只使用一个搜索条件。": "搜索条件无效，请只使用一个搜索条件。",
   "账号语言 · 本机外观": "账号语言 · 本机外观",
   "sessions.archivedLoaded": "已载入归档 · 本机整理（{count}）",
-  "sessions.archivedPreview": "当前显示前 {count} 条"
+  "sessions.archivedPreview": "当前显示前 {count} 条",
+  "conversation.image.desktopViewOnly": "当前桌面窗口支持查看原图。"
 }

@@ -36,6 +36,7 @@ import { WorkspaceBrowseProvider, useWorkspaceBrowse } from "./workspace-browse"
 import { WorkspaceShellNav } from "./workspace-shell-nav";
 import { WorkspaceSidebarContext } from "./workspace-sidebar-context";
 import { WORKSPACE_SESSION_EXPIRED_EVENT } from "./workspace-session-request";
+import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
 import { invalidateWorkspaceDirectory } from "@/lib/workspace-directory-cache";
 
 let host: HTMLDivElement, root: Root;
@@ -77,6 +78,42 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); });
 
 describe("independent desktop browser", () => {
+  it("keeps a named new conversation action available across every object browser without replacing the working draft", async () => {
+    await render();
+    const draft = host.querySelector<HTMLTextAreaElement>("textarea")!;
+    const start = vi.fn((event: Event) => event.preventDefault());
+    window.addEventListener(WORKSPACE_NEW_CONVERSATION_EVENT, start);
+    try {
+      for (const label of ["人物", "时间", "今日", "对话"]) {
+        await click(primary(label));
+        const compose = host.querySelector<HTMLButtonElement>("[data-sidebar-compose]")!;
+        expect(compose).not.toBeNull();
+        expect(compose.textContent).toBe("新对话");
+        await click(compose);
+      }
+      expect(start).toHaveBeenCalledTimes(4);
+      expect(route.push).not.toHaveBeenCalled();
+      expect(route.navigations).toEqual([]);
+      expect(host.querySelector("textarea")).toBe(draft);
+      expect(route.mounts).toBe(1);
+    } finally {
+      window.removeEventListener(WORKSPACE_NEW_CONVERSATION_EVENT, start);
+    }
+  });
+
+  it("starts an unscoped fresh draft from the persistent action when no conversation handles it", async () => {
+    await render();
+    await click(primary("人物"));
+    await click(host.querySelector("[data-sidebar-compose]")!);
+    expect(route.push).toHaveBeenCalledTimes(1);
+    const [href] = route.push.mock.calls[0]!;
+    const locator = new URL(href, "https://capri.test");
+    expect(locator.pathname).toBe("/workspace");
+    expect([...locator.searchParams.keys()].sort()).toEqual(["draft_session", "intent"]);
+    expect(locator.searchParams.get("draft_session")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(locator.searchParams.get("intent")).toBe("compose");
+  });
+
   it("changes only the left section and retains the working draft node, selection and scroll", async () => {
     await render();
     const draft = host.querySelector<HTMLTextAreaElement>('textarea')!;

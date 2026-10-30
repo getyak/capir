@@ -2693,5 +2693,6 @@
   "搜索条件无效，请只使用一个搜索条件。": "搜尋條件無效，請只使用一個搜尋條件。",
   "账号语言 · 本机外观": "帳號語言 · 本機外觀",
   "sessions.archivedLoaded": "已載入封存 · 本機整理（{count}）",
-  "sessions.archivedPreview": "目前顯示前 {count} 筆"
+  "sessions.archivedPreview": "目前顯示前 {count} 筆",
+  "conversation.image.desktopViewOnly": "目前的桌面視窗支援檢視原圖。"
 }

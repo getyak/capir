@@ -245,3 +245,20 @@
 "Check cancelled." = "確認をキャンセルしました。";
 "Check the network and workspace service, then retry." = "ネットワークとワークスペースのサービスを確認し、もう一度お試しください。";
 "Unable to connect right now" = "現在接続できません";
+
+/* Workspace status layout and device settings presentation. */
+"Workspace notice" = "ワークスペースからのお知らせ";
+"Calendar file" = "カレンダーファイル";
+"Loading workspace…" = "ワークスペースを読み込み中…";
+"Restoring sign-in…" = "サインインを復元中…";
+"Checking this Mac’s saved sign-in." = "このMacに保存されたサインイン情報を確認しています。";
+"Copy retained text" = "保持したテキストをコピー";
+"Copy text %lld" = "テキスト %lld をコピー";
+"Text copied. Paste it into the conversation and review before sending." = "テキストをコピーしました。会話に貼り付け、確認してから送信してください。";
+"Text was not copied. Check sign-in, draft retention or clipboard permission, then retry." = "テキストをコピーできませんでした。サインイン、下書きの保持期限、クリップボードの権限を確認して再試行してください。";
+"Discard this recovery" = "この復元を破棄";
+"Close" = "閉じる";
+"Workspace window" = "ワークスペースウインドウ";
+"Update status" = "アップデート状況";
+"Automatic updates" = "自動アップデート";
+"Discard recovery %lld" = "復元 %lld を破棄";

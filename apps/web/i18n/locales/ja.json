@@ -2693,5 +2693,6 @@
   "搜索条件无效，请只使用一个搜索条件。": "検索条件が無効です。検索条件は一つだけ指定してください。",
   "账号语言 · 本机外观": "アカウントの言語 · この端末の外観",
   "sessions.archivedLoaded": "読み込み済みアーカイブ · この端末（{count}）",
-  "sessions.archivedPreview": "最初の{count}件を表示"
+  "sessions.archivedPreview": "最初の{count}件を表示",
+  "conversation.image.desktopViewOnly": "このデスクトップウインドウで元の画像を表示できます。"
 }

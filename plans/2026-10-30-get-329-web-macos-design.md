@@ -125,3 +125,51 @@ not establish an OS picker, backend upload or installed-client result. One
 review finding (non-dismissible token reveal incorrectly marked busy) was fixed
 and included in the final 112 checks. Structural visual selection and the next
 implementation slice remain active; this first PR does not complete GET-329.
+
+
+## Structural direction and second slice
+
+Rendered two equivalent synthetic-content directions at 1280×820 and900×720.
+Selected the conversation-first single retrieval column and one reading axis;
+the relationship-dossier object browser remains a credible challenger for
+deliberate Person review. Neither prototype is runtime acceptance. Both narrow
+prototypes exposed composer overlap, which the implementation avoids through
+normal-flow sibling scroll owners. Exact dimensions and failed capture samples
+remain in the task artifact.
+
+The selected implementation adds persistent Search/New conversation, vertical
+named destinations, a stable760px conversation axis, explicit prose/quote/review
+hierarchy, bounded input and transcript scrolling, and visible answer-folding
+controls. Native magnification no longer folds answers. Known desktop hosts
+retain original-image inspection while uncontracted Open/Download controls stay
+with ordinary browsers; native navigation/download authority is unchanged. This
+is a producer/consumer contract correction, not proof of an observed WK failure.
+
+Native recovery now owns one in-flow status region; failure reasons remain
+verbatim/selectable, recovery actions remain explicit, and device settings use
+grouped controls with one search-owned pane. Value-driven production components
+also run in the isolated AX host. Four added GUI cases require eight total with
+zero failures/skips; actual hosted results and screenshots remain pending.
+
+Local second evidence:107 shell checks,129 reading/image checks, complete Web
+TypeScript and narrow ESLint passed. Integrated current main71b87bfa (GET325
+rapid-reopen search focus);25 focused search checks passed afterward. Native
+parse/catalog checks passed; independent review found no confirmed newP0/P1/P2.
+The first PR489's initial GUI failure was traced to fixture geometry/AX query,
+repaired without weakening its four cases. Its fresh current-source CI and the
+second source's real rendered/GUI acceptance are still gates, not completed work.
+
+## Integration decision
+
+Combine the reviewed structural slice into PR489 while the capture fixture still
+requires a fresh genuine GUI run. This avoids a second nearly identical native
+pipeline and keeps the entire delivery under one current-source set of gates.
+The original four cases remain; eight total must pass without skips. Initial
+GUI failures and exact ICC PNG replay evidence remain retained. This changes
+integration sequencing only, not acceptance or external-effect authority.
+
+A final independent review found a late desktop projection could remove a
+focused image action. Ref cleanup now records only that exact focus owner and
+transfers focus to the retained preview only while the document remains active
+and no new focus choice exists. Both removed actions, keyboard continuation and
+non-stealing cases are covered;34 image checks passed after this repair.

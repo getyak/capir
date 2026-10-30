@@ -245,3 +245,20 @@
 "Check cancelled." = "확인이 취소되었습니다.";
 "Check the network and workspace service, then retry." = "네트워크와 워크스페이스 서비스를 확인한 후 다시 시도하세요.";
 "Unable to connect right now" = "현재 연결할 수 없습니다";
+
+/* Workspace status layout and device settings presentation. */
+"Workspace notice" = "워크스페이스 알림";
+"Calendar file" = "캘린더 파일";
+"Loading workspace…" = "워크스페이스 불러오는 중…";
+"Restoring sign-in…" = "로그인 복원 중…";
+"Checking this Mac’s saved sign-in." = "이 Mac에 저장된 로그인 정보를 확인하고 있습니다.";
+"Copy retained text" = "보관된 텍스트 복사";
+"Copy text %lld" = "텍스트 %lld 복사";
+"Text copied. Paste it into the conversation and review before sending." = "텍스트를 복사했습니다. 대화에 붙여넣고 검토한 후 보내세요.";
+"Text was not copied. Check sign-in, draft retention or clipboard permission, then retry." = "텍스트가 복사되지 않았습니다. 로그인, 초안 보관 기간 또는 클립보드 권한을 확인하고 다시 시도하세요.";
+"Discard this recovery" = "이 복원 폐기";
+"Close" = "닫기";
+"Workspace window" = "워크스페이스 창";
+"Update status" = "업데이트 상태";
+"Automatic updates" = "자동 업데이트";
+"Discard recovery %lld" = "복원 %lld 폐기";

@@ -59,8 +59,8 @@ function gesture(target: EventTarget, type: string, scale: number): boolean {
 
 function wheel(target: EventTarget, init: { deltaY: number; ctrlKey?: boolean }): boolean {
   // happy-dom's WheelEvent does not carry modifier keys from its init dict;
-  // define the pinch marker (WebKit sends ctrl+wheel for trackpad pinch) the
-  // same way the gesture scale is attached above.
+  // Model the browser modifier marker; real trackpad zoom is accepted on the
+  // shipping browser/host separately from this event-default regression.
   const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: init.deltaY });
   if (init.ctrlKey) Object.defineProperty(event, "ctrlKey", { value: true });
   let notCanceled = true;
@@ -70,7 +70,7 @@ function wheel(target: EventTarget, init: { deltaY: number; ctrlKey?: boolean })
   return notCanceled;
 }
 
-describe("long-answer pinch fold", () => {
+describe("long-answer explicit reading fold", () => {
   it("localizes reading chrome while preserving source names, alt text and table content", () => {
     mount(<LocaleProvider locale="en"><ConversationProvenance sources={[{ display_name: "原始依据名称" }]} /><ConversationResponse>{"![原图说明](https://example.test/image.png)\n\n| 项目 | 内容 |\n| --- | --- |\n| 原文 | 保留文字 |"}</ConversationResponse></LocaleProvider>);
     expect(host!.textContent).toContain("Sources · 原始依据名称");
@@ -91,7 +91,7 @@ describe("long-answer pinch fold", () => {
     expect(fold.getAttribute("aria-label")).toBe(label);
     const toggle = fold.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
     expect(toggle.getAttribute("aria-label")).toBe(collapse);
-    expect(toggle.textContent).toBe("");
+    expect(toggle.textContent).toBe(collapse);
     expect(toggle.querySelector("svg")).not.toBeNull();
     expect(fold.textContent).toContain("陈宇负责设计协作。");
     act(() => toggle.click());
@@ -100,7 +100,7 @@ describe("long-answer pinch fold", () => {
     expect(fold.textContent).toContain("陈宇负责设计协作。");
     act(() => toggle.click());
     expect(toggle.getAttribute("aria-label")).toBe(collapse);
-    expect(toggle.textContent).toBe("");
+    expect(toggle.textContent).toBe(collapse);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
   it("keeps long code-only responses visible without an empty fold", () => {
@@ -108,36 +108,36 @@ describe("long-answer pinch fold", () => {
     expect(host!.querySelector("[data-folded]")).toBeNull();
   });
 
-  it("folds to an extractive preview on pinch inward and unfolds on spread", () => {
+  it("preserves native pinch defaults without changing answer visibility", () => {
     mount(createElement(ConversationResponse, { foldable: true }, LONG_ANSWER));
     const fold = surface();
     expect(fold.dataset.folded).toBe("false");
 
-    gesture(fold, "gesturestart", 1);
-    gesture(fold, "gesturechange", 0.8);
-    expect(fold.dataset.folded).toBe("true");
-    // Extractive preview visible; the exact full text stays in the DOM.
-    expect(fold.querySelector("[data-fold-preview]")?.textContent).toContain("陈宇负责设计协作。");
+    expect(gesture(fold, "gesturestart", 1)).toBe(true);
+    expect(gesture(fold, "gesturechange", 0.8)).toBe(true);
+    expect(gesture(fold, "gestureend", 0.8)).toBe(true);
+    expect(fold.dataset.folded).toBe("false");
+    expect(fold.querySelector("[data-fold-preview]")).toBeNull();
     expect(fold.textContent).toContain("合同细节仍然需要法务复核后才能进入下一步，因此暂不推进对外承诺。");
 
-    gesture(fold, "gesturestart", 1);
-    gesture(fold, "gesturechange", 1.2);
+    expect(gesture(fold, "gesturestart", 1)).toBe(true);
+    expect(gesture(fold, "gesturechange", 1.2)).toBe(true);
     expect(fold.dataset.folded).toBe("false");
   });
 
-  it("handles scoped ctrl-wheel as pinch and leaves plain wheel untouched", () => {
+  it("leaves both modified magnification and ordinary wheel scrolling to the platform", () => {
     mount(createElement(ConversationResponse, { foldable: true }, LONG_ANSWER));
     const fold = surface();
 
     expect(wheel(fold, { deltaY: -120 })).toBe(true);
     expect(fold.dataset.folded).toBe("false");
 
-    wheel(fold, { deltaY: 1, ctrlKey: true });
+    expect(wheel(fold, { deltaY: 1, ctrlKey: true })).toBe(true);
     expect(fold.dataset.folded).toBe("false");
-    expect(wheel(fold, { deltaY: 120, ctrlKey: true })).toBe(false);
-    expect(fold.dataset.folded).toBe("true");
+    expect(wheel(fold, { deltaY: 120, ctrlKey: true })).toBe(true);
+    expect(fold.dataset.folded).toBe("false");
 
-    expect(wheel(fold, { deltaY: -120, ctrlKey: true })).toBe(false);
+    expect(wheel(fold, { deltaY: -120, ctrlKey: true })).toBe(true);
     expect(fold.dataset.folded).toBe("false");
   });
 
@@ -173,7 +173,7 @@ describe("long-answer pinch fold", () => {
     expect(toggle).not.toBeNull();
     expect(toggle!.getAttribute("aria-expanded")).toBe("true");
     expect(toggle!.getAttribute("aria-label")).toBe("收起");
-    expect(toggle!.textContent).toBe("");
+    expect(toggle!.textContent).toBe("收起");
 
     act(() => toggle!.click());
     expect(fold.dataset.folded).toBe("true");

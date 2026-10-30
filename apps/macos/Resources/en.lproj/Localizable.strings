@@ -245,3 +245,20 @@
 "Check cancelled." = "Check cancelled.";
 "Check the network and workspace service, then retry." = "Check the network and workspace service, then retry.";
 "Unable to connect right now" = "Unable to connect right now";
+
+/* Workspace status layout and device settings presentation. */
+"Workspace notice" = "Workspace notice";
+"Calendar file" = "Calendar file";
+"Loading workspace…" = "Loading workspace…";
+"Restoring sign-in…" = "Restoring sign-in…";
+"Checking this Mac’s saved sign-in." = "Checking this Mac’s saved sign-in.";
+"Copy retained text" = "Copy retained text";
+"Copy text %lld" = "Copy text %lld";
+"Text copied. Paste it into the conversation and review before sending." = "Text copied. Paste it into the conversation and review before sending.";
+"Text was not copied. Check sign-in, draft retention or clipboard permission, then retry." = "Text was not copied. Check sign-in, draft retention or clipboard permission, then retry.";
+"Discard this recovery" = "Discard this recovery";
+"Close" = "Close";
+"Workspace window" = "Workspace window";
+"Update status" = "Update status";
+"Automatic updates" = "Automatic updates";
+"Discard recovery %lld" = "Discard recovery %lld";

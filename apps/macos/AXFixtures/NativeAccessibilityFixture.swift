@@ -10,6 +10,12 @@ struct NativeAccessibilityFixtureApp: App {
         WindowGroup("Native accessibility fixture") {
             if ProcessInfo.processInfo.arguments.contains("--synthetic-capture-fixture") {
                 NativeCaptureFixtureRoot()
+            } else if ProcessInfo.processInfo.arguments.contains("--synthetic-workspace-status-fixture") {
+                NativeWorkspaceFixtureRoot(mode: .status)
+            } else if ProcessInfo.processInfo.arguments.contains("--synthetic-workspace-recovery-fixture") {
+                NativeWorkspaceFixtureRoot(mode: .recovery)
+            } else if ProcessInfo.processInfo.arguments.contains("--synthetic-workspace-settings-fixture") {
+                NativeWorkspaceFixtureRoot(mode: .settings)
             } else {
                 NativePresentationFixtureRoot()
             }
@@ -366,8 +372,9 @@ private final class NativeCaptureSelector: CaptureSelecting {
 
     init(permissionAllowed: Bool) {
         self.permissionAllowed = permissionAllowed
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let canvas = CGContext(data: nil, width: 800, height: 400, bitsPerComponent: 8, bytesPerRow: 800 * 4,
-            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         canvas.setFillColor(NSColor.white.cgColor)
         canvas.fill(CGRect(x: 0, y: 0, width: 800, height: 400))
         canvas.setFillColor(NSColor.darkGray.cgColor)
@@ -379,7 +386,9 @@ private final class NativeCaptureSelector: CaptureSelecting {
         NSGraphicsContext.restoreGraphicsState()
         // A unique, synthetic-only bitmap border lets XCTest locate the actual
         // rendered image in its own window PNG, independent of AX union frames.
-        canvas.setFillColor(CGColor(red: 1, green: 0, blue: 1, alpha: 1))
+        // Generic RGB magenta becomes (255,64,255) on the CI display. Give
+        // marker production and screenshot sampling the same explicit sRGB.
+        canvas.setFillColor(CGColor(colorSpace: colorSpace, components: [1, 0, 1, 1])!)
         for edge in [CGRect(x: 0, y: 0, width: 800, height: 8), CGRect(x: 0, y: 392, width: 800, height: 8),
                      CGRect(x: 0, y: 0, width: 8, height: 400), CGRect(x: 792, y: 0, width: 8, height: 400)] {
             canvas.fill(edge)
@@ -447,4 +456,167 @@ private final class NativeCaptureTransport: CaptureTransporting {
     func receipt(for intent: CaptureIntent, context: CaptureContext) async throws -> CaptureReceipt? { canonical }
     var isEmpty: Bool { recordedPNG == nil && canonical == nil }
     func clear() { recordedPNG = nil; canonical = nil }
+}
+
+private enum NativeWorkspaceFixtureMode: String {
+    case status, recovery, settings
+}
+
+/// Only the value-driven production presentation is mounted here. In
+/// particular, WorkspaceDesktopSettings and ConnectedQuietWorkspace are not
+/// constructed: their real browser, updater and permission effects stay out.
+private struct NativeWorkspaceFixtureRoot: View {
+    let mode: NativeWorkspaceFixtureMode
+    @StateObject private var fixture = NativeWorkspaceFixtureModel()
+    @FocusState private var focusedSection: WorkspaceSettingsSection?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("SYNTHETIC NATIVE PRESENTATION · \(mode.rawValue)")
+                    .font(.caption).accessibilityIdentifier("fixture.workspace.ready")
+                Spacer()
+                if mode == .recovery {
+                    Button("Show synthetic restoring state") { fixture.restoring = true }
+                        .accessibilityIdentifier("fixture.workspace.restore")
+                }
+            }.padding(12)
+            Divider()
+            surface
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 12) {
+                    Text(String(fixture.workbenchCalls)).accessibilityIdentifier("fixture.workspace.workbenchCalls")
+                    Text(String(fixture.accountCalls)).accessibilityIdentifier("fixture.workspace.accountCalls")
+                    Text(String(fixture.calendarCalls)).accessibilityIdentifier("fixture.workspace.calendarCalls")
+                    Text(String(fixture.contentCalls)).accessibilityIdentifier("fixture.workspace.contentCalls")
+                    Text(String(fixture.reloadCalls)).accessibilityIdentifier("fixture.workspace.reloadCalls")
+                    Text(String(fixture.connectionCalls)).accessibilityIdentifier("fixture.workspace.connectionCalls")
+                    Text(fixture.restoring ? "restoring" : "failed").accessibilityIdentifier("fixture.workspace.recoveryMode")
+                }
+                HStack(spacing: 12) {
+                    Text(fixture.selection.rawValue).accessibilityIdentifier("fixture.settings.selection")
+                    Text(String(fixture.selectionCalls)).accessibilityIdentifier("fixture.settings.selectionCalls")
+                    Text(fixture.activated).accessibilityIdentifier("fixture.settings.activated")
+                    Text(String(fixture.floating)).accessibilityIdentifier("fixture.settings.floating")
+                    Text(fixture.cleaned ? "cleaned" : "active").accessibilityIdentifier("fixture.preferences")
+                    Spacer()
+                    Button("Clear fixture state") { fixture.cleanup() }.accessibilityIdentifier("fixture.cleanup")
+                }
+            }.font(.caption).padding(12)
+        }.frame(minWidth: 640, minHeight: 300)
+    }
+
+    @ViewBuilder private var surface: some View {
+        switch mode {
+        case .status:
+            WorkspaceStatusLayout(loading: true, notices: fixture.notices) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Synthetic workspace content stays below native notices")
+                        .accessibilityIdentifier("fixture.workspace.contentHeading")
+                    Button("Record synthetic content action") { fixture.contentCalls += 1 }
+                        .accessibilityIdentifier("fixture.workspace.contentAction")
+                    Spacer(minLength: 0)
+                }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        case .recovery:
+            WorkspaceRecoverySurface(presentation: fixture.restoring ? .restoringSignIn : .failed(NativeWorkspaceFixtureModel.reason),
+                                     reload: { fixture.reloadCalls += 1 },
+                                     connectionSettings: { fixture.connectionCalls += 1 })
+        case .settings:
+            settings
+        }
+    }
+
+    private var settings: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                // This field only supplies isolated input to the real static
+                // search catalog/results. It is not the product search owner.
+                TextField("Synthetic settings query", text: Binding(
+                    get: { fixture.search.query }, set: { fixture.search.update($0) }))
+                    .textFieldStyle(.roundedBorder).accessibilityIdentifier("fixture.settings.query")
+                ScrollView {
+                    WorkspaceSettingsSections(selection: fixture.selection, focus: $focusedSection) { section in
+                        fixture.select(section)
+                        focusedSection = section
+                    }
+                }
+                .accessibilityIdentifier("fixture.settings.sections")
+            }.padding(12).frame(width: 232).background(.bar)
+            Divider()
+            WorkspaceSettingsContent(searching: fixture.search.isSearching) {
+                WorkspaceSettingsPage(title: fixture.selection.title, summary: "Synthetic page; values remain in memory.") {
+                    if fixture.selection == .general {
+                        WorkspaceGeneralControls(zoom: $fixture.zoom, floating: $fixture.floating)
+                    } else {
+                        Text("Synthetic section destination only: \(fixture.selection.rawValue)")
+                            .accessibilityIdentifier("fixture.settings.destination")
+                    }
+                }
+                .accessibilityIdentifier("fixture.settings.pane")
+            } search: {
+                WorkspaceSettingsSearchResults(query: fixture.search.query, results: fixture.search.results,
+                    activeID: fixture.search.activeEntry?.id, message: fixture.searchMessage,
+                    activate: fixture.activate, dismiss: { fixture.search.reset() })
+            }
+        }
+    }
+}
+
+@MainActor
+private final class NativeWorkspaceFixtureModel: ObservableObject {
+    static let messages = [
+        "SYNTHETIC workspace notice: the draft is local. Keep raw text %@ and its separate recovery action visible while other notices remain.",
+        "SYNTHETIC account notice: the browser handoff was not confirmed. This fixture records a click only; no browser or account is opened.",
+        "SYNTHETIC calendar notice: a fictional file needs attention. This fixture records a click only; no calendar file is opened or imported."
+    ]
+    static let reason = Array(repeating: "SYNTHETIC failure detail — preserve raw %@ text. No account, network, saved sign-in or real connection is read by this presentation fixture.", count: 8).joined(separator: "\n")
+    @Published var workbenchCalls = 0
+    @Published var accountCalls = 0
+    @Published var calendarCalls = 0
+    @Published var contentCalls = 0
+    @Published var reloadCalls = 0
+    @Published var connectionCalls = 0
+    @Published var restoring = false
+    @Published var selection: WorkspaceSettingsSection = .general
+    @Published var selectionCalls = 0
+    @Published var activated = "none"
+    @Published var zoom = 1.0
+    @Published var floating = false
+    @Published var search = WorkspaceSettingsSearchState()
+    @Published var searchMessage: String?
+    @Published var cleaned = false
+
+    var notices: [WorkspaceStatusNotice] {
+        [
+            .init(kind: .workbench, message: Self.messages[0], actions: [
+                .init(id: "record", title: "Record synthetic workspace action", perform: { [weak self] in self?.workbenchCalls += 1 })]),
+            .init(kind: .accountBrowser, message: Self.messages[1], actions: [
+                .init(id: "record", title: "Record synthetic account action", perform: { [weak self] in self?.accountCalls += 1 })]),
+            .init(kind: .calendarDownload, message: Self.messages[2], actions: [
+                .init(id: "record", title: "Record synthetic calendar action", perform: { [weak self] in self?.calendarCalls += 1 })])
+        ]
+    }
+
+    func select(_ section: WorkspaceSettingsSection) {
+        selection = section
+        selectionCalls += 1
+        search.reset()
+        searchMessage = nil
+    }
+
+    func activate(_ entry: WorkspaceSettingsSearchEntry) {
+        activated = entry.id
+        if case .section(let section) = entry.action { select(section) }
+        else { searchMessage = "Synthetic external destination recorded; no system effect." }
+    }
+
+    func cleanup() {
+        search.reset()
+        searchMessage = nil
+        zoom = 1
+        floating = false
+        cleaned = true
+    }
 }

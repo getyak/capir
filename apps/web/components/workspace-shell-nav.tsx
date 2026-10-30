@@ -45,8 +45,8 @@ import styles from "./workspace-shell.module.css";
 /**
  * Shared sidebar: 236px by default / 72px collapsed; saved widths remain local.
  *
- * Expanded navigation names today, conversation, people and meetings with
- * quiet text. Search sits beside the brand utilities. The deliberately
+ * Expanded navigation names today, conversation, people and meetings in one
+ * vertical reading order, after persistent search and compose. The deliberately
  * collapsed rail retains named icon controls. Route identity
  * and hrefs live in `@/lib/workspace-navigation`; this file owns only
  * presentation. Generic icons use existing Phosphor components — the earlier
@@ -95,7 +95,7 @@ function RailControl({
   const rememberedHref = !mobile && browse ? browse.href(route.href) : rememberedRouteHref;
   const isNew = !compact && mobile && control === "conversation";
   const label = t(isNew ? "conversation.new" : RAIL_LABEL_KEYS[control]);
-  const visibleLabel = isNew ? t("nav.rail.new") : control === "conversation" ? t("nav.rail.chat") : label;
+  const visibleLabel = isNew ? t("nav.rail.new") : label;
   const accessibleLabel = isNew || visibleLabel === label || compact ? label : `${visibleLabel} (${label})`;
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
   return (
@@ -261,7 +261,6 @@ export function WorkspaceShellNav({
           <span className={styles.brandName}>capri</span>
         </Link>
         <div className={styles.brandActions}>
-          <WorkspaceGlobalSearchDialog binding={binding} label={t(RAIL_SEARCH_KEY)} />
           <button
             aria-label={t("nav.collapse")}
             aria-pressed={false}
@@ -277,17 +276,29 @@ export function WorkspaceShellNav({
         </div>
       </div>
 
+      <div className={styles.sidebarTools} data-sidebar-tools>
+        <WorkspaceGlobalSearchDialog binding={binding} label={t(RAIL_SEARCH_KEY)} presentation="field" />
+        <button
+          aria-label={t("conversation.startNew")}
+          className={styles.sidebarCompose}
+          data-sidebar-compose="true"
+          onClick={startNewConversation}
+          type="button"
+        >
+          <Plus aria-hidden="true" size={18} />
+          <span>{t("conversation.new")}</span>
+        </button>
+      </div>
+
       <nav aria-label={t("nav.label")} className={styles.railRow} ref={primaryNav}>
-        {([ ["today", "conversation"], ["people", "meetings"] ] as const).map(pair => (
-          <div className={styles.railPair} key={pair[0]}>
-            {pair.map(control => <RailControl control={control} current={selection === control}
-              key={control} route={workspaceRailRoute(control)!} />)}
-          </div>
+        {(["today", "conversation", "people", "meetings"] as const).map(control => (
+          <RailControl control={control} current={selection === control}
+            key={control} route={workspaceRailRoute(control)!} />
         ))}
       </nav>
 
-      {/* Both presentations share the primary destination order. Compose and
-          recent conversations follow it; lower utilities stay at the end.
+      {/* Both presentations share the primary destination order and a
+          persistent compose action; lower utilities stay at the end.
           The collapsed rail stays in the DOM so
           the destinations remain reachable links in every state; CSS owns the
           collapsed/expanded swap. */}

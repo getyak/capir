@@ -245,3 +245,20 @@
 "Check cancelled." = "檢查已取消。";
 "Check the network and workspace service, then retry." = "請檢查網路與工作區服務，然後重試。";
 "Unable to connect right now" = "暫時無法連線";
+
+/* Workspace status layout and device settings presentation. */
+"Workspace notice" = "工作區提示";
+"Calendar file" = "行事曆檔案";
+"Loading workspace…" = "正在載入工作區…";
+"Restoring sign-in…" = "正在恢復登入…";
+"Checking this Mac’s saved sign-in." = "正在核對此 Mac 儲存的登入資訊。";
+"Copy retained text" = "複製保留的文字";
+"Copy text %lld" = "複製第 %lld 份文字";
+"Text copied. Paste it into the conversation and review before sending." = "文字已複製。貼到對話後，請先核對再傳送。";
+"Text was not copied. Check sign-in, draft retention or clipboard permission, then retry." = "未複製文字。請核對登入狀態、草稿保留期限或剪貼簿權限後重試。";
+"Discard this recovery" = "放棄這份復原";
+"Close" = "關閉";
+"Workspace window" = "工作區視窗";
+"Update status" = "更新狀態";
+"Automatic updates" = "自動更新";
+"Discard recovery %lld" = "放棄第 %lld 份復原";
