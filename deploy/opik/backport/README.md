@@ -31,6 +31,14 @@ All 1576 protected entries were unchanged before, after patching and after
 Maven. This is meaningful pinned-source and real HTTP-boundary RED; it does not
 establish the resident incident's cause. The failed baseline remains retained.
 
+The subsequent fixed-stage run 41041631471, artifact 12971105806, from head
+`8c2c268eb570be6731b7c8a29cb12f92f7ac8182` passed all 54 instances with zero
+failures, errors or skips and Maven exit 0. Its nine raw XML files contain eight
+nonempty leaves; independent review checked the unchanged frozen tests and the
+three allowed production modifications. These are immutable historical results.
+Every later candidate still needs its own fresh run and latest applicable CI;
+the manifest's observed history never grants admission by itself.
+
 ## Patch roles
 
 1. `0001-health-ownership-tests.patch`: frozen new health tests and their real
@@ -158,7 +166,7 @@ The original tests use real production classes and futures/responses with a
 controlled Client query boundary. Patch 0006 additionally exercises the actual
 SDK/HTTP pool; patch 0007 adds the scheduler cancellation boundary. Both new
 patches compiled and ran in the test-only baseline. Their fixed-stage execution
-is still pending at this checkpoint. They cannot establish
+also passed in the historical 54-instance run above. They cannot establish
 the host incident's root cause, R2DBC safety, a resident shaded JAR or live
 recovery. Those gates remain separate. Existing upstream tests with the old
 cancellation contract are explicitly adapted rather than ignored.

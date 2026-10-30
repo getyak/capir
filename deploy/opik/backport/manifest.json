@@ -1,7 +1,7 @@
 {
   "schema": "capri.opik.backport-tests.v1",
   "issue": "GET-337",
-  "state": "Source49 GREEN and actual baseline21/nine expected assertions independently reviewed; final fixed54 candidate awaits actual remote execution. No image/live recovery.",
+  "state": "Historical baseline21 RED and fixed54 GREEN independently verified. These immutable observations do not waive the latest applicable CI of any subsequent candidate; image/live recovery remains incomplete.",
   "upstream": {
     "repository": "https://github.com/comet-ml/opik",
     "revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
@@ -208,11 +208,6 @@
     },
     "image_built": false,
     "live_mutation": false,
-    "responses_fixed": {
-      "executed": false,
-      "required_instances": 54,
-      "scope": "Expanded profile including real HTTP pool and DAO scheduler handoff tests."
-    },
     "responses_fixed_49_historical": {
       "executed": true,
       "ci_run_id": 41033225919,
@@ -233,10 +228,6 @@
       "maven_exit_code": 0,
       "source_fingerprints": 13,
       "cannot_satisfy_expanded_54_profile": true
-    },
-    "all_baseline_21": {
-      "executed": false,
-      "required_instances": 21
     },
     "http_handoff_baseline": {
       "executed": true,
@@ -262,15 +253,39 @@
       "production_changes": 0,
       "java_red": true,
       "resident_cause_or_recovery": false
+    },
+    "responses_fixed_54_historical": {
+      "executed": true,
+      "capir_revision": "8c2c268eb570be6731b7c8a29cb12f92f7ac8182",
+      "tested_merge_revision": "dde9234edae3ca6b1b8b766c0e00dec34c8920b6",
+      "ci_run_id": 41041631471,
+      "artifact_id": 12971105806,
+      "artifact_sha256": "05b12a34ee02e1fb4c75b6ac37d51beb18af59b52a87fa8e7f6fca2170926089",
+      "stage": "responses-fixed",
+      "suite": "all",
+      "tests": 54,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "maven_exit_code": 0,
+      "passed": true,
+      "raw_xml_files": 9,
+      "nonempty_leaf_suites": 8,
+      "production_changes": 3,
+      "existing_test_modifications": 3,
+      "new_regular_test_files": 5,
+      "liquibase_resource_paths": 229,
+      "liquibase_bundle_java": 1,
+      "liquibase_catalogue_unchanged": true,
+      "resident_cause_or_recovery": false
     }
   },
   "production_hunks": 10,
   "migration_hunks": 0,
   "unchanged_migration_requirement": "All exact-source Liquibase files must retain byte hashes in any later production candidate.",
   "known_gaps": [
-    "Expanded all/baseline21 and responses-fixed/all54 have not been compiled or executed.",
-    "Real SDK HTTP controls/lifecycle and post-delivery DAO scheduler cancellation window are static tests awaiting actual evidence; source assertions are not integration proof.",
-    "Historical49 GREEN cannot satisfy the expanded54 profile.",
+    "Historical54 GREEN does not waive fresh execution and latest applicable CI for a subsequent candidate.",
+    "Real loopback SDK/HTTP pool and scheduled DAO cancellation are verified at the pinned-source boundary; resident503 causality is not established.",
     "No R2DBC acceptance, patched image build or resident deployment/acceptance."
   ],
   "runner": {
@@ -319,7 +334,7 @@
         "binary_downloaded": false
       }
     },
-    "stage_execution_status": "Historical health-fixed39 and responses-fixed49 passed; independent DAO baseline10 had four assertion failures. Expanded all baseline21 and fixed54 await parent-owned execution."
+    "stage_execution_status": "Historical health-fixed39, source49 and expanded fixed54 passed; baseline21 produced nine intended assertions with both real HTTP controls passing. Each current invocation still requires its own complete fresh result and protected-source checks."
   },
   "local_artifacts": [
     {
@@ -359,8 +374,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "9272a0ae08f523a542ac6faeb9a5f7a23dffc643340180ac3d15f03b1631f2a9",
-      "bytes": 11315
+      "sha256": "b64a9f74431607f8d4c77978a701ceb564ab26c5720c1ca09b90c81bf81fd801",
+      "bytes": 11869
     },
     {
       "path": "LICENSE.upstream",
@@ -502,7 +517,7 @@
       ]
     }
   },
-  "updated_at": "2026-10-30T10:29:26.968759+00:00",
+  "updated_at": "2026-10-30T10:52:25.783707+00:00",
   "integration_patches": {
     "0006-http-pool-integration-tests.patch": {
       "role": "test-only-real-sdk-loopback-http-pool",
@@ -524,8 +539,7 @@
         "unreadRealResponseHoldsTheOnlyLeaseUntilItsPublicClose": 1,
         "timedOutProductionProbeReleasesItsLateRealResponseForTheNextProbe": 1
       },
-      "required_instances": 3,
-      "execution_status": "Static source review only; no integration Java execution yet."
+      "required_instances": 3
     },
     "0007-dataset-cancel-handoff-tests.patch": {
       "role": "test-only-real-dao-post-delivery-scheduler-handoff",
@@ -545,9 +559,9 @@
       "method_multiplicities": {
         "cancellationAfterDeliveryClosesResponseBeforeTheQueuedMapperRuns": 2
       },
-      "required_instances": 2,
-      "execution_status": "Static source review only; no integration Java execution yet."
+      "required_instances": 2
     }
   },
-  "patch_order_scope": "all/baseline; responses-fixed/all applies0001 through0007. Narrow health, DAO and health-fixed selections retain their original scope."
+  "patch_order_scope": "all/baseline; responses-fixed/all applies0001 through0007. Narrow health, DAO and health-fixed selections retain their original scope.",
+  "observation_policy": "Observed entries name immutable prior runs, commits and artifact hashes. The current invocation must produce its own fresh complete evidence; manifest history is never admission authority or a replacement for current CI."
 }

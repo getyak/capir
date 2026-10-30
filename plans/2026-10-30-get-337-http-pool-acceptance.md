@@ -147,6 +147,17 @@ after Maven, with no production change. Raw artifact SHA256:
 
 Independent review confirmed those exact sites and controls. The final workflow
 now selects responses-fixed/all54; no integration patch or production patch was
-changed to obtain this baseline. Its actual result and latest applicable CI are
-pending. Meaningful baseline RED is not fixed54 GREEN, image provenance, resident
+changed to obtain this baseline. Its first actual54 result at8c is GREEN (run41041631471/artifact12971105806);
+latest applicable CI remains required for subsequent commits. Meaningful baseline RED is not fixed54 GREEN, image provenance, resident
 503 attribution, ingestion/recovery or original product acceptance.
+
+## Evidence-metadata correction
+
+Independent final-stage review found one P2: obsolete duplicate baseline21 and
+known-gap placeholders contradicted the recorded actual baseline. Remove the
+duplicate unexecuted profile and keep a single observed baseline record. Record
+the independently verified54 run at8c as immutable historical evidence, with
+its source/run/artifact binding. Do not represent it as permission to skip a
+subsequent candidate's CI or continually rewrite manifests to self-attest each
+new commit. This correction changes evidence metadata and documentation only;
+workflow, runner, guard tests and all seven patches stay unchanged.
