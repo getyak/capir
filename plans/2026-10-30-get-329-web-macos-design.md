@@ -284,3 +284,27 @@ isolated run and2turn Session; no account, model or test re-provisioning. Requir
 independent review, current gates/normal merge, clean committed resident source
 and actual light/dark/forced-color readback. Bounded media observation must wait
 for settled computed style; immediate forced-color sampling was intermediate.
+
+
+### Rendered followup: compact completed-message footer (active)
+
+Actual WebKit short reply has a126x112px tinted card: Copy reserves44px inside
+the prose group and Activity takes another44px below. Independent visual review
+confirms OBS-004/P2: the remaining40px text-to-metadata gap still conflicts with
+the human's compact chat requirement. Keep the495 opaque fix narrow and combine
+its activation with the final complete footer slice; the prepared8f7 build is
+preserved but unactivated, not reused as a different revision's build receipt.
+
+Worker owns Session rendering/records/actions and their host tests in an
+isolated checkout; parent owns CSS/plan/integration/delivery. Keep Copy at the
+original last-safe-block anchor with stable component identity across decision
+updates. Activity and Copy are sibling44px controls in one footer. Only the
+DecisionContext-resolved completed state earns compact presentation; unknown,
+waiting, failed, interrupted and live states retain visible truth/recovery.
+Keep exact receipt/time and details in normal flow, not overlaid on the prose.
+The prose bubble loses the obsolete52px side slot/44px minimum; its footer sits
+outside the text tint. Long and short replies share the same structure, without
+length heuristics. Streamed and plain text use the same prose surface with
+provisional status kept distinct. Independent boundary/source review and real
+short-answer, disclosure, keyboard, media and viewport acceptance are required.
+One existing isolated run/two messages continues; no account/model recreation.

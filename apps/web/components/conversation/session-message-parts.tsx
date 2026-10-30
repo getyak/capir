@@ -31,7 +31,7 @@ import { sessionHumanMessages } from "@/lib/session-human-messages";
 export { sessionHumanMessages } from "@/lib/session-human-messages";
 import type { AnswerSeamRegistry } from "./answer-seam";
 import { ConversationWorkRow } from "./conversation-feedback-row";
-import { SessionMessageActions } from "./session-message-actions";
+import { extractSessionMessageCopy, SessionMessageActions } from "./session-message-actions";
 import type { ConversationWorkStatus } from "./conversation-feedback";
 import { useT, type TFunction } from "../locale-provider";
 import styles from "./queued-conversation.module.css";
@@ -403,6 +403,15 @@ function dataRecord(value: unknown): Record<string, unknown> | null {
 
 type DecisionState = "pending" | "resolved" | "unknown";
 const DecisionContext = createContext<{ states: Record<string, DecisionState>; update: (key: string, state: DecisionState) => void }>({ states: {}, update: () => {} });
+const MessageFooterContext = createContext<{ data: Record<string, unknown>; anchorBlockId: string } | null>(null);
+
+function resolvedExecutionPhase(phase: ConversationExecutionPhase, data: Record<string, unknown>, states: Record<string, DecisionState>): ConversationExecutionPhase {
+  const keys = Array.isArray(data.decisionKeys) ? data.decisionKeys.filter((key): key is string => typeof key === "string") : [];
+  const unknown = keys.some(key => !states[key] || states[key] === "unknown");
+  const pending = keys.some(key => states[key] === "pending");
+  return phase === "completed" ? (unknown ? "review-unknown" : pending ? "waiting-review" : "completed") : phase;
+}
+
 function SessionExecutionRecord({ data }: { data: Record<string, unknown> }) {
   const t = useT();
   const decisions = useContext(DecisionContext);
@@ -410,11 +419,29 @@ function SessionExecutionRecord({ data }: { data: Record<string, unknown> }) {
   const statusInHeader = useSessionTaskInHeader(messageId);
   const execution = executionData(data);
   if (!execution) return <span>{t("这项执行记录暂时无法显示。")}</span>;
-  const keys = Array.isArray(data.decisionKeys) ? data.decisionKeys.filter((key): key is string => typeof key === "string") : [];
-  const unknown = keys.some(key => !decisions.states[key] || decisions.states[key] === "unknown");
-  const pending = keys.some(key => decisions.states[key] === "pending");
-  const phase = execution.phase === "completed" ? (unknown ? "review-unknown" : pending ? "waiting-review" : "completed") : execution.phase;
+  const phase = resolvedExecutionPhase(execution.phase, data, decisions.states);
   return <SessionExecutionCard {...execution} phase={phase} statusInHeader={statusInHeader}><SessionTaskRecord messageId={messageId}/></SessionExecutionCard>;
+}
+
+function SessionExecutionPart({ data }: { data: Record<string, unknown> }) {
+  const footer = useContext(MessageFooterContext);
+  // A unique eligible record already has its stable owner beside the last
+  // safe answer. Other execution states retain their original part position.
+  return footer ? null : <SessionExecutionRecord data={data}/>;
+}
+
+function SessionMessageFooter({ afterBlockId }: { afterBlockId: string }) {
+  const placement = useContext(MessageFooterContext);
+  const decisions = useContext(DecisionContext);
+  const data = placement?.anchorBlockId === afterBlockId ? placement.data : null;
+  const execution = data ? executionData(data) : null;
+  const phase = data && execution ? resolvedExecutionPhase(execution.phase, data, decisions.states) : undefined;
+  return <div className={styles.messageFooter} data-message-footer={data ? "assistant" : undefined} data-phase={phase}>
+    {/* This action never moves between the answer and execution trees as a
+        decision resolves. Payload and last-safe-block authority stay owned. */}
+    <SessionMessageActions afterBlockId={afterBlockId}/>
+    {data ? <SessionExecutionRecord data={data}/> : null}
+  </div>;
 }
 
 function renderSessionData(name: string, raw: unknown, context: RenderContext, t: TFunction) {
@@ -440,7 +467,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext, t
       kind: typeof block.kind === "string" ? block.kind : "",
       requires_user_decision: block.requires_user_decision !== false,
       public_source_refs: Array.isArray(block.public_source_refs) ? block.public_source_refs as never : undefined,
-    }} messageId={typeof data.messageId === "string" ? data.messageId : ""} sessionId={context.sessionId} attention={context.attention}/><SessionMessageActions afterBlockId={typeof block.id === "string" ? block.id : ""}/></div>;
+    }} messageId={typeof data.messageId === "string" ? data.messageId : ""} sessionId={context.sessionId} attention={context.attention}/><SessionMessageFooter afterBlockId={typeof block.id === "string" ? block.id : ""}/></div>;
   }
   if (name === "talent-signal.work-row" && typeof data.messageId === "string") {
     const work = context.workByMessageId?.[data.messageId];
@@ -450,7 +477,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext, t
     // Streamed text that has not been read back keeps its own readable form;
     // otherwise one compact truthful work row carries the observed state.
     return <>{preview
-      ? <div className={styles.forming}><ConversationResponse>{preview}</ConversationResponse>{work.animate && <span className={styles.cursor} aria-hidden="true"/>}<small className={styles.formingStatus} role="status">{t(work.text)}</small>{actions}</div>
+      ? <div className={styles.forming}><div className={styles.semanticBubble} data-presentation="prose"><ConversationResponse>{preview}</ConversationResponse>{work.animate && <span className={styles.cursor} aria-hidden="true"/>}</div><small className={styles.formingStatus} role="status">{t(work.text)}</small>{actions}</div>
       : <ConversationWorkRow status={work}>{actions}</ConversationWorkRow>}<SessionTaskRecord messageId={data.messageId} standalone/></>;
   }
   if (name === "talent-signal.memory" && data.version === 1 && typeof data.proposalId === "string"
@@ -502,7 +529,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext, t
       sessionVersion={context.binding ?? ""}/>;
   }
   if (name === "talent-signal.execution") {
-    return <SessionExecutionRecord data={data}/>;
+    return <SessionExecutionPart data={data}/>;
   }
   if (name === "talent-signal.run-update" || name === "talent-signal.progress") {
     const updates = Array.isArray(data.updates)
@@ -536,17 +563,36 @@ export function SessionUserMessage({ context }: { context: RenderContext }) {
 
 export function SessionAssistantMessage({ context }: { context: RenderContext }) {
   const t = useT();
+  const message = useAuiState(state => state.message);
   const [states, setStates] = useState<Record<string, DecisionState>>({});
   const update = useCallback((key: string, state: DecisionState) => setStates(current => current[key] === state ? current : { ...current, [key]: state }), []);
   const renderContext = { ...context, onDecisionState: update };
-  return <DecisionContext.Provider value={{ states, update }}><MessagePrimitive.Root className={styles.turn} role="article">
+  const copy = extractSessionMessageCopy(message);
+  const executions = message.content.flatMap(part => {
+    const record = dataRecord(part);
+    const data = record?.type === "data" && record.name === "talent-signal.execution" ? dataRecord(record.data) : null;
+    return data ? [data] : [];
+  });
+  const anchors = message.content.filter(part => {
+    const record = dataRecord(part);
+    const block = record?.type === "data" && record.name === "talent-signal.answer-block" ? dataRecord(dataRecord(record.data)?.block) : null;
+    return block?.id === copy?.anchorBlockId && typeof block?.body === "string" && Boolean(block.body.trim());
+  });
+  // Raw completed is only a placement candidate. The record and footer both
+  // retain the canonical DecisionContext reduction before any quiet styling.
+  // Ambiguous anchors keep the one record in its original part instead of
+  // replicating a receipt in multiple answer blocks.
+  const execution = executions.length === 1 ? executions[0] : null;
+  const footer = execution && anchors.length === 1 && executionData(execution)?.phase === "completed" && copy?.anchorBlockId
+    ? { data: execution, anchorBlockId: copy.anchorBlockId } : null;
+  return <DecisionContext.Provider value={{ states, update }}><MessageFooterContext.Provider value={footer}><MessagePrimitive.Root className={styles.turn} role="article">
     <div className={styles.answer}>
       <div className={styles.identity} role="img" aria-label="capri"><span className={styles.mark} aria-hidden="true"/></div>
       <div className={styles.answerBody}>
         {/* Empty assistant content stays valid: silence needs no placeholder. */}
-        <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <ConversationResponse>{part.text}</ConversationResponse>
+        <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <div className={styles.semanticBubble} data-presentation="prose"><ConversationResponse>{part.text}</ConversationResponse></div>
           : part.type === "data" ? renderSessionData(part.name, part.data, renderContext, t) : null}</MessagePrimitive.Parts>
       </div>
     </div>
-  </MessagePrimitive.Root></DecisionContext.Provider>;
+  </MessagePrimitive.Root></MessageFooterContext.Provider></DecisionContext.Provider>;
 }

@@ -193,6 +193,7 @@ it("keeps the whole unfinished Markdown reply readable before closed activity de
   const draft = root.querySelector('[aria-label="回复草稿，尚未完成"]');
   expect(draft?.closest("details")).toBeNull();
   expect(draft?.textContent).toContain("const x = 1;");
+  expect(draft?.querySelector('[data-presentation="prose"]')?.textContent).toContain("const x = 1;");
   expect(root.querySelector("details")?.open).toBe(false);
   expect(root.querySelector("details")?.textContent).not.toContain("const x = 1;");
 });
