@@ -503,6 +503,72 @@ def _require_remote_execution():
         raise RuntimeError("Actual execution requires a remote GitHub-hosted Linux Actions job")
 
 
+def capture_package_context(*, capir_dir, source_dir, maven_repository,
+                            applied_paths, not_before_ns):
+    """Sample provenance; successful fixed54 admission remains the caller's job."""
+    _require_remote_execution()
+    job = os.environ.get("GITHUB_JOB", "")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,99}", job):
+        raise ValueError("Require an explicit Actions job identity")
+    if type(not_before_ns) is not int or not 0 < not_before_ns <= time.time_ns():
+        raise ValueError("Invalid actual Maven start time")
+
+    def directory(value):
+        path = Path(value)
+        if (not path.is_absolute() or ".." in path.parts
+                or any(character in str(path) for character in (",", "\n", "\r", "\0"))
+                or not path.is_dir() or path.resolve(strict=True) != path):
+            raise ValueError("Context requires real absolute directories without aliases")
+        return path
+
+    capir, source, cache = map(directory, (capir_dir, source_dir, maven_repository))
+    if directory(os.environ.get("GITHUB_WORKSPACE", "")) != capir:
+        raise ValueError("Capir checkout differs from the actual Actions workspace")
+    revision = _git(capir, "-c", "remote.origin.promisor=false", "rev-parse", "HEAD").decode().strip()
+    if (not re.fullmatch(r"[0-9a-f]{40}", revision)
+            or revision != os.environ.get("GITHUB_SHA")
+            or _git(capir, "-c", "remote.origin.promisor=false", "status",
+                    "--porcelain", "--untracked-files=all")):
+        raise ValueError("Require the clean actual tested Capir revision")
+    if source == cache or source.parent != cache.parent:
+        raise ValueError("Source and task Maven repository must be distinct siblings")
+
+    def owner(path):
+        value = path.stat()
+        return {"uid": value.st_uid, "gid": value.st_gid,
+                "mode": format(stat.S_IMODE(value.st_mode), "04o")}
+
+    source_owner, cache_owner = owner(source), owner(cache)
+    if (source_owner != cache_owner or source_owner["mode"] != "0700"
+            or (source_owner["uid"], source_owner["gid"]) != (os.getuid(), os.getgid())):
+        raise ValueError("Require the current owner's matching private source and Maven binds")
+    paths = list(applied_paths)
+    if not paths or len(paths) != len(set(paths)):
+        raise ValueError("Require distinct applied source paths")
+    hashes = {}
+    for relative in paths:
+        relative = _relative(relative)
+        path = source / relative
+        if (not path.is_file() or path.resolve(strict=True) != path
+                or path.stat().st_size > MAX_SOURCE_BYTES):
+            raise ValueError("Applied context input must be a bounded regular source file")
+        hashes[relative] = _sha256(path.read_bytes())
+    if _git(source, "-c", "remote.origin.promisor=false", "diff", "--name-only", "-z"):
+        raise ValueError("Applied source has unstaged changes")
+    index = _git(source, "-c", "remote.origin.promisor=false", "diff", "--cached",
+                 "--raw", "--no-renames", "-z", "HEAD")
+    if not index:
+        raise ValueError("Require actual staged backport changes")
+    return {
+        "github_run_id": os.environ["GITHUB_RUN_ID"],
+        "github_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"], "github_job": job,
+        "capir_revision": revision, "source_directory": str(source),
+        "source_bind_owner": source_owner, "maven_repository": str(cache),
+        "cache_bind_owner": cache_owner, "source_index_sha256": _sha256(index),
+        "applied_source_sha256": hashes, "not_before_ns": not_before_ns,
+    }
+
+
 def _new_directory(value):
     path = Path(value)
     if not path.is_absolute() or ".." in path.parts or path.exists() or path.is_symlink():
@@ -842,7 +908,28 @@ def run_backport(*, work_dir, receipt_dir, suite="health", stage="baseline"):
         receipt["passed"] = evaluation["passed"]
         receipt["classification"] = "selected_tests_passed" if evaluation["passed"] else "maven_or_test_failure"
         receipt["stage"] = "complete"
+        package_context = None
+        if stage == "responses-fixed" and suite == "all" and evaluation["passed"]:
+            if evaluation["tests"] != 54 or receipt["maven_exit_code"] != 0:
+                raise ValueError("Packaging context requires the actual complete fixed54 result")
+            package_context = capture_package_context(
+                capir_dir=PATCH_DIR.parents[2], source_dir=source,
+                maven_repository=work_dir / "maven-repository",
+                applied_paths=applied_hashes, not_before_ns=execution["not_before_ns"],
+            )
+            if (package_context["source_index_sha256"] != _sha256(initial_index)
+                    or package_context["applied_source_sha256"] != applied_hashes
+                    or package_context["source_bind_owner"] != execution["build_image"]["source_bind_owner"]
+                    or package_context["cache_bind_owner"] != execution["build_image"]["cache_bind_owner"]):
+                raise ValueError("Fresh package context differs from the actual tested inputs")
+            receipt.update(package_context)
         _write_json(result_path, receipt)
+        if package_context is not None:
+            context_path = receipt_dir / "package-context.json"
+            if context_path.exists() or context_path.is_symlink():
+                raise ValueError("Refusing to replace a preexisting package context")
+            package_context["fixed_receipt_sha256"] = _sha256(result_path.read_bytes())
+            _write_json(context_path, package_context)
         code = receipt["maven_exit_code"]
         return code if code else (0 if receipt["passed"] else 1)
     except Exception as error:

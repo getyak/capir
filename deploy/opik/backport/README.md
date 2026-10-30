@@ -190,3 +190,37 @@ real readback. Preserve the prepared backend148 identity.
 `LICENSE.upstream` retains the exact Apache-2.0 license and Comet ML notice.
 All newly authored Java tests retain their SPDX header. Preserve that legal
 material when distributing a candidate.
+
+## Building an immutable JAR
+
+The package milestone is separate from an image, import, activation or resident
+recovery. The same Actions job first runs fresh fixed54, then passes its actual
+producer context to [the package helper](../../../scripts/prompts/package-opik-backport.py).
+Historical manifest observations never authorize this step. The context binds
+the clean checked-out Capir revision, job/run attempt, private source and Maven
+repository owners, actual staged index and applied-file hashes, start time and
+final regression receipt hash. Old receipts without these facts are rejected.
+
+Before deriving the release version, the helper preserves and rehashes all raw
+fixed54 reports and receipt material. The source POM's sole root project-version
+derivation is explicit; dependencies, plugins and all other bytes stay fixed.
+Standard clean/package regenerates the owned target using the same pinned
+toolchain and m2. Ordered runtime coordinates and actual artifact hashes must
+agree before and after; complete JAR entries, required classes and all 229
+Liquibase resources receive separate admission. This does not prove loaded
+classes or the resident JAR.
+
+Owned-container settlement is a source-mutation boundary. A cleanup attempt,
+client exit, missing CID or failed inspect is insufficient on its own. Confirm
+the exact owned resources are gone; an unresolved writer blocks further
+commands and source POM restoration. Preserve unknown outcomes rather than
+overwriting a potentially active source. The deterministic contract lives in
+[cleanup tests](../../../scripts/prompts/test_opik_package_cleanup.py) and the
+helper, rather than duplicate runtime-state prose.
+
+CI retains the original regression receipt and the package output, including
+the archived raw reports when clean/package consumes the original target.
+Actual results belong to each invocation's artifacts. A package does not change
+the Compose pin or run a service. A later reviewed image and coherent clean
+Capir release must preserve the runtime, all stores, rollback references and
+actual Engine identity; config and manifest digests are distinct identities.

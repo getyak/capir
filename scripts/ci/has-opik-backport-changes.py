@@ -31,10 +31,12 @@ def required(base, head):
         "scripts/ci/opik-ci-scope.test.mjs",
         "scripts/prompts/start-opik.sh",
         "scripts/prompts/test-opik-backport.py",
+        "scripts/prompts/package-opik-backport.py",
         "scripts/prompts/test_opik_backport.py",
     }
     return any(
         path.startswith("deploy/opik/") or path in exact
+        or re.fullmatch(r"scripts/prompts/test_opik[^/]*\.py", path) is not None
         for path in map(os.fsdecode, result.stdout.rstrip(b"\0").split(b"\0"))
     )
 
