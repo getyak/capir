@@ -3,7 +3,7 @@
 import { workspaceSearchFocusTargetProps } from "@/lib/workspace-search-focus";
 import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { isConversationMemoryDraftTarget, memoryDraftHasAuthoredText, memoryDraftFailureKey, reconcileMemoryDraftTarget, type ComposerMemoryDraftTarget } from "@/lib/conversation-memory-draft-target";
 import { conversationHome } from "@/lib/conversation-local";
@@ -20,7 +20,6 @@ import { useLocale, useT, type TFunction } from "../locale-provider";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { conversationNearBottom } from "../session-workbench/session-presentation";
 import { LegacyRecoveryNotice } from "./legacy-recovery-notice";
-import { SessionSendTime } from "./session-execution-card";
 import { useConversation } from "./use-conversation";
 import { useConversationAxis } from "./use-conversation-axis";
 import { useConversationReadingPosition } from "./use-conversation-reading-position";
@@ -737,7 +736,7 @@ export function QueuedConversation(props: Props) {
       <div className={styles.content} ref={content}>
         {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><div><h2>{t("conversation.welcome.title")}</h2><p>{t("conversation.welcome.body")}</p></div></div>}
         <ThreadPrimitive.Messages>{({ message }) => message.role === "user"
-          ? <Fragment key={message.id}><SessionSendTime at={(message as { createdAt?: unknown }).createdAt}/><SessionUserMessage context={renderContext}/></Fragment>
+          ? <SessionUserMessage key={message.id} context={renderContext}/>
           : <SessionAssistantMessage key={message.id} context={renderContext}/>}</ThreadPrimitive.Messages>
         {props.meetingLinks?.filter(meeting=>!turns.some(turn=>turn.response.meetingDraft?.id===meeting.id)).map(meeting=><section key={meeting.id} className="context-calendar-draft-handoff" aria-label={t("conversation.meeting.entry")}><strong>{meeting.title}</strong><a href={`/workspace/meetings?draft=${encodeURIComponent(meeting.id)}`}>{t("conversation.meeting.review")}</a></section>)}
       </div>

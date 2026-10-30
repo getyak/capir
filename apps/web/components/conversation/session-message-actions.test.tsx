@@ -100,8 +100,12 @@ it("renders real runtime controls beneath user text and final prose before propo
   expect(host.querySelectorAll("[data-message-actions]")).toHaveLength(2);
   expect(writeText).not.toHaveBeenCalled();
   const userActions = host.querySelector('[data-message-actions="user"]')!;
-  expect(userActions.previousElementSibling?.hasAttribute("data-images")).toBe(true);
-  expect(userActions.previousElementSibling?.previousElementSibling?.hasAttribute("data-user-message")).toBe(true);
+  const sentTime = userActions.previousElementSibling!;
+  expect(sentTime.tagName).toBe("TIME");
+  expect(sentTime.getAttribute("datetime")).toBe("2026-10-23T00:00:00.000Z");
+  expect(sentTime.closest('[role="article"]')).toBe(userActions.closest('[role="article"]'));
+  expect(sentTime.previousElementSibling?.hasAttribute("data-images")).toBe(true);
+  expect(sentTime.previousElementSibling?.previousElementSibling?.hasAttribute("data-user-message")).toBe(true);
   expect(userActions.nextElementSibling).toBeNull();
   expect(host.querySelector('[data-message-actions="assistant"]')?.parentElement?.nextElementSibling?.hasAttribute("data-proposal")).toBe(true);
   expect(host.querySelector('[data-presentation="prose"]')).not.toBeNull();

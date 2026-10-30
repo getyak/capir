@@ -1,25 +1,25 @@
 .runtimeRoot { display:contents; }
 .canvas { --conversation-axis:47.5rem; --conversation-reading-size:1rem; --conversation-gutter:24px; display:flex; flex-direction:column; flex:1 1 auto; min-height:0; min-width:0; color:var(--ink); background:var(--background); position:relative; overflow:hidden; overscroll-behavior:none; }
-/* 68px floating Session title: centered, lightweight, no divider. */
-.header { display:flex; align-items:center; justify-content:center; gap:12px; min-height:68px; padding:12px 24px; min-width:0; border-bottom:0; position:relative; flex:none; }
+/* Compact title chrome leaves room for the conversation and 44px controls. */
+.header { display:flex; align-items:center; justify-content:center; gap:12px; min-height:56px; padding:6px 24px; min-width:0; border-bottom:0; position:relative; flex:none; }
 .headingText { min-width:0; max-width:min(640px, 60vw); text-align:center; }
 .header h1 { font-size:var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-heading, 1.4); font-weight:500; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .detailsLabel { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.details { position:absolute; right:14px; top:12px; flex:none; font-size:var(--ts-type-meta, 0.8125rem); color:var(--muted); }
+.details { position:absolute; right:14px; top:6px; flex:none; font-size:var(--ts-type-meta, 0.8125rem); color:var(--muted); }
 .details summary { cursor:pointer; padding:0; border-radius:10px; min-width:44px; min-height:44px; box-sizing:border-box; display:flex; align-items:center; justify-content:center; list-style:none; color:var(--muted-strong,var(--muted)); }
 .details summary::-webkit-details-marker { display:none; }
 .details summary:hover { background:var(--surface-muted); color:var(--ink); }
 .detailPanel { position:absolute; right:0; top:48px; width:min(330px,calc(100vw - 32px)); max-height:min(62dvh,460px,calc(100dvh - 144px)); overflow-y:auto; overscroll-behavior:contain; padding:18px; background:var(--surface); border:1px solid var(--line-soft); border-radius:18px; z-index:20; box-shadow:0 8px 24px color-mix(in srgb, var(--ink) 10%, transparent); line-height: var(--ts-leading-body, 1.667); font-size: var(--ts-type-body, 0.9375rem); }
 .detailPanel p { margin:0 0 12px; overflow-wrap: anywhere; }.detailPanel a { display:block; }.textButton,.confirm button { border:0; background:none; color:inherit; cursor:pointer; padding:8px 0; display:flex; gap:8px; align-items:center; font-size: var(--ts-type-nav, 0.875rem); min-height: 44px; }.confirm { display:flex; flex-wrap:wrap; gap:12px; }.confirm p { width:100%; }
 .detailScope { color:var(--ink); font-weight:500; }
-.transcript { flex:1 1 0; min-height:0; min-width:0; overflow:auto; overscroll-behavior:contain; padding:28px var(--conversation-gutter) 24px; scroll-padding-block:20px; scrollbar-gutter:stable both-edges; }
+.transcript { flex:1 1 0; min-height:0; min-width:0; overflow:auto; overscroll-behavior:contain; padding:12px var(--conversation-gutter) 24px; scroll-padding-block:20px; scrollbar-gutter:stable both-edges; }
 /* The selected single reading axis is stable before and after the first send. */
 .content { width:100%; max-width:var(--conversation-axis); margin:0 auto; min-width:0; }
 .turn { margin-bottom:36px; }.localTurn { margin:0 0 26px; }
 .turn.userTurn { margin-bottom:20px; }
 .userTurn .userRow { margin-bottom:0; }
-/* Trailing user bubbles; one centered timestamp per send above them. */
-.sendTime { color:var(--muted); display:block; font-size:var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); margin:0 0 12px; text-align:center; }
+/* Time belongs to its message, without reserving a separator above the chat. */
+.sendTime { color:var(--muted); display:block; font-size:var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); margin:0; text-align:end; }
 .userRow { display:flex; justify-content:flex-end; margin-bottom:20px; }
 .userStack { display:flex; flex-direction:column; align-items:flex-end; gap:8px; min-width:0; max-width:min(35rem,86%); }
 .userMessage { max-width:min(35rem,86%); width:fit-content; background:var(--workspace-user-bubble); padding:12px 16px; border-radius:14px 14px 4px 14px; font-size:var(--conversation-reading-size); line-height: var(--ts-leading-body, 1.667); white-space:pre-wrap; overflow-wrap:anywhere; box-sizing:border-box; }
@@ -92,7 +92,7 @@
 .recoveryContent { margin:10px 0 2px; padding:9px 10px; border-radius:9px; background:var(--surface-muted,#f5f4ed); font:inherit; font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; }
 .canvas button:focus-visible,.details summary:focus-visible { outline:2px solid var(--muted-strong,var(--muted)); outline-offset:3px; }
 @keyframes breathe { 0%,100% { opacity:.35; } 50% { opacity:1; } }
-@media(max-width:640px) { .header { padding:10px 16px; min-height:60px; gap:8px; }.details { right:8px; top:8px; }.transcript { padding:0 16px 16px; }.dock { padding:0 16px max(16px,env(safe-area-inset-bottom)); }.queue { margin:0 2px 8px; max-height:170px; }.queueActions button { min-width:44px; min-height:44px; }.stop { min-height:44px; }.send { min-width:44px; min-height:44px; font-size: var(--ts-type-nav, 0.875rem); }.userStack { max-width:min(540px,90%); }.userMessage { max-width:90%; font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); }.welcome { padding:0 2px; gap:11px; }.welcome h2 { font-size:var(--ts-type-object, 1.375rem); }.welcomeMark { width:25px; height:25px; }.canvas[data-empty="true"] .transcript { padding:0 22px; }.canvas[data-empty="true"] .dock { margin-top:22px; }.canvas[data-empty="true"] { padding-bottom:36px; }.footer { font-size:var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }.footer span:last-child { display:none; }.runMeta { flex-wrap:wrap; gap:4px; }.turn { margin-bottom:28px; } }
+@media(max-width:640px) { .header { padding:6px 16px; min-height:56px; gap:8px; }.details { right:8px; top:6px; }.transcript { padding:0 16px 16px; }.dock { padding:0 16px max(16px,env(safe-area-inset-bottom)); }.queue { margin:0 2px 8px; max-height:170px; }.queueActions button { min-width:44px; min-height:44px; }.stop { min-height:44px; }.send { min-width:44px; min-height:44px; font-size: var(--ts-type-nav, 0.875rem); }.userStack { max-width:min(540px,90%); }.userMessage { max-width:90%; font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); }.welcome { padding:0 2px; gap:11px; }.welcome h2 { font-size:var(--ts-type-object, 1.375rem); }.welcomeMark { width:25px; height:25px; }.canvas[data-empty="true"] .transcript { padding:0 22px; }.canvas[data-empty="true"] .dock { margin-top:22px; }.canvas[data-empty="true"] { padding-bottom:36px; }.footer { font-size:var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }.footer span:last-child { display:none; }.runMeta { flex-wrap:wrap; gap:4px; }.turn { margin-bottom:28px; } }
 
 @media(max-height:520px) { .canvas[data-empty="true"] { justify-content:flex-start; padding-top:24px; padding-bottom:14px; } }
 /* Short mobile windows need room above the persistent bottom navigation. */
@@ -299,7 +299,7 @@
 
 /* Adapt to the work area, including a narrow pane on a wide desktop. */
 @container (max-width:40rem) {
-  .transcript { padding-block:20px; padding-inline:16px; }
+  .transcript { padding-block:12px 20px; padding-inline:16px; }
   .dock { padding-inline:16px; }
   .userStack,.userMessage { max-width:94%; }
   .answerBlockGroup:has([data-message-actions]) { padding-inline-end:0; }

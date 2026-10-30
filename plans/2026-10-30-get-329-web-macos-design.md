@@ -224,3 +224,29 @@ rule as127fbcec. At handoff, stop exact run786c6629-b83e-42cd-ab1e-3c20cbb2fecf,
 verify account/credential removal and denied access, preserve unique sanitized
 receipts, then remove only owned inactive temporary resources. Latest completion
 and recovery references are maintained in the external get329/control.md.
+
+
+## User correction: conversation top spacing (active)
+
+The user rejected the final screenshot's excess space above the chat. Reopen
+GET-329 and evaluate this explicit visual criterion separately from prior
+functional acceptance. The same1280x820 screenshot places its first user bubble
+at~174px: a46px QA banner,68px header,28px transcript padding and a standalone
+time row. The test banner is a disclosed QA surface, not a production defect.
+
+Keep the title and44px controls with focus space in a56px browser header; use
+12px transcript top padding, including narrow-container overrides. Present each
+canonical send time with its owning user message after its text/images, retaining
+exact dateTime/localization and safe-copy exclusion. This removes the full-width
+separator before the message without deleting time evidence. Preserve measured
+native titlebar geometry, empty-state safe centering, draft and scroll ownership,
+and the completed short-window composer/dialog repairs.
+
+One fresh isolated daily run cb717e96-3fc7-421b-93b6-f5f355105f60 owns matched
+before/after rendering. Parent owns source/PR/current gates/clean resident
+deployment and cleanup, independent agent reviews source and visual risks.
+Require actual first-bubble/header/control geometry, readable time and before/
+after screenshots at equal viewport, plus narrow/short views and read-position
+continuity. Do not inject application scroll/focus/layout to make acceptance
+pass. Retain old evidence as history; user feedback invalidates its visual
+signoff. Close this run and verify deletion/credential removal before handoff.
