@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { sameConversationMemoryDraftTarget } from "@/lib/conversation-memory-draft-target";
-import { MessagePrimitive } from "@assistant-ui/react";
+import { MessagePrimitive, useAuiState } from "@assistant-ui/react";
 import type {
   ConversationImageManifest,
   ConversationMemoryDraftTarget,
@@ -19,7 +19,7 @@ import {
 } from "@/lib/conversation-execution";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { sessionTurnBlocks } from "../session-workbench/session-presentation";
-import { SessionExecutionCard, SessionRunUpdate } from "./session-execution-card";
+import { SessionExecutionCard, SessionRunUpdate, SessionSendTime } from "./session-execution-card";
 import { ConversationProvenance, ConversationResponse } from "../conversation-response";
 import { MemoryReviewCard } from "../memory-review/memory-review-card";
 import { sessionBlockTitle } from "../session-workbench/session-presentation";
@@ -515,6 +515,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext, t
 
 export function SessionUserMessage({ context }: { context: RenderContext }) {
   const t = useT();
+  const sentAt = useAuiState(state => state.message.createdAt);
   // Sent images stand outside the text bubble: each text part keeps one
   // readable bubble and image parts render directly beneath it, so an
   // image-bearing message never grows a prominent outer text bubble frame.
@@ -527,6 +528,7 @@ export function SessionUserMessage({ context }: { context: RenderContext }) {
         : <></>}</MessagePrimitive.Parts>
       <MessagePrimitive.Parts>{({ part }) => part.type === "data" ? renderSessionData(part.name, part.data, context, t)
         : part.type === "text" ? <></> : null}</MessagePrimitive.Parts>
+      <SessionSendTime at={sentAt}/>
       <SessionMessageActions/>
     </div></div>
   </MessagePrimitive.Root>;

@@ -157,7 +157,7 @@ export function SessionRunUpdate({ updates }: { updates: readonly string[]; stag
   ))}</>;
 }
 
-/** Centered per-send timestamp above each user send. */
+/** Exact localized send time, presented with its owning user message. */
 export function SessionSendTime({ at }: { at: unknown }) {
   const locale = useLocale();
   const t = useT();
