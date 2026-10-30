@@ -7,13 +7,14 @@ Opik runtime base. The recipe replaces one application file and adds only
 `io.capir.opik.*` provenance labels. A subsequent real image inspection must
 prove that boundary before a coherent Capir release can consume the image.
 
-This milestone introduces only the image Dockerfile, its versioned input lock
-and this plan. It does not recompile Java, add a generic builder or workflow,
-change Compose/runtime helpers, build/load/run an image, contact a registry,
-start an entrypoint, migrate/provision a database, call a model or mutate any
-resident service. Parent owns tests, Git, CI, resource admission, image work,
-release integration and live verification. Existing source and evidence stay
-intact; no additional permission flow is introduced.
+The recipe, input lock and initial plan were committed as image producer
+`6739993141d8aa796f3999ef1ef7623a6b5ecf18`; the parent has built and imported
+that image. This follow-up integrates only the backend Compose image reference
+and never-pull policy, plus README/plan state. It does not recompile Java, add
+a builder/workflow, change runtime helpers or operate any service. The frozen
+Dockerfile/input lock remain unchanged. Parent owns tests, Git, CI, resource
+admission, image work, release integration and live verification. Existing
+source and evidence stay intact; no additional permission flow is introduced.
 
 ## Accepted input evidence
 
@@ -48,13 +49,15 @@ platform `linux/arm64`, upstream source
 cold-base inventory `dd208e4076635b169dfbdcf206138e15d55bb51b1a78c38226f054933c4534b1`
 and seven non-JAR source comparisons
 `018ed107f5b711baf1c612adbbd800dfe7e2105ce997f2a6a4610d4ee1df3730`.
-They bridge the selected exact base files to the saved runtime/source. A fresh
-builder/image inspection is still needed; historical Docker identities and
-resource samples are not new execution admission.
+They bridge the selected exact base files to the saved runtime/source. The
+parent's subsequent build/import identity and completed selected cold-file
+inventory are recorded below. Started-JVM, database and live verification
+remain separate; historical Docker
+identities and resource samples are not new execution admission.
 
 ## Recipe and lock
 
-[Dockerfile](../deploy/opik/backport/image/Dockerfile) contains immutable FROM,
+`deploy/opik/backport/image/Dockerfile` contains immutable FROM,
 one exact-name COPY and explicit provenance LABEL only. COPY installs the
 whole JAR at `/opt/opik/opik-backend-2.2.45.jar`, UID/GID 1001:1001, mode 0644.
 There is no wildcard, RUN, Maven, OS update, new runtime environment variable,
@@ -90,19 +93,33 @@ The recipe does not add a new license file or other payload into the image.
 
 ## Milestones
 
-### 1. Source preparation and independent review — active
+### 1. Recipe source and local-image integration — integration review pending
 
 - [x] Write only the three assigned files using already reviewed package/base
   facts; preserve earlier sources, reports and all real data.
-- [ ] Parent independently reviews the exact recipe/input-lock byte binding,
-  provenance identities and one-JAR boundary, then runs applicable source/docs
-  gates and creates a clean committed producer revision. No image execution
-  has occurred at this checkpoint.
+- [x] The recipe/input-lock source is committed as producer
+  `6739993141d8aa796f3999ef1ef7623a6b5ecf18`. Input-lock SHA256 is
+  `3106f7a1901b31217cbb9d4338b6c178da974cc5f2257344854421f168142a88`.
+- [x] The parent built and completed one OCI load, then read the actual Engine
+  identity twice; this writer only consumed the sanitized evidence.
+- [x] The parent completed the bounded cold nine-file inventory, verified all
+  locked file hashes/sizes/ownership/modes and removed/read back the exact
+  stopped probe absent. It did not start the application JVM or use a database.
+- [x] Change only `services.backend.image` to
+  `sha256:2a32f376556ff24a55db8d1fd8598aa6ed362aead6153967a22519d32814280a`
+  and `services.backend.pull_policy` from missing to never. The other eight
+  services and all other backend/Compose properties remain unchanged.
+- [ ] Parent independently reviews this source integration, runs applicable
+  source/docs checks and latest CI, and commits/pushes it as part of the new
+  clean consuming release. No resident activation has occurred.
 
-### 2. Fresh admission and minimal build — pending
+### 2. Fresh admission and minimal build — parent build completed
 
 Follow `docs/operations/testflight-local-backend.md` and the parent's reviewed
 bounded operation helpers; do not introduce a second general image builder.
+The parent completed the build for the producer above. The requirements below
+remain applicable to a genuinely new build or host; do not repeat the known
+build/import merely to recreate evidence.
 
 1. Recheck all pause markers, run the resource/storage guards, identify existing
    active builders and receipts, and reuse owned work rather than duplicate it.
@@ -128,16 +145,37 @@ bounded operation helpers; do not introduce a second general image builder.
    hashes, builder identity and result. No application entrypoint, startup,
    migration/provision script, database or provider probe runs during build.
 
-### 3. Actual image/OCI verification — pending
+### 3. Actual image/OCI verification — import and selected cold proof complete
 
-The reviewed recipe text is not filesystem-delta evidence. From the actual
-candidate, independently verify:
+The parent completed one OCI load. Sanitized receipt
+`get337-host-oci-load-command-receipt.json`, SHA256
+`4005ba5aab58b78521191ab6f432999a3f6cb401198c8c85c367e1d821b2b61c`,
+records command exit 0 and two actual readbacks of Engine ID
+`sha256:2a32f376556ff24a55db8d1fd8598aa6ed362aead6153967a22519d32814280a`,
+Linux/arm64, producer 6739993, exact input-lock SHA and JAR SHA. This is observed
+host identity, not a config-digest assumption, tag lookup or load-exit inference.
+The subsequent cold inventory is a separate observation of the selected
+runtime files, not a claim that load success itself established their contents.
+
+Cold receipt `get337-cold-candidate-inventory-receipt.json`, SHA256
+`c8e93a5c4d6ef475e29d91415cc6086ce32fe6d090b074f05665d6c09b98ad70`,
+records all nine fixed files matching locked hashes, sizes, UID/GID and modes,
+successful probe exit and exact cleanup/absence readback. Parent's independent
+review connected the actual Engine identity, 12 RootFS diffIDs, 25 provenance
+labels, cold probe identity and cleanup. Hashing necessarily reads file bytes;
+the probe did not interpret/capture original file bodies or credential/Env
+values. No application JVM, startup migration/provision or database ran.
+
+The reviewed recipe text alone was not filesystem-delta evidence. Retain the
+actual image/OCI and selected cold proof against these acceptance conditions:
 
 - platform and the exact base RootFS diffID list as an unchanged prefix;
 - the final effective filesystem differs only at the exact main JAR path,
-  with its locked whole-file hash/size/1001:1001/0644 metadata. Layer tar parent
-  directory records may exist only if effective base directory metadata stays
-  unchanged; unexplained additional file or metadata deltas require review;
+  with its locked whole-file hash/size/1001:1001/0644 metadata. The observed
+  whole-JAR COPY changes the existing `/opt/opik` parent directory mtime to
+  Unix seconds `1793385755`; this one metadata delta is recorded explicitly.
+  Other parent-directory attributes and effective payload must remain unchanged;
+  no general metadata waiver or extra filesystem change is admitted;
 - the original JAR and selected seven runtime files remain unchanged, with no
   whiteout hiding old payload or accidental configuration overwrite;
 - inherited runtime Config fields/base labels match, with only the reviewed
@@ -146,15 +184,21 @@ candidate, independently verify:
 - no entrypoint has run and no migration, store, real trace or provider request
   was executed by this validation stage.
 
-Save the OCI artifact/descriptor/config/layer digest relationships and a
+Preserve the completed OCI artifact/descriptor/config/layer digest evidence and a
 sanitized external image receipt bound to the clean producer revision, exact
 recipe/lock/JAR and actual platform/base. If a separate host import is needed,
 first measure fresh host and VM expansion/staging costs and use the parent's
-reviewed bounded import procedure once. Verify actual host Engine identity and
-use never-pull consumption. Do not infer Engine identity from a config digest,
+reviewed bounded import procedure once. The current host import is complete;
+reuse its receipt instead of loading again. Another selected daemon must have
+the same verified offline artifact imported and read back before consumption,
+not obtain this local ID through a registry pull. Verify actual Engine identity
+and use never-pull consumption. Do not infer Engine identity from a config digest,
 a successful docker-load exit or the eventual tag alone. Do not weaken the
 Node-specific OCI inspector to make a Java image look like a Node image; use
 correct type-specific inspection with the same integrity/ownership boundaries.
+If a different daemon reports another Engine identity for the same OCI artifact,
+review the explicit source/image binding before consuming this pin; do not
+silently substitute an assumed digest, tag or registry pull.
 
 ### 4. Coherent release and real acceptance — pending
 
@@ -164,6 +208,14 @@ the old prepared148 launcher: its old Opik constant could restore the prior
 image. Protect the latest Web/current/rollback sources and all store volumes.
 Keep frozen role bindings and old occupied intents; never silently refreeze or
 replay an old deployment.
+
+`scripts/prompts/start-opik.sh` resolves Compose from its own checkout, starts
+the existing stores and bucket initializer, and may restart an unhealthy prior
+backend before its final backend/frontend up. `testflight-local.sh` invokes it
+before the API Compose preflight. Verify this exact local image in the selected
+resident daemon and assess startup effects before invoking either path. Do not
+use the old148 checkout or claim that merely editing this pin switched live
+services. The offline never-pull policy must fail closed when the image is absent.
 
 Read actual migration ledgers and startup/provision effects before activation,
 and retain fresh relevant backups and recovery references. The 229 unchanged
@@ -185,11 +237,15 @@ Only actual relevant live/native/isolated-flow evidence permits issue completion
 
 ## Recovery and completion evidence
 
-This checkpoint is source preparation only. No image build/load/tag, service
-operation, network call, Git operation, new test run or entrypoint execution
-was performed by this writer. All earlier package/base/binary evidence remains
+This checkpoint has completed parent-owned build/import, observed Engine
+identity and the selected cold nine-file inspection; source integration and all JVM/DB/live
+acceptance remain distinct pending stages. No image build/load/tag, service
+operation, network call, Git operation, new test run or entrypoint execution was
+performed by this source writer. All earlier package/base/binary evidence remains
 preserved. The parent owns independent review, clean commit, CI and subsequent
-operations under existing authorization.
+operations under existing authorization. Dockerfile/input-lock byte identities
+stay frozen to the actually built image; the consuming release revision is a
+new source identity, not a replacement for producer 6739993.
 
 Completion needs exact source review/CI; a clean producer build; actual complete
 image/OCI/config/filesystem and host identity proofs; a correctly pinned R;

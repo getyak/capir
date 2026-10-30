@@ -85,7 +85,7 @@
         "retries": 90,
         "start_period": "15s"
       },
-      "image": "ghcr.io/comet-ml/opik/opik-backend@sha256:2ea3198d94b010404cd7108d41471382aa6e280485f2e1aad038093bb0fafa83",
+      "image": "sha256:2a32f376556ff24a55db8d1fd8598aa6ed362aead6153967a22519d32814280a",
       "mem_limit": "805306368",
       "memswap_limit": "805306368",
       "networks": {
@@ -95,7 +95,7 @@
       "tmpfs": [
         "/tmp"
       ],
-      "pull_policy": "missing",
+      "pull_policy": "never",
       "logging": {
         "driver": "json-file",
         "options": {

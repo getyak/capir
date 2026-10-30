@@ -271,3 +271,57 @@ Actual results belong to each invocation's artifacts. A package does not change
 the Compose pin or run a service. A later reviewed image and coherent clean
 Capir release must preserve the runtime, all stores, rollback references and
 actual Engine identity; config and manifest digests are distinct identities.
+
+## Using the imported local runtime image
+
+The next release's `deploy/opik/compose.json` pins only the backend service to
+the host-observed local Engine image ID
+`sha256:2a32f376556ff24a55db8d1fd8598aa6ed362aead6153967a22519d32814280a`
+with `pull_policy: never`. Other services, environment, networks, mounts and
+startup commands are unchanged. This is a local imported-image reference, not
+a registry image that another host can pull.
+
+The image producer is the clean Capir recipe revision
+`6739993141d8aa796f3999ef1ef7623a6b5ecf18`, bound to
+[input-lock.json](image/input-lock.json) SHA256
+`3106f7a1901b31217cbb9d4338b6c178da974cc5f2257344854421f168142a88`.
+It consumes artifact 12997662015's complete 192567739-byte JAR, SHA256
+`280f348e4e2ac6b8ef53f4a5377742214e9393260b8e067caa24c2d0a1d3687c`.
+The package's actual checkout, workflow head, upstream revision and image
+producer remain distinct provenance fields in the lock and external receipts.
+
+The parent completed one OCI load. The sanitized
+`get337-host-oci-load-command-receipt.json` has SHA256
+`4005ba5aab58b78521191ab6f432999a3f6cb401198c8c85c367e1d821b2b61c`;
+it records exit 0 and two actual Engine readbacks of this exact ID, Linux/arm64
+and producer/lock/JAR labels. The ID is not inferred from a config digest or a
+successful load exit alone. Reuse that import; do not repeat a build or load
+to restate an already known result. Another resident daemon needs the same
+verified offline artifact imported and read back before consuming this pin;
+`never` deliberately fails when the image is absent.
+If another daemon exposes a different Engine identity for the artifact, review
+that explicit binding instead of substituting a config digest or adding a pull.
+
+The whole-JAR COPY also changes the existing `/opt/opik` parent directory's
+mtime to Unix seconds `1793385755`. That is the narrowly recorded directory
+metadata delta, alongside the intended JAR replacement and provenance/build
+metadata. It does not allow extra payload changes or altered permissions.
+The parent subsequently completed the bounded cold nine-file inventory.
+`get337-cold-candidate-inventory-receipt.json`, SHA256
+`c8e93a5c4d6ef475e29d91415cc6086ce32fe6d090b074f05665d6c09b98ad70`,
+confirms every fixed file's hash, size, UID/GID and mode matches the lock; the
+exact stopped probe was removed and independently read back absent. Hashing
+necessarily reads file bytes: the probe did not interpret/capture original
+file bodies or credentials/environment values. The cold proof and imported
+image identity do not establish a started application JVM, applied database
+state, live health or recurrence recovery.
+
+`start-opik.sh` consumes the Compose file from its own checkout. It starts the
+stores and bucket initializer and may restart an existing unhealthy backend
+before the final backend/frontend up operation. The deployment owner must
+therefore verify the imported image in the selected daemon and assess those
+startup effects before calling it. Use a new coherent clean release that
+contains this pin. Do not execute the old prepared148 release: its own Compose
+source would assert the old base image again. Preserve current/rollback
+references and all data; follow the real migration-ledger, relevant-backup,
+affected-service and live-readback gates in the runtime-image plan and runbook.
