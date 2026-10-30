@@ -44,6 +44,7 @@ test("Opik source, pin, runner and gate edits require the actual Java regression
     "scripts/prompts/test-opik-backport.py", "scripts/ci/has-opik-backport-changes.py",
     "scripts/prompts/test_opik_backport.py",
     "scripts/prompts/package-opik-backport.py",
+    "scripts/prompts/opik_compile_profile.py",
     "scripts/prompts/test_opik_package.py",
     "scripts/prompts/test_opik_package_context.py",
     "scripts/prompts/test_opik_package_cleanup.py",

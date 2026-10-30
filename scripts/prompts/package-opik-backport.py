@@ -22,6 +22,7 @@ import stat
 import struct
 import subprocess
 import sys
+import time
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
@@ -35,6 +36,7 @@ if _spec is None or _spec.loader is None:
     raise RuntimeError("Regression admission module is unavailable")
 REGRESSION = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(REGRESSION)
+COMPILE = REGRESSION.COMPILE
 REVISION = REGRESSION.REVISION
 VERSION = "2.2.45"
 POM_PATH = "apps/opik-backend/pom.xml"
@@ -167,7 +169,7 @@ def validate_fixed54_evidence(*, receipt_dir, report_dir, expected, context):
         raise ValueError("Require a completed successful fixed54 run")
     for key in ("github_run_id", "github_run_attempt", "github_job", "capir_revision",
                 "source_directory", "source_bind_owner", "maven_repository", "cache_bind_owner",
-                "source_index_sha256", "not_before_ns"):
+                "source_index_sha256", "not_before_ns", "compile_profile"):
         if key not in context or key not in receipt or receipt[key] != context[key]:
             raise ValueError("Missing or changed fresh-run context: " + key)
     if (not str(context["github_run_id"]).isdigit() or not str(context["github_run_attempt"]).isdigit()
@@ -218,6 +220,16 @@ def validate_fixed54_evidence(*, receipt_dir, report_dir, expected, context):
     for filename, key in (("maven.log", "maven_log_sha256"), ("toolchain-versions.log", "toolchain_versions_sha256")):
         if not _digest(receipt.get(key)) or _hash_file(receipt_dir / filename) != receipt[key]:
             raise ValueError("Changed actual log evidence")
+    report_times = [path.stat().st_mtime_ns for path in report_dir.glob("*.xml")]
+    if not report_times:
+        raise ValueError("Compile observation requires fresh raw test reports")
+    COMPILE.validate(
+        receipt["compile_profile"], source_dir=context["source_directory"], receipt_dir=receipt_dir,
+        protected_catalogue=patched, upstream_revision=REVISION,
+        token=receipt.get("build_image", {}).get("container_run_token"), phase="fixed54_test",
+        log_path=receipt_dir / "maven.log", not_before_ns=context["not_before_ns"],
+        not_after_ns=min(report_times),
+    )
     selected = receipt.get("selected_surefire")
     if _json(receipt_dir / "selected-surefire.json") != selected:
         raise ValueError("Changed selected Surefire receipt")
@@ -652,6 +664,7 @@ def _proof_files(receipt_dir, report_dir):
                  "protected-source-before.json", "protected-source-patched.json",
                  "protected-source-after.json", "maven.log", "toolchain-versions.log"):
         files["receipt/" + name] = receipt_dir / name
+    files["receipt/compile-profile/lombok.config"] = receipt_dir / "compile-profile/lombok.config"
     for path in sorted(report_dir.glob("*.xml")):
         files["raw/" + path.name] = _regular(path)
     return files
@@ -946,6 +959,7 @@ def run_package(*, source_dir, fixed_receipt_dir, report_dir, output_dir, manife
         "manifest_sha256": _sha(manifest_bytes), "patch_sha256": expected["patch_sha256"],
         "source_directory": str(source), "maven_repository": str(cache),
         "source_bind_owner": _owner(source), "cache_bind_owner": _owner(cache),
+        "compile_profile": receipt["compile_profile"],
         "build_image": {"reference": REGRESSION.IMAGE, **actual_image,
                         "selected_platform_manifest": REGRESSION.PLATFORM_DIGESTS["arm64"]},
         "commands": [], "image_or_import_or_activation": False,
@@ -960,6 +974,8 @@ def run_package(*, source_dir, fixed_receipt_dir, report_dir, output_dir, manife
 
     docker_config = output / "docker-config"
     token = uuid.uuid4().hex
+    package_receipt["container_run_token"] = token
+    compile_profile = receipt["compile_profile"]
     derived_active = False
     writers_settled = True
     try:
@@ -987,6 +1003,7 @@ def run_package(*, source_dir, fixed_receipt_dir, report_dir, output_dir, manife
             "--mount", "type=bind,src=" + str(source) + ",dst=/workspace",
             "--mount", "type=bind,src=" + str(cache) + ",dst=/maven-repository",
             "--mount", "type=bind,src=" + str(output) + ",dst=/package-evidence",
+            "--mount", COMPILE.mount_argument(compile_profile),
             "--workdir", "/workspace/apps/opik-backend",
             "--env", "MAVEN_CONFIG=/maven-repository",
             "--env", "JAVA_TOOL_OPTIONS=-Duser.home=/maven-repository",
@@ -995,8 +1012,20 @@ def run_package(*, source_dir, fixed_receipt_dir, report_dir, output_dir, manife
 
         def container(arguments, log_name, timeout=1800):
             nonlocal writers_settled
+            COMPILE.validate_host(
+                compile_profile, source_dir=source, receipt_dir=receipts,
+                protected_catalogue=protected, upstream_revision=REVISION,
+            )
+            applicable_catalogue = {**protected, POM_PATH: _sha(derived_pom)} if derived_active else protected
+            validate_source_catalogue(source_dir=source, expected=applicable_catalogue)
             cid = output / (log_name + ".cid")
-            package_receipt["commands"].append({"arguments": arguments, "log": log_name})
+            package_receipt["commands"].append({
+                "arguments": arguments, "log": log_name, "compile_phase": log_name,
+                "compile_source_catalogue_sha256": COMPILE.catalogue_sha(applicable_catalogue),
+                "effective_compile_catalogue_sha256": COMPILE.catalogue_sha({
+                    **applicable_catalogue, COMPILE.SOURCE_CONFIG: COMPILE.OVERRIDE_SHA,
+                }),
+            })
             update()
             code = None
             timed_out = False
@@ -1005,8 +1034,11 @@ def run_package(*, source_dir, fixed_receipt_dir, report_dir, output_dir, manife
                     writers_settled = False
                     package_receipt.update(writers_settled=False, source_state="writer_possible")
                     update()
+                    command_started_ns = time.time_ns()
                     try:
-                        result = subprocess.run(common + ["--cidfile", str(cid), REGRESSION.IMAGE] + arguments,
+                        result = subprocess.run(common + ["--cidfile", str(cid), REGRESSION.IMAGE]
+                                                + COMPILE.command(compile_profile, token=token,
+                                                                  phase=log_name, arguments=arguments),
                                                 stdout=log, stderr=subprocess.STDOUT, timeout=timeout,
                                                 check=False, env=environment)
                         code = result.returncode
@@ -1038,6 +1070,14 @@ def run_package(*, source_dir, fixed_receipt_dir, report_dir, output_dir, manife
                 if not writers_settled:
                     reason = settlement.get("reason", "missing_settlement") if isinstance(settlement, dict) else "missing_settlement"
                     raise _UnsettledWriter(log_name, code, timed_out, reason)
+            # Outcomes and settlement are already durable before diagnostics
+            # are interpreted; a bad proof cannot erase an actual exit code.
+            proof = COMPILE.observe(
+                log_path=output / log_name, profile=compile_profile, token=token,
+                phase=log_name, not_before_ns=command_started_ns,
+            )
+            package_receipt["commands"][-1]["compile_observation"] = proof
+            update()
 
         container(["java", "-version"], "java-version.log", 60)
         container(["mvn", "--version"], "maven-version.log", 60)

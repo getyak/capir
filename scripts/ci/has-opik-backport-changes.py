@@ -32,6 +32,7 @@ def required(base, head):
         "scripts/prompts/start-opik.sh",
         "scripts/prompts/test-opik-backport.py",
         "scripts/prompts/package-opik-backport.py",
+        "scripts/prompts/opik_compile_profile.py",
         "scripts/prompts/test_opik_backport.py",
     }
     return any(

@@ -211,6 +211,13 @@ class OpikPackageAdmissionTests(unittest.TestCase):
         cache = self.root / "maven-repository"
         for path in (receipts, reports, source, cache):
             path.mkdir(mode=0o700)
+        source_config_path = "apps/opik-backend/lombok.config"
+        source_config_bytes = (b"# Synthetic source config: it must remain untouched.\n"
+                               b"lombok.anyConstructor.addConstructorProperties = true\n")
+        source_config = source / source_config_path
+        source_config.parent.mkdir(parents=True, mode=0o700)
+        source_config.write_bytes(source_config_bytes)
+        source_config.chmod(0o644)
         manifest_bytes = (BACKPORT / "manifest.json").read_bytes()
         manifest = json.loads(manifest_bytes)
         manifest_path = self.root / "manifest.json"
@@ -247,7 +254,8 @@ class OpikPackageAdmissionTests(unittest.TestCase):
             original[path] = patched[path] = sha(("synthetic migration " + str(index)).encode())
         original["apps/opik-backend/pom.xml"] = patched["apps/opik-backend/pom.xml"] = sha(POM)
         original["LICENSE"] = patched["LICENSE"] = sha(b"Apache-2.0 public fixture\n")
-        for index in range(1342):
+        original[source_config_path] = patched[source_config_path] = sha(source_config_bytes)
+        for index in range(1341):
             path = "apps/opik-backend/fixture-protected-" + str(index) + ".txt"
             original[path] = patched[path] = sha(("protected " + str(index)).encode())
         self.assertEqual(len(original), 1576)
@@ -266,7 +274,44 @@ class OpikPackageAdmissionTests(unittest.TestCase):
         self.write_json(receipts / "protected-source-before.json", original)
         self.write_json(receipts / "protected-source-patched.json", patched)
         self.write_json(receipts / "protected-source-after.json", patched)
-        (receipts / "maven.log").write_bytes(b"Public synthetic fixed54 test log\n")
+        # Synthetic same-container observation fixture, not an executed compiler.
+        # The real source config remains in the complete protected catalogue;
+        # only a separate read-only build mount provides the effective config.
+        profile_directory = receipts / "compile-profile"
+        profile_directory.mkdir(mode=0o700)
+        override = profile_directory / "lombok.config"
+        override_bytes = b"config.stopBubbling = true\n"
+        override.write_bytes(override_bytes)
+        override.chmod(0o400)
+        override_hash = sha(override_bytes)
+        profile_id = "opik-dd403-official-docker-build-v1"
+        container_token = "9" * 32
+        execution_proof = {
+            "schema": "capri.opik.compile-observation.v1", "profile_id": profile_id,
+            "run_token": container_token, "phase": "fixed54_test",
+            "observed_at_ns": context["not_before_ns"] + 1,
+            "target": "/workspace/apps/opik-backend/lombok.config",
+            "sha256": override_hash, "bytes": len(override_bytes), "file_type": "regular",
+            "uid": owner["uid"], "gid": owner["gid"], "mode": "0400", "mount_read_only": True,
+        }
+        compile_profile = {
+            "schema": "capri.opik.compile-profile.v1", "profile_id": profile_id,
+            "upstream_revision": REVISION, "source_config_path": source_config_path,
+            "source_config_sha256": sha(source_config_bytes),
+            "source_catalogue_sha256": sha(json.dumps(patched, sort_keys=True).encode()),
+            "effective_catalogue_sha256": sha(json.dumps(
+                {**patched, source_config_path: override_hash}, sort_keys=True).encode()),
+            "override_path": str(override), "override_sha256": override_hash,
+            "override_bytes": len(override_bytes),
+            "override_owner": {"uid": owner["uid"], "gid": owner["gid"], "mode": "0400"},
+            "target": execution_proof["target"], "mount_read_only": True,
+            "execution_proof": execution_proof,
+        }
+        context["compile_profile"] = copy.deepcopy(compile_profile)
+        profile_marker = (b"CAPIR_OPIK_COMPILE_PROFILE_V1 "
+                          + json.dumps(execution_proof, sort_keys=True, separators=(",", ":")).encode()
+                          + b"\n")
+        (receipts / "maven.log").write_bytes(profile_marker + b"Public synthetic fixed54 test log\n")
         (receipts / "toolchain-versions.log").write_bytes(b"Public synthetic Maven 3.9.16; Java 25 readback\n")
         # Public frozen patch bodies supply the five new source identities.
         # This remains JSON evidence; it does not assert a local upstream checkout.
@@ -307,6 +352,8 @@ class OpikPackageAdmissionTests(unittest.TestCase):
             "applied_test_changes": ([{"path": path, "status": "M", "mode": "100644"} for path in sorted(LEGACY_TESTS)]
                                      + [{"path": path, "status": "A", "mode": "100644"} for path in sorted(NEW_TESTS)]),
             "selected_surefire": selected,
+            "compile_profile": copy.deepcopy(compile_profile),
+            "build_image": {"container_run_token": container_token},
             "maven_log_sha256": sha((receipts / "maven.log").read_bytes()),
             "toolchain_versions_sha256": sha((receipts / "toolchain-versions.log").read_bytes()),
         }

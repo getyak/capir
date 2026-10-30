@@ -201,6 +201,38 @@ the clean checked-out Capir revision, job/run attempt, private source and Maven
 repository owners, actual staged index and applied-file hashes, start time and
 final regression receipt hash. Old receipts without these facts are rejected.
 
+### Explicit official-default compile profile
+
+The pinned official Docker build copies pom.xml, spotless.xml and src before
+compilation; it copies lombok.config only into the later runtime stage. A full
+source bind exposes that configuration during our build and is not the same
+compile context. Both new regression and package containers therefore use
+`opik-dd403-official-docker-build-v1`: one build-only read-only bind containing
+exactly `config.stopBubbling = true` plus LF at the project Lombok config path.
+The protected original configuration remains unchanged on the host.
+
+The [shared profile helper](../../../scripts/prompts/opik_compile_profile.py)
+preserves the private 0400 override in the fresh regression receipt directory.
+The original full source catalogue and the effective one-config-overlay
+catalogue have distinct hashes. A wrapper in each actual Maven container
+observes the effective regular file, exact bytes/hash, owner/mode and read-only
+mount before exec. Its first-line log proof binds the container ownership
+token, phase and observation time. Fresh54 receipt and same-job package context
+must carry the exact matching profile/proof; legacy no-profile receipts cannot
+be upgraded. The package archives this input evidence, emits its own container
+proofs and records the applicable catalogue when deriving only the root POM
+version. Known command outcomes and writer settlement precede proof parsing.
+The [profile admission tests](../../../scripts/prompts/test_opik_compile_profile.py)
+cover missing, changed and self-consistently rebound claims through the real
+fixed54 validator.
+
+This profile is an explicit compile-input correction, not proof of binary
+equivalence. The previous actual package remains admitted in its recorded
+scope. A new real fixed54/package run and independent full application-class
+comparison must explain all changes beyond the three declared Java source
+families before accepting runtime compatibility. No class post-processing,
+mixed JAR or resident change follows from a unit fixture or profile ID alone.
+
 Before deriving the release version, the helper preserves and rehashes all raw
 fixed54 reports and receipt material. The source POM's sole root project-version
 derivation is explicit; dependencies, plugins and all other bytes stay fixed.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -22,6 +23,15 @@ import time
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
+
+
+_compile_spec = importlib.util.spec_from_file_location(
+    "opik_compile_profile", Path(__file__).with_name("opik_compile_profile.py")
+)
+if _compile_spec is None or _compile_spec.loader is None:
+    raise RuntimeError("Compile-profile module is unavailable")
+COMPILE = importlib.util.module_from_spec(_compile_spec)
+_compile_spec.loader.exec_module(COMPILE)
 
 
 PATCH_DIR = Path(__file__).resolve().parents[2] / "deploy" / "opik" / "backport"
@@ -727,6 +737,7 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest, stage="base
     source_owner = source_dir.stat()
     cache_owner = cache.stat()
     container_user = str(source_owner.st_uid) + ":" + str(source_owner.st_gid)
+    token = uuid.uuid4().hex
     identity.update({
         "source_bind_owner": {"uid": source_owner.st_uid, "gid": source_owner.st_gid,
                               "mode": format(stat.S_IMODE(source_owner.st_mode), "04o")},
@@ -735,6 +746,7 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest, stage="base
         "requested_container_user": container_user,
         "maven_config": "/maven-repository",
         "jvm_user_home": "/maven-repository",
+        "container_run_token": token,
     })
     _write_json(receipt_dir / "build-image.json", identity)
     if (source_owner.st_uid, source_owner.st_gid) != (cache_owner.st_uid, cache_owner.st_gid):
@@ -747,7 +759,11 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest, stage="base
     for path in (source_dir, cache):
         if any(character in str(path) for character in (",", "\n", "\r")):
             raise ValueError("Unsupported mount path")
-    token = uuid.uuid4().hex
+    protected = _protected_catalogue(source_dir)
+    compile_profile = COMPILE.prepare(
+        source_dir=source_dir, receipt_dir=receipt_dir,
+        protected_catalogue=protected, upstream_revision=REVISION,
+    )
     common = [
         "docker", "run", "--rm", "--init", "--pull=never",
         "--user", container_user,
@@ -756,19 +772,38 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest, stage="base
         "--label", "capir.task=GET-337", "--label", "capir.run=" + token,
         "--mount", "type=bind,src=" + str(source_dir) + ",dst=/workspace",
         "--mount", "type=bind,src=" + str(cache) + ",dst=/maven-repository",
+        "--mount", COMPILE.mount_argument(compile_profile),
         "--workdir", "/workspace/apps/opik-backend",
         "--env", "MAVEN_OPTS=-Xmx1G -XX:MaxMetaspaceSize=265m",
         "--env", "MAVEN_CONFIG=/maven-repository",
         "--env", "JAVA_TOOL_OPTIONS=-Duser.home=/maven-repository",
     ]
 
-    def container(arguments, log_name, timeout):
+    observations = {}
+    command_outcomes = []
+
+    def container(arguments, log_name, timeout, phase):
         cid_file = work_dir / (log_name + ".cid")
         try:
-            return _logged_command(
-                common + ["--cidfile", str(cid_file), IMAGE] + arguments,
+            COMPILE.validate_host(
+                compile_profile, source_dir=source_dir, receipt_dir=receipt_dir,
+                protected_catalogue=protected, upstream_revision=REVISION,
+            )
+            command_started_ns = time.time_ns()
+            code = _logged_command(
+                common + ["--cidfile", str(cid_file), IMAGE]
+                + COMPILE.command(compile_profile, token=token, phase=phase, arguments=arguments),
                 environment=environment, log_path=receipt_dir / log_name, timeout=timeout,
             )
+            # Preserve the known process outcome before parsing its diagnostics.
+            command_outcomes.append({"log": log_name, "phase": phase, "exit_code": code,
+                                     "not_before_ns": command_started_ns, "run_token": token})
+            _write_json(receipt_dir / "container-command-outcomes.json", command_outcomes)
+            observations[log_name] = COMPILE.observe(
+                log_path=receipt_dir / log_name, profile=compile_profile, token=token,
+                phase=phase, not_before_ns=command_started_ns,
+            )
+            return code
         finally:
             # Only this invocation's exact container ID and ownership labels can be cleaned.
             if cid_file.is_file():
@@ -787,7 +822,8 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest, stage="base
                                 capture_output=True, check=False, timeout=30, env=environment,
                             )
     versions_code = container(
-        ["/bin/sh", "-c", "java -version && mvn --version"], "toolchain-versions.log", 60
+        ["/bin/sh", "-c", "java -version && mvn --version"], "toolchain-versions.log", 60,
+        "toolchain_versions",
     )
     if versions_code:
         raise RuntimeError("Build-container toolchain readback failed")
@@ -798,9 +834,16 @@ def run_maven(*, source_dir, work_dir, receipt_dir, suite, manifest, stage="base
          "-DfailIfNoTests=true", "-Dmaven.repo.local=/maven-repository",
          "-DforkCount=1", "-DreuseForks=true", "-DargLine=-Xmx768m", "test"],
         "maven.log", 1800,
+        "fixed54_test" if suite == "all" and stage == "responses-fixed" else stage + "_" + suite + "_test",
     )
+    COMPILE.validate_host(
+        compile_profile, source_dir=source_dir, receipt_dir=receipt_dir,
+        protected_catalogue=protected, upstream_revision=REVISION,
+    )
+    compile_profile["execution_proof"] = observations["maven.log"]
     return {"maven_exit_code": code, "not_before_ns": started_ns, "report_dir": reports,
             "build_image": identity,
+            "compile_profile": compile_profile,
             "toolchain_versions_sha256": _sha256((receipt_dir / "toolchain-versions.log").read_bytes()),
             "maven_log_sha256": _sha256((receipt_dir / "maven.log").read_bytes())}
 
@@ -882,6 +925,7 @@ def run_backport(*, work_dir, receipt_dir, suite="health", stage="baseline"):
         )
         receipt["maven_exit_code"] = execution["maven_exit_code"]
         receipt["build_image"] = execution["build_image"]
+        receipt["compile_profile"] = execution["compile_profile"]
         receipt["toolchain_versions_sha256"] = execution["toolchain_versions_sha256"]
         receipt["maven_log_sha256"] = execution["maven_log_sha256"]
         evaluation = evaluate_test_results(
@@ -922,6 +966,7 @@ def run_backport(*, work_dir, receipt_dir, suite="health", stage="baseline"):
                     or package_context["source_bind_owner"] != execution["build_image"]["source_bind_owner"]
                     or package_context["cache_bind_owner"] != execution["build_image"]["cache_bind_owner"]):
                 raise ValueError("Fresh package context differs from the actual tested inputs")
+            package_context["compile_profile"] = execution["compile_profile"]
             receipt.update(package_context)
         _write_json(result_path, receipt)
         if package_context is not None:
