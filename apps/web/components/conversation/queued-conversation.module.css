@@ -15,26 +15,27 @@
 .transcript { flex:1 1 0; min-height:0; min-width:0; overflow:auto; overscroll-behavior:contain; padding:12px var(--conversation-gutter) 24px; scroll-padding-block:20px; scrollbar-gutter:stable both-edges; }
 /* The selected single reading axis is stable before and after the first send. */
 .content { width:100%; max-width:var(--conversation-axis); margin:0 auto; min-width:0; }
-.turn { margin-bottom:36px; }.localTurn { margin:0 0 26px; }
-.turn.userTurn { margin-bottom:20px; }
+.turn { margin-bottom:16px; }.localTurn { margin:0 0 16px; }
+.turn.userTurn { margin-bottom:12px; }
 .userTurn .userRow { margin-bottom:0; }
 /* Time belongs to its message, without reserving a separator above the chat. */
 .sendTime { color:var(--muted); display:block; font-size:var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); margin:0; text-align:end; }
-.userRow { display:flex; justify-content:flex-end; margin-bottom:20px; }
-.userStack { display:flex; flex-direction:column; align-items:flex-end; gap:8px; min-width:0; max-width:min(35rem,86%); }
-.userMessage { max-width:min(35rem,86%); width:fit-content; background:var(--workspace-user-bubble); padding:12px 16px; border-radius:14px 14px 4px 14px; font-size:var(--conversation-reading-size); line-height: var(--ts-leading-body, 1.667); white-space:pre-wrap; overflow-wrap:anywhere; box-sizing:border-box; }
+.userRow { display:flex; justify-content:flex-end; margin-bottom:12px; }
+.userStack { display:flex; flex-direction:column; align-items:flex-end; gap:4px; min-width:0; max-width:min(35rem,86%); }
+.userMessage { max-width:min(35rem,86%); width:fit-content; background:var(--workspace-user-bubble); padding:10px 14px; border-radius:14px 14px 4px 14px; font-size:var(--conversation-reading-size); line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; box-sizing:border-box; }
 /* Image-bearing sends keep the images out of a prominent text bubble frame:
    the session transcript stacks them below the text bubble, and the local
    pending wrapper drops the frame around its inline strip. Text-only and
    non-image messages keep the original bubble unchanged. */
 .userStack > .userMessage { max-width:100%; }
 .userMessage:has(> .images) { background:none; padding:0; }
-/* Identity precedes the answer instead of consuming a permanent text column. */
-.answer { display:grid; grid-template-columns:minmax(0,1fr); row-gap:10px; min-width:0; padding:0; align-items:start; }
-.identity { display:flex; justify-content:flex-start; width:auto; align-items:center; gap:8px; font-size:var(--ts-type-meta, 0.8125rem); font-weight:500; color:var(--muted); margin:2px 0 0; }
-.mark { width:20px; height:20px; flex:none; background:var(--workspace-brand-image) center / contain no-repeat; }
-.answerBody { min-width:0; }
-.semanticBubble > h3 { font-size:var(--ts-type-section,1.125rem); line-height:1.5; font-weight:600; margin:0 0 12px; overflow-wrap:anywhere; }
+/* One reply is one chat group; identity stays beside its first line. The
+   same surface is served to browsers and the shipped macOS WebKit host. */
+.answer { display:grid; grid-template-columns:24px minmax(0,1fr); gap:8px; min-width:0; padding:0; align-items:start; }
+.identity { display:flex; justify-content:center; width:24px; align-items:center; color:var(--muted); margin:10px 0 0; }
+.mark { width:24px; height:24px; flex:none; background:var(--workspace-brand-image) center / contain no-repeat; }
+.answerBody { min-width:0; max-width:100%; width:fit-content; box-sizing:border-box; padding:10px 12px; border-radius:4px 14px 14px 14px; background:var(--surface-muted); }
+.semanticBubble > h3 { font-size:var(--ts-type-section,1.125rem); line-height:1.5; font-weight:600; margin:0 0 8px; overflow-wrap:anywhere; }
 /* Milestone-only dialogue update while a run forms its result. */
 .milestone { max-width:620px; background:var(--surface-muted,#f4f3ef); border-radius:14px; padding:12px; margin-bottom:8px; }
 /* State stays on the reading axis; diagnostics live inside the disclosure. */
@@ -92,7 +93,7 @@
 .recoveryContent { margin:10px 0 2px; padding:9px 10px; border-radius:9px; background:var(--surface-muted,#f5f4ed); font:inherit; font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; }
 .canvas button:focus-visible,.details summary:focus-visible { outline:2px solid var(--muted-strong,var(--muted)); outline-offset:3px; }
 @keyframes breathe { 0%,100% { opacity:.35; } 50% { opacity:1; } }
-@media(max-width:640px) { .header { padding:6px 16px; min-height:56px; gap:8px; }.details { right:8px; top:6px; }.transcript { padding:0 16px 16px; }.dock { padding:0 16px max(16px,env(safe-area-inset-bottom)); }.queue { margin:0 2px 8px; max-height:170px; }.queueActions button { min-width:44px; min-height:44px; }.stop { min-height:44px; }.send { min-width:44px; min-height:44px; font-size: var(--ts-type-nav, 0.875rem); }.userStack { max-width:min(540px,90%); }.userMessage { max-width:90%; font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); }.welcome { padding:0 2px; gap:11px; }.welcome h2 { font-size:var(--ts-type-object, 1.375rem); }.welcomeMark { width:25px; height:25px; }.canvas[data-empty="true"] .transcript { padding:0 22px; }.canvas[data-empty="true"] .dock { margin-top:22px; }.canvas[data-empty="true"] { padding-bottom:36px; }.footer { font-size:var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }.footer span:last-child { display:none; }.runMeta { flex-wrap:wrap; gap:4px; }.turn { margin-bottom:28px; } }
+@media(max-width:640px) { .header { padding:6px 16px; min-height:56px; gap:8px; }.details { right:8px; top:6px; }.transcript { padding:0 16px 16px; }.dock { padding:0 16px max(16px,env(safe-area-inset-bottom)); }.queue { margin:0 2px 8px; max-height:170px; }.queueActions button { min-width:44px; min-height:44px; }.stop { min-height:44px; }.send { min-width:44px; min-height:44px; font-size: var(--ts-type-nav, 0.875rem); }.userStack { max-width:min(540px,90%); }.userMessage { max-width:90%; font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); }.welcome { padding:0 2px; gap:11px; }.welcome h2 { font-size:var(--ts-type-object, 1.375rem); }.welcomeMark { width:25px; height:25px; }.canvas[data-empty="true"] .transcript { padding:0 22px; }.canvas[data-empty="true"] .dock { margin-top:22px; }.canvas[data-empty="true"] { padding-bottom:36px; }.footer { font-size:var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }.footer span:last-child { display:none; }.runMeta { flex-wrap:wrap; gap:4px; }.turn { margin-bottom:16px; } }
 
 @media(max-height:520px) { .canvas[data-empty="true"] { justify-content:flex-start; padding-top:24px; padding-bottom:14px; } }
 /* Short mobile windows need room above the persistent bottom navigation. */
@@ -182,7 +183,7 @@
    the preview toolbar even in a short, narrow transcript. */
 .canvas:has([data-evidence-preview]) .latest { position:static; margin:0 0 8px auto; min-height:44px; }
 
-.semanticBubble { width:100%; max-width:none; min-width:0; box-sizing:border-box; padding:20px 0; border-block:1px solid var(--line); border-radius:0; background:transparent; margin:12px 0; }
+.semanticBubble { width:100%; max-width:none; min-width:0; box-sizing:border-box; padding:12px 0; border-block:1px solid var(--line); border-radius:0; background:transparent; margin:8px 0; }
 .semanticBubble[data-presentation="prose"] { width:100%; max-width:none; padding:0; border:0; border-radius:0; background:transparent; margin:0; }
 .queueText small { white-space:normal; overflow-wrap:anywhere; line-height:var(--ts-leading-meta,1.5); }
 .send[data-send-mode="steer"], .send[data-send-mode="queue"] { width:auto; min-width:44px; gap:6px; padding:0 12px; }
@@ -200,7 +201,7 @@
 /* Live work is one presence row; detailed evidence stays behind disclosure. */
 .execution[data-live="true"] .executionSummary { font-size: var(--ts-type-meta, 0.8125rem); gap:6px; min-height:44px; padding:0; }
 .workingName { font-weight:400; }
-.answer:has(.execution[data-live="true"]) > .identity { margin-top:0; }
+.answer:has(.execution[data-live="true"]) > .identity { margin-top:20px; }
 .answer:has(.execution[data-live="true"][data-phase="running"]) > .identity .mark { animation:breathe 1.8s ease-in-out infinite; }
 .answer:has(.workRow[data-animate="true"]) > .identity .mark { animation:breathe 1.8s ease-in-out infinite; }
 .executionSummary:focus-visible { outline:2px solid var(--muted); outline-offset:3px; }
@@ -209,7 +210,7 @@
 /* Opaque warm reading surfaces when transparency is reduced. */
 @media(prefers-reduced-transparency:reduce) {
   .canvas, .transcript { background:var(--background); }
-  .queue, .notice, .recovery, .detailPanel, .latest, .milestone, .semanticBubble { background:var(--surface); }
+  .queue, .notice, .recovery, .detailPanel, .latest, .milestone, .semanticBubble, .answerBody { background:var(--surface); }
   .semanticBubble[data-presentation="prose"] { background:transparent; }
   .userMessage { background:var(--workspace-user-bubble); }
   .userMessage:has(> .images) { background:none; }
@@ -219,7 +220,7 @@
 /* Keep every control, border and focus ring visible under forced colors. */
 @media(forced-colors:active) {
   .canvas { background:Canvas; color:CanvasText; }
-  .queue, .notice, .recovery, .detailPanel, .userMessage, .milestone, .semanticBubble, .latest, .composerImage, .imageButton, .imagePlaceholder { border:1px solid CanvasText; }
+  .queue, .notice, .recovery, .detailPanel, .userMessage, .answerBody, .milestone, .semanticBubble, .latest, .composerImage, .imageButton, .imagePlaceholder { border:1px solid CanvasText; }
   .composerImageRemove, .imageZoom, .imageControl, .imageNav, .imageClose, .imageRetryInline { background:Canvas; border:1px solid CanvasText; color:CanvasText; }
   .imageDialogMessage, .imageFileName, .imagePosition { color:CanvasText; }
   .imageDialog button:focus-visible { outline:2px solid Highlight; }
@@ -249,11 +250,10 @@
 .execution[data-phase="completed"] .executionSummary { font-size:var(--ts-type-meta,0.8125rem); }
 .executionDetail { padding-inline: 0; }
 .executionSummary::after { margin-left: auto; }
-.turn { margin-bottom: 28px; }
-.turn.userTurn { margin-bottom: 16px; }
+.turn { margin-bottom: 16px; }
+.turn.userTurn { margin-bottom: 12px; }
 /* An empty adapter-generated part must not reserve a whole blank turn. */
 .turn:has(.answerBody:empty) { display:none; }
-@media(max-width:640px) { .turn { margin-bottom:24px; } }
 
 .answerBlockGroup { position:relative; min-width:0; }
 .userStack { position:relative; }
@@ -302,8 +302,6 @@
   .transcript { padding-block:12px 20px; padding-inline:16px; }
   .dock { padding-inline:16px; }
   .userStack,.userMessage { max-width:94%; }
-  .answerBlockGroup:has([data-message-actions]) { padding-inline-end:0; }
-  .identity { margin-top:0; }
   .executionMilestones li { flex-wrap:wrap; gap:2px 10px; }
 }
 @media (max-height:420px) {
