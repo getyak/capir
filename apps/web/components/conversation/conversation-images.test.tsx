@@ -519,6 +519,88 @@ it("keeps an unavailable image honest, in place and retryable inside the viewer"
   expect(positionText()).toContain("2 / 3");
 });
 
+it("keeps pending retry keyboard focus inside its current inline preview", async () => {
+  await renderStrip({ images: [imageManifest(0)] });
+  await act(async () => { button("查看原图 1").click(); });
+  await act(async () => { dialogImage().dispatchEvent(new window.Event("error")); });
+  const preview = dialog();
+  const retry = button("重新读取");
+  retry.focus();
+  expect(preview.contains(retry)).toBe(true);
+  expect(document.activeElement).toBe(retry);
+
+  let finish: ((response: Response) => void) | undefined;
+  fetcher.mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  try {
+    await act(async () => { retry.click(); });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(dialog()).toBe(preview);
+    expect(preview.isConnected).toBe(true);
+    expect(document.activeElement?.isConnected).toBe(true);
+    expect(preview.contains(document.activeElement)).toBe(true);
+  } finally {
+    finish?.(new Response(pngBytes()));
+    await flush();
+  }
+});
+
+it.each(["moved focus", "close", "switch", "reopen"] as const)("keeps newer %s focus when an earlier image retry finishes", async (intent) => {
+  await renderStrip({ images: [imageManifest(0), imageManifest(1)] });
+  const originalTrigger = button("查看原图 2");
+  const sourceRecovery = button("展开图片");
+  await act(async () => { originalTrigger.click(); });
+  await act(async () => { dialogImage().dispatchEvent(new window.Event("error")); });
+  expect(originalTrigger.isConnected).toBe(false);
+  const retry = button("重新读取");
+  retry.focus();
+  let finish: ((response: Response) => void) | undefined;
+  fetcher.mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  try {
+    await act(async () => { retry.click(); });
+    let newerFocus: HTMLButtonElement;
+    if (intent === "close" || intent === "reopen") {
+      await act(async () => { button("关闭原图").click(); });
+      // The failed opener is gone; the existing multi-image return contract
+      // prefers this captured Expand control over another thumbnail.
+      newerFocus = sourceRecovery;
+      expect(document.activeElement).toBe(newerFocus);
+      if (intent === "reopen") {
+        await act(async () => { button("查看原图 1").click(); });
+        await act(async () => { button("下一张图片").click(); });
+        newerFocus = button("关闭原图");
+        newerFocus.focus();
+      }
+    } else if (intent === "switch") {
+      newerFocus = button("上一张图片");
+      await act(async () => { newerFocus.focus(); newerFocus.click(); });
+    } else {
+      newerFocus = button("关闭原图");
+      newerFocus.focus();
+    }
+    expect(newerFocus.isConnected).toBe(true);
+    expect(document.activeElement).toBe(newerFocus);
+
+    const createdBeforeRetryCompletes = createdUrls.length;
+    finish?.(new Response(pngBytes()));
+    await vi.waitFor(async () => {
+      await act(async () => { await Promise.resolve(); });
+      expect(createdUrls).toHaveLength(createdBeforeRetryCompletes + 1);
+    }, { timeout: 1_000 });
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/conversation-images/" + MESSAGE + "/1"))).toHaveLength(2);
+    expect(mount!.querySelector<HTMLImageElement>("ul img[alt='photo-2.png']")?.getAttribute("src")).toBe(createdUrls[createdBeforeRetryCompletes]);
+    if (intent === "close") {
+      expect(document.querySelector("[data-evidence-preview]")).toBeNull();
+    } else {
+      expect(dialogImage().alt).toBe(intent === "switch" ? "photo-1.png" : "photo-2.png");
+      await act(async () => { dialogImage().dispatchEvent(new window.Event("load")); });
+    }
+    expect(document.activeElement).toBe(newerFocus);
+  } finally {
+    finish?.(new Response(pngBytes()));
+    await flush();
+  }
+});
+
 it("replaces a decoded-image failure with an honest retry while preserving its manifest position", async () => {
   await renderStrip({ images: [imageManifest(0), imageManifest(1)] });
   await act(async () => { document.querySelector<HTMLButtonElement>("button[title='查看原图 2']")!.click(); });

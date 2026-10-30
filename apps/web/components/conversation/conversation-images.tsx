@@ -257,7 +257,13 @@ function LoadedConversationImageStrip({
     if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
     else if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
   };
-  const retryOne = (position: number) => {
+  const retryOne = (position: number, trigger: HTMLButtonElement) => {
+    const preview = previewRef.current;
+    // Clearing failure removes Retry before bytes arrive. Keep its keyboard
+    // ownership on this stable preview, without focusing from a later load.
+    if (document.activeElement === trigger && preview?.isConnected && preview.contains(trigger)) {
+      preview.focus({ preventScroll: true });
+    }
     setFailed((previous) => previous.map((value, i) => (i === position ? false : value)));
     const run = generation.current;
     const alive = () => generation.current === run;
@@ -392,7 +398,7 @@ function LoadedConversationImageStrip({
                 <div className={styles.imageDialogMessage} role="status">
                   <p>{t(failed[index] ? "conversation.image.unavailableSentence" : "conversation.image.loading")}</p>
                   {failed[index] ? (
-                    <button className={styles.imageRetryInline} onClick={() => retryOne(index)} type="button">
+                    <button className={styles.imageRetryInline} onClick={(event) => retryOne(index, event.currentTarget)} type="button">
                       {t("conversation.image.reload")}
                     </button>
                   ) : null}
