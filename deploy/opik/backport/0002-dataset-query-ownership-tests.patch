@@ -1,0 +1,187 @@
+diff --git a/apps/opik-backend/src/test/java/com/comet/opik/domain/Get337DatasetItemVersionResponseOwnershipTest.java b/apps/opik-backend/src/test/java/com/comet/opik/domain/Get337DatasetItemVersionResponseOwnershipTest.java
+new file mode 100644
+--- /dev/null
++++ b/apps/opik-backend/src/test/java/com/comet/opik/domain/Get337DatasetItemVersionResponseOwnershipTest.java
+@@ -0,0 +1,182 @@
++// SPDX-License-Identifier: Apache-2.0
++package com.comet.opik.domain;
++
++import com.clickhouse.client.api.Client;
++import com.clickhouse.client.api.query.QueryResponse;
++import com.clickhouse.client.api.query.QuerySettings;
++import com.comet.opik.api.DatasetItemEdit;
++import com.comet.opik.api.sorting.SortingFactoryDatasets;
++import com.comet.opik.domain.experiments.aggregations.ExperimentAggregatesDAO;
++import com.comet.opik.domain.filter.FilterQueryBuilder;
++import com.comet.opik.domain.sorting.SortingQueryBuilder;
++import com.comet.opik.infrastructure.OpikConfiguration;
++import com.comet.opik.infrastructure.auth.RequestContext;
++import com.comet.opik.infrastructure.db.TransactionTemplateAsync;
++import com.comet.opik.infrastructure.db.ZeroRowsRetryPolicy;
++import com.comet.opik.testutil.Get337QueryResponseFixture;
++import org.junit.jupiter.api.Timeout;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.EnumSource;
++import reactor.core.Disposable;
++import reactor.core.publisher.Mono;
++import reactor.test.StepVerifier;
++
++import java.time.Duration;
++import java.util.List;
++import java.util.UUID;
++import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.atomic.AtomicInteger;
++import java.util.concurrent.atomic.AtomicReference;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyMap;
++import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
++
++/**
++ * Exercises both existing public DAO operations and their actual Reactor chains.
++ * Real futures, retry policy, context, QueryResponse and metrics are retained.
++ * The only query substitute is the per-instance external Client.query boundary.
++ */
++@Timeout(5)
++class Get337DatasetItemVersionResponseOwnershipTest {
++
++    private static final Duration VERIFY_TIMEOUT = Duration.ofSeconds(2);
++    private static final UUID SOURCE_DATASET = UUID.fromString("00000000-0000-0000-0000-000000000001");
++    private static final UUID SOURCE_VERSION = UUID.fromString("00000000-0000-0000-0000-000000000002");
++    private static final UUID TARGET_DATASET = UUID.fromString("00000000-0000-0000-0000-000000000003");
++    private static final UUID TARGET_VERSION = UUID.fromString("00000000-0000-0000-0000-000000000004");
++    private static final UUID ITEM = UUID.fromString("00000000-0000-0000-0000-000000000005");
++    private static final UUID NEW_ROW = UUID.fromString("00000000-0000-0000-0000-000000000006");
++
++    enum Operation {
++        COPY("copy_version_items:"),
++        EDIT("edit_item_via_select_insert:");
++
++        private final String logCommentPrefix;
++
++        Operation(String logCommentPrefix) {
++            this.logCommentPrefix = logCommentPrefix;
++        }
++    }
++
++    @ParameterizedTest
++    @EnumSource(Operation.class)
++    void cancellationBeforeDeliveryClosesTheLateQueryResponse(Operation operation) throws Exception {
++        var pending = new CompletableFuture<QueryResponse>();
++        var fixture = Get337QueryResponseFixture.successful();
++        var scenario = scenario(operation, pending);
++        var deliveredError = new AtomicReference<Throwable>();
++        Disposable subscription = scenario.operation().subscribe(value -> {
++        }, deliveredError::set);
++        try {
++            assertThat(scenario.queryCalls().get()).isEqualTo(1);
++            assertThat(scenario.logComment().get()).startsWith(operation.logCommentPrefix);
++            subscription.dispose();
++
++            assertThat(pending.complete(fixture.response()))
++                    .as("Cancelling the DAO subscriber must leave an owner for the late QueryResponse")
++                    .isTrue();
++            assertThat(fixture.awaitClosed()).isTrue();
++            assertThat(fixture.closeCount()).isEqualTo(1);
++            assertThat(deliveredError.get()).isNull();
++        } finally {
++            subscription.dispose();
++        }
++    }
++
++    @ParameterizedTest
++    @EnumSource(Operation.class)
++    void deliveredResponseIsClosedOnceBeforeReportingTheWrittenCount(Operation operation) {
++        var fixture = Get337QueryResponseFixture.successful();
++        var scenario = scenario(operation, CompletableFuture.completedFuture(fixture.response()));
++
++        StepVerifier.create(scenario.operation())
++                .assertNext(count -> {
++                    assertThat(count).isEqualTo(1L);
++                    assertThat(fixture.closeCount()).isEqualTo(1);
++                })
++                .expectComplete()
++                .verify(VERIFY_TIMEOUT);
++        assertThat(scenario.queryCalls().get()).isEqualTo(1);
++    }
++
++    @ParameterizedTest
++    @EnumSource(Operation.class)
++    void queryFailurePropagatesWithoutSubmittingAnotherWrite(Operation operation) {
++        var failure = new IllegalStateException("Synthetic query failure");
++        var scenario = scenario(operation, CompletableFuture.failedFuture(failure));
++
++        StepVerifier.create(scenario.operation())
++                .expectErrorSatisfies(error -> assertThat(error).isSameAs(failure))
++                .verify(VERIFY_TIMEOUT);
++        assertThat(scenario.queryCalls().get()).isEqualTo(1);
++    }
++
++    @ParameterizedTest
++    @EnumSource(Operation.class)
++    void writtenRowsMappingFailureClosesItsResponseExactlyOnce(Operation operation) {
++        var fixture = Get337QueryResponseFixture.missingWrittenRows();
++        var scenario = scenario(operation, CompletableFuture.completedFuture(fixture.response()));
++
++        StepVerifier.create(scenario.operation())
++                .expectError(NullPointerException.class)
++                .verify(VERIFY_TIMEOUT);
++        assertThat(fixture.closeCount()).isEqualTo(1);
++        assertThat(scenario.queryCalls().get()).isEqualTo(1);
++    }
++
++    @ParameterizedTest
++    @EnumSource(Operation.class)
++    void cleanupFailureDoesNotTurnACompletedWriteIntoAFailedOrRetriedWrite(Operation operation) {
++        var fixture = Get337QueryResponseFixture.failingClose();
++        var scenario = scenario(operation, CompletableFuture.completedFuture(fixture.response()));
++
++        StepVerifier.create(scenario.operation())
++                .expectNext(1L)
++                .expectComplete()
++                .verify(VERIFY_TIMEOUT);
++        assertThat(fixture.closeCount()).isEqualTo(1);
++        assertThat(scenario.queryCalls().get()).isEqualTo(1);
++    }
++
++    private Scenario scenario(Operation operation, CompletableFuture<QueryResponse> response) {
++        Client client = mock(Client.class);
++        var calls = new AtomicInteger();
++        var logComment = new AtomicReference<String>();
++        when(client.query(anyString(), anyMap(), any(QuerySettings.class))).thenAnswer(invocation -> {
++            calls.incrementAndGet();
++            QuerySettings settings = invocation.getArgument(2);
++            logComment.set((String) settings.getAllSettings().get("clickhouse_setting_log_comment"));
++            return response;
++        });
++
++        var dao = new DatasetItemVersionDAOImpl(
++                mock(TransactionTemplateAsync.class),
++                mock(FilterQueryBuilder.class),
++                mock(SortingQueryBuilder.class),
++                mock(SortingFactoryDatasets.class),
++                mock(OpikConfiguration.class),
++                mock(ExperimentAggregatesDAO.class),
++                client,
++                new ZeroRowsRetryPolicy(1, Duration.ofMillis(1), Duration.ofMillis(1)));
++
++        Mono<Long> result = switch (operation) {
++            // One UUID makes the copy's existing expected-row guard a no-op; these are ownership tests.
++            case COPY -> dao.copyVersionItems(SOURCE_DATASET, SOURCE_VERSION, TARGET_DATASET, TARGET_VERSION,
++                    null, List.of(NEW_ROW));
++            case EDIT -> dao.editItemsViaSelectInsert(SOURCE_DATASET, SOURCE_VERSION, TARGET_DATASET, TARGET_VERSION,
++                    List.of(DatasetItemEdit.builder().id(ITEM).description("Synthetic test edit").build()),
++                    List.of(NEW_ROW));
++        };
++        return new Scenario(result.contextWrite(context -> context
++                .put(RequestContext.USER_NAME, "get337-synthetic-user")
++                .put(RequestContext.WORKSPACE_ID, "get337-synthetic-workspace")),
++                calls, logComment);
++    }
++
++    private record Scenario(Mono<Long> operation, AtomicInteger queryCalls, AtomicReference<String> logComment) {
++    }
++}

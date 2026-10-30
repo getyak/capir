@@ -27,6 +27,7 @@ test("the actual aggregate denies failed, cancelled, missing or skipped runtime 
         WEB_RESULT: "success", BACKEND_RESULT: "success", PHASE_ONE_RESULT: "success",
         IOS_REQUIRED: "false", IOS_RESULT: "skipped", MACOS_HYBRID_REQUIRED: "false",
         MACOS_HYBRID_RESULT: "skipped", DOCS_ONLY: docsOnly, CLI_RESULT: cliResult,
+        OPIK_BACKPORT_REQUIRED: "false", OPIK_BACKPORT_RESULT: "skipped",
       },
     });
     assert.equal(result.status, expected, `${docsOnly}/${cliResult || "missing"}`);

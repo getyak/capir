@@ -44,6 +44,7 @@ jobs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
       ios: ${{ steps.filter.outputs.ios }}
       macos_hybrid: ${{ steps.macos_hybrid.outputs.required }}
+      opik_backport: ${{ steps.opik_backport.outputs.required }}
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -130,6 +131,17 @@ jobs:
           required="$(./scripts/ci/has-macos-hybrid-changes.sh "$BASE_SHA" "$HEAD_SHA")"
           echo "required=$required" >> "$GITHUB_OUTPUT"
           echo "macOS Hybrid checks required: $required"
+
+      - name: Detect Opik response lifecycle changes
+        id: opik_backport
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          required="$(python3 scripts/ci/has-opik-backport-changes.py "$BASE_SHA" "$HEAD_SHA")"
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+          echo "Opik regression required: $required"
 
   repository:
     name: Repository policy and docs
@@ -549,6 +561,41 @@ jobs:
       - name: Verify restored artifact matches original
         run: cmp build/phase-one-ci.json build/restored-phase-one/phase-one-ci.json
 
+  opik-backport:
+    name: Opik response lifecycle
+    needs: changes
+    if: needs.changes.outputs.opik_backport == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Verify the regression harness boundaries
+        run: python3 -m unittest discover -s scripts/prompts -p test_opik_backport.py -v
+
+      - name: Test the exact pinned Opik health response ownership
+        run: |
+          python3 scripts/prompts/test-opik-backport.py \
+            --work-dir "$RUNNER_TEMP/opik-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --receipt-dir "$RUNNER_TEMP/opik-receipts-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --suite health
+
+      - name: Retain public-source regression evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: opik-regression-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/opik-receipts-${{ github.run_id }}-${{ github.run_attempt }}/
+            ${{ runner.temp }}/opik-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-*Get337*.xml
+          if-no-files-found: warn
+          retention-days: 14
+
   ios:
     name: iOS release smoke
     needs: changes
@@ -674,7 +721,7 @@ jobs:
 
   required:
     name: CI required
-    needs: [changes, repository, web, cli, backend, phase-one, ios, macos-hybrid]
+    needs: [changes, repository, web, cli, backend, phase-one, ios, macos-hybrid, opik-backport]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -690,11 +737,18 @@ jobs:
       IOS_REQUIRED: ${{ needs.changes.outputs.ios }}
       MACOS_HYBRID_REQUIRED: ${{ needs.changes.outputs.macos_hybrid }}
       MACOS_HYBRID_RESULT: ${{ needs.macos-hybrid.result }}
+      OPIK_BACKPORT_REQUIRED: ${{ needs.changes.outputs.opik_backport }}
+      OPIK_BACKPORT_RESULT: ${{ needs.opik-backport.result }}
     steps:
       - name: Enforce required job results
         run: |
           test "$CHANGES_RESULT" = "success"
           test "$REPOSITORY_RESULT" = "success"
+          case "$OPIK_BACKPORT_REQUIRED" in
+            true) test "$OPIK_BACKPORT_RESULT" = "success" ;;
+            false) test "$OPIK_BACKPORT_RESULT" = "success" || test "$OPIK_BACKPORT_RESULT" = "skipped" ;;
+            *) exit 1 ;;
+          esac
           if [ "$IOS_REQUIRED" = "true" ]; then
             test "$IOS_RESULT" = "success"
           else

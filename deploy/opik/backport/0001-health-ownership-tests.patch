@@ -1,0 +1,250 @@
+diff --git a/apps/opik-backend/src/test/java/com/comet/opik/testutil/Get337QueryResponseFixture.java b/apps/opik-backend/src/test/java/com/comet/opik/testutil/Get337QueryResponseFixture.java
+new file mode 100644
+--- /dev/null
++++ b/apps/opik-backend/src/test/java/com/comet/opik/testutil/Get337QueryResponseFixture.java
+@@ -0,0 +1,103 @@
++// SPDX-License-Identifier: Apache-2.0
++package com.comet.opik.testutil;
++
++import com.clickhouse.client.api.internal.ClientStatisticsHolder;
++import com.clickhouse.client.api.metrics.OperationMetrics;
++import com.clickhouse.client.api.metrics.ServerMetrics;
++import com.clickhouse.client.api.query.QueryResponse;
++import com.clickhouse.client.api.query.QuerySettings;
++import com.clickhouse.client.api.transport.internal.TransportResponse;
++import com.clickhouse.data.ClickHouseFormat;
++
++import java.io.IOException;
++import java.io.InputStream;
++import java.util.Map;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicInteger;
++
++/**
++ * Test-only transport boundary for real QueryResponse ownership.
++ * No SQL, network, pool implementation, or production cleanup logic is copied here.
++ */
++public final class Get337QueryResponseFixture {
++
++    private final AtomicInteger closes = new AtomicInteger();
++    private final CountDownLatch closed = new CountDownLatch(1);
++    private final QueryResponse response;
++
++    private Get337QueryResponseFixture(boolean includeWrittenRows, boolean failClose) {
++        var metrics = new OperationMetrics(new ClientStatisticsHolder());
++        if (includeWrittenRows) {
++            metrics.updateMetric(ServerMetrics.NUM_ROWS_WRITTEN, 1L);
++        }
++
++        TransportResponse transport = new TransportResponse() {
++            @Override
++            public ClickHouseFormat getDataFormat() {
++                return ClickHouseFormat.RowBinaryWithNamesAndTypes;
++            }
++
++            @Override
++            public String getSummaryJson() {
++                return "{}";
++            }
++
++            @Override
++            public String getQueryId() {
++                return "get337-synthetic-query";
++            }
++
++            @Override
++            public <T> T getDelegate() {
++                throw new UnsupportedOperationException("No HTTP delegate in this test fixture");
++            }
++
++            @Override
++            public Map<String, String> getHeaders() {
++                return Map.of();
++            }
++
++            @Override
++            public InputStream createDataInputStream() {
++                return InputStream.nullInputStream();
++            }
++
++            @Override
++            public void close() throws IOException {
++                closes.incrementAndGet();
++                closed.countDown();
++                if (failClose) {
++                    throw new IOException("Synthetic transport close failure");
++                }
++            }
++        };
++
++        response = new QueryResponse(transport, ClickHouseFormat.RowBinaryWithNamesAndTypes,
++                new QuerySettings(), metrics);
++    }
++
++    public static Get337QueryResponseFixture successful() {
++        return new Get337QueryResponseFixture(true, false);
++    }
++
++    public static Get337QueryResponseFixture missingWrittenRows() {
++        return new Get337QueryResponseFixture(false, false);
++    }
++
++    public static Get337QueryResponseFixture failingClose() {
++        return new Get337QueryResponseFixture(true, true);
++    }
++
++    public QueryResponse response() {
++        return response;
++    }
++
++    public int closeCount() {
++        return closes.get();
++    }
++
++    public boolean awaitClosed() throws InterruptedException {
++        return closed.await(2, TimeUnit.SECONDS);
++    }
++}
+diff --git a/apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHealthCheckOwnershipTest.java b/apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHealthCheckOwnershipTest.java
+new file mode 100644
+--- /dev/null
++++ b/apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHealthCheckOwnershipTest.java
+@@ -0,0 +1,137 @@
++// SPDX-License-Identifier: Apache-2.0
++package com.comet.opik.infrastructure.db.healthchecks;
++
++import com.clickhouse.client.api.Client;
++import com.clickhouse.client.api.ClientException;
++import com.clickhouse.client.api.query.QueryResponse;
++import com.clickhouse.client.api.query.QuerySettings;
++import com.codahale.metrics.health.HealthCheck;
++import com.comet.opik.testutil.Get337QueryResponseFixture;
++import io.dropwizard.util.Duration;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.Timeout;
++
++import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.ExecutionException;
++import java.util.concurrent.TimeoutException;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
++
++/**
++ * GET-337 / OPIK-8576 regression against the actual pinned production health check.
++ * CompletableFuture and QueryResponse are real; only Client.query's external I/O is replaced.
++ */
++@Timeout(5)
++class Get337ClickHouseHealthCheckOwnershipTest {
++
++    private final Client client = mock(Client.class);
++    private final ClickHouseHealthCheck healthCheck = new ClickHouseHealthCheck(client, Duration.milliseconds(1));
++
++    @AfterEach
++    void clearInterrupt() {
++        Thread.interrupted();
++    }
++
++    @Test
++    void timedOutProbeClosesTheResponseThatArrivesAfterTheDeadline() throws Exception {
++        var future = new CompletableFuture<QueryResponse>();
++        var fixture = Get337QueryResponseFixture.successful();
++        queryReturns(future);
++
++        var result = healthCheck.execute();
++
++        assertThat(result.isHealthy()).isFalse();
++        assertThat(result.getError()).isInstanceOf(TimeoutException.class);
++        assertThat(future.complete(fixture.response()))
++                .as("An abandoned probe must still accept its late response so it can be closed")
++                .isTrue();
++        assertThat(fixture.awaitClosed()).isTrue();
++        assertThat(fixture.closeCount()).isEqualTo(1);
++    }
++
++    @Test
++    void interruptedProbePreservesInterruptAndClosesItsLateResponse() throws Exception {
++        var future = new CompletableFuture<QueryResponse>();
++        var fixture = Get337QueryResponseFixture.successful();
++        queryReturns(future);
++
++        HealthCheck.Result result;
++        boolean interruptPreserved;
++        Thread.currentThread().interrupt();
++        try {
++            result = healthCheck.execute();
++            interruptPreserved = Thread.currentThread().isInterrupted();
++        } finally {
++            Thread.interrupted();
++        }
++
++        assertThat(result.isHealthy()).isFalse();
++        assertThat(result.getError()).isInstanceOf(InterruptedException.class);
++        assertThat(interruptPreserved).isTrue();
++        assertThat(future.complete(fixture.response()))
++                .as("Interrupting the waiter must not discard the still-running query's response")
++                .isTrue();
++        assertThat(fixture.awaitClosed()).isTrue();
++        assertThat(fixture.closeCount()).isEqualTo(1);
++    }
++
++    @Test
++    void successfulProbeClosesItsAcquiredResponseExactlyOnce() {
++        var fixture = Get337QueryResponseFixture.successful();
++        queryReturns(CompletableFuture.completedFuture(fixture.response()));
++
++        var result = healthCheck.execute();
++
++        assertThat(result.isHealthy()).isTrue();
++        assertThat(result.getError()).isNull();
++        assertThat(fixture.closeCount()).isEqualTo(1);
++    }
++
++    @Test
++    void failedAcquisitionReportsTheOriginalFailure() {
++        var failure = new IllegalStateException("Synthetic query failure");
++        queryReturns(CompletableFuture.failedFuture(failure));
++
++        var result = healthCheck.execute();
++
++        assertThat(result.isHealthy()).isFalse();
++        assertThat(result.getError()).isInstanceOf(ExecutionException.class);
++        assertThat(result.getError().getCause()).isSameAs(failure);
++    }
++
++    @Test
++    void mappingFailureClosesTheAcquiredResponseExactlyOnce() {
++        var fixture = Get337QueryResponseFixture.successful();
++        var failure = new IllegalStateException("Synthetic health mapping failure");
++
++        var result = healthCheck.executeProbe(CompletableFuture.completedFuture(fixture.response()), response -> {
++            throw failure;
++        });
++
++        assertThat(result.isHealthy()).isFalse();
++        assertThat(result.getError()).isSameAs(failure);
++        assertThat(fixture.closeCount()).isEqualTo(1);
++    }
++
++    @Test
++    void closeFailureReportsUnhealthyWithoutClosingTheSameResponseAgain() {
++        var fixture = Get337QueryResponseFixture.failingClose();
++
++        var result = healthCheck.executeProbe(CompletableFuture.completedFuture(fixture.response()),
++                response -> HealthCheck.Result.healthy());
++
++        assertThat(result.isHealthy()).isFalse();
++        assertThat(result.getError()).isInstanceOf(ClientException.class);
++        assertThat(result.getError().getCause()).isInstanceOf(java.io.IOException.class);
++        assertThat(fixture.closeCount()).isEqualTo(1);
++    }
++
++    private void queryReturns(CompletableFuture<QueryResponse> future) {
++        when(client.query(eq("SELECT 1"), any(QuerySettings.class))).thenReturn(future);
++    }
++}

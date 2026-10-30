@@ -78,6 +78,7 @@ test("required gate rejects skipped or failed iOS when its scope requires execut
       env: { ...process.env, CHANGES_RESULT: "success", REPOSITORY_RESULT: "success",
         WEB_RESULT: "success", CLI_RESULT: "success", BACKEND_RESULT: "success", PHASE_ONE_RESULT: "success",
         DOCS_ONLY: "false", MACOS_HYBRID_REQUIRED: "false", MACOS_HYBRID_RESULT: "skipped",
+        OPIK_BACKPORT_REQUIRED: "false", OPIK_BACKPORT_RESULT: "skipped",
         IOS_REQUIRED: required, IOS_RESULT: result },
     });
     assert.equal(outcome.status === 0, passes, `${required}/${result}: ${outcome.stderr}`);
