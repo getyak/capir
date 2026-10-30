@@ -210,7 +210,8 @@
 /* Opaque warm reading surfaces when transparency is reduced. */
 @media(prefers-reduced-transparency:reduce) {
   .canvas, .transcript { background:var(--background); }
-  .queue, .notice, .recovery, .detailPanel, .latest, .milestone, .semanticBubble, .answerBody { background:var(--surface); }
+  .queue, .notice, .recovery, .detailPanel, .latest, .milestone, .semanticBubble { background:var(--surface); }
+  /* The reply tint is already opaque; retain its grouping in this mode. */
   .semanticBubble[data-presentation="prose"] { background:transparent; }
   .userMessage { background:var(--workspace-user-bubble); }
   .userMessage:has(> .images) { background:none; }
