@@ -212,3 +212,59 @@ fresh invocation can identify the actual input before deciding compatibility.
 The branch has normally merged current mainc1073b38531b84cfab6d19629d4ec9bb1464acdc
 (PR503 Time display change); published history is not rewritten. The existing
 52 host guards and immutable actual failures remain separate evidence.
+
+## Third refusal identifies the exact empty-directory metadata
+
+Head5bc40bc19b82c9254c4c4a7f460f56e0374b2f63/CI41059042631 retained
+artifact12978811210 (802397 bytes, SHA256
+788b99e4231f2217b6cd9ac5bc5da399764cbce2ea6b895091a75ced6cf0c047).
+Raw54/0/0/0, packageMaven0,311same dependencies and safe settlement/restoration
+are again observed, followed by the same refusal with a concrete public input:
+compiler-0.9.14.jar, creator3, attributes0xffff0010, META-INF/maven/.
+
+The exact runtime graph's com.github.spullara.mustache.java:compiler:0.9.14 JAR
+was downloaded once from its fixed Maven Central coordinate and verified against
+SHA256 99a7e7855609135006f078e6de7ee69daad9c42f98e679d56f80653cb17526b9
+and116051 bytes. Its109 entries contain96 regular files,10 ordinary directories
+and3 Maven metadata directories with those attributes. All3 have stored method0,
+flags0, size/compressed-size/CRC0 and decode to zero bytes. They are not observed
+symlinks. No claim is made thatFFFF is a ZIP-defined unset-mode sentinel.
+
+Parent observed a real-ZIP contract RED:3 methods/1 assertion failure/2 control
+methods pass, including18 malformed variants. Log SHA256
+68084858825fb9b14b739e7b3c2e9b8070d4764725113ad23cc97c063ddf2d94.
+The selected compatibility is limited to the exact observed tuple inside the
+META-INF/maven/ subtree, trailing slash, empty stored data and consistent local
+header. Actual dependency provenance must retain coordinate/artifact hash/path
+and raw creator/attributes. Unknown shapes, files, symlinks, special types,
+nonempty or malformed directories, paths, duplicate/encrypted entries and size
+limits remain protected; no filesystem extraction or execution is introduced.
+The original52 guards and frozen source/patches remain unchanged. Parent55
+regression, independent review and a fresh actual complete-JAR proof still gate
+readiness; this third failed invocation is not relabeled passed.
+
+## Independent review P2: bind the header to the opened archive
+
+The initial compatibility slice passed55 host guards and read all109 entries of
+the exact public compiler JAR, including its3 observed empty directories. These
+results do not prove a complete release JAR. Independent review retained a P2:
+the local header was read by reopening the pathname, while central metadata and
+the decoded empty read used an already-open archive descriptor. A pathname swap
+could mix two sets of evidence. This is an evidence-consistency counterexample,
+not an observed full-package exploit or real-data disclosure.
+
+Before editing that reader, the parent observed a real small-ZIP/open-descriptor
+replacement RED:4 methods/1 assertion failure, with the original3 methods passing.
+The unchanged old descriptor retained a bad local flags field while a valid ZIP
+replaced its pathname; the original helper failed to reject that mixed evidence.
+Log SHA256 a083fa4345f702a95e7c3f15b78868167967a4e27f7550ddec8f1d3b8872dc88.
+The original4aa source snapshot and exact earlier tests remain archived.
+
+The correction keeps the pathname metadata/symlink check but reads the30-byte
+header with positional IO from the opened archive's same regular, bounded fd.
+It fails closed if that fd or positional read is unavailable, and does not move
+the ZIP reader cursor. All tuple, header and decoded-empty checks remain; the
+namespace/source229/required5 and owned-writer/outcome guards are unchanged.
+Focused4/full56 and a separate independent rereview of the final source still
+precede the next fresh CI. Historical55 GREEN and the initial P2 review remain
+historical evidence, never a waiver for the corrected version.

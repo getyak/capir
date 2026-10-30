@@ -19,6 +19,7 @@ import platform
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import urllib.request
@@ -302,6 +303,46 @@ def derive_project_pom(*, original, version):
     return original[:span[0]] + version.encode("ascii") + original[span[1]:]
 
 
+def _empty_maven_directory_metadata(info):
+    # Compatibility for one observed older dependency encoding. 0xffff is not
+    # treated as a ZIP sentinel or a general DOS/Unix file-mode exemption.
+    return (info.create_system == 3 and info.external_attr == 0xFFFF0010
+            and info.filename.startswith("META-INF/maven/") and info.is_dir()
+            and info.file_size == 0 and info.compress_size == 0 and info.CRC == 0
+            and info.compress_type == zipfile.ZIP_STORED and info.flag_bits == 0)
+
+
+def _compatible_empty_maven_directory(archive, info):
+    if not _empty_maven_directory_metadata(info):
+        return False
+    _relative(info.filename[:-1])
+    if not isinstance(archive.filename, (str, os.PathLike)):
+        raise ValueError("Cannot verify empty Maven directory local header")
+    try:
+        _regular(archive.filename, MAX_JAR)
+        if archive.fp is None or not callable(getattr(os, "pread", None)):
+            raise ValueError("Opened ZIP descriptor is unavailable")
+        descriptor = archive.fp.fileno()
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > MAX_JAR:
+            raise ValueError("Opened ZIP descriptor is not a bounded regular file")
+        header = os.pread(descriptor, 30, info.header_offset)
+        if len(header) != 30:
+            raise ValueError("Truncated empty Maven directory local header")
+        local = struct.unpack("<IHHHHHIIIHH", header)
+        if (local[0] != 0x04034B50 or local[2] != 0 or local[3] != zipfile.ZIP_STORED
+                or local[6:9] != (0, 0, 0)):
+            raise ValueError("Inconsistent empty Maven directory local header")
+        # ZipFile.open also validates the local name against the central name.
+        # Read to EOF so an empty central declaration alone is not proof.
+        with archive.open(info) as contents:
+            if contents.read(1) != b"":
+                raise ValueError("Nonempty Maven metadata directory")
+    except (OSError, AttributeError, zipfile.BadZipFile, RuntimeError, struct.error):
+        raise ValueError("Unable to verify empty Maven metadata directory: " + repr(info.filename)[:160]) from None
+    return True
+
+
 def _zip_entries(archive):
     seen, total = set(), 0
     infos = archive.infolist()
@@ -314,7 +355,8 @@ def _zip_entries(archive):
             raise ValueError("Duplicate or encrypted JAR entry")
         seen.add(name)
         kind = stat.S_IFMT(info.external_attr >> 16)
-        if kind not in (0, stat.S_IFREG, stat.S_IFDIR) or (kind == stat.S_IFDIR and not info.is_dir()):
+        if ((kind not in (0, stat.S_IFREG, stat.S_IFDIR) or (kind == stat.S_IFDIR and not info.is_dir()))
+                and not _compatible_empty_maven_directory(archive, info)):
             archive_name = (Path(archive.filename).name
                             if isinstance(archive.filename, (str, os.PathLike)) else "unknown-archive")
             raise ValueError("Non-regular JAR entry (archive=" + repr(archive_name)[:100]
@@ -729,6 +771,7 @@ def _dependency_origins(graph, packaged):
     }
     origins, services, licenses = defaultdict(list), defaultdict(list), defaultdict(list)
     namespace_origins = defaultdict(list)
+    compatibility_directories = []
     tracked = {
         "com/clickhouse/client/api/Client.class",
         "com/clickhouse/client/api/query/QueryResponse.class",
@@ -740,6 +783,16 @@ def _dependency_origins(graph, packaged):
             with zipfile.ZipFile(row["file"]) as archive:
                 for info in _zip_entries(archive):
                     name = info.filename
+                    if _empty_maven_directory_metadata(info):
+                        # _zip_entries verified the local header and actual empty
+                        # read before yielding this otherwise non-regular mode.
+                        compatibility_directories.append({
+                            "coordinate": row["coordinate"], "artifact_sha256": row["sha256"],
+                            "path": name, "external_attr": info.external_attr, "create_system": info.create_system,
+                            "file_size": info.file_size, "compressed_size": info.compress_size,
+                            "CRC": info.CRC, "compress_type": info.compress_type, "flag_bits": info.flag_bits,
+                            "empty_read_verified": True,
+                        })
                     if info.is_dir() or not (name.endswith(".class") or name.startswith("META-INF/services/")
                                               or ("LICENSE" in name.upper() or "NOTICE" in name.upper())
                                               or name in foreign_entries):
@@ -773,6 +826,7 @@ def _dependency_origins(graph, packaged):
     return {
         "source_migration_entries": sorted(source_entries),
         "liquibase_dependency_entries": proven_namespace,
+        "compatibility_empty_maven_directories": compatibility_directories,
         "duplicate_classes": {name: records for name, records in origins.items() if len(records) > 1},
         "services": dict(services), "license_notice_entries": dict(licenses),
         "codec_client_classes": {

@@ -215,6 +215,16 @@ that explicit graph remain rejected. The boundary is covered by the
 [namespace tests](../../../scripts/prompts/test_opik_package_namespace.py).
 This does not prove loaded classes or the resident JAR.
 
+Some pinned dependencies carry empty Maven metadata directories with the exact
+observed Unix attributes `0xffff0010`. Only that verified empty, stored directory
+shape under `META-INF/maven/` is compatible; its header and decoded emptiness
+are checked from the same opened archive, and dependency provenance records
+the original metadata. Files,
+symlinks, special types and other unknown directory shapes remain rejected.
+The [ZIP metadata tests](../../../scripts/prompts/test_opik_package_zip_metadata.py)
+cover the observed shape and malformed variants. This is not a general ZIP
+mode normalization or a filesystem extraction path.
+
 Owned-container settlement is a source-mutation boundary. A cleanup attempt,
 client exit, missing CID or failed inspect is insufficient on its own. Confirm
 the exact owned resources are gone; an unresolved writer blocks further
