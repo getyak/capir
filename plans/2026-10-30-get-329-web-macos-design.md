@@ -271,3 +271,16 @@ captures. Compare identical multi-turn synthetic content at1280,900x480 and375
 before/after; use real user events and exact Session route guards. Native host
 source consistency is distinct from actual installed WebKit acceptance.
 Active evidence: external get329/compact-chat/control.md. Prior runs are deleted.
+
+
+### Rendered followup: opaque chat tint
+
+Actual resident31e302 rendered with the host's reduced-transparency preference
+active. Its fallback replaced the already-opaque reply tint with the canvas
+white, erasing the intended chat grouping (observed P2, OBS-003). Preserve the
+existing opaque tint in that mode; keep forced-color borders. This is a CSS-only
+followup, no message, approval, draft or native code changes. Reuse the same
+isolated run and2turn Session; no account, model or test re-provisioning. Require
+independent review, current gates/normal merge, clean committed resident source
+and actual light/dark/forced-color readback. Bounded media observation must wait
+for settled computed style; immediate forced-color sampling was intermediate.
