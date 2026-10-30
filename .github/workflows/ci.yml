@@ -578,7 +578,7 @@ jobs:
       - name: Verify the regression harness boundaries
         run: python3 -m unittest discover -s scripts/prompts -p test_opik_backport.py -v
 
-      - name: Test fixed health and dataset response ownership
+      - name: Test fixed response ownership and HTTP pool recovery
         run: |
           python3 scripts/prompts/test-opik-backport.py \
             --work-dir "$RUNNER_TEMP/opik-responses-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
@@ -597,6 +597,8 @@ jobs:
             ${{ runner.temp }}/opik-responses-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.infrastructure.db.healthchecks.ClickHouseExistenceHealthCheckTest.xml
             ${{ runner.temp }}/opik-responses-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.infrastructure.db.healthchecks.ClickHouseTracesTopologyHealthCheckTest.xml
             ${{ runner.temp }}/opik-responses-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.domain.Get337DatasetItemVersionResponseOwnershipTest.xml
+            ${{ runner.temp }}/opik-responses-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHttpPoolLifecycleTest.xml
+            ${{ runner.temp }}/opik-responses-source-${{ github.run_id }}-${{ github.run_attempt }}/upstream/apps/opik-backend/target/surefire-reports/TEST-com.comet.opik.domain.Get337DatasetQueryHandoffOwnershipTest.xml
           if-no-files-found: warn
           retention-days: 14
 

@@ -1,7 +1,7 @@
 {
   "schema": "capri.opik.backport-tests.v1",
   "issue": "GET-337",
-  "state": "Health-fixed39 GREEN and DAO baseline10/four assertion failures independently reviewed; responses-fixed/all49 candidate awaits runner GREEN, source review and remote Java execution.",
+  "state": "Historical baseline21 RED and fixed54 GREEN independently verified. These immutable observations do not waive the latest applicable CI of any subsequent candidate; image/live recovery remains incomplete.",
   "upstream": {
     "repository": "https://github.com/comet-ml/opik",
     "revision": "dd40343a223ec8d0ab11eafc5f88cbf18532c0ac",
@@ -128,7 +128,9 @@
   ],
   "patch_order": [
     "0001-health-ownership-tests.patch",
-    "0002-dataset-query-ownership-tests.patch"
+    "0002-dataset-query-ownership-tests.patch",
+    "0006-http-pool-integration-tests.patch",
+    "0007-dataset-cancel-handoff-tests.patch"
   ],
   "tests": {
     "health_class": "Get337ClickHouseHealthCheckOwnershipTest",
@@ -139,8 +141,13 @@
       "editItemsViaSelectInsert"
     ],
     "dao_parameterized_instances": 10,
-    "responses_fixed_required_instances": 49,
-    "responses_fixed_health_instances": 39
+    "responses_fixed_required_instances": 54,
+    "responses_fixed_health_instances": 39,
+    "http_class": "com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHttpPoolLifecycleTest",
+    "http_required_instances": 3,
+    "handoff_class": "com.comet.opik.domain.Get337DatasetQueryHandoffOwnershipTest",
+    "handoff_required_instances": 2,
+    "all_baseline_required_instances": 21
   },
   "observed": {
     "health_baseline": {
@@ -201,16 +208,84 @@
     },
     "image_built": false,
     "live_mutation": false,
-    "responses_fixed": {
-      "executed": false
+    "responses_fixed_49_historical": {
+      "executed": true,
+      "ci_run_id": 41033225919,
+      "artifact_id": 12967141149,
+      "artifact_sha256": "af4ed6ae1e4675aff4ecf42bf820944038378a544f692bef8109f54e54facc2f",
+      "patches": [
+        "0001-health-ownership-tests.patch",
+        "0002-dataset-query-ownership-tests.patch",
+        "0003-health-late-response-fix.patch",
+        "0004-upstream-health-contract-tests.patch",
+        "0005-dataset-query-response-fix.patch"
+      ],
+      "tests": 49,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true,
+      "maven_exit_code": 0,
+      "source_fingerprints": 13,
+      "cannot_satisfy_expanded_54_profile": true
+    },
+    "http_handoff_baseline": {
+      "executed": true,
+      "capir_revision": "1379144e18a53d0a6bf5c75168259c5330fc7ee1",
+      "tested_merge_revision": "4118bd5c2eb3e91fb9ab316cbc5d9e8ec58e2e23",
+      "ci_run_id": 41039992804,
+      "artifact_id": 12969528485,
+      "artifact_sha256": "4f01742c6c4676f756027ff0108678c3327954250d32edf1f38588862fd49060",
+      "stage": "baseline",
+      "suite": "all",
+      "tests": 21,
+      "failures": 9,
+      "errors": 0,
+      "skipped": 0,
+      "maven_exit_code": 1,
+      "http_controls_passed": 2,
+      "health_failures": 2,
+      "dao_failures": 4,
+      "handoff_failures": 2,
+      "http_pool_failures": 1,
+      "protected_entries": 1576,
+      "protected_catalogues_identical": true,
+      "production_changes": 0,
+      "java_red": true,
+      "resident_cause_or_recovery": false
+    },
+    "responses_fixed_54_historical": {
+      "executed": true,
+      "capir_revision": "8c2c268eb570be6731b7c8a29cb12f92f7ac8182",
+      "tested_merge_revision": "dde9234edae3ca6b1b8b766c0e00dec34c8920b6",
+      "ci_run_id": 41041631471,
+      "artifact_id": 12971105806,
+      "artifact_sha256": "05b12a34ee02e1fb4c75b6ac37d51beb18af59b52a87fa8e7f6fca2170926089",
+      "stage": "responses-fixed",
+      "suite": "all",
+      "tests": 54,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "maven_exit_code": 0,
+      "passed": true,
+      "raw_xml_files": 9,
+      "nonempty_leaf_suites": 8,
+      "production_changes": 3,
+      "existing_test_modifications": 3,
+      "new_regular_test_files": 5,
+      "liquibase_resource_paths": 229,
+      "liquibase_bundle_java": 1,
+      "liquibase_catalogue_unchanged": true,
+      "resident_cause_or_recovery": false
     }
   },
   "production_hunks": 10,
   "migration_hunks": 0,
   "unchanged_migration_requirement": "All exact-source Liquibase files must retain byte hashes in any later production candidate.",
   "known_gaps": [
-    "Combined responses-fixed/all49 candidate has not been compiled or run.",
-    "No actual post-delivery/pre-mapper cancellation-window test or real SDK HTTP-pool recovery evidence.",
+    "Historical54 GREEN does not waive fresh execution and latest applicable CI for a subsequent candidate.",
+    "Real loopback SDK/HTTP pool and scheduled DAO cancellation are verified at the pinned-source boundary; resident503 causality is not established.",
     "No R2DBC acceptance, patched image build or resident deployment/acceptance."
   ],
   "runner": {
@@ -259,7 +334,7 @@
         "binary_downloaded": false
       }
     },
-    "stage_execution_status": "Health-fixed39 passed; separate DAO baseline10 had four assertion failures. Combined responses-fixed/all49 awaits parent-owned execution."
+    "stage_execution_status": "Historical health-fixed39, source49 and expanded fixed54 passed; baseline21 produced nine intended assertions with both real HTTP controls passing. Each current invocation still requires its own complete fresh result and protected-source checks."
   },
   "local_artifacts": [
     {
@@ -288,9 +363,19 @@
       "bytes": 6687
     },
     {
+      "path": "0006-http-pool-integration-tests.patch",
+      "sha256": "8085881a877988024414ef6af8c3eb95c40f16fad2f7e45680827c4b29cb6bef",
+      "bytes": 21291
+    },
+    {
+      "path": "0007-dataset-cancel-handoff-tests.patch",
+      "sha256": "1762d37fdb01c641f8f31a644617d7c0650d9837b14b7190b225855e4c3b8def",
+      "bytes": 13106
+    },
+    {
       "path": "README.md",
-      "sha256": "f75178a59e4df9e6d3128c8700080214f67b631d6b00a086feef9b2fcacbf43f",
-      "bytes": 8923
+      "sha256": "b64a9f74431607f8d4c77978a701ceb564ab26c5720c1ca09b90c81bf81fd801",
+      "bytes": 11869
     },
     {
       "path": "LICENSE.upstream",
@@ -432,5 +517,51 @@
       ]
     }
   },
-  "updated_at": "2026-10-30T09:14:05.574258+00:00"
+  "updated_at": "2026-10-30T10:52:25.783707+00:00",
+  "integration_patches": {
+    "0006-http-pool-integration-tests.patch": {
+      "role": "test-only-real-sdk-loopback-http-pool",
+      "sha256": "8085881a877988024414ef6af8c3eb95c40f16fad2f7e45680827c4b29cb6bef",
+      "bytes": 21291,
+      "new_test_paths": [
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHttpPoolLifecycleTest.java"
+      ],
+      "new_test_sources": {
+        "apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHttpPoolLifecycleTest.java": {
+          "bytes": 20415,
+          "sha256": "ac68b64ea55f1203a0dcbb92158ed83ea9fb216e73bb7b755fe4817591cbe984",
+          "git_blob_sha1": "cde29e6231b66fb28ef0fe44173287551f7ace78"
+        }
+      },
+      "junit_class": "com.comet.opik.infrastructure.db.healthchecks.Get337ClickHouseHttpPoolLifecycleTest",
+      "method_multiplicities": {
+        "realSdkReaderRoundTripsTheCompleteNativeCompressedSelectOneResponse": 1,
+        "unreadRealResponseHoldsTheOnlyLeaseUntilItsPublicClose": 1,
+        "timedOutProductionProbeReleasesItsLateRealResponseForTheNextProbe": 1
+      },
+      "required_instances": 3
+    },
+    "0007-dataset-cancel-handoff-tests.patch": {
+      "role": "test-only-real-dao-post-delivery-scheduler-handoff",
+      "sha256": "1762d37fdb01c641f8f31a644617d7c0650d9837b14b7190b225855e4c3b8def",
+      "bytes": 13106,
+      "new_test_paths": [
+        "apps/opik-backend/src/test/java/com/comet/opik/domain/Get337DatasetQueryHandoffOwnershipTest.java"
+      ],
+      "new_test_sources": {
+        "apps/opik-backend/src/test/java/com/comet/opik/domain/Get337DatasetQueryHandoffOwnershipTest.java": {
+          "bytes": 11324,
+          "sha256": "267ce883297ca6592949a08e5427372141c4781ff897779d666484c0bb09636b",
+          "git_blob_sha1": "dd5e74b3fb89127d6086bbc62ff3104a7e0770a6"
+        }
+      },
+      "junit_class": "com.comet.opik.domain.Get337DatasetQueryHandoffOwnershipTest",
+      "method_multiplicities": {
+        "cancellationAfterDeliveryClosesResponseBeforeTheQueuedMapperRuns": 2
+      },
+      "required_instances": 2
+    }
+  },
+  "patch_order_scope": "all/baseline; responses-fixed/all applies0001 through0007. Narrow health, DAO and health-fixed selections retain their original scope.",
+  "observation_policy": "Observed entries name immutable prior runs, commits and artifact hashes. The current invocation must produce its own fresh complete evidence; manifest history is never admission authority or a replacement for current CI."
 }

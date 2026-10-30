@@ -14,8 +14,30 @@ The subsequent run 41028979099, artifact 12964489776, passed all 39 health-fixed
 instances. Its separate DAO baseline ran ten instances with four assertion
 failures, zero errors and zero skips: copy/edit each rejected late response
 delivery after cancellation and each turned cleanup failure into a write error.
-The other six DAO instances passed. The query-response production candidate below
-has not been compiled or run; no patched image or resident repair is established.
+The other six DAO instances passed. Run 41033225919, artifact 12967141149,
+then passed all 49 fixed health/DAO instances with zero failures, errors or skips
+and Maven exit 0. Independent review checked the raw XML and exact protected
+source catalogue. PR #498 merged as `353297697054392efefc9d393984645a19ad4339`.
+No patched image or resident repair is established by that source result.
+
+The new test-only baseline ran in CI 41039992804, artifact 12969528485, from
+PR #501 head `1379144e18a53d0a6bf5c75168259c5330fc7ee1`. All 21 instances
+executed: nine assertion failures, zero errors and zero skips, Maven exit 1.
+Both real HTTP controls passed. The HTTP regression failed at the final second
+healthy-probe assertion after its connection-timeout/server-request checks;
+both DAO handoff instances failed at the paused-close assertion after delivery
+and barrier entry. The original health two and DAO four failures remained.
+All 1576 protected entries were unchanged before, after patching and after
+Maven. This is meaningful pinned-source and real HTTP-boundary RED; it does not
+establish the resident incident's cause. The failed baseline remains retained.
+
+The subsequent fixed-stage run 41041631471, artifact 12971105806, from head
+`8c2c268eb570be6731b7c8a29cb12f92f7ac8182` passed all 54 instances with zero
+failures, errors or skips and Maven exit 0. Its nine raw XML files contain eight
+nonempty leaves; independent review checked the unchanged frozen tests and the
+three allowed production modifications. These are immutable historical results.
+Every later candidate still needs its own fresh run and latest applicable CI;
+the manifest's observed history never grants admission by itself.
 
 ## Patch roles
 
@@ -37,6 +59,19 @@ has not been compiled or run; no patched image or resident repair is established
    cancellation, closes discarded late responses and owns delivered responses
    through scheduled mapping and cancellation. Only the copy/edit query calls
    use it. Their competing try-with-resources owners are removed.
+6. `0006-http-pool-integration-tests.patch`: three tests using the real SDK and
+   Apache HTTP pool against an owned loopback server. First validate the complete
+   native-compressed SELECT response with the real reader, then prove an unread
+   response retains the sole lease until public close, then test a health timeout
+   followed by late delivery and a second probe. The factory-derived client
+   preserves async/native LZ4 configuration while explicitly overriding pool
+   size, lease deadline, retries and its observed executor. This is not an
+   unchanged production factory instance or a real ClickHouse server.
+7. `0007-dataset-cancel-handoff-tests.patch`: two actual DAO operation instances.
+   A narrowly owned public scheduler hook holds the delivered response before
+   its mapper runs. Cancel, observe cleanup while held, release the mapper and
+   verify no duplicate close, signal or query. No production test hook or private
+   scheduler/pool reflection is used.
 
 The production change follows
 [upstream OPIK-8576](https://github.com/comet-ml/opik/pull/8606).
@@ -56,9 +91,9 @@ It never applies a production patch.
 | --- | --- | --- | --- |
 | health | baseline | 0001 | Frozen health six |
 | dao | baseline | 0001, 0002 | Frozen DAO ten |
-| all | baseline | 0001, 0002 | Frozen health six and DAO ten |
+| all | baseline | 0001, 0002, 0006, 0007 | Health six, DAO ten, HTTP three and handoff two: 21 total |
 | health | health-fixed | 0001, 0003, 0004 | Frozen health six and 33 existing upstream instances |
-| all | responses-fixed | 0001, 0002, 0003, 0004, 0005 | Health 39 and frozen DAO ten: 49 total |
+| all | responses-fixed | 0001–0007 | Health 39, DAO ten, HTTP three and handoff two: 54 total |
 
 The fixed health stage requires all 39 instances across the new class, both
 nested existing abstract-health classes, existence checks and traces-topology
@@ -89,8 +124,11 @@ upstream commit, the locked Maven/Corretto image, private bind-owner UID:GID and
 task-owned cache. Source/dependency fingerprints, actual index paths/modes,
 toolchain/image identity and fresh raw/parsed JUnit evidence remain separate.
 
-The parent owns workflow integration and serial execution. After the new runner
-guards and source review pass, the combined candidate invocation is:
+The parent owns workflow integration and serial execution. The test-only
+`all/baseline` was collected in a fresh checkout and independently reviewed at
+the exact failure sites above. Both HTTP controls passed; compilation, fixture,
+parsing or unrelated deadline failures cannot establish the intended RED. That
+failed job remains failed. The final required job now selects:
 
 ```sh
 python3 scripts/prompts/test-opik-backport.py \
@@ -124,11 +162,14 @@ tag is Maven 3.9.16/Corretto 25, locked to the recorded OCI index/platform
 digests. The runner records actual image identity and version readback; no
 local Docker/Maven/build is needed for this source work.
 
-These tests use real production classes and real futures/responses; only each
-Client query boundary is controlled. They do not establish actual HTTP pool
-recovery, tail-latency handling, R2DBC safety or resident acceptance. Those gates
-remain separate. Existing upstream tests with the old cancellation contract are
-explicitly adapted rather than ignored.
+The original tests use real production classes and futures/responses with a
+controlled Client query boundary. Patch 0006 additionally exercises the actual
+SDK/HTTP pool; patch 0007 adds the scheduler cancellation boundary. Both new
+patches compiled and ran in the test-only baseline. Their fixed-stage execution
+also passed in the historical 54-instance run above. They cannot establish
+the host incident's root cause, R2DBC safety, a resident shaded JAR or live
+recovery. Those gates remain separate. Existing upstream tests with the old
+cancellation contract are explicitly adapted rather than ignored.
 
 For the two query operations, consumption remains on boundedElastic. The resource
 is owned by usingWhen before the scheduled mapper runs; cancellation in that
@@ -136,9 +177,8 @@ window runs cleanup independently of mapper execution. Cleanup runs inline and
 absorbs only its own Exception, so successful written-row counts and original
 acquisition/mapping errors are preserved. SQL, context, instrumentation, edit
 count mapping and ZeroRowsRetryPolicy remain unchanged. This structural argument
-does not replace a real post-delivery/pre-mapper cancellation test. That focused
-DAO extension and a real SDK/loopback HTTP-pool reproduction remain separate
-required stages after the first 49-instance GREEN; neither is implemented here.
+does not replace the actual execution of the new handoff and HTTP tests. The
+retained 49-instance GREEN cannot satisfy the extended 54-instance contract.
 
 Every Liquibase resource must remain byte-for-byte unchanged. Preserve all
 existing MySQL, ClickHouse, MinIO, Redis and ZooKeeper volumes and unrelated Capir

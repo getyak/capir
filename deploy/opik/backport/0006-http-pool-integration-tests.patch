@@ -1,0 +1,422 @@
+diff --git a/apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHttpPoolLifecycleTest.java b/apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHttpPoolLifecycleTest.java
+new file mode 100644
+index 0000000..cde29e6
+--- /dev/null
++++ b/apps/opik-backend/src/test/java/com/comet/opik/infrastructure/db/healthchecks/Get337ClickHouseHttpPoolLifecycleTest.java
+@@ -0,0 +1,416 @@
++// SPDX-License-Identifier: Apache-2.0
++
++package com.comet.opik.infrastructure.db.healthchecks;
++
++import com.clickhouse.client.api.Client;
++import com.clickhouse.client.api.ClientConfigProperties;
++import com.clickhouse.client.api.internal.ClickHouseLZ4InputStream;
++import com.clickhouse.client.api.internal.ClickHouseLZ4OutputStream;
++import com.clickhouse.client.api.query.QueryResponse;
++import com.clickhouse.data.ClickHouseFormat;
++import com.codahale.metrics.health.HealthCheck;
++import com.comet.opik.infrastructure.DatabaseAnalyticsFactory;
++import com.sun.net.httpserver.HttpExchange;
++import com.sun.net.httpserver.HttpServer;
++import net.jpountz.lz4.LZ4Factory;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.Timeout;
++
++import java.io.ByteArrayOutputStream;
++import java.io.IOException;
++import java.net.InetSocketAddress;
++import java.net.URI;
++import java.net.URLDecoder;
++import java.nio.charset.StandardCharsets;
++import java.time.temporal.ChronoUnit;
++import java.util.HashMap;
++import java.util.List;
++import java.util.concurrent.AbstractExecutorService;
++import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.ExecutionException;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.TimeoutException;
++import java.util.concurrent.atomic.AtomicBoolean;
++import java.util.concurrent.atomic.AtomicInteger;
++import java.util.concurrent.atomic.AtomicReference;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.junit.jupiter.api.Assertions.fail;
++
++/**
++ * Real client-v2/Apache HTTP ownership boundary, not a ClickHouse server emulator.
++ *
++ * The pinned production factory cannot configure maxconn1: its top-level driver
++ * query parameters are intentionally ignored. These tests copy that factory's
++ * public configuration into a real SDK builder and explicitly change only pool
++ * size, acquire timeout, retries and an observational shared executor. Async,
++ * native compression, default query format and the production health check stay
++ * unchanged. A successful boundary test does not attribute a resident 503.
++ */
++@Timeout(30)
++class Get337ClickHouseHttpPoolLifecycleTest {
++
++    private static final String SELECT_ONE = "SELECT 1";
++    private static final long WAIT_SECONDS = 5;
++    private static final long ACQUIRE_MILLIS = 200;
++    private static final int CODEC_BUFFER_SIZE = 64 * 1024;
++
++    // RowBinaryWithNamesAndTypes: one column named "1", UInt8, one row containing 1.
++    private static final byte[] ROW_BINARY = {1, 1, '1', 5, 'U', 'I', 'n', 't', '8', 1};
++
++    @Test
++    void realSdkReaderRoundTripsTheCompleteNativeCompressedSelectOneResponse() throws Exception {
++        try (var fixture = new Fixture(false)) {
++            try (var response = response(fixture.client.query(SELECT_ONE));
++                    var reader = fixture.client.newBinaryFormatReader(response)) {
++                assertThat(response.getFormat()).isEqualTo(ClickHouseFormat.RowBinaryWithNamesAndTypes);
++                assertThat(reader.hasNext()).isTrue();
++                var row = reader.next();
++                assertThat(row).containsOnlyKeys("1");
++                assertThat(row.get("1")).isInstanceOf(Number.class);
++                assertThat(((Number) row.get("1")).longValue()).isEqualTo(1L);
++                assertThat(reader.hasNext()).isFalse();
++            }
++            fixture.assertServerHealthy();
++            assertThat(fixture.requests.get()).isEqualTo(1);
++        }
++    }
++
++    @Test
++    void unreadRealResponseHoldsTheOnlyLeaseUntilItsPublicClose() throws Exception {
++        try (var fixture = new Fixture(false)) {
++            QueryResponse held = response(fixture.client.query(SELECT_ONE));
++            try {
++                // Do not open/read its stream: the control must establish a real unread lease.
++                assertThat(held.getFormat()).isEqualTo(ClickHouseFormat.RowBinaryWithNamesAndTypes);
++                await(fixture.operations.firstFinished, "first real query operation did not finish");
++                fixture.assertServerHealthy();
++
++                var waiting = fixture.client.query(SELECT_ONE);
++                var failure = assertThrows(ExecutionException.class, () -> {
++                    // If LAX/transport semantics permit another lease, close that unexpected
++                    // real response but fail the control instead of weakening the oracle.
++                    try (var unexpected = response(waiting)) {
++                        fail("maxconn1 did not block a second lease while the first response was unread");
++                    }
++                });
++                assertTrue(hasConnectionRequestTimeout(failure),
++                        "second query must fail from actual connection acquisition, not a fixture/parse error");
++                fixture.assertServerHealthy();
++                assertThat(fixture.requests.get()).isEqualTo(1);
++
++                held.close();
++                held = null;
++                try (var recovered = response(fixture.client.query(SELECT_ONE))) {
++                    assertThat(recovered.getFormat()).isEqualTo(ClickHouseFormat.RowBinaryWithNamesAndTypes);
++                }
++                fixture.assertServerHealthy();
++                assertThat(fixture.requests.get()).isEqualTo(2);
++            } finally {
++                if (held != null) {
++                    held.close();
++                }
++            }
++        }
++    }
++
++    @Test
++    void timedOutProductionProbeReleasesItsLateRealResponseForTheNextProbe() throws Exception {
++        try (var fixture = new Fixture(true)) {
++            Future<HealthCheck.Result> first = fixture.healthCalls.submit(fixture.healthCheck::execute);
++            await(fixture.firstRequestArrived, "first SELECT 1 did not reach the loopback server");
++            fixture.assertServerHealthy();
++            assertThat(first.isDone())
++                    .as("fixture requires request arrival before the actual health deadline")
++                    .isFalse();
++
++            var expired = first.get(WAIT_SECONDS, TimeUnit.SECONDS);
++            assertThat(expired.isHealthy()).isFalse();
++            assertThat(expired.getError()).isInstanceOf(TimeoutException.class);
++            assertThat(fixture.operations.firstFinished.getCount())
++                    .as("the real HTTP supplier must still be waiting for response headers")
++                    .isEqualTo(1L);
++
++            // Headers, not a tail-body fragment, are delayed. A correct close can
++            // drain the complete finite body without a synthetic close-time stall.
++            fixture.releaseFirstHeaders.countDown();
++            await(fixture.firstResponseWritten, "late complete response was not written");
++            await(fixture.operations.firstFinished, "late real HTTP operation did not return");
++            fixture.assertServerHealthy();
++
++            // The forwarding executor signals after the actual AsyncSupply.run:
++            // fixed inline whenComplete cleanup has finished; a cancelled public
++            // future alone would not prove that its HTTP supplier had finished.
++            var next = fixture.healthCheck.execute();
++            fixture.assertServerHealthy();
++            if (!next.isHealthy()) {
++                assertTrue(hasConnectionRequestTimeout(next.getError()),
++                        "baseline pool RED requires an actual public connection-acquisition timeout");
++                assertThat(fixture.requests.get()).isEqualTo(1);
++            }
++            assertTrue(next.isHealthy(), () -> "second production SELECT 1 must recover the same HTTP pool; cause="
++                    + (next.getError() == null ? "none" : next.getError().getClass().getSimpleName()));
++            await(fixture.secondRequestArrived, "second healthy probe never reached the server");
++            assertThat(fixture.requests.get()).isEqualTo(2);
++        }
++    }
++
++    private static QueryResponse response(CompletableFuture<QueryResponse> future) throws Exception {
++        return future.get(WAIT_SECONDS, TimeUnit.SECONDS);
++    }
++
++    private static void await(CountDownLatch latch, String message) throws InterruptedException {
++        assertTrue(latch.await(WAIT_SECONDS, TimeUnit.SECONDS), message);
++    }
++
++    private static boolean hasConnectionRequestTimeout(Throwable failure) {
++        // Inspect only the public exception chain, never a private client/pool field.
++        for (var cause = failure; cause != null; cause = cause.getCause()) {
++            if ("ConnectionRequestTimeoutException".equals(cause.getClass().getSimpleName())) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    private static byte[] compressedResponse() throws IOException {
++        var bytes = new ByteArrayOutputStream();
++        try (var output = new ClickHouseLZ4OutputStream(bytes,
++                LZ4Factory.fastestInstance().fastCompressor(), CODEC_BUFFER_SIZE)) {
++            output.write(ROW_BINARY);
++        }
++        return bytes.toByteArray();
++    }
++
++    private static String queryParameter(URI uri, String name) {
++        var query = uri.getRawQuery();
++        if (query == null) {
++            return null;
++        }
++        for (var pair : query.split("&")) {
++            var parts = pair.split("=", 2);
++            if (name.equals(URLDecoder.decode(parts[0], StandardCharsets.UTF_8))) {
++                return parts.length == 2 ? URLDecoder.decode(parts[1], StandardCharsets.UTF_8) : "";
++            }
++        }
++        return null;
++    }
++
++    private static final class Fixture implements AutoCloseable {
++
++        private final boolean delayFirstHeaders;
++        private final byte[] wireResponse;
++        private final HttpServer server;
++        private final ExecutorService serverCalls;
++        private final ExecutorService healthCalls;
++        private final ObservedExecutor operations;
++        private final AtomicInteger requests = new AtomicInteger();
++        private final AtomicReference<Throwable> serverFailure = new AtomicReference<>();
++        private final AtomicBoolean closing = new AtomicBoolean();
++        private final CountDownLatch firstRequestArrived = new CountDownLatch(1);
++        private final CountDownLatch releaseFirstHeaders = new CountDownLatch(1);
++        private final CountDownLatch firstResponseWritten = new CountDownLatch(1);
++        private final CountDownLatch secondRequestArrived = new CountDownLatch(1);
++        private Client client;
++        private ClickHouseHealthCheck healthCheck;
++
++        private Fixture(boolean delayFirstHeaders) throws Exception {
++            this.delayFirstHeaders = delayFirstHeaders;
++            this.wireResponse = compressedResponse();
++            this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
++            this.serverCalls = Executors.newCachedThreadPool();
++            this.healthCalls = Executors.newCachedThreadPool();
++            this.operations = new ObservedExecutor();
++            try {
++                server.setExecutor(serverCalls);
++                server.createContext("/", this::handle);
++                server.start();
++
++                var factory = new DatabaseAnalyticsFactory();
++                factory.setProtocol(DatabaseAnalyticsFactory.Protocol.HTTP);
++                factory.setHost("127.0.0.1");
++                factory.setPort(server.getAddress().getPort());
++                // Entirely synthetic credentials; no environment, host account or real data.
++                factory.setUsername("get337-synthetic-user");
++                factory.setPassword("get337-synthetic-password");
++                factory.setDatabaseName("default");
++                var endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
++
++                try (var reference = factory.buildClient()) {
++                    var expected = new HashMap<>(reference.getConfiguration());
++                    assertThat(expected).containsEntry(ClientConfigProperties.ASYNC_OPERATIONS.getKey(), "true")
++                            .containsEntry(ClientConfigProperties.COMPRESS_CLIENT_REQUEST.getKey(), "true")
++                            .containsEntry(ClientConfigProperties.COMPRESS_SERVER_RESPONSE.getKey(), "true")
++                            .containsEntry(ClientConfigProperties.CONNECTION_POOL_ENABLED.getKey(), "true")
++                            .containsEntry(ClientConfigProperties.HTTP_MAX_OPEN_CONNECTIONS.getKey(), "10")
++                            .containsEntry(ClientConfigProperties.SOCKET_OPERATION_TIMEOUT.getKey(), "0")
++                            .doesNotContainKey(ClientConfigProperties.INPUT_OUTPUT_FORMAT.getKey());
++
++                    var builder = new Client.Builder().addEndpoint(endpoint);
++                    expected.forEach(builder::setOption);
++                    builder.setMaxConnections(1)
++                            .setConnectionRequestTimeout(ACQUIRE_MILLIS, ChronoUnit.MILLIS)
++                            .setOption(ClientConfigProperties.RETRY_ON_FAILURE.getKey(), "0")
++                            .setSharedOperationExecutor(operations);
++                    client = builder.build();
++                    expected.put(ClientConfigProperties.HTTP_MAX_OPEN_CONNECTIONS.getKey(), "1");
++                    expected.put(ClientConfigProperties.CONNECTION_REQUEST_TIMEOUT.getKey(),
++                            String.valueOf(ACQUIRE_MILLIS));
++                    expected.put(ClientConfigProperties.RETRY_ON_FAILURE.getKey(), "0");
++                    assertThat(client.getConfiguration()).isEqualTo(expected);
++                }
++                assertTrue(ACQUIRE_MILLIS < factory.getHealthCheckTimeout().toMilliseconds(),
++                        "test acquire deadline must precede the unchanged factory health deadline");
++                healthCheck = new ClickHouseHealthCheck(client, factory.getHealthCheckTimeout());
++            } catch (Exception | Error failure) {
++                try {
++                    close();
++                } catch (Exception | Error cleanup) {
++                    failure.addSuppressed(cleanup);
++                }
++                throw failure;
++            }
++        }
++
++        private void handle(HttpExchange exchange) {
++            var sequence = requests.incrementAndGet();
++            try {
++                assertTrue("POST".equals(exchange.getRequestMethod()), "SDK query must use POST");
++                assertTrue("RowBinaryWithNamesAndTypes".equals(
++                        exchange.getRequestHeaders().getFirst("X-ClickHouse-Format")),
++                        "SDK default query format must be preserved");
++                assertTrue(exchange.getRequestHeaders().getFirst("Content-Encoding") == null,
++                        "fixture requires the production native-compression path");
++                assertTrue("1".equals(queryParameter(exchange.getRequestURI(), "compress")),
++                        "production response compression must remain enabled");
++                assertTrue("1".equals(queryParameter(exchange.getRequestURI(), "decompress")),
++                        "production request compression must remain enabled");
++                try (var request = new ClickHouseLZ4InputStream(exchange.getRequestBody(),
++                        LZ4Factory.fastestInstance().fastDecompressor(), CODEC_BUFFER_SIZE)) {
++                    assertTrue(SELECT_ONE.equals(new String(request.readAllBytes(), StandardCharsets.UTF_8)),
++                            "real compressed SDK request must decode to SELECT 1");
++                }
++                if (delayFirstHeaders) {
++                    assertTrue("health_check:clickhouse".equals(
++                            queryParameter(exchange.getRequestURI(), "log_comment")),
++                            "actual production health query settings must be retained");
++                    assertTrue("1".equals(queryParameter(exchange.getRequestURI(), "max_execution_time")),
++                            "factory one-second health deadline must retain its server-side cap");
++                }
++                if (sequence == 1) {
++                    firstRequestArrived.countDown();
++                    if (delayFirstHeaders) {
++                        await(releaseFirstHeaders, "test did not release the first response headers");
++                    }
++                } else if (sequence == 2) {
++                    secondRequestArrived.countDown();
++                }
++
++                var headers = exchange.getResponseHeaders();
++                headers.set("Content-Type", "application/octet-stream");
++                headers.set("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes");
++                headers.set("X-ClickHouse-Timezone", "UTC");
++                headers.set("X-ClickHouse-Query-Id", "get337-loopback-" + sequence);
++                headers.set("X-ClickHouse-Summary",
++                        "{\"read_rows\":\"1\",\"read_bytes\":\"1\",\"written_rows\":\"0\","
++                                + "\"written_bytes\":\"0\",\"result_rows\":\"1\",\"result_bytes\":\"1\","
++                                + "\"elapsed_ns\":\"1\"}");
++                // Positive finite Content-Length and no Connection: close.
++                exchange.sendResponseHeaders(200, wireResponse.length);
++                try (var output = exchange.getResponseBody()) {
++                    output.write(wireResponse);
++                }
++                if (sequence == 1) {
++                    firstResponseWritten.countDown();
++                }
++            } catch (Throwable failure) {
++                if (!closing.get()) {
++                    serverFailure.compareAndSet(null, failure);
++                }
++                // Wake bounded observers so fixture failures are reported as such.
++                firstRequestArrived.countDown();
++                firstResponseWritten.countDown();
++                secondRequestArrived.countDown();
++            } finally {
++                exchange.close();
++            }
++        }
++
++        private void assertServerHealthy() {
++            var failure = serverFailure.get();
++            if (failure != null) {
++                throw new AssertionError("loopback protocol fixture failed", failure);
++            }
++        }
++
++        @Override
++        public void close() throws Exception {
++            closing.set(true);
++            releaseFirstHeaders.countDown();
++            try {
++                if (client != null) {
++                    client.close();
++                }
++            } finally {
++                server.stop(0);
++                List.of(healthCalls, operations, serverCalls).forEach(ExecutorService::shutdownNow);
++                for (var executor : List.of(healthCalls, operations, serverCalls)) {
++                    assertTrue(executor.awaitTermination(WAIT_SECONDS, TimeUnit.SECONDS),
++                            "owned loopback executor did not terminate");
++                }
++            }
++        }
++    }
++
++    private static final class ObservedExecutor extends AbstractExecutorService {
++
++        private final ExecutorService delegate = Executors.newCachedThreadPool();
++        private final AtomicInteger submitted = new AtomicInteger();
++        private final CountDownLatch firstFinished = new CountDownLatch(1);
++
++        @Override
++        public void execute(Runnable command) {
++            var first = submitted.getAndIncrement() == 0;
++            delegate.execute(() -> {
++                try {
++                    command.run();
++                } finally {
++                    if (first) {
++                        firstFinished.countDown();
++                    }
++                }
++            });
++        }
++
++        @Override
++        public void shutdown() {
++            delegate.shutdown();
++        }
++
++        @Override
++        public List<Runnable> shutdownNow() {
++            return delegate.shutdownNow();
++        }
++
++        @Override
++        public boolean isShutdown() {
++            return delegate.isShutdown();
++        }
++
++        @Override
++        public boolean isTerminated() {
++            return delegate.isTerminated();
++        }
++
++        @Override
++        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
++            return delegate.awaitTermination(timeout, unit);
++        }
++    }
++}
