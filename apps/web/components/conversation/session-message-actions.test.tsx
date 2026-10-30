@@ -4,8 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../memory-review/memory-review-card", () => ({ MemoryReviewCard: () => <div data-proposal>Memory proposal</div> }));
-vi.mock("./session-calendar-draft-card", () => ({ SessionCalendarDraftCard: () => <div data-proposal>Calendar proposal</div> }));
+vi.mock("../memory-review/memory-review-card", () => ({ MemoryReviewCard: ({ onDecisionState }: { onDecisionState?: (state: "pending" | "resolved" | "unknown") => void }) => <div data-proposal>Memory proposal
+  {(["pending", "resolved", "unknown"] as const).map(state => <button key={state} data-memory-state={state} onClick={() => onDecisionState?.(state)}>{state}</button>)}
+</div> }));
+vi.mock("./session-calendar-draft-card", () => ({ SessionCalendarDraftCard: ({ onDecisionState }: { onDecisionState?: (state: "pending" | "resolved" | "unknown") => void }) => <div data-proposal>Calendar proposal
+  {(["pending", "resolved", "unknown"] as const).map(state => <button key={state} data-calendar-state={state} onClick={() => onDecisionState?.(state)}>{state}</button>)}
+</div> }));
 vi.mock("../mcp/mcp-request-card", () => ({ McpRequestCard: () => <div data-proposal>MCP proposal</div> }));
 vi.mock("./conversation-images", () => ({ ConversationImageStrip: () => <div data-images>Image</div> }));
 
@@ -13,10 +17,11 @@ import { extractSessionMessageCopy } from "./session-message-actions";
 import { SessionAssistantMessage, SessionUserMessage, type SessionProjectedMessage } from "./session-message-parts";
 import { SessionRuntime } from "./session-runtime";
 import { LocaleProvider } from "../locale-provider";
+import styles from "./queued-conversation.module.css";
 
 const data = (name: string, value: Record<string, unknown>) => ({ type: "data" as const, name: `talent-signal.${name}`, data: value });
-function execution(phase = "completed", endedAt: string | null = "2026-10-23T00:00:08Z") {
-  return data("execution", { phase, endedAt, startedAt: "2026-10-23T00:00:00Z", completedTools: [{ name: "PRIVATE_TOOL", completed_at: "2026-10-23T00:00:04Z" }] });
+function execution(phase = "completed", endedAt: string | null = "2026-10-23T00:00:08Z", extra: Record<string, unknown> = {}) {
+  return data("execution", { phase, endedAt, startedAt: "2026-10-23T00:00:00Z", completedTools: [{ name: "PRIVATE_TOOL", completed_at: "2026-10-23T00:00:04Z" }], ...extra });
 }
 function answer(body = "**完成**的正文。\n\n- 第一步", overrides: Record<string, unknown> = {}) {
   return data("answer-block", { messageId: "turn-1", block: { id: "answer-1", kind: "answer", title: "下一步", body, status: "informational", requires_user_decision: false, ...overrides } });
@@ -107,7 +112,7 @@ it("renders real runtime controls beneath user text and final prose before propo
   expect(sentTime.previousElementSibling?.hasAttribute("data-images")).toBe(true);
   expect(sentTime.previousElementSibling?.previousElementSibling?.hasAttribute("data-user-message")).toBe(true);
   expect(userActions.nextElementSibling).toBeNull();
-  expect(host.querySelector('[data-message-actions="assistant"]')?.parentElement?.nextElementSibling?.hasAttribute("data-proposal")).toBe(true);
+  expect(host.querySelector('[data-message-actions="assistant"]')?.closest(`.${styles.answerBlockGroup}`)?.nextElementSibling?.hasAttribute("data-proposal")).toBe(true);
   expect(host.querySelector('[data-presentation="prose"]')).not.toBeNull();
   await act(async () => action("复制消息").click());
   expect(writeText).toHaveBeenLastCalledWith("  用户\n文字  ");
@@ -120,6 +125,114 @@ it("never renders a copy control for incomplete answers or image-only messages",
     message("user", [data("user-images", { messageId: "user-1", images: [{}] })])]);
   expect(host.querySelector("[data-message-actions]")).toBeNull();
   expect(writeText).not.toHaveBeenCalled();
+});
+
+it.each(["收到", "第一段保留原始正文。\n\n第二段也属于同一个语义回复。".repeat(20)])("keeps short and long prose in the same content-only bubble with sibling footer controls", async body => {
+  await render([message("assistant", [answer(body, { title: null }), execution()])]);
+  const prose = host.querySelector('[data-presentation="prose"]')!;
+  const footer = host.querySelector<HTMLElement>('[data-message-footer="assistant"]')!;
+  expect(footer).not.toBeNull();
+  expect(footer.dataset.phase).toBe("completed");
+  expect(prose.querySelector("[data-message-actions], details[data-phase]")).toBeNull();
+  expect(footer.contains(action())).toBe(true);
+  const activity = footer.querySelector<HTMLDetailsElement>('details[data-phase="completed"]')!;
+  expect(activity.parentElement).toBe(footer);
+  expect(activity.querySelector("summary button")).toBeNull();
+  expect(activity.querySelector('[data-elapsed-ms="8000"]')).not.toBeNull();
+  expect(activity.querySelector('time[datetime="2026-10-23T00:00:04Z"]')).not.toBeNull();
+  expect(activity.querySelector("[data-run-diagnostics]")?.textContent).toContain("PRIVATE_TOOL");
+  expect(host.querySelectorAll("details[data-phase]")).toHaveLength(1);
+  await act(async () => action().click());
+  expect(writeText).toHaveBeenLastCalledWith(body);
+});
+
+it("keeps the one Copy/Activity footer at the original last safe block before later proposals and sources", async () => {
+  await render([message("assistant", [answer("first", { title: null }), answer("second", { id: "last-safe", title: null, public_source_refs: [{ display_name: "PRIVATE_SOURCE" }] }),
+    ...proposals, answer("PRIVATE_PROPOSAL", { id: "proposal", kind: "proposal", status: "proposed", requires_user_decision: true }), execution()])]);
+  const footer = host.querySelector('[data-message-footer="assistant"]')!;
+  expect(footer).not.toBeNull();
+  expect(footer.previousElementSibling?.textContent).toContain("second");
+  expect(footer.parentElement?.nextElementSibling?.hasAttribute("data-proposal")).toBe(true);
+  expect(host.querySelectorAll('[data-message-actions="assistant"]')).toHaveLength(1);
+  expect(host.querySelectorAll('details[data-phase="completed"]')).toHaveLength(1);
+  await act(async () => action().click());
+  expect(writeText).toHaveBeenLastCalledWith("first\n\nsecond");
+  expect(writeText.mock.calls[0]?.[0]).not.toContain("PRIVATE");
+});
+
+it.each(["answer", "proposal"])("keeps a single original execution record when a malformed %s block repeats the safe anchor", async kind => {
+  await render([message("assistant", [answer("first", { title: null }), answer("second", { title: null, kind,
+    ...(kind === "proposal" ? { status: "proposed", requires_user_decision: true } : {}) }), execution()])]);
+  expect(host.querySelector('[data-message-footer="assistant"]')).toBeNull();
+  expect(host.querySelectorAll('details[data-phase="completed"]')).toHaveLength(1);
+  expect(host.querySelector('details[data-phase="completed"]')?.closest(`.${styles.answerBlockGroup}`)).toBeNull();
+});
+
+it.each(["memory", "calendar"])("uses canonical %s decision state for footer completion without replacing Copy or Activity", async kind => {
+  let finish!: () => void;
+  writeText.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  const key = kind === "memory" ? "memory:PRIVATE_MEMORY" : "calendar:PRIVATE_CALENDAR";
+  const proposal = kind === "memory" ? proposals[0] : proposals[1];
+  await render([message("assistant", [answer("收到", { title: null }), proposal, execution("completed", undefined, { decisionKeys: [key] })])]);
+  const footer = host.querySelector<HTMLElement>('[data-message-footer="assistant"]')!;
+  expect(footer).not.toBeNull();
+  expect(footer.dataset.phase).toBe("review-unknown");
+  const copy = action();
+  const record = footer.querySelector<HTMLDetailsElement>("details[data-phase]")!;
+  const summary = record.querySelector("summary")!;
+  await act(async () => copy.click());
+  record.open = true; summary.focus();
+  for (const [state, phase] of [["pending", "waiting-review"], ["resolved", "completed"], ["unknown", "review-unknown"]] as const) {
+    await act(async () => host.querySelector<HTMLButtonElement>(`[data-${kind}-state="${state}"]`)!.click());
+    expect(footer.dataset.phase).toBe(phase);
+    expect(record.dataset.phase).toBe(phase);
+    expect(action()).toBe(copy);
+    expect(footer.querySelector("details[data-phase]")).toBe(record);
+    expect(record.querySelector("summary")).toBe(summary);
+    expect(record.open).toBe(true);
+    expect(document.activeElement).toBe(summary);
+    expect(host.querySelector('[data-message-actions="assistant"]')?.getAttribute("data-state")).toBe("busy");
+  }
+  await act(async () => finish());
+  expect(host.querySelector('[data-message-actions="assistant"]')?.getAttribute("data-state")).toBe("copied");
+  expect(writeText).toHaveBeenCalledExactlyOnceWith("收到");
+});
+
+it("keeps the same failed Copy action and feedback when raw execution changes footer presentation", async () => {
+  writeText.mockRejectedValueOnce(new Error("denied"));
+  await render([message("assistant", [answer("收到", { title: null }), execution()])]);
+  await act(async () => action().click());
+  const copy = action("重试复制回答");
+  copy.focus();
+  for (const phase of ["waiting-review", "completed"]) {
+    await render([message("assistant", [answer("收到", { title: null }), execution(phase)])]);
+    expect(action("重试复制回答")).toBe(copy);
+    expect(document.activeElement).toBe(copy);
+    expect(host.querySelector('[data-state="failed"]')).not.toBeNull();
+  }
+});
+
+it.each(["running", "failed", "interrupted", "waiting-review", "review-unknown"])("keeps %s execution out of the completed footer", async phase => {
+  await render([message("assistant", [execution(phase, phase === "running" ? null : undefined), answer("未决正文")])]);
+  expect(host.querySelector('[data-message-footer="assistant"]')).toBeNull();
+  const record = host.querySelector<HTMLDetailsElement>(`details[data-phase="${phase}"]`)!;
+  expect(record).not.toBeNull();
+  expect(record.closest('[data-message-footer="assistant"]')).toBeNull();
+});
+
+it.each([{ blocks: [] }, { blocks: [answer("", { title: null })] }])("retains one Activity receipt without inventing a Copy footer when safe prose is absent", async ({ blocks }) => {
+  await render([message("assistant", [...blocks, execution()])]);
+  expect(host.querySelector('[data-message-footer="assistant"]')).toBeNull();
+  expect(host.querySelector("[data-message-actions]")).toBeNull();
+  expect(host.querySelectorAll('details[data-phase="completed"]')).toHaveLength(1);
+});
+
+it("gives a plain assistant text part a prose wrapper without inventing completion or Copy authority", async () => {
+  await render([message("assistant", [{ type: "text", text: "仍是普通回复文本" }, execution("running", null)])]);
+  expect(host.querySelector('[data-presentation="prose"]')?.textContent).toBe("仍是普通回复文本");
+  expect(host.querySelector('[data-message-footer="assistant"]')).toBeNull();
+  expect(host.querySelector("[data-message-actions]")).toBeNull();
+  expect(host.querySelector('details[data-phase="running"]')).not.toBeNull();
 });
 it("uses the active display locale for copy, retry and feedback while preserving source text", async () => {
   const source = "  用户\n原文  ";

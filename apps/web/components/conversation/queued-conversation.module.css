@@ -34,7 +34,7 @@
 .answer { display:grid; grid-template-columns:24px minmax(0,1fr); gap:8px; min-width:0; padding:0; align-items:start; }
 .identity { display:flex; justify-content:center; width:24px; align-items:center; color:var(--muted); margin:10px 0 0; }
 .mark { width:24px; height:24px; flex:none; background:var(--workspace-brand-image) center / contain no-repeat; }
-.answerBody { min-width:0; max-width:100%; width:fit-content; box-sizing:border-box; padding:10px 12px; border-radius:4px 14px 14px 14px; background:var(--surface-muted); }
+.answerBody { min-width:0; max-width:100%; width:fit-content; }
 .semanticBubble > h3 { font-size:var(--ts-type-section,1.125rem); line-height:1.5; font-weight:600; margin:0 0 8px; overflow-wrap:anywhere; }
 /* Milestone-only dialogue update while a run forms its result. */
 .milestone { max-width:620px; background:var(--surface-muted,#f4f3ef); border-radius:14px; padding:12px; margin-bottom:8px; }
@@ -184,7 +184,7 @@
 .canvas:has([data-evidence-preview]) .latest { position:static; margin:0 0 8px auto; min-height:44px; }
 
 .semanticBubble { width:100%; max-width:none; min-width:0; box-sizing:border-box; padding:12px 0; border-block:1px solid var(--line); border-radius:0; background:transparent; margin:8px 0; }
-.semanticBubble[data-presentation="prose"] { width:100%; max-width:none; padding:0; border:0; border-radius:0; background:transparent; margin:0; }
+.semanticBubble[data-presentation="prose"] { width:fit-content; max-width:100%; padding:10px 12px; border:0; border-radius:4px 14px 14px 14px; background:var(--surface-muted); margin:0; }
 .queueText small { white-space:normal; overflow-wrap:anywhere; line-height:var(--ts-leading-meta,1.5); }
 .send[data-send-mode="steer"], .send[data-send-mode="queue"] { width:auto; min-width:44px; gap:6px; padding:0 12px; }
 .send span { white-space:nowrap; }
@@ -201,7 +201,8 @@
 /* Live work is one presence row; detailed evidence stays behind disclosure. */
 .execution[data-live="true"] .executionSummary { font-size: var(--ts-type-meta, 0.8125rem); gap:6px; min-height:44px; padding:0; }
 .workingName { font-weight:400; }
-.answer:has(.execution[data-live="true"]) > .identity { margin-top:20px; }
+.answer:has(.execution[data-live="true"]) > .identity { margin-top:10px; }
+.answer:has(.workRow):not(:has(.semanticBubble)) > .identity { margin-top:0; }
 .answer:has(.execution[data-live="true"][data-phase="running"]) > .identity .mark { animation:breathe 1.8s ease-in-out infinite; }
 .answer:has(.workRow[data-animate="true"]) > .identity .mark { animation:breathe 1.8s ease-in-out infinite; }
 .executionSummary:focus-visible { outline:2px solid var(--muted); outline-offset:3px; }
@@ -210,9 +211,8 @@
 /* Opaque warm reading surfaces when transparency is reduced. */
 @media(prefers-reduced-transparency:reduce) {
   .canvas, .transcript { background:var(--background); }
-  .queue, .notice, .recovery, .detailPanel, .latest, .milestone, .semanticBubble { background:var(--surface); }
+  .queue, .notice, .recovery, .detailPanel, .latest, .milestone, .semanticBubble:not([data-presentation="prose"]) { background:var(--surface); }
   /* The reply tint is already opaque; retain its grouping in this mode. */
-  .semanticBubble[data-presentation="prose"] { background:transparent; }
   .userMessage { background:var(--workspace-user-bubble); }
   .userMessage:has(> .images) { background:none; }
   .imageDialog { background:var(--surface); }
@@ -221,7 +221,8 @@
 /* Keep every control, border and focus ring visible under forced colors. */
 @media(forced-colors:active) {
   .canvas { background:Canvas; color:CanvasText; }
-  .queue, .notice, .recovery, .detailPanel, .userMessage, .answerBody, .milestone, .semanticBubble, .latest, .composerImage, .imageButton, .imagePlaceholder { border:1px solid CanvasText; }
+  .queue, .notice, .recovery, .detailPanel, .userMessage, .milestone, .semanticBubble, .latest, .composerImage, .imageButton, .imagePlaceholder { border:1px solid CanvasText; }
+  .semanticBubble[data-presentation="prose"] { border:1px solid CanvasText; }
   .composerImageRemove, .imageZoom, .imageControl, .imageNav, .imageClose, .imageRetryInline { background:Canvas; border:1px solid CanvasText; color:CanvasText; }
   .imageDialogMessage, .imageFileName, .imagePosition { color:CanvasText; }
   .imageDialog button:focus-visible { outline:2px solid Highlight; }
@@ -258,9 +259,16 @@
 
 .answerBlockGroup { position:relative; min-width:0; }
 .userStack { position:relative; }
-@media(hover:hover) and (pointer:fine) {
-  .answerBlockGroup:has([data-message-actions]) { min-height:44px; padding-inline-end:52px; }
-}
+/* Completed reply tools share one footer; its receipt stays in normal flow.
+   Unknown/pending/failed outcomes retain the full-width recovery record. */
+.messageFooter { display:flex; align-items:flex-start; flex-wrap:wrap; gap:4px 8px; min-width:0; margin-top:2px; }
+.messageFooter:empty { display:none; }
+.messageFooter > .execution { flex:0 1 auto; min-width:0; max-width:100%; margin:0; }
+.messageFooter:has(> .execution:not([data-phase="completed"])) { flex-direction:column; align-items:stretch; }
+.messageFooter [data-message-actions="assistant"] { position:static; flex:none; align-self:flex-start; }
+.answerBody .messageFooter [data-message-actions="assistant"] > * { opacity:1; }
+.messageFooter .executionSummary { min-height:44px; padding-inline:4px; }
+
 
 /* Symmetric side tracks keep the title on the content area's center axis.
    Empty and active states reserve the same space; status targets the transcript. */

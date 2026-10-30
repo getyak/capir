@@ -77,7 +77,7 @@ export function SessionExecutionCard({
     {live ? <div className={executionStyles.progress} data-run-progress>
       {draft?.trim() ? <section aria-label={t("回复草稿，尚未完成")}>
         <p className={executionStyles.draftLabel}>{t("回复草稿，尚未完成")}</p>
-        <ConversationResponse>{draft}</ConversationResponse>
+        <div className={styles.semanticBubble} data-presentation="prose"><ConversationResponse>{draft}</ConversationResponse></div>
         {phase === "running" ? <span className={styles.cursor} aria-hidden="true"/> : null}
       </section> : <p className={executionStyles.stage} role={statusInHeader ? undefined : "status"}>
         {!statusInHeader ? <span className={styles.workingName}>{siteConfig.name}</span> : null}
