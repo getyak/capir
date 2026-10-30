@@ -315,7 +315,12 @@ def _zip_entries(archive):
         seen.add(name)
         kind = stat.S_IFMT(info.external_attr >> 16)
         if kind not in (0, stat.S_IFREG, stat.S_IFDIR) or (kind == stat.S_IFDIR and not info.is_dir()):
-            raise ValueError("Non-regular JAR entry")
+            archive_name = (Path(archive.filename).name
+                            if isinstance(archive.filename, (str, os.PathLike)) else "unknown-archive")
+            raise ValueError("Non-regular JAR entry (archive=" + repr(archive_name)[:100]
+                             + ", create_system=" + str(info.create_system)
+                             + ", external_attr=" + hex(info.external_attr)
+                             + ", kind=" + oct(kind) + ", entry=" + repr(name)[:160] + ")")
         if info.file_size > MAX_ENTRY:
             raise ValueError("Unbounded JAR entry")
         total += info.file_size

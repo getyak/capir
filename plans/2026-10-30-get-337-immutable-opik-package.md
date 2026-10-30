@@ -193,3 +193,22 @@ bytes and hash in its verified JARs. Unknown or changed entries remain rejected.
 Old P1 writer settlement and P2 outcome persistence stay unchanged. Source
 review, full local regression and a fresh actual package invocation still gate
 readiness/merge; no failed invocation is relabeled passed.
+
+## Second actual package refusal: retain the ZIP boundary
+
+Head5aec3864e3a2c5c9d945ac7632f476ddb092e8c1 ran CI41056666820.
+Artifact12976189817 (802300 bytes, SHA256
+e13d31d948ccc55066807c75166b9923f80082c4213e3fe2d0ec8f765cca0313)
+again records raw54/0/0/0, Maven clean package0, identical311 ordered runtime
+dependencies, settled writers and restored source POM. JAR/resource admission
+now stops at “Non-regular JAR entry”. The offending archive/entry is not retained
+in that receipt, and the final JAR is still unavailable; do not claim the new
+namespace gate or required classes passed on actual output. The verified public
+Liquibase dependency itself has no offending entry under the current type rule.
+
+Do not weaken the ZIP mode/symlink condition. The next correction only adds
+bounded public archive-basename, entry and metadata to that same refusal, so one
+fresh invocation can identify the actual input before deciding compatibility.
+The branch has normally merged current mainc1073b38531b84cfab6d19629d4ec9bb1464acdc
+(PR503 Time display change); published history is not rewritten. The existing
+52 host guards and immutable actual failures remain separate evidence.
