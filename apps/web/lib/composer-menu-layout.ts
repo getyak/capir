@@ -9,8 +9,8 @@
  * the component effect and its tests share the same geometry.
  *
  * Boundaries: it only decides side and height. It never hides or reorders
- * options, never changes the inline fallback policy, and never measures the
- * popup or its list against itself.
+ * options. Inline placement reserves the existing composer body before giving
+ * the remaining visible space to the menu's own scrollport.
  */
 
 export type ComposerMenuBounds = {
@@ -47,13 +47,16 @@ const INLINE_RATIO = 0.45;
  * clipping-ancestor bounds (see {@link composerMenuClipBounds}), or null when
  * nothing clips. The chosen absolute height never exceeds the space that
  * actually exists on the chosen side; when neither side can afford the
- * existing 140px minimum the popup falls inline as before.
+ * existing 140px minimum the popup falls inline. Its height can be smaller
+ * than 140px: the editor and its actions must keep their own visible space.
  */
 export function composerMenuPlacement(input: {
   outer: ComposerMenuBounds;
   viewport: { top: number; height: number };
   clip?: ComposerMenuBounds | null;
   mobile: boolean;
+  /** Existing editor/actions/padding/border plus the inline menu's grid gap. */
+  inlineContentHeight?: number;
 }): ComposerMenuPlacement {
   const clipTop = input.clip
     ? input.clip.top + COMPOSER_MENU_GAP
@@ -76,11 +79,14 @@ export function composerMenuPlacement(input: {
         ? "above"
         : "below";
   if (side === "inline") {
+    const retained = input.inlineContentHeight
+      ?? Math.max(0, input.outer.bottom - input.outer.top) + COMPOSER_MENU_GAP;
+    const budget = safeBottom - Math.max(safeTop, input.outer.top) - retained;
     return {
       side,
       maxHeight: Math.max(
-        COMPOSER_MENU_MIN_HEIGHT,
-        Math.min(INLINE_CAP, input.viewport.height * INLINE_RATIO),
+        0,
+        Math.floor(Math.min(INLINE_CAP, input.viewport.height * INLINE_RATIO, budget)),
       ),
     };
   }
