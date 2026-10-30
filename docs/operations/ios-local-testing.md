@@ -159,6 +159,13 @@ teardown, and shutdown/readback/inventory cleanup failures.
 behavior on a device is observed through the ordinary `check.sh` output and
 result bundles.
 
+This repository commits its generated Xcode project. After adding a Swift test
+file, run `pnpm ios:generate` from the repository root to synchronize
+`apps/ios/project.yml` with the committed project, then review the generated diff
+and the file's membership in its intended test target. Source presence and an
+overall green check do not prove execution: confirm each new test method ran
+and passed in the native result bundle or log for the exact tested revision.
+
 ## Opt-in live account journey
 
 The `LiveConversationFlowUITests`, `LiveImageFlowUITests`, and
