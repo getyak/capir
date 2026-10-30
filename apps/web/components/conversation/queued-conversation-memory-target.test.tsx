@@ -21,6 +21,7 @@ const initialDetail = { session_id: SESSION, revision: 1, updated_at: "2026-10-2
 const active = { queue_entry_id: ACTIVE, message_id: ACTIVE, sequence: 1, status: "running", objective: "Synthetic active message", created_at: initialDetail.updated_at, updated_at: initialDetail.updated_at, revision: 1, run_id: "55555555-5555-4555-8555-555555555555", stage: "answer", cancel_requested: false, failure_code: null, accepts_steering: true };
 let root: Root, host: HTMLDivElement;
 let put: ConversationImageStore["put"];
+let readImages: ConversationImageStore["get"];
 let snapshotActive = true;
 let echoTarget = true;
 let emitSnapshot: (snapshot: unknown) => void;
@@ -42,7 +43,8 @@ beforeEach(async () => {
   window.history.replaceState(null, "", "/workspace"); fetcher.mockReset();
   const images = new Map<string, DurableConversationImage[]>();
   put = async (key, records) => { if (records.length) images.set(key, [...records]); else images.delete(key); return true; };
-  setConversationImageStoreForTest({ put: (...args) => put(...args), get: async key => images.get(key) ?? [], delete: async key => { images.delete(key); }, deletePrefix: async prefix => { for (const key of images.keys()) if (key.startsWith(prefix)) images.delete(key); }, inventory: async () => [] });
+  readImages = async key => images.get(key) ?? [];
+  setConversationImageStoreForTest({ put: (...args) => put(...args), get: (...args) => readImages(...args), delete: async key => { images.delete(key); }, deletePrefix: async prefix => { for (const key of images.keys()) if (key.startsWith(prefix)) images.delete(key); }, inventory: async () => [] });
   fetcher.mockImplementation((url, init) => {
     if (String(url).endsWith("/stream")) return Promise.resolve(new Response(new ReadableStream({ start(controller) {
       emitSnapshot = snapshot => controller.enqueue(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`));
@@ -97,13 +99,34 @@ it("preserves a newer same-text target selected while an earlier ordinary image 
   const originalPut = put; let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   put = async (...args) => { if (!args[0].endsWith(CONVERSATION_IMAGE_DRAFT)) await held; return originalPut(...args); };
+  const originalRead = readImages; let releaseRead!: () => void; let readStarted = false;
+  const heldRead = new Promise<void>(resolve => { releaseRead = resolve; });
+  readImages = async key => {
+    if (!key.endsWith(CONVERSATION_IMAGE_DRAFT)) { readStarted = true; await heldRead; }
+    return originalRead(key);
+  };
   const exactText = input().value;
   await act(async () => send().click());
   await chooseTarget(); expect(selection()).not.toBeNull();
-  await act(async () => release()); await flush();
-  expect(input().value).toBe(exactText); expect(selection()).not.toBeNull();
-  expect(JSON.parse(posts()[0][1].body)).not.toHaveProperty("memory_draft_target");
-  expect(send().disabled).toBe(false);
+  try {
+    await act(async () => release()); await flush();
+    await vi.waitFor(async () => {
+      await act(async () => { await Promise.resolve(); });
+      expect(readStarted).toBe(true);
+    });
+    expect(input().value).toBe(exactText); expect(selection()).not.toBeNull();
+    expect(posts()).toHaveLength(0);
+    await act(async () => releaseRead());
+    await vi.waitFor(async () => {
+      await act(async () => { await Promise.resolve(); });
+      expect(posts()).toHaveLength(1);
+    });
+    expect(input().value).toBe(exactText); expect(selection()).not.toBeNull();
+    expect(JSON.parse(posts()[0][1].body)).not.toHaveProperty("memory_draft_target");
+    expect(send().disabled).toBe(false);
+  } finally {
+    await act(async () => releaseRead()); await flush();
+  }
 });
 
 it("keeps the original target visible and offers a read-only check when a same-ID queue receipt has lost its scope", async () => {
