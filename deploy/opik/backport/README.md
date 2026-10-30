@@ -207,8 +207,13 @@ derivation is explicit; dependencies, plugins and all other bytes stay fixed.
 Standard clean/package regenerates the owned target using the same pinned
 toolchain and m2. Ordered runtime coordinates and actual artifact hashes must
 agree before and after; complete JAR entries, required classes and all 229
-Liquibase resources receive separate admission. This does not prove loaded
-classes or the resident JAR.
+source migration resources receive separate admission. The shaded Liquibase
+dependency shares the `liquibase/` namespace: its classes and library resources
+are separate from application migrations and require matching paths, bytes and
+hashes in the actual resolved dependency JARs. Extra namespace entries without
+that explicit graph remain rejected. The boundary is covered by the
+[namespace tests](../../../scripts/prompts/test_opik_package_namespace.py).
+This does not prove loaded classes or the resident JAR.
 
 Owned-container settlement is a source-mutation boundary. A cleanup attempt,
 client exit, missing CID or failed inspect is insufficient on its own. Confirm

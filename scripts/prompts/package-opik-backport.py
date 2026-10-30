@@ -324,7 +324,7 @@ def _zip_entries(archive):
         yield info
 
 
-def catalogue_release_jar(*, jar_path, migration_sources, required_entries):
+def catalogue_release_jar(*, jar_path, migration_sources, required_entries, dependency_graph=None):
     jar_path = _regular(jar_path, MAX_JAR)
     if not isinstance(migration_sources, dict) or len(migration_sources) != 229:
         raise ValueError("Require the complete229 source resource map")
@@ -337,7 +337,7 @@ def catalogue_release_jar(*, jar_path, migration_sources, required_entries):
         with zipfile.ZipFile(jar_path) as archive:
             for info in _zip_entries(archive):
                 digest, size = hashlib.sha256(), 0
-                content = bytearray() if info.filename.startswith("liquibase/") or info.filename == "META-INF/MANIFEST.MF" else None
+                content = bytearray() if info.filename in migration_sources or info.filename == "META-INF/MANIFEST.MF" else None
                 with archive.open(info) as stream:
                     for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                         size += len(chunk)
@@ -348,14 +348,27 @@ def catalogue_release_jar(*, jar_path, migration_sources, required_entries):
                     raise ValueError("JAR entry size mismatch")
                 entries[info.filename] = {"sha256": digest.hexdigest(), "bytes": size,
                                           "kind": "directory" if info.is_dir() else "file"}
-                if info.filename.startswith("liquibase/") and not info.is_dir():
+                if info.filename in migration_sources and not info.is_dir():
                     resources[info.filename] = bytes(content)
                 if info.filename == "META-INF/MANIFEST.MF":
                     manifest = bytes(content)
     except (OSError, zipfile.BadZipFile, RuntimeError):
         raise ValueError("Unreadable safe JAR catalogue") from None
-    if not set(required_entries).issubset(entries) or resources != migration_sources:
-        raise ValueError("Incomplete class/Bundle/schema resource closure")
+    missing_classes = sorted(set(required_entries) - set(entries))
+    if missing_classes:
+        raise ValueError("Missing required application JAR entries: " + ", ".join(missing_classes[:5]))
+    missing_resources = sorted(set(migration_sources) - set(resources))
+    if missing_resources:
+        raise ValueError("Missing application migration resources: " + ", ".join(missing_resources[:5]))
+    changed_resources = sorted(name for name in migration_sources if resources[name] != migration_sources[name])
+    if changed_resources:
+        raise ValueError("Changed application migration resource bytes: " + ", ".join(changed_resources[:5]))
+    foreign_namespace = sorted(name for name, entry in entries.items()
+                               if name.startswith("liquibase/") and entry["kind"] == "file"
+                               and name not in migration_sources)
+    if foreign_namespace and dependency_graph is None:
+        raise ValueError("Liquibase namespace entries require explicit dependency provenance: "
+                         + ", ".join(foreign_namespace[:5]))
     attributes = {}
     if manifest is not None:
         section = manifest.replace(b"\r\n", b"\n").replace(b"\n ", b"").split(b"\n\n", 1)[0]
@@ -371,10 +384,16 @@ def catalogue_release_jar(*, jar_path, migration_sources, required_entries):
             attributes[key] = value
     if attributes.get(b"main-class") != b"com.comet.opik.OpikApplication":
         raise ValueError("Unexpected main JAR manifest")
-    return {"sha256": _hash_file(jar_path), "bytes": jar_path.stat().st_size,
-            "entries": entries, "migration_resources": len(resources),
-            "classes": [name for name in entries if name.endswith(".class")],
-            "services": [name for name in entries if name.startswith("META-INF/services/") and entries[name]["kind"] == "file"]}
+    result = {"sha256": _hash_file(jar_path), "bytes": jar_path.stat().st_size,
+              "entries": entries, "migration_resources": len(resources),
+              "source_migration_entries": sorted(migration_sources),
+              "classes": [name for name in entries if name.endswith(".class")],
+              "services": [name for name in entries if name.startswith("META-INF/services/") and entries[name]["kind"] == "file"]}
+    if dependency_graph is not None:
+        # Admission and provenance share one dependency ZIP scan. The caller
+        # persists this separately rather than rescanning a large runtime graph.
+        result["_dependency_provenance"] = _dependency_origins(dependency_graph, result)
+    return result
 
 
 def _verify_graph(graph):
@@ -690,9 +709,21 @@ def _runtime_graph(classpath_path, cache, version):
 
 
 def _dependency_origins(graph, packaged):
-    # Complete final-JAR catalogue is separate. Keep only duplicate class
-    # origins, services, licenses and explicit codec/client provenance here.
+    # Source migration identity is already byte-checked. Extra files sharing
+    # its namespace require exact entries in the hash-bound runtime artifacts.
+    _verify_graph(graph)
+    source_entries = packaged.get("source_migration_entries")
+    if (not isinstance(source_entries, list) or len(source_entries) != 229
+            or len(set(source_entries)) != 229
+            or any(not name.startswith("liquibase/") or name not in packaged["entries"] for name in source_entries)):
+        raise ValueError("Complete application migration identity is missing from the JAR catalogue")
+    source_entries = set(source_entries)
+    foreign_entries = {
+        name: entry for name, entry in packaged["entries"].items()
+        if name.startswith("liquibase/") and entry["kind"] == "file" and name not in source_entries
+    }
     origins, services, licenses = defaultdict(list), defaultdict(list), defaultdict(list)
+    namespace_origins = defaultdict(list)
     tracked = {
         "com/clickhouse/client/api/Client.class",
         "com/clickhouse/client/api/query/QueryResponse.class",
@@ -705,23 +736,38 @@ def _dependency_origins(graph, packaged):
                 for info in _zip_entries(archive):
                     name = info.filename
                     if info.is_dir() or not (name.endswith(".class") or name.startswith("META-INF/services/")
-                                              or ("LICENSE" in name.upper() or "NOTICE" in name.upper())):
+                                              or ("LICENSE" in name.upper() or "NOTICE" in name.upper())
+                                              or name in foreign_entries):
                         continue
                     digest = hashlib.sha256()
                     with archive.open(info) as stream:
                         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                             digest.update(chunk)
                     record = {"coordinate": row["coordinate"], "order": row["order"],
-                              "sha256": digest.hexdigest(), "bytes": info.file_size}
+                              "sha256": digest.hexdigest(), "bytes": info.file_size,
+                              "artifact_sha256": row["sha256"], "artifact_bytes": row["bytes"]}
+                    if name in foreign_entries:
+                        namespace_origins[name].append(record)
                     if name.endswith(".class"):
                         origins[name].append(record)
                     elif name.startswith("META-INF/services/"):
                         services[name].append(record)
-                    else:
+                    elif "LICENSE" in name.upper() or "NOTICE" in name.upper():
                         licenses[name].append(record)
         except (OSError, zipfile.BadZipFile, RuntimeError):
             raise ValueError("Unable to catalogue actual dependency JAR provenance") from None
+        if _hash_file(row["file"]) != row["sha256"] or Path(row["file"]).stat().st_size != row["bytes"]:
+            raise ValueError("Actual dependency artifact changed during provenance collection")
+    proven_namespace = {}
+    for name, entry in foreign_entries.items():
+        matching = [origin for origin in namespace_origins[name]
+                    if origin["sha256"] == entry["sha256"] and origin["bytes"] == entry["bytes"]]
+        if not matching:
+            raise ValueError("Unresolved or changed dependency Liquibase namespace entry: " + name)
+        proven_namespace[name] = {"packaged": entry, "matching_dependency_origins": matching}
     return {
+        "source_migration_entries": sorted(source_entries),
+        "liquibase_dependency_entries": proven_namespace,
         "duplicate_classes": {name: records for name, records in origins.items() if len(records) > 1},
         "services": dict(services), "license_notice_entries": dict(licenses),
         "codec_client_classes": {
@@ -982,13 +1028,14 @@ def run_package(*, source_dir, fixed_receipt_dir, report_dir, output_dir, manife
         package_receipt["phase"] = "jar_and_resource_admission"
         update()
         catalogue = catalogue_release_jar(jar_path=jar_path, migration_sources=migration_sources,
-                                           required_entries=REQUIRED_CLASSES)
+                                           required_entries=REQUIRED_CLASSES, dependency_graph=after_graph)
+        dependency_provenance = catalogue.pop("_dependency_provenance")
         with zipfile.ZipFile(jar_path) as archive:
             properties = archive.read("META-INF/maven/com.comet.opik/opik-backend/pom.properties").decode("utf-8")
             if re.findall(r"(?m)^version=([^\r\n]*)", properties) != [VERSION]:
                 raise ValueError("Assembled Maven project version is not the derived version")
         _write(output / "jar-catalogue.json", catalogue)
-        _write(output / "dependency-class-origins.json", _dependency_origins(after_graph, catalogue))
+        _write(output / "dependency-class-origins.json", dependency_provenance)
         target_jar = output / jar_path.name
         shutil.copyfile(jar_path, target_jar)
         if _hash_file(target_jar) != catalogue["sha256"]:

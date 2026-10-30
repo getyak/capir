@@ -8,12 +8,12 @@ class/resource and resolved-runtime dependency catalogues to the source, patches
 and real test receipt. This is a package milestone, not an image, import,
 activation, resident 503 attribution or product acceptance.
 
-This worktree starts at PR501 head
-`8c2c268eb570be6731b7c8a29cb12f92f7ac8182`. Update to its reviewed merged main
-before publishing a follow-up PR. Existing actual source49 and baseline21 remain
-immutable evidence. Fixed54 ran all54 with zero failures/errors/skips and Maven0
-in CI41041631471/artifact12971105806; independent actual review and other latest
-applicable CI are still pending. Never use that result for a changed patchset.
+This worktree initially started at PR501 head
+`8c2c268eb570be6731b7c8a29cb12f92f7ac8182` and advanced to its reviewed merged
+main `3afb9d7f6a0ded46b3a5cc7cc152b5d2da19a534` before publishing draft PR502.
+Existing actual source49, baseline21 and reviewed fixed54 remain immutable
+evidence. PR501's latest applicable checks passed and it merged; those historical
+results never authorize a changed package invocation.
 
 ## Boundaries and ownership
 
@@ -164,3 +164,32 @@ not. All7 scope/aggregate tests passed. None of these checks is remote Maven,
 JAR provenance or a live acceptance result. The next published PR stays draft
 until its same-job actual fixed54/package output and latest applicable CI have
 been inspected and independently reviewed.
+
+## Actual first package invocation and namespace correction
+
+PR502 head a80de9a887eba8a1940746b4a4376fa30044daaa ran CI41053614611.
+Artifact12975208597 (802211 bytes, SHA256
+6327b8b0eb40cd9a76c26cdca21c7e517e1477e64fc64cf222b6715ae032be22)
+retains fresh raw54/0/0/0/Maven0 and the package failure. The clean package itself
+returned0, all five owned commands settled, the311 ordered runtime dependencies
+were identical before/after, and the source POM was restored. JAR/resource
+admission refused “Incomplete class/Bundle/schema resource closure”. The target
+JAR was not retained on that failure, so its exact entries and all five required
+classes remain unobserved; do not claim complete package or image proof.
+
+Independent review found namespace conflation: every shaded `liquibase/` class
+or library asset was compared to the229 application migration map. The exact
+resolved public Liquibase4.33.0 JAR matches the runtime graph fingerprint and
+contains1345 such classes plus84 library resources. This corroborates a source
+validator defect; it does not substitute for observing the final shaded JAR.
+
+Parent first observed3 namespace tests with5 assertion failures/0errors, then
+an explicit-graph/default-fail-closed contract RED with4 tests/7 assertion
+failures/0errors. New fixtures use small real JARs and actual artifact hashes.
+The correction must retain all229 application bytes, required classes, ZIP
+safety and the default rejection of unreviewed namespace files. Only an explicit
+actual runtime graph can admit extra dependency entries with matching path,
+bytes and hash in its verified JARs. Unknown or changed entries remain rejected.
+Old P1 writer settlement and P2 outcome persistence stay unchanged. Source
+review, full local regression and a fresh actual package invocation still gate
+readiness/merge; no failed invocation is relabeled passed.
