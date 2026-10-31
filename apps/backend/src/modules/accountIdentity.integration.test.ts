@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { buildApp } from "../app.js";
@@ -21,7 +21,7 @@ import {
   completeCredentialChange,
   startCredentialChange as startCredentialChangeRaw,
 } from "./accountLoginMethods.js";
-import type { StartCredentialChangeRequest } from "@talent-signal/contracts";
+import type { PersistentSessionResponse, StartCredentialChangeRequest } from "@talent-signal/contracts";
 import {
   confirmPasswordRegistration,
   startPasswordRegistration,
@@ -2444,11 +2444,42 @@ describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () =
   });
 
 
-  async function passwordResultFixture(completed: boolean) {
+  async function passwordResultFixture(completed: boolean, member = false) {
     const account = await createAccount({
       email: `synthetic-result-boundary-${randomUUID()}@example.test`,
       password: "synthetic-result-boundary-before",
     });
+    if (member) {
+      // Keep the real creator as owner. This second, owned fixture user has
+      // only member rights and its own verified email/password, never an
+      // owner receipt or a preseeded credential-change/persistent grant.
+      const userId = randomUUID();
+      const email = `synthetic-result-member-${userId}@example.test`;
+      const client = await pool!.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          "INSERT INTO account_email_reservations(normalized_email,state,account_id,user_id) VALUES($1,'owned',$2,$3)",
+          [email, account.accountId, userId],
+        );
+        await client.query(
+          `INSERT INTO users(id,account_id,email,display_name,kind,account_role,email_verified_at)
+           VALUES($1,$2,$3,'Synthetic result member','password_human','member',now())`,
+          [userId, account.accountId, email],
+        );
+        await client.query(
+          "INSERT INTO password_credentials(account_id,user_id,password_scrypt) VALUES($1,$2,$3)",
+          [account.accountId, userId, await encodePasswordCredential("synthetic-result-boundary-before")],
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      account.userId = userId;
+    }
     const { auth, token } = await sessionFor(account.accountId, account.userId, "web");
     const grant = await startCredentialChange(pool!, config, auth, {
       id: randomUUID(), intent: "change_password", client_label: "web",
@@ -2523,8 +2554,9 @@ describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () =
   async function withPasswordResult(
     completed: boolean,
     run: (f: PasswordResultFixture) => Promise<void>,
+    options: { member?: boolean } = {},
   ) {
-    const f = await passwordResultFixture(completed);
+    const f = await passwordResultFixture(completed, options.member === true);
     try {
       // Every corrupted receipt starts from a real, authenticated successful
       // producer readback; no test inserts a successful access event.
@@ -2534,6 +2566,83 @@ describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () =
       await f.app.close();
     }
   }
+
+  it("reads the same applied password receipt after real web-session enrollment and renewal", async () => {
+    await withPasswordResult(true, async (f) => {
+      const original = (await expectPasswordReadState(f, "applied")).json();
+      const before = await passwordResultBusinessFingerprint(f);
+      const held = (await pool!.query<{ session_id: string; expires_at: Date }>(
+        "SELECT session_id,expires_at FROM credential_change_attempts WHERE id=$1",
+        [f.grant.attempt_id],
+      )).rows[0]!;
+      expect(held.session_id).toBe(f.auth.sessionId);
+      expect(original).toMatchObject({ expires_at: held.expires_at.toISOString() });
+      const renewalSecret = randomBytes(32).toString("base64url");
+      const enrollment = await f.app.inject({
+        method: "POST", url: "/v1/auth/persistent/enroll",
+        headers: { authorization: `Bearer ${f.token}`, origin: "https://web.test" },
+        payload: { renewal_secret: renewalSecret, client_kind: "web" },
+      });
+      expect(enrollment.statusCode).toBe(200);
+      const enrolled = enrollment.json<PersistentSessionResponse>();
+      expect(enrolled.session_id).toBe(f.auth.sessionId);
+      expect(sha256(enrolled.access_token)).not.toBe(sha256(f.token));
+      const renewal = await f.app.inject({
+        method: "POST", url: "/v1/auth/persistent/renew",
+        headers: { origin: "https://web.test" },
+        payload: {
+          renewal_secret: renewalSecret, session_id: enrolled.session_id,
+          account_id: f.account.accountId, user_id: f.account.userId,
+        },
+      });
+      expect(renewal.statusCode).toBe(200);
+      const renewed = renewal.json<PersistentSessionResponse>();
+      expect(renewed.session_id).toBe(f.auth.sessionId);
+      // An immediate renewal retries the same live access generation. It is
+      // new relative to the original bearer, not a forced second rotation.
+      expect(sha256(renewed.access_token)).toBe(sha256(enrolled.access_token));
+      for (let read = 0; read < 2; read++) {
+        const response = await requestPasswordResult(f, { token: renewed.access_token });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual(original);
+        expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+      }
+      // Enrollment retains the previous bearer until its original deadline;
+      // revoking it immediately would contradict the existing auth contract.
+      const previous = await requestPasswordResult(f, { token: f.token });
+      expect(previous.statusCode).toBe(200);
+      expect(previous.json()).toEqual(original);
+      const stillHeld = (await pool!.query<{ session_id: string; expires_at: Date }>(
+        "SELECT session_id,expires_at FROM credential_change_attempts WHERE id=$1",
+        [f.grant.attempt_id],
+      )).rows[0]!;
+      expect(stillHeld).toEqual(held);
+      expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+    });
+  });
+
+  it("lets an ordinary non-owner member read only their own real applied password receipt", async () => {
+    await withPasswordResult(true, async (f) => {
+      const settings = f.committed!.settings;
+      // These are the real completion producer's settings, not a hand-written
+      // role response. Merely demoting an owner would not prove this case.
+      expect(settings.workspace).toMatchObject({
+        role: "member", is_owner: false, can_manage: false,
+      });
+      expect(settings.workspace.owner_user_id).not.toBeNull();
+      expect(settings.workspace.owner_user_id).not.toBe(f.account.userId);
+      expect(settings.user.id).toBe(f.account.userId);
+      const before = await passwordResultBusinessFingerprint(f);
+      for (let read = 0; read < 2; read++) {
+        const response = await expectPasswordReadState(f, "applied");
+        expect(response.json()).toMatchObject({
+          account_id: f.account.accountId, user_id: f.account.userId,
+          outcome: "password_set",
+        });
+      }
+      expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+    }, { member: true });
+  });
 
   it("keeps repeated pending result reads read-only and does not consume the live grant", async () => {
     await withPasswordResult(false, async (f) => {

@@ -8,6 +8,7 @@ import { redirect } from "next/navigation";
 import { signIn } from "@/auth";
 import {
   completeLoginMethodChange,
+  readLoginMethodChangeResult,
   startLoginMethodChange,
 } from "@/lib/server/loginMethods";
 import { bindAppleNonce } from "@/lib/server/apple-session";
@@ -17,11 +18,12 @@ import {
   continuityReturnTo,
   settingsLinkErrorTarget,
 } from "@/lib/login-continuity";
-import { authenticatedBackendClient, readPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
+import { authenticatedBackendClient, readBackendSessionClaims, readPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
 import {
   LINK_COMPLETE_PATH,
   clearStagedAuth,
   flowExpiresAt,
+  flowIsLive,
   readAuthOperation,
   recoveryOperationFor,
   renderedScopeFrom,
@@ -99,6 +101,10 @@ export type LoginMethodActionState = {
   data?: AccountSettings;
   error?: string;
   saved?: boolean;
+  passwordResult?: {
+    ref: string;
+    state: "editing" | "pending" | "applied" | "unknown" | "invalid";
+  };
 };
 
 const failure = (error: unknown): LoginMethodActionState => {
@@ -462,40 +468,89 @@ export async function startPasswordStepUpLink(
   }
 }
 
-/**
- * Collect the NEW password after provider reauthentication. The sealed
- * attempt stays server-side; only the new password crosses this form.
- */
+/** Both primary and effective identities must still own the original session. */
+async function stagedPasswordAuthority(
+  operation: AuthOperation | null,
+  scope: RenderedOperationScope | null,
+): Promise<boolean> {
+  if (!operation?.attempt || !flowIsLive(operation) ||
+    (operation.intent !== "set_password" && operation.intent !== "change_password") ||
+    !renderedScopeMatchesOperation(operation, scope)) return false;
+  try {
+    const primary = await readPrimaryBackendSessionClaims();
+    const effective = await readBackendSessionClaims();
+    return [primary, effective].every((claims) => Boolean(
+      claims && claims.backendAccountId === operation.accountId &&
+      claims.backendUserId === operation.userId &&
+      sessionFingerprint(claims) === operation.sessionFingerprint,
+    ));
+  } catch {
+    return false;
+  }
+}
+
+/** Same imported action serves save and read-only check; previous UI is no authority. */
 export async function completeStagedPassword(
   _previous: LoginMethodActionState,
   form: FormData,
 ): Promise<LoginMethodActionState> {
+  const scope = renderedScopeFrom(form);
+  // Echo only an opaque operation UUID, never arbitrary submitted text.
+  const submittedRef = String(form.get("operationRef") ?? "");
+  const ref = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(submittedRef)
+    ? submittedRef : "";
+  const state = (kind: NonNullable<LoginMethodActionState["passwordResult"]>["state"], error?: string): LoginMethodActionState => ({
+    passwordResult: { ref, state: kind },
+    ...(kind === "applied" ? { saved: true } : {}),
+    ...(error ? { error } : {}),
+  });
+  const invalid = () => state("invalid", "这次操作已过期或登录状态已变化。请回到设置重新验证。");
+  const unknown = () => state("unknown", "暂时无法确认这次更改的结果。请检查结果，不要重复提交密码。");
+  const operation = await readAuthOperation();
+  if (!ref || !(await stagedPasswordAuthority(operation, scope)) || !operation?.attempt ||
+    (operation.intent !== "set_password" && operation.intent !== "change_password")) return invalid();
+  const attempt = operation.attempt;
+  const mode = form.get("passwordMode") ?? "save";
+  if (mode === "check") {
+    try {
+      const result = await readLoginMethodChangeResult({
+        attempt_id: attempt.attempt_id, attempt_secret: attempt.attempt_secret,
+        intent: operation.intent,
+      });
+      if (result.attempt_id !== attempt.attempt_id || result.intent !== operation.intent) return unknown();
+      if (result.state === "applied") {
+        if (result.account_id !== operation.accountId || result.user_id !== operation.userId ||
+          result.revision_before !== operation.accountRevision ||
+          result.revision_after !== operation.accountRevision + 1) return unknown();
+        return state("applied");
+      }
+      if (result.state === "invalid") return invalid();
+      if (result.state === "pending") return state("pending", "这次更改仍在处理中，请稍后再检查结果。");
+      return unknown();
+    } catch {
+      return unknown();
+    }
+  }
+  if (mode !== "save") return invalid();
   const newPassword = String(form.get("newPassword") ?? "");
   if (newPassword.length < 8 || newPassword.length > 128) {
-    return { error: "新密码至少 8 个字符。" };
+    // Only this correlated, pre-dispatch rejection can reopen the editor.
+    return state("editing", "新密码需要 8 到 128 个字符。");
   }
-  const operation = await readAuthOperation();
-  const attempt = operation?.attempt;
-  const scope = renderedScopeFrom(form);
-  // A stale form can never write to a newer operation or another account: the
-  // rendered scope must match the sealed operation and the live session.
-  if (!operation || !attempt || !(await stagedScopeMatches(operation, scope))) {
-    return {
-      error: "这个表单属于更早的操作，已失效。请回到设置重新开始；当前账号没有被这个表单修改。",
-    };
-  }
-  // Keep the original bounded context for outcome recovery. A completion
-  // response can be lost or arrive after a newer flow; it must not clear or
-  // reseal staged cookies. The original expiry and one-use grant still apply.
+  // Preserve the original bounded context. Late responses cannot clear B's
+  // cookies or refresh A's lifetime; consumed grants remain one-use.
   try {
     const result = await completeLoginMethodChange({
-      attempt_id: attempt.attempt_id,
-      attempt_secret: attempt.attempt_secret,
+      attempt_id: attempt.attempt_id, attempt_secret: attempt.attempt_secret,
       password: newPassword,
     });
-    return { data: result.settings, saved: true };
-  } catch (error) {
-    return failure(error);
+    if (result.status !== "password_set" ||
+      result.settings.workspace.id !== operation.accountId ||
+      result.settings.user.id !== operation.userId ||
+      result.settings.workspace.revision !== operation.accountRevision + 1) return unknown();
+    return state("applied");
+  } catch {
+    return unknown();
   }
 }
 

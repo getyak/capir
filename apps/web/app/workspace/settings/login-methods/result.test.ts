@@ -19,6 +19,7 @@ vi.mock("@/lib/server/backendAuth", () => ({
   authSecret: () => "parent-result-regression-secret-only",
   backendAuthBaseUrl: () => "https://backend.example.invalid",
   readPrimaryBackendSessionClaims: boundary.claims,
+  readBackendSessionClaims: boundary.claims,
   authenticatedBackendClient: async () => ({ accountSettings: async () => ({ workspace: { revision: 2 }, user: { revision: 3 } }) }),
 }));
 vi.mock("@/lib/server/loginMethods", () => ({
