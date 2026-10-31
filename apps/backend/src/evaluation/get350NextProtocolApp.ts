@@ -36,8 +36,8 @@ export async function writeProtocolApp(dir: string, repo: string) {
     }, include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"], exclude: ["node_modules"] }),
     "next.config.mjs": `export default { poweredByHeader:false, reactStrictMode:true,
       experimental:{useTypeScriptCli:false}, turbopack:{root:${JSON.stringify(repo)},resolveAlias:{
-        "@/auth":${JSON.stringify(join(dir,"unavailable-auth.ts"))},
-        "@/lib/server/backendAuth":${JSON.stringify(join(dir,"backend-auth.ts"))}
+        "@/auth":"./unavailable-auth.ts",
+        "@/lib/server/backendAuth":"./backend-auth.ts"
       }} };`,
     "unavailable-auth.ts": `import type NextAuth from "next-auth";
       type AuthResult = ReturnType<typeof NextAuth>;
