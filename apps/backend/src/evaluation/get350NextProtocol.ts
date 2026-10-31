@@ -194,7 +194,12 @@ type Fixture = ProtocolSetup & {
   slot:string;accountId:string;userId:string;token:string;expiresAt:string;
   completionRequests:number;completionStatus:number;resultRequests:number;
 };
-type Arm = { enhanced: boolean; actionKey:string; received: ReturnType<typeof deferred>; dispatch: ReturnType<typeof deferred>;
+type CutObservation={responsePresent:boolean;headersSentBefore:boolean|null;responseEndedBefore:boolean|null;socketPresent:boolean;socketDestroyedBefore:boolean|null;socketDestroyedAfter:boolean|null;responseDestroyedAfter:boolean|null;socketClosedByObservation:boolean|null};
+let lastTransportDiagnostic:Record<string,unknown>|null=null;
+const transportObservations:Array<Record<string,unknown>>=[];
+const diagnosticBool=(value:unknown)=>typeof value==="boolean"?value:null;
+const diagnosticCount=(value:unknown)=>typeof value==="number"&&Number.isSafeInteger(value)&&value>=0&&value<=1_000_000?value:null;
+type Arm = { cutObservation?:()=>CutObservation; enhanced: boolean; actionKey:string; received: ReturnType<typeof deferred>; dispatch: ReturnType<typeof deferred>;
   response: ReturnType<typeof deferred>; status: number; outgoing?: import("node:http").ServerResponse;
   headers?: import("node:http").IncomingHttpHeaders; chunks: Buffer[]; size: number; terminal: boolean };
 function frontendProxy() {
@@ -247,7 +252,12 @@ function frontendProxy() {
       armed = plan; return plan;
     },
     flush(plan: Arm) { check(plan.outgoing && plan.headers && plan.terminal, "complete held Action response"); plan.outgoing.writeHead(plan.status, plan.headers); plan.outgoing.flushHeaders(); },
-    cut(plan: Arm) { plan.outgoing?.destroy(); plan.chunks = []; active = undefined; },
+    cut(plan: Arm) {
+      const response=plan.outgoing,socket=response?.socket;
+      const before={responsePresent:Boolean(response),headersSentBefore:diagnosticBool(response?.headersSent),responseEndedBefore:diagnosticBool(response?.writableEnded),socketPresent:Boolean(socket),socketDestroyedBefore:diagnosticBool(socket?.destroyed)};
+      plan.cutObservation=()=>({responsePresent:before.responsePresent,headersSentBefore:before.headersSentBefore,responseEndedBefore:before.responseEndedBefore,socketPresent:before.socketPresent,socketDestroyedBefore:before.socketDestroyedBefore,socketDestroyedAfter:diagnosticBool(socket?.destroyed),responseDestroyedAfter:diagnosticBool(response?.destroyed),socketClosedByObservation:diagnosticBool(socket?.closed)});
+      plan.outgoing?.destroy(); plan.chunks = []; active = undefined;
+    },
     release(plan: Arm) { check(plan.outgoing && plan.headers && plan.terminal, "complete held Action response");
       if (!plan.outgoing.destroyed) { plan.outgoing.writeHead(plan.status, plan.headers); plan.outgoing.end(Buffer.concat(plan.chunks)); }
       plan.chunks = []; active = undefined;
@@ -548,12 +558,20 @@ async function main() {
     };
     // Scenario 1: actual enhanced Action, both response-loss boundaries.
     for (const boundary of ["before-headers", "after-headers"] as const) {
+      lastTransportDiagnostic=null;
       phase = `loss:${boundary}`; const f = await makeFixture(boundary), page = await open(f);
+      let observeTransport:(()=>Record<string,unknown>)|undefined;
       try {
         const visibleHref = await page.attribute(`a[href*="?result="]`, "href"); check(visibleHref, "production visible GET recovery link");
         const pending = await fingerprint(f), beforePosts=page.observed.passwordPosts, plan = proxy.arm();
+        const wirePostsBefore=proxy.observed.passwordPosts;
         await page.fillPassword(secret()); await page.click('button[type="submit"]'); await bounded(plan.received.promise, "Action dispatch gate");
         const action=await page.passwordAction(beforePosts);
+        observeTransport=()=>{const cut=plan.cutObservation?.();return {boundary,backendCompletionRequests:diagnosticCount(f.completionRequests),backendCompletionStatus:diagnosticCount(f.completionStatus),backendResultRequests:diagnosticCount(f.resultRequests),
+          wirePasswordPosts:diagnosticCount(proxy.observed.passwordPosts),wirePasswordPostDelta:diagnosticCount(proxy.observed.passwordPosts-wirePostsBefore),recoveryGets:diagnosticCount(proxy.observed.recoveryGets),
+          browserPasswordPosts:diagnosticCount(page.observed.passwordPosts),browserPasswordPostDelta:diagnosticCount(page.observed.passwordPosts-beforePosts),browserActionHeaders:diagnosticCount(page.observed.actionHeaders),
+          browserFailedPasswordRequests:diagnosticCount(page.observed.failedPasswordRequests),browserFinishedPasswordRequests:diagnosticCount(page.observed.finishedPasswordRequests),blockedExternalRequests:diagnosticCount(page.observed.blockedExternal),
+          actionResponseReceived:diagnosticBool(action.responseReceived),actionStatus:diagnosticCount(action.status),actionFinished:diagnosticBool(action.finished),actionFailed:diagnosticBool(action.failed),cut:cut?{responsePresent:cut.responsePresent,headersSentBefore:cut.headersSentBefore,responseEndedBefore:cut.responseEndedBefore,socketPresent:cut.socketPresent,socketDestroyedBefore:cut.socketDestroyedBefore,socketDestroyedAfter:cut.socketDestroyedAfter,responseDestroyedAfter:cut.responseDestroyedAfter,socketClosedByObservation:cut.socketClosedByObservation}:null};};
         check(plan.enhanced&&action.enhanced&&action.keyHash===plan.actionKey,"held HTTP and exact CDP Action must match");
         check(await page.currentUrl() === new URL(visibleHref, front).href, "product checkpoint must exist before dispatch");
         check(f.completionRequests === 0 && await fingerprint(f) === pending, "gate precedes producer");
@@ -588,9 +606,15 @@ async function main() {
           completionRequests:f.completionRequests,resultRequests:f.resultRequests,fullActionReceived:true,businessFingerprintUnchanged:true,
           postHeadersObserved:boundary==="after-headers",heldActionMatched:true,errorUIObserved:observedError,
           automaticReadOnlyGetObserved:observedAutoGet,flowEnvelopeUnchanged:true,externalBrowserRequests:page.observed.blockedExternal});
+        lastTransportDiagnostic=observeTransport?.()??null;if(lastTransportDiagnostic)transportObservations.push(lastTransportDiagnostic);
+      } catch(error) {
+        // Capture before closing the page so cleanup-generated events cannot masquerade as the cut outcome.
+        try{lastTransportDiagnostic=observeTransport?.()??null;}catch{lastTransportDiagnostic={observationCaptureFailed:true};}
+        throw error;
       } finally { await page.close(); }
     }
     // Scenario 2: browser-native no-JS validation, then actual303 -> GET.
+    lastTransportDiagnostic=null;
     phase = "native:no-js"; const native = await makeFixture("native"), nativePage = await open(native);
     try {
       await nativePage.call("Emulation.setScriptExecutionDisabled", { value: true });
@@ -642,7 +666,7 @@ async function main() {
         aResponseFinished:action.finished,aResponseCancelled:action.failed});
     } finally { await page.close(); }
     passedSummary = { fixture: "GET350_NEXT_PROTOCOL", passed: true, logicalScenarios: 3,
-      observedSourceRevision, scenarios:scenarioSummaries, enhancedLossBoundaries: 2, runtimeVersions:{node:process.versions.node,...frameworks,chrome:version.product},
+      observedSourceRevision, scenarios:scenarioSummaries, transportObservations, enhancedLossBoundaries: 2, runtimeVersions:{node:process.versions.node,...frameworks,chrome:version.product},
       realPGProducer: true, AuthJsOAuthAcceptance: false, maintenanceDisabled: false,
       providerExecutionWorkersDisabled: true, chromeChildEndpointOwned:true, summariesContainBodiesOrSecrets: false,
       source:actualSource };
@@ -678,7 +702,7 @@ async function main() {
   phase = "passed"; await writeReceipt(passedSummary); console.log(JSON.stringify(passedSummary));
 }
 void main().catch(async (error:unknown) => {
-  const failure = {fixture:"GET350_NEXT_PROTOCOL",passed:false,failureCode:error instanceof Error?(FIXTURE_FAILURE_CODES.get(error.message)??"UNCLASSIFIED_ERROR"):"NON_ERROR_THROWN",lastSetupHttpStatus:typeof lastSetupHttpStatus==="number"&&Number.isInteger(lastSetupHttpStatus)&&lastSetupHttpStatus>=100&&lastSetupHttpStatus<=599?lastSetupHttpStatus:null,phase,observedSourceRevision,source:actualSource??"not-bound",nextBuildDiagnostic:nextBuildDiagnostic??"not-started",ownedProcessGroupsEmpty:[...ownedGroups.values()].every(group=>group.closed),ownedProcessGroupCount:ownedGroups.size,scenarios:completedScenarios};
+  const failure = {fixture:"GET350_NEXT_PROTOCOL",passed:false,failureCode:error instanceof Error?(FIXTURE_FAILURE_CODES.get(error.message)??"UNCLASSIFIED_ERROR"):"NON_ERROR_THROWN",lastSetupHttpStatus:typeof lastSetupHttpStatus==="number"&&Number.isInteger(lastSetupHttpStatus)&&lastSetupHttpStatus>=100&&lastSetupHttpStatus<=599?lastSetupHttpStatus:null,transportDiagnostic:lastTransportDiagnostic,phase,observedSourceRevision,source:actualSource??"not-bound",nextBuildDiagnostic:nextBuildDiagnostic??"not-started",ownedProcessGroupsEmpty:[...ownedGroups.values()].every(group=>group.closed),ownedProcessGroupCount:ownedGroups.size,scenarios:completedScenarios};
   try { await writeReceipt(failure); } catch { /* CI still fails; never upload private diagnostics instead. */ }
   console.error(JSON.stringify(failure)); process.exitCode = 1;
 });
