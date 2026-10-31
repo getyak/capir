@@ -484,16 +484,17 @@ export async function completeStagedPassword(
       error: "这个表单属于更早的操作，已失效。请回到设置重新开始；当前账号没有被这个表单修改。",
     };
   }
+  // Keep the original bounded context for outcome recovery. A completion
+  // response can be lost or arrive after a newer flow; it must not clear or
+  // reseal staged cookies. The original expiry and one-use grant still apply.
   try {
     const result = await completeLoginMethodChange({
       attempt_id: attempt.attempt_id,
       attempt_secret: attempt.attempt_secret,
       password: newPassword,
     });
-    await clearStagedAuth();
     return { data: result.settings, saved: true };
   } catch (error) {
-    await clearStagedAuth();
     return failure(error);
   }
 }

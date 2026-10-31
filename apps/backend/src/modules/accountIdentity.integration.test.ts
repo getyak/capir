@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
+import { buildApp } from "../app.js";
 import type { BackendConfig } from "../config.js";
 import { sha256 } from "../lib/hash.js";
 import { createMemoryMailSink } from "../lib/mail.js";
@@ -1652,6 +1653,10 @@ describe.skipIf(!pool)("provider-only accounts (PostgreSQL)", () => {
       "https://web.test",
       deps,
     );
+    const beforeRevision = (await pool!.query<{ settings_revision: number }>(
+      "SELECT settings_revision FROM accounts WHERE id=$1",
+      [account.accountId],
+    )).rows[0]!.settings_revision;
     const completed = await completeCredentialChange(
       pool!,
       config,
@@ -1669,6 +1674,26 @@ describe.skipIf(!pool)("provider-only accounts (PostgreSQL)", () => {
     expect(
       completed.settings.sign_in_methods.find((method) => method.provider === "password")?.state,
     ).toBe("connected");
+
+    // The receipt must describe the committed row, not the context captured
+    // before this operation increments the account's settings revision.
+    const finalRow = (await pool!.query<{ settings_revision: number }>(
+      "SELECT settings_revision FROM accounts WHERE id=$1",
+      [account.accountId],
+    )).rows[0]!;
+    const receipt = await pool!.query<{ revision_before: number; revision_after: number }>(
+      `SELECT details->'revision_before' AS revision_before,
+              details->'revision_after' AS revision_after
+       FROM account_access_events
+       WHERE id=$1 AND account_id=$2 AND actor_user_id=$3 AND kind='set_password'`,
+      [started.attempt_id, account.accountId, account.userId],
+    );
+    expect(finalRow.settings_revision).toBe(beforeRevision + 1);
+    expect(completed.settings.workspace.revision).toBe(finalRow.settings_revision);
+    expect(receipt.rows).toEqual([{
+      revision_before: beforeRevision,
+      revision_after: finalRow.settings_revision,
+    }]);
     const login = await createPasswordSession(pool!, config, {
       identifier: account.accountId && (await pool!.query<{ email: string }>(
         `SELECT email FROM users WHERE id = $1`,
@@ -2370,5 +2395,51 @@ describe.skipIf(!pool)("verified secondary email ownership (PostgreSQL)", () => 
       `SELECT retired_at FROM accounts WHERE id = $1`, [shape.duplicate.accountId],
     );
     expect(sourceAccount.rows[0]!.retired_at).toBeNull();
+  });
+});
+
+
+describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () => {
+  it("returns applied for the exact completed password attempt through the authenticated result route", async () => {
+    const account = await createAccount({
+      email: `synthetic-password-result-${randomUUID()}@example.test`,
+      password: "synthetic-result-before-password",
+    });
+    const { auth, token } = await sessionFor(account.accountId, account.userId, "web");
+    const grant = await startCredentialChange(pool!, config, auth, {
+      id: randomUUID(), intent: "change_password", origin: "ignored", client_label: "web",
+      step_up: { kind: "password", password: "synthetic-result-before-password" },
+    }, "https://web.test", deps);
+    await completeCredentialChange(pool!, config, auth, {
+      attempt_id: grant.attempt_id, attempt_secret: grant.attempt_secret,
+      origin: "ignored", password: "synthetic-result-after-password",
+    }, "https://web.test", deps);
+
+    // Reuse the real HTTP factory, with existing test controls disabling model
+    // adapters and optional workers. The pool remains owned by this PG suite.
+    const app = await buildApp({
+      pool: pool!, config, remoteChatProvider: null, privateConversationProvider: null,
+      personResearchProvider: null, screenshotContact: null,
+      conversationQueueWorkerEnabled: false, labJobWorkerEnabled: false,
+      labProviders: new Map(), mail: createMemoryMailSink().delivery,
+    });
+    try {
+      const response = await app.inject({
+        method: "POST", url: "/v1/account/login-methods/result",
+        headers: { authorization: `Bearer ${token}`, origin: "https://web.test" },
+        payload: {
+          attempt_id: grant.attempt_id,
+          attempt_secret: grant.attempt_secret,
+          intent: "change_password",
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        state: "applied", attempt_id: grant.attempt_id,
+        intent: "change_password", outcome: "password_set",
+      });
+    } finally {
+      await app.close();
+    }
   });
 });
