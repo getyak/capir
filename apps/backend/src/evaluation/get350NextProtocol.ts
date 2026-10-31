@@ -1,0 +1,563 @@
+/** Explicit, isolated Linux protocol acceptance; never part of default tests. */
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createServer, request as httpRequest, type Server } from "node:http";
+import type { Socket } from "node:net";
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
+import type { Pool as PgPool } from "pg";
+import type { BackendConfig } from "../config.js";
+import { PASSWORD_PATH, writeProtocolApp, type ProtocolSetup } from "./get350NextProtocolApp.js";
+import { ProtocolCdp, ProtocolPage, until, type ProtocolFlow } from "./get350NextProtocolCdp.js";
+
+function check(value: unknown, label: string): asserts value { if (!value) throw new Error(label); }
+const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+const secret = () => randomBytes(32).toString("base64url");
+const SOURCE_PATHS = [
+  "apps/web/app/workspace/settings/link-complete/password/page.tsx",
+  "apps/web/app/workspace/settings/link-complete/password/error.tsx",
+  "apps/web/app/workspace/settings/link-complete/staged-forms.tsx",
+  "apps/web/app/workspace/settings/login-methods/actions.ts",
+  "apps/web/lib/server/loginMethods.ts",
+  "apps/web/lib/server/stagedAuth.ts",
+  "packages/contracts/src/client.ts",
+  "apps/backend/src/app.ts"
+];
+type SourceFile = {path:string;mode:string;blob:string;sha256:string};
+type SourceBinding = {commit:string;files:SourceFile[];lock:SourceFile};
+let actualSource: SourceBinding | undefined;
+function gitRead(repo:string,args:string[]) {
+  return execFileSync("git",["--no-optional-locks","--no-lazy-fetch","-c","core.fsmonitor=false",
+    "-c","core.untrackedCache=false","-c","gc.auto=0","-c","maintenance.auto=false","-C",repo,...args],
+    {encoding:"utf8",stdio:["ignore","pipe","ignore"],env:{...process.env,GIT_OPTIONAL_LOCKS:"0",GIT_NO_LAZY_FETCH:"1",GIT_TERMINAL_PROMPT:"0"}});
+}
+async function bindSource(repo:string):Promise<SourceBinding> {
+  const commit=gitRead(repo,["rev-parse","--verify","HEAD"]).trim();
+  check(/^[0-9a-f]{40}$/.test(commit),"actual Git HEAD required");
+  const entries=gitRead(repo,["ls-tree","-z",commit,"--",...SOURCE_PATHS,"pnpm-lock.yaml"]).split("\0").filter(Boolean);
+  const records=new Map<string,{mode:string;blob:string}>();
+  for(const entry of entries){
+    const match=/^(100644|100755) blob ([0-9a-f]{40})\t(.+)$/.exec(entry);
+    check(match,"regular HEAD source blob required");records.set(match[3]!,{mode:match[1]!,blob:match[2]!});
+  }
+  const files:SourceFile[]=[];
+  for(const path of [...SOURCE_PATHS,"pnpm-lock.yaml"]){
+    const record=records.get(path);check(record,"HEAD source path missing");
+    const stat=await lstat(join(repo,path));check(stat.isFile()&&!stat.isSymbolicLink(),"regular source checkout required");
+    const bytes=await readFile(join(repo,path));
+    const blob=createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+    check(blob===record.blob,"checkout bytes must match actual HEAD blob");
+    files.push({path,mode:record.mode,blob,sha256:hash(bytes)});
+  }
+  return {commit,files:files.slice(0,8),lock:files[8]!};
+}
+async function sourceMatches(repo:string,expected:SourceBinding) {
+  check(JSON.stringify(await bindSource(repo))===JSON.stringify(expected),"HEAD/source/lock changed during protocol run");
+}
+// Read only the generated pnpm importer/dependency/version fields, not a new YAML dependency.
+function lockedWebVersion(lock:string,name:string) {
+  const block=(lines:string[],key:string,indent:number)=>{
+    const header=" ".repeat(indent)+key+":";
+    const positions=lines.flatMap((line,index)=>line===header?[index]:[]);
+    check(positions.length===1,"unsupported/ambiguous pnpm lock block");
+    const start=positions[0]!+1;let end=start;
+    while(end<lines.length && (!lines[end]!.trim() || /^\s*/.exec(lines[end]!)![0].length>indent))end++;
+    return lines.slice(start,end);
+  };
+  const importer=block(block(lock.split(/\r?\n/),"importers",0),"apps/web",2);
+  const dependency=block(block(importer,"dependencies",4),name,6);
+  const versions=dependency.filter(line=>line.startsWith("        version: "));
+  check(versions.length===1,"one actual locked framework selection required");
+  let value=versions[0]!.slice("        version: ".length).trim();
+  if(value.startsWith('"'))value=JSON.parse(value) as string;
+  else if(value.startsWith("'")){check(value.endsWith("'"),"quoted lock selection");value=value.slice(1,-1).replace(/''/g,"'");}
+  const version=/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=\(|$)/.exec(value)?.[1];
+  check(version,"registry framework version required");return version;
+}
+
+function deferred() { let resolve!: () => void; const promise = new Promise<void>((r) => { resolve = r; }); return { promise, resolve }; }
+async function bounded<T>(promise: Promise<T>, label: string, milliseconds = 20_000) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(label)), milliseconds); })]); }
+  finally { if (timer) clearTimeout(timer); }
+}
+async function listen(server: Server) {
+  await new Promise<void>((ok, bad) => { server.once("error", bad); server.listen(0, "127.0.0.1", () => { server.off("error", bad); ok(); }); });
+  const address = server.address(); check(address && typeof address !== "string", "loopback server address");
+  return `http://127.0.0.1:${address.port}`;
+}
+function ownServer(server: Server) {
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
+  return { sockets, async close() {
+    if (!server.listening) return;
+    const closed = new Promise<void>((ok, bad) => { server.close((e) => e ? bad(e) : ok()); });
+    for (const socket of sockets) socket.destroy();
+    await closed;
+  } };
+}
+type ProcessIdentity={pid:number;pgid:number;sid:number;uid:number;start:string};
+type OwnedGroup={pgid:number;leaderStart?:string;known:Map<number,string>;closed:boolean};
+const ownedGroups=new Map<ChildProcess,OwnedGroup>();
+function identity(pid:number):ProcessIdentity|undefined {
+  try{
+    const text=readFileSync(`/proc/${pid}/stat`,"utf8"),fields=text.slice(text.lastIndexOf(")")+2).trim().split(/\s+/);
+    check(/^\d+$/.test(fields[19]??""),"process start identity unavailable");
+    return {pid,pgid:Number(fields[2]),sid:Number(fields[3]),uid:statSync(`/proc/${pid}`).uid,start:fields[19]!};
+  }catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return undefined;throw error;}
+}
+function groupPids(pgid:number):number[]{
+  try{return execFileSync("/usr/bin/pgrep",["-g",String(pgid)],{encoding:"utf8",timeout:1000,maxBuffer:65536,stdio:["ignore","pipe","ignore"]})
+    .trim().split(/\s+/).filter(Boolean).map(value=>{check(/^\d+$/.test(value),"owned group PID format");return Number(value);});}
+  catch(error){if((error as {status?:number}).status===1)return [];throw new Error("owned group membership unavailable");}
+}
+function groupMembers(group:OwnedGroup){
+  const leader=identity(group.pgid);
+  if(leader)check(leader.start===group.leaderStart&&leader.pgid===group.pgid&&leader.sid===group.pgid,"owned leader reused/changed");
+  const rows:ProcessIdentity[]=[];
+  for(const pid of groupPids(group.pgid)){
+    const row=identity(pid);if(!row)continue;
+    check(row.pgid===group.pgid&&row.sid===group.pgid&&row.uid===process.getuid?.(),"owned group identity changed");
+    const prior=group.known.get(pid);
+    if(prior)check(prior===row.start,"owned member PID reused");
+    else {check(Boolean(leader),"unknown member after leader exit; refuse signals");group.known.set(pid,row.start);}
+    rows.push(row);
+  }
+  return rows;
+}
+function rememberGroup(process:ChildProcess|undefined){
+  if(!process?.pid)return;
+  const group=ownedGroups.get(process);check(group,"unregistered child group");
+  if(!group.closed)groupMembers(group);
+}
+function child(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
+  const process=spawn(command,args,{cwd,env,detached:true,stdio:"ignore"});
+  // Readiness/build checks still fail; an unhandled spawn event must not bypass finally.
+  process.on("error",()=>{});
+  if(process.pid){
+    const row=identity(process.pid),group:OwnedGroup={pgid:process.pid,leaderStart:row?.start,known:new Map(),closed:false};
+    ownedGroups.set(process,group);
+    if(row){check(row.pgid===process.pid&&row.sid===process.pid&&row.uid===globalThis.process.getuid?.(),"child must own detached group/session");group.known.set(row.pid,row.start);}
+  }
+  return process;
+}
+async function waitGroupEmpty(group:OwnedGroup,milliseconds:number){
+  const deadline=Date.now()+milliseconds;
+  while(Date.now()<deadline){
+    if(groupPids(group.pgid).length===0){await delay(50);if(groupPids(group.pgid).length===0){group.closed=true;return true;}}
+    else groupMembers(group); // Detected reuse/unknown is a failure, never permission to kill.
+    await delay(50);
+  }
+  return false;
+}
+async function stop(process: ChildProcess | undefined) {
+  if(!process?.pid)return;
+  const group=ownedGroups.get(process);check(group,"unregistered child group");if(group.closed)return;
+  if(await waitGroupEmpty(group,100))return;
+  const signal=(name:NodeJS.Signals)=>{
+    const members=groupMembers(group);if(members.length===0)return;
+    // No argv/environment scan: signal only this registered, identity-checked PG.
+    try{globalThis.process.kill(-group.pgid,name);}catch(error){if((error as NodeJS.ErrnoException).code!=="ESRCH")throw error;}
+  };
+  signal("SIGTERM");if(await waitGroupEmpty(group,5000))return;
+  signal("SIGKILL");check(await waitGroupEmpty(group,5000),"owned process group still nonempty");
+}
+
+type Fixture = ProtocolSetup & {
+  slot:string;accountId:string;userId:string;token:string;expiresAt:string;
+  completionRequests:number;completionStatus:number;resultRequests:number;
+};
+type Arm = { enhanced: boolean; actionKey:string; received: ReturnType<typeof deferred>; dispatch: ReturnType<typeof deferred>;
+  response: ReturnType<typeof deferred>; status: number; outgoing?: import("node:http").ServerResponse;
+  headers?: import("node:http").IncomingHttpHeaders; chunks: Buffer[]; size: number; terminal: boolean };
+function frontendProxy() {
+  let nextOrigin = ""; let armed: Arm | undefined; let active: Arm | undefined;
+  const observed = { passwordPosts: 0, native303: 0, native200:0, recoveryGets: 0 };
+  const server = createServer((incoming, outgoing) => {
+    if (!nextOrigin || !incoming.url?.startsWith("/")) { outgoing.writeHead(503).end(); return; }
+    const url = new URL(incoming.url, nextOrigin);
+    if (url.origin !== nextOrigin) { outgoing.writeHead(404).end(); return; }
+    const passwordPost = incoming.method === "POST" && url.pathname === PASSWORD_PATH;
+    if (incoming.method === "GET" && url.pathname === PASSWORD_PATH && url.searchParams.has("result")) observed.recoveryGets++;
+    const plan = passwordPost ? armed : undefined;
+    if (passwordPost) { observed.passwordPosts++; armed = undefined; }
+    if (plan) { active = plan; plan.enhanced = typeof incoming.headers["next-action"] === "string";
+      plan.actionKey=hash(`POST\0${incoming.url}\0${incoming.headers["next-action"]??""}`);plan.received.resolve(); }
+    const forward = () => {
+      const upstream = httpRequest(url, { method: incoming.method, agent: false,
+        headers: { ...incoming.headers, "x-forwarded-host": incoming.headers.host, "x-forwarded-proto": "http" } }, (response) => {
+        response.once("error", () => outgoing.destroy());
+        if (passwordPost && response.statusCode === 303) observed.native303++;
+        if(passwordPost&&!incoming.headers["next-action"]&&response.statusCode===200)observed.native200++;
+        if (!plan) { outgoing.writeHead(response.statusCode ?? 502, response.headers); response.pipe(outgoing); return; }
+        plan.status = response.statusCode ?? 0; plan.headers = response.headers; plan.outgoing = outgoing;
+        response.on("data", (chunk: Buffer) => {
+          plan.size += chunk.length;
+          if (plan.size > 2 * 1024 * 1024) { response.destroy(); outgoing.destroy(); return; }
+          plan.chunks.push(chunk); // Bounded, private in-memory transport only; never logged/uploaded.
+        });
+        response.once("end", () => { plan.terminal = response.complete; plan.response.resolve(); });
+      });
+      upstream.once("socket", (socket) => { owned.sockets.add(socket); socket.once("close", () => owned.sockets.delete(socket)); });
+      upstream.once("error", () => outgoing.destroy());
+      incoming.once("aborted", () => upstream.destroy());
+      incoming.pipe(upstream);
+    };
+    if (plan) void plan.dispatch.promise.then(forward); else forward();
+  });
+  const owned = ownServer(server);
+  return { server, observed, setNext(url: string) { nextOrigin = url; },
+    arm() {
+      check(!armed && !active, "one owned action interception");
+      const plan: Arm = { enhanced: false, actionKey:"", received: deferred(), dispatch: deferred(), response: deferred(),
+        status: 0, chunks: [], size: 0, terminal: false };
+      armed = plan; return plan;
+    },
+    flush(plan: Arm) { check(plan.outgoing && plan.headers && plan.terminal, "complete held Action response"); plan.outgoing.writeHead(plan.status, plan.headers); plan.outgoing.flushHeaders(); },
+    cut(plan: Arm) { plan.outgoing?.destroy(); plan.chunks = []; active = undefined; },
+    release(plan: Arm) { check(plan.outgoing && plan.headers && plan.terminal, "complete held Action response");
+      if (!plan.outgoing.destroyed) { plan.outgoing.writeHead(plan.status, plan.headers); plan.outgoing.end(Buffer.concat(plan.chunks)); }
+      plan.chunks = []; active = undefined;
+    },
+    async close() { armed?.dispatch.resolve(); active?.outgoing?.destroy(); armed = undefined; active = undefined; await owned.close(); },
+  };
+}
+
+let phase = "admission";
+let receiptPath: string | undefined;
+let observedSourceRevision = "unreported";
+const completedScenarios: Array<Record<string, string | number | boolean>> = [];
+async function prepareReceiptDirectory() {
+  const requested = process.env.GET350_NEXT_PROTOCOL_ARTIFACT_DIR;
+  const runnerTemp = process.env.RUNNER_TEMP;
+  check(requested && runnerTemp, "explicit runner-temp receipt directory required");
+  const parent = await realpath(runnerTemp), output = resolve(requested);
+  check(await realpath(dirname(output)) === parent && basename(output) === "get350-next-protocol-evidence", "receipt directory outside owned runner-temp slot");
+  try { await mkdir(output, {mode:0o700}); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  const stat = await lstat(output);
+  check(stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === process.getuid?.(), "receipt directory identity");
+  check((await readdir(output)).length === 0, "receipt directory must start empty");
+  await chmod(output,0o700); receiptPath = join(output,"receipt.json");
+}
+async function writeReceipt(value: Record<string,unknown>) {
+  if (receiptPath) await writeFile(receiptPath,JSON.stringify(value)+"\n",{mode:0o600,flag:"wx"});
+}
+async function main() {
+  check(process.platform === "linux" && Number(process.versions.node.split(".")[0]) >= 22 && typeof WebSocket === "function", "Linux Node22+ with built-in WebSocket required");
+  check(process.env.GET350_NEXT_PROTOCOL === "1", "explicit protocol flag required; no skip");
+  await prepareReceiptDirectory();
+  if (/^[0-9a-f]{40}$/.test(process.env.GITHUB_SHA ?? "")) observedSourceRevision = process.env.GITHUB_SHA!;
+  const database = process.env.ACCOUNT_IDENTITY_TEST_DATABASE_URL;
+  check(database, "owned protocol PG required; no skip");
+  const db = new URL(database);
+  check(db.protocol === "postgresql:" && db.hostname === "127.0.0.1" && /^\/get350_[a-z0-9_]+$/.test(db.pathname), "dedicated loopback get350 database required");
+  const chrome = process.env.GET350_CHROME_PATH || "/usr/bin/google-chrome";
+  check(chrome.startsWith("/"), "absolute existing Chrome path required"); await access(chrome);
+  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+  const web = join(repo, "apps/web"), runtime = await mkdtemp(join(tmpdir(), "get350-next-protocol-"));
+  const project = await mkdtemp(join(web, ".get350-next-protocol-"));
+  await chmod(runtime, 0o700); await chmod(project, 0o700);
+  const controlKey = secret(), authSecret = secret(), sourceCwd = process.cwd();
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, LANG: "C.UTF-8", TZ: "UTC", TMPDIR: runtime,
+    NODE_ENV: "test", LOG_LEVEL: "silent", NEXT_TELEMETRY_DISABLED: "1", CI: "true",
+    XDG_CONFIG_HOME: join(runtime,"xdg-config"), XDG_CACHE_HOME: join(runtime,"xdg-cache"),
+    ACCOUNT_IDENTITY_TEST_DATABASE_URL: database, CHAT_MEDIA_STORAGE_PROVIDER: "local", CHAT_MEDIA_LOCAL_DIRECTORY: join(runtime, "chat-media") };
+  // Before any production import, remove provider/key/policy/env inheritance.
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, env); process.chdir(runtime);
+  let pool: PgPool | undefined, app: Awaited<ReturnType<typeof import("../app.js")["buildApp"]>> | undefined;
+  let next: ChildProcess | undefined, chromeProcess: ChildProcess | undefined, build: ChildProcess | undefined;
+  let passedSummary: Record<string, unknown> | undefined;
+  let frameworkCheck: (()=>Promise<void>) | undefined;
+  const scenarioSummaries = completedScenarios;
+  let cdp: ProtocolCdp | undefined, controlOwned: ReturnType<typeof ownServer> | undefined;
+  const proxy = frontendProxy(), fixtures = new Map<string, Fixture>();
+  try {
+    phase = "actual Git source binding"; actualSource = await bindSource(repo);
+    phase = "owned PG admission";
+    const { Pool } = await import("pg"); pool = new Pool({ connectionString: database });
+    const empty = (await pool.query<{ count: string }>("SELECT count(*)::text AS count FROM users")).rows[0];
+    check(empty?.count === "0", "protocol PG must be migrated and empty");
+    const { buildApp } = await import("../app.js");
+    const { createRealIdentity, newAccountSlug } = await import("../modules/accountIdentity.js");
+    const { insertSession } = await import("../modules/auth.js");
+    const { encodePasswordCredential } = await import("../modules/passwordCredential.js");
+    const { createMemoryMailSink } = await import("../lib/mail.js");
+    const { TalentSignalClient } = await import("@talent-signal/contracts");
+    const config: BackendConfig = { allowedOrigins: [], appleSignInAudiences: [], appleSignInEnabled: false,
+      googleSignInAudiences: [], databaseUrl: database, host: "127.0.0.1", port: 0,
+      passwordAuthEnabled: true, passwordRegistrationEnabled: false, simulatedAuthEnabled: false,
+      sessionTtlSeconds: 28_800, retentionSweepIntervalMs: 60_000, internalLabEnabled: false,
+      chatMediaStorage: { provider: "local", directory: join(runtime, "chat-media") } };
+    app = await buildApp({ pool, config, remoteChatProvider: null, privateConversationProvider: null,
+      personResearchProvider: null, screenshotContact: null, labProviders: new Map(), labCIVerifier: null,
+      labJobWorkerEnabled: false, conversationQueueWorkerEnabled: false,
+      voiceTranscriber: { async transcribe() { throw new Error("Voice is outside this protocol fixture"); } },
+      mail: createMemoryMailSink().delivery });
+    const backendHttp={completionRequests:0};
+    app.addHook("onRequest",async(request)=>{if(request.method==="POST"&&request.url==="/v1/account/login-methods/complete")backendHttp.completionRequests++;});
+    app.addHook("preHandler", async (request) => {
+      const body = request.body as { attempt_id?: string } | undefined;
+      const f = [...fixtures.values()].find((entry) => entry.grant.attempt_id === body?.attempt_id);
+      if (request.method === "POST" && request.url === "/v1/account/login-methods/complete" && f) f.completionRequests++;
+      if (request.method === "POST" && request.url === "/v1/account/login-methods/result" && f) f.resultRequests++;
+    });
+    app.addHook("onResponse", async (request, reply) => {
+      if (request.method !== "POST" || request.url !== "/v1/account/login-methods/complete") return;
+      const body = request.body as { attempt_id?: string };
+      const f = [...fixtures.values()].find((entry) => entry.grant.attempt_id === body.attempt_id);
+      if (f) f.completionStatus = reply.statusCode;
+    });
+    const backend = await app.listen({ host: "127.0.0.1", port: 0 });
+    const makeFixture = async (slot: string) => {
+      check(!fixtures.has(slot), "fixture slot is one-use");
+      const accountId = randomUUID(), userId = randomUUID(), beforePassword = secret();
+      const client = await pool!.connect();
+      let session: Awaited<ReturnType<typeof insertSession>>;
+      try {
+        await client.query("BEGIN");
+        await createRealIdentity(client, { accountId, userId, accountName: "GET350 synthetic protocol", accountSlug: newAccountSlug(),
+          email: `get350-${userId}@example.test`, displayName: "Synthetic protocol", kind: "password_human", emailVerifiedAt: new Date() });
+        await client.query("INSERT INTO password_credentials(account_id,user_id,password_scrypt) VALUES($1,$2,$3)", [accountId, userId, await encodePasswordCredential(beforePassword)]);
+        const identity = (await client.query<{ email: string; display_name: string; kind: "password_human"; username: string | null; slug: string; name: string; account_role: "admin" | "member" }>(
+          "SELECT u.email,u.display_name,u.kind,u.username,u.account_role,a.slug,a.name FROM users u JOIN accounts a ON a.id=u.account_id WHERE u.id=$1", [userId])).rows[0]!;
+        session = await insertSession(client, config, { accountId, accountName: identity.name, accountSlug: identity.slug, displayName: identity.display_name,
+          role: identity.account_role, userEmail: identity.email, userId, userKind: identity.kind, username: identity.username }, "talent-signal-web");
+        await client.query("COMMIT");
+      } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+      const sessionId = (await pool!.query<{ id: string }>("SELECT id FROM sessions WHERE account_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT 1", [accountId, userId])).rows[0]!.id;
+      const sdk = new TalentSignalClient(backend, session!.access_token);
+      const settings = await sdk.accountSettings();
+      // Exact real Web wrapper channel: JSON is not trusted Origin; no HTTP Origin is sent.
+      const grant = await sdk.startLoginMethodChange({ id: randomUUID(), intent: "change_password", origin: "server-derived", client_label: "talent-signal-web",
+        expected_account_revision: settings.workspace.revision, expected_user_revision: settings.user.revision,
+        step_up: { kind: "password", password: beforePassword } }, AbortSignal.timeout(10_000));
+      check(grant.provider_challenge===null,"password grant has no provider challenge");
+      const row = (await pool!.query<{ origin: string; client_label: string; session_id: string; created_at: Date; expires_at: Date; consumed_at: Date | null }>(
+        "SELECT origin,client_label,session_id,created_at,expires_at,consumed_at FROM credential_change_attempts WHERE id=$1", [grant.attempt_id])).rows[0]!;
+      check(row.origin === "client:talent-signal-web" && row.client_label === "talent-signal-web" && row.session_id === sessionId && row.consumed_at === null, "real Web grant origin/session binding");
+      const f: Fixture = { slot, ref: randomUUID(), handle: secret(), accountId, userId, token: session!.access_token, grant, settings,
+        upstreamReauth:{provider:"google",challengeId:randomUUID(),nonce:secret(),step:"awaiting-reauth"},
+        createdAt: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString(), completionRequests: 0, completionStatus: 0, resultRequests: 0,
+        claims: { backendSessionId: sessionId, backendAccessToken: session!.access_token, backendAccountId: accountId, backendAccountName: session!.account.name,
+          backendAccountSlug: session!.account.slug, backendExpiresAt: session!.expires_at, backendRole: session!.user.role, backendUserId: userId, backendUsername: session!.user.username??null } };
+      fixtures.set(slot, f); return f;
+    };
+    const fingerprint = async (f: Fixture) => {
+      const row = (await pool!.query(`SELECT
+        (SELECT to_jsonb(p) FROM password_credentials p WHERE p.account_id=a.id AND p.user_id=u.id) AS credential,
+        (SELECT to_jsonb(c) FROM credential_change_attempts c WHERE c.id=$3) AS attempt,
+        (SELECT to_jsonb(e) FROM account_access_events e WHERE e.id=$3) AS audit,a.settings_revision,u.profile_revision
+        FROM accounts a JOIN users u ON u.account_id=a.id AND u.id=$2 WHERE a.id=$1`, [f.accountId, f.userId, f.grant.attempt_id])).rows[0];
+      check(row, "synthetic business fingerprint row"); return hash(JSON.stringify(row));
+    };
+    const control = createServer(async (request, response) => {
+      if (request.method !== "POST" || request.headers["x-get350-control"] !== controlKey) { response.writeHead(403).end(); return; }
+      try {
+        const chunks: Buffer[] = []; let size = 0;
+        for await (const chunk of request) { size += chunk.length; check(size < 2048, "control envelope bound"); chunks.push(Buffer.from(chunk)); }
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as { slot?: string; handle?: string };
+        const f = request.url === "/session" ? [...fixtures.values()].find((entry) => entry.handle === body.handle) : fixtures.get(body.slot ?? "");
+        if (!f || !["/session", "/setup"].includes(request.url ?? "")) { response.writeHead(404).end(); return; }
+        response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+        response.end(JSON.stringify(request.url === "/session" ? f.claims : { ref: f.ref, handle: f.handle, grant: f.grant, settings: f.settings, claims: f.claims, createdAt: f.createdAt, upstreamReauth:f.upstreamReauth }));
+      } catch { response.writeHead(400).end(); }
+    });
+    controlOwned = ownServer(control); const controlUrl = await listen(control), front = await listen(proxy.server);
+    phase = "production Next build";
+    const requireWeb = createRequire(join(web, "package.json"));
+    const lock=await readFile(join(repo,"pnpm-lock.yaml"),"utf8"),frameworks:Record<string,string>={};
+    const packageVersion=async(name:string)=>{
+      const value=JSON.parse(await readFile(requireWeb.resolve(`${name}/package.json`),"utf8")) as {version?:unknown};
+      check(typeof value.version==="string","installed framework version required");return value.version;
+    };
+    for(const name of ["next","react","react-dom"]){
+      const selected=lockedWebVersion(lock,name);check(await packageVersion(name)===selected,"installed framework must match actual lock");frameworks[name]=selected;
+    }
+    frameworkCheck=async()=>{for(const [name,version] of Object.entries(frameworks))check(await packageVersion(name)===version,"installed framework changed during run");};
+    for (const dependency of ["typescript", "@types/react/package.json", "@types/node/package.json"]) requireWeb.resolve(dependency);
+    await writeProtocolApp(project, repo);
+    const nextEnv: NodeJS.ProcessEnv = { ...env, NODE_ENV: "production", AUTH_SECRET: authSecret, AUTH_URL: front,
+      TALENT_SIGNAL_ALLOW_LAN_HTTP: "true", TALENT_SIGNAL_BACKEND_URL: backend, GET350_CONTROL_URL: controlUrl, GET350_CONTROL_KEY: controlKey };
+    // Capability/provenance file is private, never a CI artifact, removed in finally.
+    await writeFile(join(runtime, "capability.json"), JSON.stringify({ front, controlUrl, controlKey }), { mode: 0o600, flag: "wx" });
+    build = child(process.execPath, [requireWeb.resolve("next/dist/bin/next"), "build", project], web, nextEnv);
+    const buildCode = await bounded(new Promise<number | null>((ok, bad) => { build!.once("error", bad); build!.once("exit", ok); }), "Next build budget", 300_000);
+    check(buildCode === 0, "real Next build failed"); await stop(build); build = undefined;
+    const reservation = createServer(); const reserved = await listen(reservation); const nextPort = new URL(reserved).port;
+    await new Promise<void>((ok) => reservation.close(() => ok()));
+    next = child(process.execPath, [requireWeb.resolve("next/dist/bin/next"), "start", project, "--hostname", "127.0.0.1", "--port", nextPort], web, nextEnv);
+    proxy.setNext(`http://127.0.0.1:${nextPort}`);
+    await until(async () => { try { return (await fetch(front, { redirect: "error", signal: AbortSignal.timeout(1000) })).ok; } catch { return false; } }, "real Next readiness", 60_000);
+    phase = "owned Chrome";
+    const profile = join(runtime, "chrome-profile"); await mkdir(profile, { mode: 0o700 });
+    chromeProcess = child(chrome, ["--headless=new", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
+      "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-sync", "--disable-extensions", "--password-store=basic", "about:blank"], runtime, env);
+    const activePort = join(profile, "DevToolsActivePort");
+    await until(async () => { try { return (await readFile(activePort, "utf8")).split("\n").length >= 2; } catch { return false; } }, "owned Chrome CDP", 15_000);
+    const [port, endpoint] = (await readFile(activePort, "utf8")).split("\n");
+    check(/^\d+$/.test(port!) && endpoint!.startsWith("/devtools/browser/"), "owned CDP endpoint");
+    cdp = await ProtocolCdp.connect(`ws://127.0.0.1:${port}${endpoint}`);
+    const version = await cdp.call<{ product: string }>("Browser.getVersion");
+    const flowBaselines=new Map<string,ProtocolFlow>();
+    const flowUnchanged=async(page:ProtocolPage,f:Fixture)=>{
+      const baseline=flowBaselines.get(f.ref);check(baseline,"initial real flow baseline required");
+      check(JSON.stringify(await page.inspect(f.ref,controlKey))===JSON.stringify(baseline),"flow createdAt/exp/iat/jti/envelope changed");
+    };
+    const open = async (f: Fixture) => {
+      const page = await ProtocolPage.create(cdp!, front);
+      await page.navigate(front); await page.ready(); await page.setup(f.slot, controlKey);
+      flowBaselines.set(f.ref,await page.inspect(f.ref,controlKey));
+      await page.navigate(front + PASSWORD_PATH); await page.ready();
+      check(await page.attribute('input[name="operationRef"]', "value") === f.ref, "real rendered operation ref");
+      await flowUnchanged(page,f);return page;
+    };
+    const applied = async (page: ProtocolPage, f: Fixture) => {
+      await until(() => page.messageIncludes("已保存并核验。"), "real applied UI");
+      check(!(await page.has('input[name="newPassword"]')), "applied UI is read-only");
+      check(f.completionRequests === 1 && f.completionStatus === 200, "one real successful completion");
+      const row = (await pool!.query<{ expires_at: Date; consumed_at: Date | null }>("SELECT expires_at,consumed_at FROM credential_change_attempts WHERE id=$1", [f.grant.attempt_id])).rows[0]!;
+      check(row.expires_at.toISOString() === f.expiresAt && row.consumed_at !== null, "original consumed grant TTL");
+    };
+    // Scenario 1: actual enhanced Action, both response-loss boundaries.
+    for (const boundary of ["before-headers", "after-headers"] as const) {
+      phase = `loss:${boundary}`; const f = await makeFixture(boundary), page = await open(f);
+      try {
+        const visibleHref = await page.attribute(`a[href*="?result="]`, "href"); check(visibleHref, "production visible GET recovery link");
+        const pending = await fingerprint(f), beforePosts=page.observed.passwordPosts, plan = proxy.arm();
+        await page.fillPassword(secret()); await page.click('button[type="submit"]'); await bounded(plan.received.promise, "Action dispatch gate");
+        const action=await page.passwordAction(beforePosts);
+        check(plan.enhanced&&action.enhanced&&action.keyHash===plan.actionKey,"held HTTP and exact CDP Action must match");
+        check(await page.currentUrl() === new URL(visibleHref, front).href, "product checkpoint must exist before dispatch");
+        check(f.completionRequests === 0 && await fingerprint(f) === pending, "gate precedes producer");
+        plan.dispatch.resolve(); await bounded(plan.response.promise, "real complete Action response");
+        await until(async () => f.completionStatus === 200, "real producer200");
+        check(plan.status === 200 && plan.terminal && f.completionRequests === 1, "real complete upstream Action");
+        const committed = await fingerprint(f), priorGets=proxy.observed.recoveryGets;
+        if (boundary === "after-headers") { proxy.flush(plan); await until(async () => action.responseReceived&&action.status===200,"same Action responseReceived before body loss"); }
+        proxy.cut(plan); await until(async()=>action.failed,"same Action transport loss");
+        let observedError=false,observedAutoGet=false;
+        await until(async()=>{
+          const editor=await page.has('input[name="newPassword"]')||await page.has('input[name="passwordMode"][value="save"]');
+          if(editor)return false;
+          observedError=await page.textIncludes("section > p","页面没有收到更改结果。请通过只读页面核对结果。")&&await page.visible("section > p");
+          observedAutoGet=!observedError&&proxy.observed.recoveryGets>priorGets&&f.resultRequests>0&&
+            await page.messageIncludes("已保存并核验。")&&await page.attribute('input[name="operationRef"]',"value")===f.ref&&
+            await page.attribute('input[name="passwordMode"]',"value")==="check";
+          return observedError||observedAutoGet;
+        },"actual Error recovery or verified read-only automatic GET; never stale editor");
+        await flowUnchanged(page,f);
+        // Follow the actual visible production GET recovery link, then reload.
+        // Never construct a result URL or repair a missing history checkpoint.
+        const recoverySelector = `a[href=${JSON.stringify(visibleHref)}]`;
+        await until(() => page.has(recoverySelector), "visible production GET recovery");
+        await page.click(recoverySelector); await applied(page, f);
+        check(await fingerprint(f) === committed, "first GET recovery is business-read-only");await flowUnchanged(page,f);
+        await page.reload(); await applied(page, f);
+        check(await fingerprint(f) === committed && f.resultRequests >= 2, "repeat GET same receipt and no replay");await flowUnchanged(page,f);
+        check(page.observed.passwordPosts===beforePosts+1,"no second browser Action");
+        check(page.observed.blockedExternal === 0, "no external browser request");
+        scenarioSummaries.push({scenario:"enhanced-loss",boundary,checkpointBeforeDispatch:true,producerStatus:f.completionStatus,
+          completionRequests:f.completionRequests,resultRequests:f.resultRequests,fullActionReceived:true,businessFingerprintUnchanged:true,
+          postHeadersObserved:boundary==="after-headers",heldActionMatched:true,errorUIObserved:observedError,
+          automaticReadOnlyGetObserved:observedAutoGet,flowEnvelopeUnchanged:true,externalBrowserRequests:page.observed.blockedExternal});
+      } finally { await page.close(); }
+    }
+    // Scenario 2: browser-native no-JS validation, then actual303 -> GET.
+    phase = "native:no-js"; const native = await makeFixture("native"), nativePage = await open(native);
+    try {
+      await nativePage.call("Emulation.setScriptExecutionDisabled", { value: true });
+      await nativePage.navigate(front + PASSWORD_PATH);
+      await until(() => nativePage.has('input[name="newPassword"]'), "native real form");
+      const baseline = await fingerprint(native), initialPosts = proxy.observed.passwordPosts, initialBackendPosts=backendHttp.completionRequests, native200=proxy.observed.native200;
+      await nativePage.fillPassword("short"); await nativePage.click('button[type="submit"]'); await delay(300);
+      check(proxy.observed.passwordPosts === initialPosts && native.completionRequests === 0 && await fingerprint(native) === baseline, "native minlength prevents dispatch");
+      await flowUnchanged(nativePage,native);
+      phase="native:server-local-rejection";
+      await nativePage.setAttribute('input[name="newPassword"]',"minlength","0");
+      await nativePage.click('button[type="submit"]');
+      await until(async()=>proxy.observed.native200===native200+1&&await nativePage.messageIncludes("新密码需要 8 到 128 个字符。"),"real native local rejection formState");
+      check(await nativePage.has('input[name="newPassword"]')&&await nativePage.attribute('input[name="passwordMode"]',"value")==="save"&&await nativePage.attribute('input[name="operationRef"]',"value")===native.ref,"server-rejected same-operation form remains editing");
+      check(nativePage.observed.native303===0&&proxy.observed.passwordPosts===initialPosts+1&&backendHttp.completionRequests===initialBackendPosts&&await fingerprint(native)===baseline,"one native rejected POST, no303/no backend complete");
+      await flowUnchanged(nativePage,native);
+      phase="native:valid-save";
+      await nativePage.fillPassword(secret()); await nativePage.click('button[type="submit"]'); await applied(nativePage, native);
+      check(nativePage.observed.native303 === 1 && proxy.observed.native303 >= 1, "actual native303 followed by GET");
+      check((await nativePage.currentUrl()).includes(`result=${native.ref}`), "received native redirect gives GET URL");await flowUnchanged(nativePage,native);
+      const committed = await fingerprint(native); await nativePage.reload(); await applied(nativePage, native);
+      await nativePage.quiet();
+      check(await fingerprint(native) === committed && nativePage.observed.blockedExternal === 0, "native GET reload never resubmits");await flowUnchanged(nativePage,native);
+      check(proxy.observed.passwordPosts === initialPosts + 2 && nativePage.observed.passwordPosts === 2, "native validation sent no hidden Action POST");
+      scenarioSummaries.push({scenario:"native-no-js",htmlMinlengthPreventedPost:true,serverValidationPosts:1,savePosts:1,serverValidationEditingPreserved:true,flowEnvelopeUnchanged:true,passwordPosts:nativePage.observed.passwordPosts,
+        actual303:nativePage.observed.native303,completionRequests:native.completionRequests,businessFingerprintUnchanged:true,
+        nativeTotalResponseLossAutoGetClaimed:false});
+    } finally { await nativePage.close(); }
+    // Scenario 3: late real A response cannot overwrite B or clear B's sealed cookie.
+    phase = "late:A-B"; const a = await makeFixture("late-a"), page = await open(a);
+    try {
+      const beforePosts=page.observed.passwordPosts,plan = proxy.arm(); await page.fillPassword(secret()); await page.click('button[type="submit"]');
+      await bounded(plan.received.promise, "late A dispatch"); const action=await page.passwordAction(beforePosts);check(plan.enhanced&&action.enhanced&&action.keyHash===plan.actionKey,"late A held/CDP request match"); plan.dispatch.resolve();
+      await bounded(plan.response.promise, "late A response held"); await until(async () => a.completionStatus === 200, "late A real commit");
+      check(a.completionRequests === 1 && plan.status === 200 && plan.terminal, "late A committed before B");
+      const aCommitted = await fingerprint(a), b = await makeFixture("late-b"), bPending = await fingerprint(b);
+      await page.setup(b.slot, controlKey);flowBaselines.set(b.ref,await page.inspect(b.ref,controlKey));await page.click("#fixture-next-navigation");
+      await until(async () => await page.attribute('input[name="operationRef"]', "value") === b.ref, "real Next client navigation to B");
+      await flowUnchanged(page,b);
+      proxy.release(plan);
+      await until(async()=>action.finished||action.failed,"same held late A transport settled");
+      await page.quiet();
+      check(await page.attribute('input[name="operationRef"]', "value") === b.ref && await page.has('input[name="newPassword"]'), "late A must not replace B editor");
+      check(!(await page.messageIncludes("已保存并核验。")),"late A cannot display success for B");await flowUnchanged(page,b);
+      check(page.observed.passwordPosts===beforePosts+1,"late A was not replayed");
+      check(a.completionRequests === 1 && await fingerprint(a) === aCommitted && await fingerprint(b) === bPending && b.completionRequests === 0 && page.observed.blockedExternal === 0, "late response has no B business effects");
+      scenarioSummaries.push({scenario:"late-A-B",aCompletionRequests:a.completionRequests,bCompletionRequests:b.completionRequests,
+        bCookiePreserved:true,bFlowEnvelopeUnchanged:true,bEditorPreserved:true,heldActionMatched:true,bBusinessFingerprintUnchanged:true,
+        aResponseFinished:action.finished,aResponseCancelled:action.failed});
+    } finally { await page.close(); }
+    passedSummary = { fixture: "GET350_NEXT_PROTOCOL", passed: true, logicalScenarios: 3,
+      observedSourceRevision, scenarios:scenarioSummaries, enhancedLossBoundaries: 2, runtimeVersions:{node:process.versions.node,...frameworks,chrome:version.product},
+      realPGProducer: true, AuthJsOAuthAcceptance: false, maintenanceDisabled: false,
+      providerExecutionWorkersDisabled: true, summariesContainBodiesOrSecrets: false,
+      source:actualSource };
+  } finally {
+    let cleanupFailed = false;
+    // Snapshot descendants while the owned leader still exists, before Browser.close.
+    try{rememberGroup(chromeProcess);}catch{cleanupFailed=true;}
+    if (cdp) { try { await cdp.call("Browser.close"); } catch {} cdp.close(); }
+    for (const cleanup of [...[...ownedGroups.keys()].reverse().map(owned=>()=>stop(owned)),
+      () => proxy.close(), () => controlOwned?.close(), () => app?.close(), () => pool?.end()]) {
+      try { await cleanup(); } catch { cleanupFailed = true; }
+    }
+    process.chdir(sourceCwd);
+    // Unknown/nonempty groups fail and retain private work roots; do not pretend
+    // runner-level recycling was our own verified cleanup.
+    const groupsEmpty=[...ownedGroups.values()].every(group=>group.closed);
+    if(!groupsEmpty)cleanupFailed=true;
+    if(groupsEmpty)try {
+      check(await realpath(project) === project && dirname(project) === web && basename(project).startsWith(".get350-next-protocol-"), "owned project cleanup scope");
+      await rm(project, { recursive: true });
+    } catch { cleanupFailed = true; }
+    if(groupsEmpty)try {
+      check(await realpath(runtime) === runtime && basename(runtime).startsWith("get350-next-protocol-"), "owned runtime cleanup scope");
+      await rm(runtime, { recursive: true });
+    } catch { cleanupFailed = true; }
+    try { if(actualSource)await sourceMatches(repo,actualSource); if(frameworkCheck)await frameworkCheck(); } catch { cleanupFailed = true; }
+    check(!cleanupFailed, "owned fixture cleanup failed");
+  }
+  check(passedSummary, "protocol did not reach all three scenarios");
+  passedSummary.sourceUnchangedDuringRun=true;
+  passedSummary.ownedProcessGroupsEmpty=[...ownedGroups.values()].every(group=>group.closed);
+  passedSummary.ownedProcessGroupCount=ownedGroups.size;
+  phase = "passed"; await writeReceipt(passedSummary); console.log(JSON.stringify(passedSummary));
+}
+void main().catch(async () => {
+  const failure = {fixture:"GET350_NEXT_PROTOCOL",passed:false,phase,observedSourceRevision,source:actualSource??"not-bound",ownedProcessGroupsEmpty:[...ownedGroups.values()].every(group=>group.closed),ownedProcessGroupCount:ownedGroups.size,scenarios:completedScenarios};
+  try { await writeReceipt(failure); } catch { /* CI still fails; never upload private diagnostics instead. */ }
+  console.error(JSON.stringify(failure)); process.exitCode = 1;
+});

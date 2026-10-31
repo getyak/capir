@@ -1,0 +1,222 @@
+/** No browser dependency: Node 22 WebSocket + the official CDP domains. */
+import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { PASSWORD_PATH } from "./get350NextProtocolApp.js";
+
+export type ProtocolAction = {requestId:string;keyHash:string;ordinal:number;enhanced:boolean;responseReceived:boolean;status:number;finished:boolean;failed:boolean};
+export type ProtocolFlow = {matches:boolean;live:boolean;hasAttempt:boolean;validEnvelope:boolean;
+  createdAtHash:string;expHash:string;iatHash:string;jtiHash:string;envelopeHash:string};
+type Params = Record<string, unknown>;
+type Message = { id?: number; sessionId?: string; method?: string; params?: Params; result?: unknown; error?: unknown };
+export class ProtocolCdp {
+  private sequence = 0;
+  private waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private handlers = new Map<string, Set<(params: Params) => void>>();
+  private constructor(private socket: WebSocket) {
+    socket.addEventListener("message", (event) => {
+      const message = JSON.parse(String(event.data)) as Message;
+      if (message.id !== undefined) {
+        const pending = this.waiting.get(message.id);
+        if (!pending) return;
+        clearTimeout(pending.timer); this.waiting.delete(message.id);
+        if (message.error) pending.reject(new Error("CDP command rejected"));
+        else pending.resolve(message.result);
+      } else if (message.method) {
+        for (const handler of this.handlers.get(`${message.sessionId ?? ""}:${message.method}`) ?? []) handler(message.params ?? {});
+      }
+    });
+    socket.addEventListener("close", () => {
+      for (const pending of this.waiting.values()) { clearTimeout(pending.timer); pending.reject(new Error("Owned CDP socket closed")); }
+      this.waiting.clear();
+    });
+  }
+  static async connect(url: string) {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "ws:" || parsed.hostname !== "127.0.0.1") throw new Error("Non-loopback CDP refused");
+    const socket = new WebSocket(url);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { socket.close(); reject(new Error("CDP connection timeout")); }, 10_000);
+      socket.addEventListener("open", () => { clearTimeout(timer); resolve(); }, { once: true });
+      socket.addEventListener("error", () => { clearTimeout(timer); reject(new Error("CDP connection failed")); }, { once: true });
+    });
+    return new ProtocolCdp(socket);
+  }
+  call<T = Params>(method: string, params: Params = {}, sessionId?: string): Promise<T> {
+    const id = ++this.sequence;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => { this.waiting.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, 10_000);
+      this.waiting.set(id, { resolve: (value) => resolve(value as T), reject, timer });
+      this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+  }
+  on(session: string, method: string, handler: (params: Params) => void) {
+    const key = `${session}:${method}`;
+    if (!this.handlers.has(key)) this.handlers.set(key, new Set());
+    this.handlers.get(key)!.add(handler);
+    return () => { this.handlers.get(key)?.delete(handler); };
+  }
+  close() { this.socket.close(); }
+}
+
+export async function until(condition: () => Promise<boolean>, label: string, milliseconds = 20_000) {
+  const deadline = Date.now() + milliseconds;
+  while (Date.now() < deadline) {
+    try { if (await condition()) return; } catch { /* A document/context may be replaced during real navigation. */ }
+    await delay(50);
+  }
+  throw new Error(`Protocol condition timed out: ${label}`);
+}
+
+export class ProtocolPage {
+  readonly observed = { passwordPosts: 0, actionHeaders: 0, native303: 0, failedPasswordRequests: 0, finishedPasswordRequests: 0, blockedExternal: 0 };
+  private passwordRequests = new Set<string>();
+  private actions = new Map<string,ProtocolAction>();
+  private activeRequests = new Set<string>();
+  private networkChangedAt = Date.now();
+  private disposers: Array<() => void> = [];
+  private constructor(private cdp: ProtocolCdp, readonly session: string, readonly context: string, private origin: string) {}
+  static async create(cdp: ProtocolCdp, origin: string) {
+    const { browserContextId } = await cdp.call<{ browserContextId: string }>("Target.createBrowserContext");
+    const { targetId } = await cdp.call<{ targetId: string }>("Target.createTarget", { url: "about:blank", browserContextId });
+    const { sessionId } = await cdp.call<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
+    const page = new ProtocolPage(cdp, sessionId, browserContextId, origin);
+    page.disposers.push(cdp.on(sessionId, "Fetch.requestPaused", (params) => {
+      const request = params.request as { url: string };
+      const local = request.url.startsWith("data:") || request.url === "about:blank" || new URL(request.url).origin === origin;
+      if (!local) page.observed.blockedExternal++;
+      void page.call(local ? "Fetch.continueRequest" : "Fetch.failRequest", local
+        ? { requestId: params.requestId } : { requestId: params.requestId, errorReason: "BlockedByClient" }).catch(() => {});
+    }));
+    page.disposers.push(cdp.on(sessionId, "Network.requestWillBeSent", (params) => {
+      const request = params.request as { url: string; method: string; headers:Record<string,string> };
+      page.activeRequests.add(String(params.requestId)); page.networkChangedAt = Date.now();
+      if (new URL(request.url).pathname !== PASSWORD_PATH) return;
+      if (request.method === "POST") {
+        const requestId=String(params.requestId),url=new URL(request.url);
+        page.passwordRequests.add(requestId);page.observed.passwordPosts++;
+        const action=Object.entries(request.headers).find(([name])=>name.toLowerCase()==="next-action")?.[1]??"";
+        const keyHash=createHash("sha256").update(`POST\0${url.pathname}${url.search}\0${action}`).digest("hex");
+        page.actions.set(requestId,{requestId,keyHash,ordinal:page.observed.passwordPosts,enhanced:Boolean(action),responseReceived:false,status:0,finished:false,failed:false});
+      }
+      const redirect = params.redirectResponse as { status?: number } | undefined;
+      if (request.method === "GET" && redirect?.status === 303) page.observed.native303++;
+    }));
+    page.disposers.push(cdp.on(sessionId, "Network.responseReceived", (params) => {
+      if (page.passwordRequests.has(String(params.requestId))) page.observed.actionHeaders++;
+      const action=page.actions.get(String(params.requestId));
+      if(action){action.responseReceived=true;action.status=(params.response as {status:number}).status;}
+    }));
+    page.disposers.push(cdp.on(sessionId, "Network.loadingFailed", (params) => {
+      page.activeRequests.delete(String(params.requestId)); page.networkChangedAt = Date.now();
+      if (page.passwordRequests.has(String(params.requestId))) page.observed.failedPasswordRequests++;
+      const action=page.actions.get(String(params.requestId));if(action)action.failed=true;
+    }));
+    page.disposers.push(cdp.on(sessionId, "Network.loadingFinished", (params) => {
+      page.activeRequests.delete(String(params.requestId)); page.networkChangedAt = Date.now();
+      if (page.passwordRequests.has(String(params.requestId))) page.observed.finishedPasswordRequests++;
+      const action=page.actions.get(String(params.requestId));if(action)action.finished=true;
+    }));
+    for (const method of ["Page.enable", "DOM.enable"]) await page.call(method);
+    await page.call("Network.enable", { maxPostDataSize: 0 });
+    await page.call("Network.setCacheDisabled", { cacheDisabled: true });
+    await page.call("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+    return page;
+  }
+  call<T = Params>(method: string, params: Params = {}) { return this.cdp.call<T>(method, params, this.session); }
+  async evaluate<T>(expression: string) {
+    const response = await this.call<{ result: { value?: T }; exceptionDetails?: unknown }>("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+    // Never mirror the expression, exception details, DOM or returned data to logs.
+    if (response.exceptionDetails) throw new Error("Fixture page evaluation failed");
+    return response.result.value as T;
+  }
+  async navigate(url: string) {
+    if (new URL(url).origin !== this.origin) throw new Error("Cross-origin fixture navigation refused");
+    await this.documentLoad(async () => {
+      const result = await this.call<{ errorText?: string }>("Page.navigate", { url });
+      if (result.errorText) throw new Error("Fixture navigation failed");
+    });
+  }
+  private async documentLoad(start: () => Promise<unknown>) {
+    let resolve!: () => void;
+    const loaded = new Promise<void>((done) => { resolve = done; });
+    const dispose = this.cdp.on(this.session, "Page.loadEventFired", () => resolve());
+    const timer = setTimeout(() => resolve(), 20_000);
+    let actualLoad = false;
+    const mark = this.cdp.on(this.session, "Page.loadEventFired", () => { actualLoad = true; });
+    try { await start(); await loaded; if (!actualLoad) throw new Error("Real page load timed out"); }
+    finally { clearTimeout(timer); dispose(); mark(); }
+  }
+  reload() { return this.documentLoad(() => this.call("Page.reload", { ignoreCache: true })); }
+  quiet() { return until(async () => this.activeRequests.size === 0 && Date.now() - this.networkChangedAt > 250, "settled real network"); }
+  async currentUrl() {
+    const history = await this.call<{ currentIndex: number; entries: Array<{ url: string }> }>("Page.getNavigationHistory");
+    return history.entries[history.currentIndex]!.url;
+  }
+  async node(selector: string) {
+    const { root } = await this.call<{ root: { nodeId: number } }>("DOM.getDocument", { depth: 0 });
+    const { nodeId } = await this.call<{ nodeId: number }>("DOM.querySelector", { nodeId: root.nodeId, selector });
+    return nodeId;
+  }
+  async has(selector: string) { return Boolean(await this.node(selector)); }
+  async attribute(selector: string, name: string) {
+    const nodeId = await this.node(selector); if (!nodeId) return undefined;
+    const { attributes } = await this.call<{ attributes: string[] }>("DOM.getAttributes", { nodeId });
+    for (let i = 0; i < attributes.length; i += 2) if (attributes[i] === name) return attributes[i + 1];
+    return undefined;
+  }
+  async messageIncludes(text: string) {
+    const nodeId = await this.node('[aria-live="polite"]'); if (!nodeId) return false;
+    const { outerHTML } = await this.call<{ outerHTML: string }>("DOM.getOuterHTML", { nodeId });
+    return outerHTML.includes(text); // Only the boolean escapes this method.
+  }
+  async click(selector: string) {
+    const nodeId = await this.node(selector); if (!nodeId) throw new Error("Missing fixture click target");
+    await this.call("DOM.scrollIntoViewIfNeeded", { nodeId });
+    const { model } = await this.call<{ model: { content: number[] } }>("DOM.getBoxModel", { nodeId });
+    const q = model.content, x = (q[0]! + q[2]! + q[4]! + q[6]!) / 4, y = (q[1]! + q[3]! + q[5]! + q[7]!) / 4;
+    await this.call("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+    await this.call("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  }
+  async passwordAction(afterCount:number) {
+    await until(async()=>this.observed.passwordPosts>afterCount,"specific browser Action request");
+    if(this.observed.passwordPosts!==afterCount+1)throw new Error("Ambiguous browser Action dispatch");
+    const action=[...this.actions.values()].find(entry=>entry.ordinal===afterCount+1);
+    if(!action)throw new Error("Missing specific Action tracker");return action;
+  }
+  async setAttribute(selector:string,name:string,value:string){
+    const nodeId=await this.node(selector);if(!nodeId)throw new Error("Missing controlled DOM target");
+    await this.call("DOM.setAttributeValue",{nodeId,name,value});
+  }
+  async textIncludes(selector:string,text:string){
+    const nodeId=await this.node(selector);if(!nodeId)return false;
+    const {outerHTML}=await this.call<{outerHTML:string}>("DOM.getOuterHTML",{nodeId});return outerHTML.includes(text);
+  }
+  async visible(selector:string){
+    const nodeId=await this.node(selector);if(!nodeId)return false;
+    const {model}=await this.call<{model:{width:number;height:number}}>("DOM.getBoxModel",{nodeId});return model.width>0&&model.height>0;
+  }
+  async fillPassword(value: string) {
+    const nodeId = await this.node('input[name="newPassword"]'); if (!nodeId) throw new Error("Missing production password input");
+    await this.call("DOM.focus", { nodeId });
+    await this.call("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 });
+    await this.call("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 0, windowsVirtualKeyCode: 65 });
+    await this.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Backspace", windowsVirtualKeyCode: 8 });
+    await this.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", windowsVirtualKeyCode: 8 });
+    await this.call("Input.insertText", { text: value });
+  }
+  async setup(slot: string, key: string) {
+    const ready = await this.evaluate<boolean>(`(async()=>{const r=await fetch("/__get350/setup",{method:"POST",headers:{"content-type":"application/json","x-get350-control":${JSON.stringify(key)}},body:JSON.stringify({slot:${JSON.stringify(slot)}})});return r.ok;})()`);
+    if (!ready) throw new Error("Protected Next setup failed");
+  }
+  async inspect(ref: string, key: string):Promise<ProtocolFlow> {
+    const value=await this.evaluate<ProtocolFlow|null>(`(async()=>{const r=await fetch("/__get350/inspect",{method:"POST",headers:{"content-type":"application/json","x-get350-control":${JSON.stringify(key)}},body:JSON.stringify({ref:${JSON.stringify(ref)}})});if(!r.ok)return null;const x=await r.json();return {matches:x.matches,live:x.live,hasAttempt:x.hasAttempt,validEnvelope:x.validEnvelope,createdAtHash:x.createdAtHash,expHash:x.expHash,iatHash:x.iatHash,jtiHash:x.jtiHash,envelopeHash:x.envelopeHash};})()`);
+    if(!value || !value.matches || !value.live || !value.hasAttempt || !value.validEnvelope ||
+      ![value.createdAtHash,value.expHash,value.iatHash,value.jtiHash,value.envelopeHash].every(digest=>typeof digest==="string"&&/^[0-9a-f]{64}$/.test(digest)))throw new Error("Invalid real flow-cookie inspection");
+    return value;
+  }
+  async ready() {
+    await until(() => this.evaluate<boolean>('document.readyState==="complete"&&document.documentElement.dataset.get350Ready==="true"'), "fixture hydration");
+    await this.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+  }
+  async close() { for (const dispose of this.disposers) dispose(); await this.cdp.call("Target.disposeBrowserContext", { browserContextId: this.context }); }
+}

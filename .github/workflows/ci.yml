@@ -229,6 +229,20 @@ jobs:
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      get350-postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: lab-ci-only
+          POSTGRES_DB: get350_next_protocol_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d get350_next_protocol_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -279,6 +293,39 @@ jobs:
           # their separately managed AUTH_SECRET.
           AUTH_SECRET: ci-build-only-not-a-deployment-secret
         run: pnpm build
+
+      - name: Verify staged password recovery in real Next and Chromium
+        id: password_protocol
+        env:
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/get350_next_protocol_ci
+          ACCOUNT_IDENTITY_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/get350_next_protocol_ci
+          GET350_NEXT_PROTOCOL: "1"
+          GET350_NEXT_PROTOCOL_ARTIFACT_DIR: ${{ runner.temp }}/get350-next-protocol-evidence
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            GET350_CHROME_PATH="$(command -v google-chrome)"
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            GET350_CHROME_PATH="$(command -v google-chrome-stable)"
+          else
+            echo "A Chrome binary is required for the password protocol gate" >&2
+            exit 1
+          fi
+          export GET350_CHROME_PATH
+          test -x "$GET350_CHROME_PATH"
+          # Materialize the existing backend workspace exports for the real app.
+          pnpm --filter @talent-signal/backend build
+          pnpm --filter @talent-signal/backend migrate
+          pnpm --filter @talent-signal/backend exec tsx src/evaluation/get350NextProtocol.ts
+
+      - name: Preserve sanitized password protocol receipt
+        if: always() && steps.password_protocol.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: password-next-protocol-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/get350-next-protocol-evidence/receipt.json
+          if-no-files-found: error
+          retention-days: 7
 
   cli:
     name: CLI quality
