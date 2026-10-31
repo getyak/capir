@@ -171,6 +171,7 @@ describe("same-attempt password outcome SDK", () => {
     { label: "invalid applied account UUID", intent: "change_password", body: { ...applied, account_id: "not-a-uuid" } },
     { label: "invalid expiry format", intent: "set_password", body: { ...pending, expires_at: "not-a-date" } },
     { label: "invalid applied revision", intent: "change_password", body: { ...applied, revision_after: 0 } },
+    { label: "unsafe applied revision pair", intent: "change_password", body: { ...applied, revision_before: 2 ** 53, revision_after: 2 ** 53 } },
     { label: "applied revision did not advance", intent: "change_password", body: { ...applied, revision_after: 1 } },
     { label: "applied revision skipped one increment", intent: "change_password", body: { ...applied, revision_after: 3 } },
     { label: "applied consumption after original expiry", intent: "change_password", body: { ...applied, consumed_at: "2035-01-01T00:06:00.000Z" } },

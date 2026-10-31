@@ -42,7 +42,8 @@ import type {
   PersonSourceSyncResponse,
   PersonSourceSyncRunsResponse,
 } from "./personSourceSyncSchemas.js";
-import type { AccountSettings, AccountMutation, AccountOnboarding, AccountOnboardingMutation, AccountOnboardingPreview, AccountOnboardingPreviewRequest, CredentialChangeAttempt, CredentialChangeResult, CompleteCredentialChangeRequest, StartCredentialChangeRequest, PasswordRegistrationStartResponse, PasswordVerificationConfirmRequest, ReconciliationActionRequest, ReconciliationPrepareRequest, ReconciliationRecord } from "./accountSchemas.js";
+import type { AccountSettings, AccountMutation, AccountOnboarding, AccountOnboardingMutation, AccountOnboardingPreview, AccountOnboardingPreviewRequest, CredentialChangeAttempt, CredentialChangeResult, CredentialChangeReadback, ReadCredentialChangeResultRequest, CompleteCredentialChangeRequest, StartCredentialChangeRequest, PasswordRegistrationStartResponse, PasswordVerificationConfirmRequest, ReconciliationActionRequest, ReconciliationPrepareRequest, ReconciliationRecord } from "./accountSchemas.js";
+import { CredentialChangeReadbackSchema } from "./accountSchemas.js";
 import type {
   McpClientGrantCreateRequest,
   McpClientGrantCreateResponse,
@@ -396,6 +397,49 @@ export class TalentSignalClient {
       "/v1/account/login-methods/complete",
       { method: "POST", body: request, signal },
     );
+  }
+
+  /** Inspect the original password attempt; never replay its completion. */
+  async readCredentialChangeResult(
+    request: ReadCredentialChangeResultRequest,
+    signal?: AbortSignal,
+  ): Promise<CredentialChangeReadback> {
+    const unverifiable = () => new TalentSignalHttpError(
+      502,
+      "CREDENTIAL_RESULT_UNVERIFIABLE",
+      "The password change result could not be verified.",
+      undefined,
+    );
+    let payload: unknown;
+    try {
+      payload = await this.request<unknown>(
+        "/v1/account/login-methods/result",
+        { method: "POST", body: {
+          attempt_id: request.attempt_id,
+          attempt_secret: request.attempt_secret,
+          intent: request.intent,
+        }, signal },
+      );
+    } catch (error) {
+      // JSON parse errors may contain the received body. Discard it; preserve
+      // ordinary authentication, transport and cancellation error semantics.
+      if (error instanceof SyntaxError) throw unverifiable();
+      throw error;
+    }
+    ensureProvisioningFormats();
+    if (!Value.Check(CredentialChangeReadbackSchema, payload)) throw unverifiable();
+    if (payload.attempt_id !== request.attempt_id || payload.intent !== request.intent) {
+      throw unverifiable();
+    }
+    if (payload.state !== "invalid" && !Number.isFinite(Date.parse(payload.expires_at))) {
+      throw unverifiable();
+    }
+    if (payload.state === "applied" && (
+      payload.revision_after !== payload.revision_before + 1 ||
+      !Number.isFinite(Date.parse(payload.consumed_at)) ||
+      Date.parse(payload.consumed_at) > Date.parse(payload.expires_at)
+    )) throw unverifiable();
+    return payload;
   }
 
   prepareReconciliation(
