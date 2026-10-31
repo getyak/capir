@@ -1,6 +1,6 @@
 /** Test-only temporary Next project. Never creates a production app route. */
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type { AccountSettings, CredentialChangeAttempt } from "@talent-signal/contracts";
 
 export type ProtocolClaims = {
@@ -19,7 +19,11 @@ export const SESSION_COOKIE = "get350.fixture-session";
 
 export async function writeProtocolApp(dir: string, repo: string) {
   const web = join(repo, "apps/web");
-  const production = (path: string) => JSON.stringify(join(web, path));
+  const importSpecifier=(file:string,target:string)=>{
+    const specifier=relative(dirname(join(dir,file)),target);
+    return JSON.stringify(specifier.startsWith(".")?specifier:"./"+specifier);
+  };
+  const production=(file:string,path:string)=>importSpecifier(file,join(web,path));
   const files: Record<string, string> = {
     "package.json": JSON.stringify({ name: "get350-owned-next-protocol", private: true, type: "module" }),
     "tsconfig.json": JSON.stringify({ compilerOptions: {
@@ -46,7 +50,7 @@ export async function writeProtocolApp(dir: string, repo: string) {
       import {cache} from "react";
       import {cookies,headers} from "next/headers";
       import {TalentSignalClient} from "@talent-signal/contracts";
-      import type {BackendSessionClaims} from ${production("lib/server/backendAuth.ts")};
+      import type {BackendSessionClaims} from ${production("backend-auth.ts","lib/server/backendAuth.ts")};
       export type {BackendSessionClaims};
       export function authSecret(){
         const secret=process.env.AUTH_SECRET;
@@ -76,7 +80,7 @@ export async function writeProtocolApp(dir: string, repo: string) {
         // Match the real Web wrapper: no browser Origin is added here.
         return new TalentSignalClient(process.env.TALENT_SIGNAL_BACKEND_URL!,claims.backendAccessToken);
       }`,
-    "app/layout.tsx": `import {LocaleProvider} from ${production("components/locale-provider.tsx")};
+    "app/layout.tsx": `import {LocaleProvider} from ${production("app/layout.tsx","components/locale-provider.tsx")};
       import Bridge from "./bridge";
       export default function Layout({children}:{children:React.ReactNode}){
         return <html lang="zh-CN"><body><LocaleProvider locale="zh-CN"><Bridge/>{children}</LocaleProvider></body></html>;
@@ -89,13 +93,13 @@ export async function writeProtocolApp(dir: string, repo: string) {
     "app/page.tsx": "export default function Home(){return <p>Owned GET350 protocol fixture</p>;}",
     "app/workspace/settings/page.tsx": "export default function Settings(){return <p>Fixture settings boundary</p>;}",
     "app/workspace/settings/link-complete/password/page.tsx": `export const dynamic="force-dynamic";
-      export {default,metadata} from ${production("app/workspace/settings/link-complete/password/page.tsx")};`,
+      export {default,metadata} from ${production("app/workspace/settings/link-complete/password/page.tsx","app/workspace/settings/link-complete/password/page.tsx")};`,
     "app/workspace/settings/link-complete/password/error.tsx": `"use client";
-      export {default} from ${production("app/workspace/settings/link-complete/password/error.tsx")};`,
+      export {default} from ${production("app/workspace/settings/link-complete/password/error.tsx","app/workspace/settings/link-complete/password/error.tsx")};`,
     "app/__get350/setup/route.ts": `import {cookies} from "next/headers";
       import {NextResponse} from "next/server";
-      import {sealAuthOperation,sessionFingerprint,type AuthOperation} from ${production("lib/server/stagedAuth.ts")};
-      import type {ProtocolSetup} from ${JSON.stringify(join(repo,"apps/backend/src/evaluation/get350NextProtocolApp.ts"))};
+      import {sealAuthOperation,sessionFingerprint,type AuthOperation} from ${production("app/__get350/setup/route.ts","lib/server/stagedAuth.ts")};
+      import type {ProtocolSetup} from ${importSpecifier("app/__get350/setup/route.ts",join(repo,"apps/backend/src/evaluation/get350NextProtocolApp.ts"))};
       export async function POST(request:Request){
         if(request.headers.get("x-get350-control")!==process.env.GET350_CONTROL_KEY) return new Response(null,{status:403});
         const {slot}=await request.json();
@@ -122,7 +126,7 @@ export async function writeProtocolApp(dir: string, repo: string) {
       }`,
     "app/__get350/inspect/route.ts": `import {NextResponse} from "next/server";
       import {cookies} from "next/headers";import {createHash} from "node:crypto";
-      import {readAuthOperation,flowIsLive,AUTH_OPERATION_COOKIE} from ${production("lib/server/stagedAuth.ts")};
+      import {readAuthOperation,flowIsLive,AUTH_OPERATION_COOKIE} from ${production("app/__get350/inspect/route.ts","lib/server/stagedAuth.ts")};
       export async function POST(request:Request){
         if(request.headers.get("x-get350-control")!==process.env.GET350_CONTROL_KEY) return new Response(null,{status:403});
         const {ref}=await request.json();const op=await readAuthOperation();
