@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
+import { buildApp } from "../app.js";
 import type { BackendConfig } from "../config.js";
 import { sha256 } from "../lib/hash.js";
 import { createMemoryMailSink } from "../lib/mail.js";
@@ -1652,6 +1653,10 @@ describe.skipIf(!pool)("provider-only accounts (PostgreSQL)", () => {
       "https://web.test",
       deps,
     );
+    const beforeRevision = (await pool!.query<{ settings_revision: number }>(
+      "SELECT settings_revision FROM accounts WHERE id=$1",
+      [account.accountId],
+    )).rows[0]!.settings_revision;
     const completed = await completeCredentialChange(
       pool!,
       config,
@@ -1669,6 +1674,26 @@ describe.skipIf(!pool)("provider-only accounts (PostgreSQL)", () => {
     expect(
       completed.settings.sign_in_methods.find((method) => method.provider === "password")?.state,
     ).toBe("connected");
+
+    // The receipt must describe the committed row, not the context captured
+    // before this operation increments the account's settings revision.
+    const finalRow = (await pool!.query<{ settings_revision: number }>(
+      "SELECT settings_revision FROM accounts WHERE id=$1",
+      [account.accountId],
+    )).rows[0]!;
+    const receipt = await pool!.query<{ revision_before: number; revision_after: number }>(
+      `SELECT details->'revision_before' AS revision_before,
+              details->'revision_after' AS revision_after
+       FROM account_access_events
+       WHERE id=$1 AND account_id=$2 AND actor_user_id=$3 AND kind='set_password'`,
+      [started.attempt_id, account.accountId, account.userId],
+    );
+    expect(finalRow.settings_revision).toBe(beforeRevision + 1);
+    expect(completed.settings.workspace.revision).toBe(finalRow.settings_revision);
+    expect(receipt.rows).toEqual([{
+      revision_before: beforeRevision,
+      revision_after: finalRow.settings_revision,
+    }]);
     const login = await createPasswordSession(pool!, config, {
       identifier: account.accountId && (await pool!.query<{ email: string }>(
         `SELECT email FROM users WHERE id = $1`,
@@ -2370,5 +2395,310 @@ describe.skipIf(!pool)("verified secondary email ownership (PostgreSQL)", () => 
       `SELECT retired_at FROM accounts WHERE id = $1`, [shape.duplicate.accountId],
     );
     expect(sourceAccount.rows[0]!.retired_at).toBeNull();
+  });
+});
+
+
+describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () => {
+  it("returns applied for the exact completed password attempt through the authenticated result route", async () => {
+    const account = await createAccount({
+      email: `synthetic-password-result-${randomUUID()}@example.test`,
+      password: "synthetic-result-before-password",
+    });
+    const { auth, token } = await sessionFor(account.accountId, account.userId, "web");
+    const grant = await startCredentialChange(pool!, config, auth, {
+      id: randomUUID(), intent: "change_password", origin: "ignored", client_label: "web",
+      step_up: { kind: "password", password: "synthetic-result-before-password" },
+    }, "https://web.test", deps);
+    await completeCredentialChange(pool!, config, auth, {
+      attempt_id: grant.attempt_id, attempt_secret: grant.attempt_secret,
+      origin: "ignored", password: "synthetic-result-after-password",
+    }, "https://web.test", deps);
+
+    // Reuse the real HTTP factory, with existing test controls disabling model
+    // adapters and optional workers. The pool remains owned by this PG suite.
+    const app = await buildApp({
+      pool: pool!, config, remoteChatProvider: null, privateConversationProvider: null,
+      personResearchProvider: null, screenshotContact: null,
+      conversationQueueWorkerEnabled: false, labJobWorkerEnabled: false,
+      labProviders: new Map(), mail: createMemoryMailSink().delivery,
+    });
+    try {
+      const response = await app.inject({
+        method: "POST", url: "/v1/account/login-methods/result",
+        headers: { authorization: `Bearer ${token}`, origin: "https://web.test" },
+        payload: {
+          attempt_id: grant.attempt_id,
+          attempt_secret: grant.attempt_secret,
+          intent: "change_password",
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        state: "applied", attempt_id: grant.attempt_id,
+        intent: "change_password", outcome: "password_set",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+
+  async function passwordResultFixture(completed: boolean) {
+    const account = await createAccount({
+      email: `synthetic-result-boundary-${randomUUID()}@example.test`,
+      password: "synthetic-result-boundary-before",
+    });
+    const { auth, token } = await sessionFor(account.accountId, account.userId, "web");
+    const grant = await startCredentialChange(pool!, config, auth, {
+      id: randomUUID(), intent: "change_password", client_label: "web",
+      step_up: { kind: "password", password: "synthetic-result-boundary-before" },
+    }, "https://web.test", deps);
+    const committed = completed ? await completeCredentialChange(pool!, config, auth, {
+      attempt_id: grant.attempt_id, attempt_secret: grant.attempt_secret,
+      origin: "ignored", password: "synthetic-result-boundary-after",
+    }, "https://web.test", deps) : null;
+    if (committed) expect(committed.status).toBe("password_set");
+    const app = await buildApp({
+      pool: pool!, config, remoteChatProvider: null, privateConversationProvider: null,
+      personResearchProvider: null, screenshotContact: null,
+      conversationQueueWorkerEnabled: false, labJobWorkerEnabled: false,
+      labProviders: new Map(), mail: createMemoryMailSink().delivery,
+    });
+    return {
+      account, auth, token, grant, committed, app,
+      payload: {
+        attempt_id: grant.attempt_id,
+        attempt_secret: grant.attempt_secret,
+        intent: "change_password" as const,
+      },
+    };
+  }
+  type PasswordResultFixture = Awaited<ReturnType<typeof passwordResultFixture>>;
+
+  function requestPasswordResult(
+    f: PasswordResultFixture,
+    options: { token?: string; origin?: string | null; payload?: Record<string, unknown> } = {},
+  ) {
+    const headers: Record<string, string> = { authorization: `Bearer ${options.token ?? f.token}` };
+    if (options.origin !== null) headers.origin = options.origin ?? "https://web.test";
+    return f.app.inject({
+      method: "POST", url: "/v1/account/login-methods/result", headers,
+      payload: options.payload ?? f.payload,
+    });
+  }
+
+  // Hash only the exact synthetic operation's business rows. This covers all
+  // credential/attempt/audit columns and both revisions, without printing a
+  // password hash or held attempt proof in an assertion diff.
+  async function passwordResultBusinessFingerprint(f: PasswordResultFixture) {
+    const state = await pool!.query(
+      `SELECT
+         (SELECT to_jsonb(p) FROM password_credentials p
+           WHERE p.account_id = ac.id AND p.user_id = u.id) AS credential,
+         (SELECT to_jsonb(a) FROM credential_change_attempts a WHERE a.id = $3) AS attempt,
+         (SELECT to_jsonb(e) FROM account_access_events e WHERE e.id = $3) AS audit,
+         ac.settings_revision, u.profile_revision
+       FROM accounts ac JOIN users u ON u.account_id = ac.id AND u.id = $2
+       WHERE ac.id = $1`,
+      [f.account.accountId, f.account.userId, f.grant.attempt_id],
+    );
+    expect(state.rowCount).toBe(1);
+    return sha256(JSON.stringify(state.rows[0]));
+  }
+
+  async function expectPasswordReadState(f: PasswordResultFixture, state: "pending" | "applied" | "unknown" | "invalid") {
+    const before = await passwordResultBusinessFingerprint(f);
+    const response = await requestPasswordResult(f);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toContain("no-store");
+    expect(response.json()).toMatchObject({
+      state, attempt_id: f.grant.attempt_id, intent: "change_password",
+    });
+    expect(response.body).not.toContain(f.grant.attempt_secret);
+    expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+    return response;
+  }
+
+  async function withPasswordResult(
+    completed: boolean,
+    run: (f: PasswordResultFixture) => Promise<void>,
+  ) {
+    const f = await passwordResultFixture(completed);
+    try {
+      // Every corrupted receipt starts from a real, authenticated successful
+      // producer readback; no test inserts a successful access event.
+      await expectPasswordReadState(f, completed ? "applied" : "pending");
+      await run(f);
+    } finally {
+      await f.app.close();
+    }
+  }
+
+  it("keeps repeated pending result reads read-only and does not consume the live grant", async () => {
+    await withPasswordResult(false, async (f) => {
+      const before = await passwordResultBusinessFingerprint(f);
+      await expectPasswordReadState(f, "pending");
+      await expectPasswordReadState(f, "pending");
+      const grant = await pool!.query<{ consumed_at: Date | null }>(
+        "SELECT consumed_at FROM credential_change_attempts WHERE id = $1", [f.grant.attempt_id],
+      );
+      expect(grant.rows[0]!.consumed_at).toBeNull();
+      expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+    });
+  });
+
+  it("denies a sibling session and a foreign actor without changing the held operation", async () => {
+    await withPasswordResult(false, async (f) => {
+      const sibling = await sessionFor(f.account.accountId, f.account.userId, "sibling");
+      expect(sibling.auth.sessionId).not.toBe(f.auth.sessionId);
+      const foreign = await createAccount({ email: `synthetic-result-foreign-${randomUUID()}@example.test` });
+      const other = await sessionFor(foreign.accountId, foreign.userId, "foreign");
+      const before = await passwordResultBusinessFingerprint(f);
+      for (const token of [sibling.token, other.token]) {
+        const response = await requestPasswordResult(f, { token });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({ state: "invalid" });
+        expect(response.body).not.toContain(f.grant.attempt_secret);
+      }
+      expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+    });
+  });
+
+  it("separates invalid held proof or intent from a schema-invalid non-password intent", async () => {
+    await withPasswordResult(false, async (f) => {
+      const before = await passwordResultBusinessFingerprint(f);
+      for (const payload of [
+        { ...f.payload, attempt_secret: "synthetic-wrong-proof-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
+        { ...f.payload, intent: "set_password" },
+      ]) {
+        const response = await requestPasswordResult(f, { payload });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({ state: "invalid" });
+      }
+      const invalidSchema = await requestPasswordResult(f, { payload: { ...f.payload, intent: "link_provider" } });
+      expect(invalidSchema.statusCode).toBe(400);
+      expect(invalidSchema.headers["cache-control"]).toContain("no-store");
+      expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+    });
+  });
+
+  it("distinguishes forbidden Origin from a missing Origin that cannot match the bound browser grant", async () => {
+    await withPasswordResult(false, async (f) => {
+      const before = await passwordResultBusinessFingerprint(f);
+      const forbidden = await requestPasswordResult(f, { origin: "https://other.test" });
+      expect(forbidden.statusCode).toBe(403);
+      expect(forbidden.json()).toMatchObject({ error: { code: "ORIGIN_NOT_ALLOWED" } });
+      expect(forbidden.headers["cache-control"]).toContain("no-store");
+      const missing = await requestPasswordResult(f, { origin: null });
+      expect(missing.statusCode).toBe(200);
+      expect(missing.json()).toMatchObject({ state: "invalid" });
+      expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+    });
+  });
+
+  it("rejects an expired original grant without extending or consuming it", async () => {
+    await withPasswordResult(false, async (f) => {
+      const changed = await pool!.query(
+        "UPDATE credential_change_attempts SET expires_at = now() - interval '1 second' WHERE id = $1",
+        [f.grant.attempt_id],
+      );
+      expect(changed.rowCount).toBe(1);
+      await expectPasswordReadState(f, "invalid");
+      const grant = await pool!.query<{ consumed_at: Date | null; expired: boolean }>(
+        "SELECT consumed_at, expires_at <= now() AS expired FROM credential_change_attempts WHERE id = $1",
+        [f.grant.attempt_id],
+      );
+      expect(grant.rows[0]).toMatchObject({ consumed_at: null, expired: true });
+    });
+  });
+
+  it("keeps session revocation authoritative at HTTP authentication rather than treating it as a domain result", async () => {
+    await withPasswordResult(false, async (f) => {
+      const changed = await pool!.query("UPDATE sessions SET revoked_at = now() WHERE id = $1", [f.auth.sessionId]);
+      expect(changed.rowCount).toBe(1);
+      const before = await passwordResultBusinessFingerprint(f);
+      const response = await requestPasswordResult(f);
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ error: { code: "SESSION_INVALID" } });
+      expect(response.headers["cache-control"]).toContain("no-store");
+      expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+    });
+  });
+
+  it("does not infer completion when a consumed real attempt has lost its exact audit event", async () => {
+    await withPasswordResult(true, async (f) => {
+      const removed = await pool!.query("DELETE FROM account_access_events WHERE id = $1", [f.grant.attempt_id]);
+      expect(removed.rowCount).toBe(1);
+      await expectPasswordReadState(f, "unknown");
+    });
+  });
+
+  it("keeps a same-ID wrong-scope event unknown without exposing the foreign account or actor", async () => {
+    await withPasswordResult(true, async (f) => {
+      const foreign = await createAccount({ email: `synthetic-result-audit-owner-${randomUUID()}@example.test` });
+      const changed = await pool!.query(
+        "UPDATE account_access_events SET account_id = $2, actor_user_id = $3 WHERE id = $1",
+        [f.grant.attempt_id, foreign.accountId, foreign.userId],
+      );
+      expect(changed.rowCount).toBe(1);
+      const response = await expectPasswordReadState(f, "unknown");
+      expect(response.body).not.toContain(foreign.accountId);
+      expect(response.body).not.toContain(foreign.userId);
+    });
+  });
+
+  it("rejects wrong hashes, wrong outcomes and the old preincrement audit value from real completed attempts", async () => {
+    for (const corruption of ["hash", "outcome", "legacy_after"] as const) {
+      await withPasswordResult(true, async (f) => {
+        const changed = corruption === "hash"
+          ? await pool!.query("UPDATE account_access_events SET request_hash = $2 WHERE id = $1", [f.grant.attempt_id, sha256("synthetic-wrong-result-hash")])
+          : corruption === "outcome"
+            ? await pool!.query("UPDATE account_access_events SET details = jsonb_set(details, '{outcome}', $2::jsonb) WHERE id = $1", [f.grant.attempt_id, JSON.stringify("unlinked")])
+            : await pool!.query("UPDATE account_access_events SET details = jsonb_set(details, '{revision_after}', details->'revision_before') WHERE id = $1", [f.grant.attempt_id]);
+        expect(changed.rowCount, corruption).toBe(1);
+        await expectPasswordReadState(f, "unknown");
+      });
+    }
+  });
+
+  it("keeps a historical applied receipt readable after later settings revisions and never changes business rows on repeated reads", async () => {
+    await withPasswordResult(true, async (f) => {
+      const receiptRevision = f.committed!.settings.workspace.revision;
+      const laterGrant = await startCredentialChange(pool!, config, f.auth, {
+        id: randomUUID(), intent: "change_password", client_label: "web",
+        step_up: { kind: "password", password: "synthetic-result-boundary-after" },
+      }, "https://web.test", deps);
+      const laterCompletion = await completeCredentialChange(pool!, config, f.auth, {
+        attempt_id: laterGrant.attempt_id, attempt_secret: laterGrant.attempt_secret,
+        origin: "ignored", password: "synthetic-result-boundary-later",
+      }, "https://web.test", deps);
+      expect(laterCompletion.status).toBe("password_set");
+      expect(laterCompletion.settings.workspace.revision).toBe(receiptRevision + 1);
+      const before = await passwordResultBusinessFingerprint(f);
+      for (let i = 0; i < 2; i++) {
+        const response = await expectPasswordReadState(f, "applied");
+        expect(response.json()).toMatchObject({ revision_after: receiptRevision });
+      }
+      expect(await passwordResultBusinessFingerprint(f)).toBe(before);
+    });
+  });
+
+  it("keeps a future consumed timestamp unknown even when it is still inside the original grant expiry", async () => {
+    await withPasswordResult(true, async (f) => {
+      const changed = await pool!.query<{ future_consumption: boolean; inside_original_expiry: boolean }>(
+        `UPDATE credential_change_attempts
+         SET consumed_at = now() + interval '1 minute'
+         WHERE id = $1
+         RETURNING consumed_at > now() AS future_consumption,
+                   consumed_at < expires_at AS inside_original_expiry`,
+        [f.grant.attempt_id],
+      );
+      expect(changed.rowCount).toBe(1);
+      expect(changed.rows[0]).toMatchObject({ future_consumption: true, inside_original_expiry: true });
+      // A future "commit" time is contradictory evidence, not an applied
+      // result. The original already-verified receipt is otherwise untouched.
+      await expectPasswordReadState(f, "unknown");
+    });
   });
 });

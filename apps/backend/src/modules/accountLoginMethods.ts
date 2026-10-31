@@ -6,6 +6,8 @@ import {
   type CredentialChangeAttempt,
   type CredentialChangeIntent,
   type CredentialChangeResult,
+  type CredentialChangeReadback,
+  type ReadCredentialChangeResultRequest,
   type ProviderChallenge,
   type SignInMethodProvider,
   type StartCredentialChangeRequest,
@@ -773,6 +775,22 @@ export async function completeCredentialChange(
        SET consumed_at = now() WHERE id = $1`,
       [attempt.id],
     );
+    // Capture the actual committed revision under the existing account lock.
+    // A guessed or preincrement value cannot serve as an outcome receipt.
+    const advanced = await client.query<{ settings_revision: number }>(
+      `UPDATE accounts SET settings_revision = settings_revision + 1
+       WHERE id = $1 RETURNING settings_revision`,
+      [auth.accountId],
+    );
+    const revisionAfter = advanced.rows[0]?.settings_revision;
+    if (
+      advanced.rowCount !== 1 ||
+      typeof revisionAfter !== "number" ||
+      !Number.isSafeInteger(revisionAfter) ||
+      revisionAfter !== context.settingsRevision + 1
+    ) {
+      throw new ApiError(500, "CREDENTIAL_RESULT_UNVERIFIABLE", "The account revision could not be verified.");
+    }
     await client.query(
       `INSERT INTO account_access_events(id, account_id, actor_user_id, kind, request_hash, details)
        VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -791,15 +809,11 @@ export async function completeCredentialChange(
         JSON.stringify({
           target_provider: attempt.provider,
           revision_before: attempt.expected_revision,
-          revision_after: context.settingsRevision,
+          revision_after: revisionAfter,
           target_user_id: auth.userId,
           outcome: status,
         }),
       ],
-    );
-    await client.query(
-      `UPDATE accounts SET settings_revision = settings_revision + 1 WHERE id = $1`,
-      [auth.accountId],
     );
     const settings = await readAccountSettingsWith(client, auth, labEnabled);
     await client.query("COMMIT");
@@ -815,4 +829,115 @@ export async function completeCredentialChange(
   } finally {
     client.release();
   }
+}
+
+
+type CredentialResultRow = {
+  id: string;
+  provider: SignInMethodProvider | null;
+  origin: string;
+  client_label: string;
+  expected_revision: number;
+  expected_user_revision: number;
+  current_account_revision: number;
+  current_user_revision: number;
+  expires_at: Date;
+  consumed_at: Date | null;
+  consumed_time_valid: boolean | null;
+  event_present: boolean;
+  event_scope_matches: boolean | null;
+  receipt_hash: string | null;
+  receipt_target_matches: boolean | null;
+  receipt_outcome: string | null;
+  receipt_before: unknown;
+  receipt_after: unknown;
+};
+
+/** Inspect one frozen password operation; never consume or replay it. */
+export async function readCredentialChangeResult(
+  pool: Pool,
+  auth: AuthContext,
+  request: ReadCredentialChangeResultRequest,
+  requestOrigin: string | null,
+): Promise<CredentialChangeReadback> {
+  const base = {
+    contract_version: CONTRACT_VERSION,
+    attempt_id: request.attempt_id,
+    intent: request.intent,
+  };
+  // One plain SELECT observes grant, live authority and receipt consistently.
+  // Do not call loadContext(false): it still locks users and can invert the
+  // writer's grant->account/user lock order. Foreign event details stay in SQL.
+  const found = await pool.query<CredentialResultRow>(
+    `SELECT a.id, a.provider, a.origin, a.client_label,
+            a.expected_revision, a.expected_user_revision,
+            a.expires_at, a.consumed_at,
+            (a.consumed_at <= now() AND a.consumed_at <= a.expires_at) AS consumed_time_valid,
+            ac.settings_revision AS current_account_revision,
+            u.profile_revision AS current_user_revision,
+            (e.id IS NOT NULL) AS event_present,
+            (e.account_id = a.account_id AND e.actor_user_id = a.user_id
+             AND e.kind = a.intent) AS event_scope_matches,
+            CASE WHEN e.account_id = a.account_id AND e.actor_user_id = a.user_id
+                       AND e.kind = a.intent THEN e.request_hash END AS receipt_hash,
+            CASE WHEN e.account_id = a.account_id AND e.actor_user_id = a.user_id
+                       AND e.kind = a.intent
+                 THEN e.details->>'target_user_id' = a.user_id::text END AS receipt_target_matches,
+            CASE WHEN e.account_id = a.account_id AND e.actor_user_id = a.user_id
+                       AND e.kind = a.intent THEN e.details->>'outcome' END AS receipt_outcome,
+            CASE WHEN e.account_id = a.account_id AND e.actor_user_id = a.user_id
+                       AND e.kind = a.intent THEN e.details->'revision_before' END AS receipt_before,
+            CASE WHEN e.account_id = a.account_id AND e.actor_user_id = a.user_id
+                       AND e.kind = a.intent THEN e.details->'revision_after' END AS receipt_after
+       FROM credential_change_attempts a
+       JOIN accounts ac ON ac.id = a.account_id AND ac.retired_at IS NULL
+       JOIN users u ON u.id = a.user_id AND u.account_id = a.account_id
+                   AND u.status = 'active' AND u.kind <> 'lab_human'
+       JOIN sessions s ON s.id = a.session_id AND s.account_id = a.account_id
+                      AND s.user_id = a.user_id AND s.revoked_at IS NULL
+                      AND s.expires_at > now()
+       LEFT JOIN account_access_events e ON e.id = a.id
+      WHERE a.id = $1 AND a.account_id = $2 AND a.user_id = $3
+        AND a.session_id = $4 AND a.attempt_secret_hash = $5
+        AND a.intent = $6 AND a.expires_at > now()`,
+    [request.attempt_id, auth.accountId, auth.userId, auth.sessionId,
+      sha256(request.attempt_secret), request.intent],
+  );
+  const row = found.rows[0];
+  if (!row || row.provider !== null || row.origin !== (requestOrigin ?? `client:${row.client_label}`)) {
+    return { ...base, state: "invalid" };
+  }
+  const scope = { ...base, expires_at: row.expires_at.toISOString() };
+  if (!row.consumed_at) {
+    if (row.event_present) return { ...scope, state: "unknown" };
+    if (
+      row.current_account_revision !== row.expected_revision ||
+      row.current_user_revision !== row.expected_user_revision
+    ) return { ...base, state: "invalid" };
+    // Pending is an observation, not a promise that an in-flight request
+    // cannot still commit and not permission to dispatch another change.
+    return { ...scope, state: "pending" };
+  }
+  const before = row.receipt_before;
+  const after = row.receipt_after;
+  const expectedHash = sha256(JSON.stringify({
+    attempt: row.id, provider: row.provider, origin: row.origin,
+  }));
+  if (
+    row.consumed_time_valid !== true ||
+    !row.event_present || row.event_scope_matches !== true ||
+    row.receipt_target_matches !== true || row.receipt_hash !== expectedHash ||
+    row.receipt_outcome !== "password_set" ||
+    typeof before !== "number" || !Number.isSafeInteger(before) ||
+    typeof after !== "number" || !Number.isSafeInteger(after) ||
+    before !== row.expected_revision || after !== before + 1 ||
+    row.current_account_revision < after ||
+    row.current_user_revision < row.expected_user_revision
+  ) return { ...scope, state: "unknown" };
+  return {
+    ...scope, state: "applied", outcome: "password_set",
+    account_id: auth.accountId, user_id: auth.userId,
+    consumed_at: row.consumed_at.toISOString(),
+    revision_before: before, revision_after: after,
+  };
 }

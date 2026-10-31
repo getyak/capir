@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONTRACT_VERSION, type CredentialChangeResult } from "@talent-signal/contracts";
+import type { BackendSessionClaims } from "@/lib/server/backendAuth";
 
 const boundary = vi.hoisted(() => ({
   jar: new Map<string, string>(),
@@ -28,7 +30,7 @@ vi.mock("@/lib/server/google-session", () => ({ bindGoogleNonce: vi.fn() }));
 vi.mock("@/auth", () => ({ signIn: vi.fn() }));
 // Keep next/navigation's real redirect implementation: it throws framework
 // control flow. A no-op mock would hide successful mutations being caught.
-import { completeStagedUnlink, saveAccountPassword } from "./actions";
+import { completeStagedPassword, completeStagedUnlink, saveAccountPassword } from "./actions";
 import { readAuthOperation, sealAuthOperation, sessionFingerprint, type AuthOperation } from "@/lib/server/stagedAuth";
 
 const actor = { accountId: "10000000-0000-4000-8000-000000000001", userId: "20000000-0000-4000-8000-000000000002" };
@@ -92,4 +94,103 @@ describe("credential completion outcome", () => {
     expect(state.error).toContain("无法确认");
     expect(state.error).not.toContain("未生效");
   });
+});
+
+
+describe("staged password completion recovery (GET-350)", () => {
+  const syntheticSession: BackendSessionClaims = {
+    backendSessionId: "30000000-0000-4000-8000-000000000003",
+    backendAccessToken: "synthetic-staged-password-access-token",
+    backendAccountId: actor.accountId,
+    backendAccountName: "Synthetic account",
+    backendAccountSlug: "synthetic-account",
+    backendExpiresAt: "2026-10-31T01:00:00.000Z",
+    backendRole: "admin",
+    backendUserId: actor.userId,
+    backendUsername: null,
+  };
+  const syntheticCompletion: CredentialChangeResult = {
+    contract_version: CONTRACT_VERSION,
+    status: "password_set",
+    settings: {
+      contract_version: CONTRACT_VERSION,
+      user: {
+        id: actor.userId, email: "synthetic-owner@example.test",
+        display_name: "Synthetic owner", username: null, kind: "google_human",
+        revision: 3, login_methods: ["google", "password"],
+        email_verified_at: "2026-10-31T00:00:00.000Z",
+      },
+      sign_in_methods: [
+        { provider: "apple", state: "unconnected", hint: null, can_unlink: false },
+        { provider: "google", state: "connected", hint: null, can_unlink: true },
+        { provider: "password", state: "connected", hint: null, can_unlink: true },
+      ],
+      email_ownership_state: "verified",
+      workspace: {
+        id: actor.accountId, name: "Synthetic account", slug: "synthetic-account",
+        revision: 3, owner_user_id: actor.userId, role: "admin", is_owner: true,
+        can_manage: true, is_test: false,
+      },
+      sessions: [], members: [], activity: [], lab_enabled: false,
+    },
+  };
+
+  beforeEach(async () => {
+    // The already-sealed operation is one minute old. Completing it must not
+    // mint a new operation or restart its original absolute lifetime.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-10-31T00:01:00.000Z"));
+    boundary.claims.mockResolvedValue(syntheticSession);
+    await sealAuthOperation({
+      ref: "60000000-0000-4000-8000-000000000006", intent: "change_password",
+      reauthProvider: "google", reauthChallengeId: "50000000-0000-4000-8000-000000000005",
+      clientLabel: "talent-signal-web", ...actor,
+      sessionFingerprint: sessionFingerprint(syntheticSession),
+      accountRevision: 2, userRevision: 3, step: "awaiting-reauth",
+      createdAt: "2026-10-31T00:00:00.000Z",
+      attempt: {
+        attempt_id: "40000000-0000-4000-8000-000000000004",
+        attempt_secret: "synthetic-credential-attempt-secret",
+        challenge_id: "50000000-0000-4000-8000-000000000005",
+        challenge_nonce: "synthetic-current-nonce",
+      },
+    }, false);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it.each(["transport unknown", "completion received"] as const)(
+    "retains the original staged password operation after %s until browser confirmation",
+    async (outcome) => {
+      // Only the external backend completion boundary is controlled. This
+      // unit does not claim that a real database committed or a browser lost
+      // a response; those need separate PostgreSQL and HTTP evidence.
+      if (outcome === "transport unknown") {
+        boundary.complete.mockRejectedValue(new TypeError("Synthetic transport loss"));
+      } else {
+        boundary.complete.mockResolvedValue(syntheticCompletion);
+      }
+      await completeStagedPassword({}, form({
+        operationRef: "60000000-0000-4000-8000-000000000006",
+        newPassword: "synthetic-new-password",
+      }));
+
+      // Guard against a false green from a stale-scope early return: the
+      // actual action must have reached the one intended backend operation.
+      expect(boundary.complete).toHaveBeenCalledExactlyOnceWith({
+        attempt_id: "40000000-0000-4000-8000-000000000004",
+        attempt_secret: "synthetic-credential-attempt-secret",
+        password: "synthetic-new-password",
+      });
+      expect(await readAuthOperation()).toMatchObject({
+        ref: "60000000-0000-4000-8000-000000000006",
+        createdAt: "2026-10-31T00:00:00.000Z",
+        attempt: {
+          attempt_id: "40000000-0000-4000-8000-000000000004",
+          attempt_secret: "synthetic-credential-attempt-secret",
+          challenge_id: "50000000-0000-4000-8000-000000000005",
+          challenge_nonce: "synthetic-current-nonce",
+        },
+      });
+    },
+  );
 });
