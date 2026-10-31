@@ -2571,10 +2571,9 @@ describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () =
 
   // This proxy changes transport delivery only. The real backend must finish
   // its exact completion response before the SDK's downstream socket is lost.
-  async function passwordCompletionLossProxy(upstreamAddress: string) {
-    const upstreamBase = new URL(upstreamAddress);
-    if (upstreamBase.protocol !== "http:" || upstreamBase.hostname !== "127.0.0.1") {
-      throw new Error("The response-loss fixture requires its owned loopback app.");
+  async function passwordCompletionLossProxy(upstreamPort:number) {
+    if(!Number.isInteger(upstreamPort)||upstreamPort<1||upstreamPort>65535){
+      throw new Error("The response-loss fixture requires its owned loopback port.");
     }
     const completePath = "/v1/account/login-methods/complete";
     const resultPath = "/v1/account/login-methods/result";
@@ -2599,10 +2598,9 @@ describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () =
       if (completion) observed.completionRequests++;
       else observed.resultRequests++;
       observed.originsMatch &&= incoming.headers.origin === "https://web.test";
-      const target = new URL(incoming.url!, upstreamBase);
-      const upstream = httpRequest(target, {
-        method: "POST", agent: false,
-        headers: { ...incoming.headers, host: target.host },
+      const upstream = httpRequest({protocol:"http:",hostname:"127.0.0.1",port:upstreamPort,
+        path:completion?completePath:resultPath,method:"POST",agent:false,
+        headers:{...incoming.headers,host:`127.0.0.1:${upstreamPort}`},
       }, (response) => {
         response.once("error", () => downstream.destroy());
         if (completion) observed.completionStatus = response.statusCode ?? 0;
@@ -2656,8 +2654,10 @@ describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () =
       expect(held.session_id).toBe(f.auth.sessionId);
       expect(held.consumed_at).toBeNull();
       const pendingFingerprint = await passwordResultBusinessFingerprint(f);
-      const upstreamAddress = await f.app.listen({ host: "127.0.0.1", port: 0 });
-      const proxy = await passwordCompletionLossProxy(upstreamAddress);
+      await f.app.listen({ host: "127.0.0.1", port: 0 });
+      const upstream=f.app.server.address();
+      if(!upstream||typeof upstream==="string"||upstream.address!=="127.0.0.1")throw new Error("Owned backend loopback address required");
+      const proxy=await passwordCompletionLossProxy(upstream.port);
       const realFetch = globalThis.fetch;
       // The current SDK uses global fetch, not a constructor fetch option.
       // Supply the real browser Origin without replacing any HTTP response.
@@ -2731,7 +2731,7 @@ describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () =
       expect(enrollment.statusCode).toBe(200);
       const enrolled = enrollment.json<PersistentSessionResponse>();
       expect(enrolled.session_id).toBe(f.auth.sessionId);
-      expect(sha256(enrolled.access_token)).not.toBe(sha256(f.token));
+      expect(enrolled.access_token === f.token).toBe(false);
       const renewal = await f.app.inject({
         method: "POST", url: "/v1/auth/persistent/renew",
         headers: { origin: "https://web.test" },
@@ -2745,7 +2745,7 @@ describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () =
       expect(renewed.session_id).toBe(f.auth.sessionId);
       // An immediate renewal retries the same live access generation. It is
       // new relative to the original bearer, not a forced second rotation.
-      expect(sha256(renewed.access_token)).toBe(sha256(enrolled.access_token));
+      expect(renewed.access_token === enrolled.access_token).toBe(true);
       for (let read = 0; read < 2; read++) {
         const response = await requestPasswordResult(f, { token: renewed.access_token });
         expect(response.statusCode).toBe(200);

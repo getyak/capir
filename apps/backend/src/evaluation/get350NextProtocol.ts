@@ -102,7 +102,7 @@ function ownServer(server: Server) {
   } };
 }
 type ProcessIdentity={pid:number;pgid:number;sid:number;uid:number;start:string};
-type OwnedGroup={pgid:number;leaderStart?:string;known:Map<number,string>;closed:boolean};
+type OwnedGroup={pgid:number;leaderStart:string|undefined;known:Map<number,string>;closed:boolean};
 const ownedGroups=new Map<ChildProcess,OwnedGroup>();
 function identity(pid:number):ProcessIdentity|undefined {
   try{
@@ -135,8 +135,8 @@ function rememberGroup(process:ChildProcess|undefined){
   const group=ownedGroups.get(process);check(group,"unregistered child group");
   if(!group.closed)groupMembers(group);
 }
-function child(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
-  const process=spawn(command,args,{cwd,env,detached:true,stdio:"ignore"});
+function child(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, pipeStderr=false) {
+  const process=spawn(command,args,{cwd,env,detached:true,stdio:["ignore","ignore",pipeStderr?"pipe":"ignore"]});
   // Readiness/build checks still fail; an unhandled spawn event must not bypass finally.
   process.on("error",()=>{});
   if(process.pid){
@@ -145,6 +145,26 @@ function child(command: string, args: string[], cwd: string, env: NodeJS.Process
     if(row){check(row.pgid===process.pid&&row.sid===process.pid&&row.uid===globalThis.process.getuid?.(),"child must own detached group/session");group.known.set(row.pid,row.start);}
   }
   return process;
+}
+function ownChromeAnnouncement(process:ChildProcess,ownedPort:number){
+  check(process.stderr,"owned Chrome announcement pipe required");
+  const state:{uuid:string|undefined;invalid:boolean}={uuid:undefined,invalid:false};
+  let retained="",seen=0;
+  process.stderr.on("data",(chunk:Buffer)=>{
+    // Always drain, but never retain more than16KiB or emit raw child stderr.
+    if(state.uuid||state.invalid)return;
+    seen+=chunk.length;if(seen>16384){state.invalid=true;retained="";return;}
+    retained+=chunk.toString("utf8");
+    const lines=retained.split(/\r?\n/);retained=lines.pop()??"";
+    for(const line of lines){
+      if(!line.startsWith("DevTools listening on "))continue;
+      const match=/^DevTools listening on ws:\/\/127\.0\.0\.1:([1-9]\d{0,4})\/devtools\/browser\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(line);
+      if(!match||Number(match[1])!==ownedPort){state.invalid=true;retained="";return;}
+      state.uuid=match[2];retained="";return;
+    }
+  });
+  process.stderr.once("error",()=>{state.invalid=true;retained="";});
+  return state;
 }
 async function waitGroupEmpty(group:OwnedGroup,milliseconds:number){
   const deadline=Date.now()+milliseconds;
@@ -176,12 +196,15 @@ type Arm = { enhanced: boolean; actionKey:string; received: ReturnType<typeof de
   response: ReturnType<typeof deferred>; status: number; outgoing?: import("node:http").ServerResponse;
   headers?: import("node:http").IncomingHttpHeaders; chunks: Buffer[]; size: number; terminal: boolean };
 function frontendProxy() {
-  let nextOrigin = ""; let armed: Arm | undefined; let active: Arm | undefined;
+  let nextPort:number|undefined,frontAuthority:string|undefined; let armed: Arm | undefined; let active: Arm | undefined;
   const observed = { passwordPosts: 0, native303: 0, native200:0, recoveryGets: 0 };
   const server = createServer((incoming, outgoing) => {
-    if (!nextOrigin || !incoming.url?.startsWith("/")) { outgoing.writeHead(503).end(); return; }
-    const url = new URL(incoming.url, nextOrigin);
-    if (url.origin !== nextOrigin) { outgoing.writeHead(404).end(); return; }
+    if(!nextPort||!frontAuthority){outgoing.writeHead(503).end();return;}
+    const requestTarget=incoming.url;
+    if(!requestTarget?.startsWith("/")||requestTarget.startsWith("//")||/[\\\r\n#]/.test(requestTarget)||incoming.headers.host!==frontAuthority){outgoing.writeHead(404).end();return;}
+    const port=nextPort,host=frontAuthority;
+    const url=new URL(requestTarget,"http://127.0.0.1");
+    if(url.origin!=="http://127.0.0.1"){outgoing.writeHead(404).end();return;}
     const passwordPost = incoming.method === "POST" && url.pathname === PASSWORD_PATH;
     if (incoming.method === "GET" && url.pathname === PASSWORD_PATH && url.searchParams.has("result")) observed.recoveryGets++;
     const plan = passwordPost ? armed : undefined;
@@ -189,8 +212,9 @@ function frontendProxy() {
     if (plan) { active = plan; plan.enhanced = typeof incoming.headers["next-action"] === "string";
       plan.actionKey=hash(`POST\0${incoming.url}\0${incoming.headers["next-action"]??""}`);plan.received.resolve(); }
     const forward = () => {
-      const upstream = httpRequest(url, { method: incoming.method, agent: false,
-        headers: { ...incoming.headers, "x-forwarded-host": incoming.headers.host, "x-forwarded-proto": "http" } }, (response) => {
+      const upstream = httpRequest({protocol:"http:",hostname:"127.0.0.1",port,path:requestTarget,
+        method:incoming.method,agent:false,
+        headers:{...incoming.headers,host,"x-forwarded-host":host,"x-forwarded-proto":"http"}},(response)=>{
         response.once("error", () => outgoing.destroy());
         if (passwordPost && response.statusCode === 303) observed.native303++;
         if(passwordPost&&!incoming.headers["next-action"]&&response.statusCode===200)observed.native200++;
@@ -211,7 +235,9 @@ function frontendProxy() {
     if (plan) void plan.dispatch.promise.then(forward); else forward();
   });
   const owned = ownServer(server);
-  return { server, observed, setNext(url: string) { nextOrigin = url; },
+  return {server,observed,
+    setNextPort(port:number){check(nextPort===undefined&&Number.isInteger(port)&&port>0&&port<=65535,"one owned Next port");nextPort=port;},
+    setFrontAuthority(host:string){check(frontAuthority===undefined&&/^127\.0\.0\.1:[1-9]\d{0,4}$/.test(host)&&Number(host.split(":")[1])<=65535,"owned front authority");frontAuthority=host;},
     arm() {
       check(!armed && !active, "one owned action interception");
       const plan: Arm = { enhanced: false, actionKey:"", received: deferred(), dispatch: deferred(), response: deferred(),
@@ -253,7 +279,7 @@ async function main() {
   check(process.env.GET350_NEXT_PROTOCOL === "1", "explicit protocol flag required; no skip");
   await prepareReceiptDirectory();
   if (/^[0-9a-f]{40}$/.test(process.env.GITHUB_SHA ?? "")) observedSourceRevision = process.env.GITHUB_SHA!;
-  const database = process.env.ACCOUNT_IDENTITY_TEST_DATABASE_URL;
+  const database = process.env.DATABASE_URL;
   check(database, "owned protocol PG required; no skip");
   const db = new URL(database);
   check(db.protocol === "postgresql:" && db.hostname === "127.0.0.1" && /^\/get350_[a-z0-9_]+$/.test(db.pathname), "dedicated loopback get350 database required");
@@ -267,7 +293,7 @@ async function main() {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, LANG: "C.UTF-8", TZ: "UTC", TMPDIR: runtime,
     NODE_ENV: "test", LOG_LEVEL: "silent", NEXT_TELEMETRY_DISABLED: "1", CI: "true",
     XDG_CONFIG_HOME: join(runtime,"xdg-config"), XDG_CACHE_HOME: join(runtime,"xdg-cache"),
-    ACCOUNT_IDENTITY_TEST_DATABASE_URL: database, CHAT_MEDIA_STORAGE_PROVIDER: "local", CHAT_MEDIA_LOCAL_DIRECTORY: join(runtime, "chat-media") };
+    DATABASE_URL: database, CHAT_MEDIA_STORAGE_PROVIDER: "local", CHAT_MEDIA_LOCAL_DIRECTORY: join(runtime, "chat-media") };
   // Before any production import, remove provider/key/policy/env inheritance.
   for (const key of Object.keys(process.env)) delete process.env[key];
   Object.assign(process.env, env); process.chdir(runtime);
@@ -370,6 +396,7 @@ async function main() {
       } catch { response.writeHead(400).end(); }
     });
     controlOwned = ownServer(control); const controlUrl = await listen(control), front = await listen(proxy.server);
+    proxy.setFrontAuthority(new URL(front).host);
     phase = "production Next build";
     const requireWeb = createRequire(join(web, "package.json"));
     const lock=await readFile(join(repo,"pnpm-lock.yaml"),"utf8"),frameworks:Record<string,string>={};
@@ -393,17 +420,21 @@ async function main() {
     const reservation = createServer(); const reserved = await listen(reservation); const nextPort = new URL(reserved).port;
     await new Promise<void>((ok) => reservation.close(() => ok()));
     next = child(process.execPath, [requireWeb.resolve("next/dist/bin/next"), "start", project, "--hostname", "127.0.0.1", "--port", nextPort], web, nextEnv);
-    proxy.setNext(`http://127.0.0.1:${nextPort}`);
+    proxy.setNextPort(Number(nextPort));
     await until(async () => { try { return (await fetch(front, { redirect: "error", signal: AbortSignal.timeout(1000) })).ok; } catch { return false; } }, "real Next readiness", 60_000);
     phase = "owned Chrome";
     const profile = join(runtime, "chrome-profile"); await mkdir(profile, { mode: 0o700 });
-    chromeProcess = child(chrome, ["--headless=new", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
-      "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-sync", "--disable-extensions", "--password-store=basic", "about:blank"], runtime, env);
-    const activePort = join(profile, "DevToolsActivePort");
-    await until(async () => { try { return (await readFile(activePort, "utf8")).split("\n").length >= 2; } catch { return false; } }, "owned Chrome CDP", 15_000);
-    const [port, endpoint] = (await readFile(activePort, "utf8")).split("\n");
-    check(/^\d+$/.test(port!) && endpoint!.startsWith("/devtools/browser/"), "owned CDP endpoint");
-    cdp = await ProtocolCdp.connect(`ws://127.0.0.1:${port}${endpoint}`);
+    const debugReservation=createServer(),debugReserved=await listen(debugReservation),debugPort=Number(new URL(debugReserved).port);
+    await new Promise<void>((ok)=>debugReservation.close(()=>ok()));
+    chromeProcess = child(chrome, ["--headless=new", "--remote-debugging-address=127.0.0.1", `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`,
+      "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-sync", "--disable-extensions", "--password-store=basic", "about:blank"], runtime, env, true);
+    const announcement=ownChromeAnnouncement(chromeProcess,debugPort);
+    await until(async()=>Boolean(announcement.uuid)||announcement.invalid||chromeProcess?.exitCode!==null||chromeProcess?.signalCode!==null,"owned child DevTools announcement",15_000);
+    const expectedBrowserUUID=announcement.uuid;
+    check(expectedBrowserUUID&&!announcement.invalid&&chromeProcess.exitCode===null&&chromeProcess.signalCode===null,"owned child Chrome endpoint proof required");
+    rememberGroup(chromeProcess);
+    // The announcement is comparison-only; it never supplies a network URL.
+    cdp=await ProtocolCdp.connect(debugPort,expectedBrowserUUID);
     const version = await cdp.call<{ product: string }>("Browser.getVersion");
     const flowBaselines=new Map<string,ProtocolFlow>();
     const flowUnchanged=async(page:ProtocolPage,f:Fixture)=>{
@@ -438,7 +469,7 @@ async function main() {
         check(f.completionRequests === 0 && await fingerprint(f) === pending, "gate precedes producer");
         plan.dispatch.resolve(); await bounded(plan.response.promise, "real complete Action response");
         await until(async () => f.completionStatus === 200, "real producer200");
-        check(plan.status === 200 && plan.terminal && f.completionRequests === 1, "real complete upstream Action");
+        check(plan.status === 200 && plan.terminal && Number(f.completionRequests) === 1, "real complete upstream Action");
         const committed = await fingerprint(f), priorGets=proxy.observed.recoveryGets;
         if (boundary === "after-headers") { proxy.flush(plan); await until(async () => action.responseReceived&&action.status===200,"same Action responseReceived before body loss"); }
         proxy.cut(plan); await until(async()=>action.failed,"same Action transport loss");
@@ -488,7 +519,7 @@ async function main() {
       await flowUnchanged(nativePage,native);
       phase="native:valid-save";
       await nativePage.fillPassword(secret()); await nativePage.click('button[type="submit"]'); await applied(nativePage, native);
-      check(nativePage.observed.native303 === 1 && proxy.observed.native303 >= 1, "actual native303 followed by GET");
+      check(Number(nativePage.observed.native303) === 1 && proxy.observed.native303 >= 1, "actual native303 followed by GET");
       check((await nativePage.currentUrl()).includes(`result=${native.ref}`), "received native redirect gives GET URL");await flowUnchanged(nativePage,native);
       const committed = await fingerprint(native); await nativePage.reload(); await applied(nativePage, native);
       await nativePage.quiet();
@@ -523,7 +554,7 @@ async function main() {
     passedSummary = { fixture: "GET350_NEXT_PROTOCOL", passed: true, logicalScenarios: 3,
       observedSourceRevision, scenarios:scenarioSummaries, enhancedLossBoundaries: 2, runtimeVersions:{node:process.versions.node,...frameworks,chrome:version.product},
       realPGProducer: true, AuthJsOAuthAcceptance: false, maintenanceDisabled: false,
-      providerExecutionWorkersDisabled: true, summariesContainBodiesOrSecrets: false,
+      providerExecutionWorkersDisabled: true, chromeChildEndpointOwned:true, summariesContainBodiesOrSecrets: false,
       source:actualSource };
   } finally {
     let cleanupFailed = false;

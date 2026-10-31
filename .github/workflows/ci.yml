@@ -298,7 +298,6 @@ jobs:
         id: password_protocol
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/get350_next_protocol_ci
-          ACCOUNT_IDENTITY_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/get350_next_protocol_ci
           GET350_NEXT_PROTOCOL: "1"
           GET350_NEXT_PROTOCOL_ARTIFACT_DIR: ${{ runner.temp }}/get350-next-protocol-evidence
         run: |

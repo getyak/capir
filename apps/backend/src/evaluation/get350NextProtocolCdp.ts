@@ -30,10 +30,17 @@ export class ProtocolCdp {
       this.waiting.clear();
     });
   }
-  static async connect(url: string) {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "ws:" || parsed.hostname !== "127.0.0.1") throw new Error("Non-loopback CDP refused");
-    const socket = new WebSocket(url);
+  static async connect(ownedPort:number,expectedBrowserUUID:string) {
+    if(!Number.isInteger(ownedPort)||ownedPort<1||ownedPort>65535)throw new Error("Invalid owned Chrome port");
+    const metadata=await fetch(`http://127.0.0.1:${ownedPort}/json/version`,{redirect:"error",signal:AbortSignal.timeout(5000)});
+    if(!metadata.ok)throw new Error("Owned Chrome metadata unavailable");
+    const value=await metadata.json() as {webSocketDebuggerUrl?:unknown};
+    if(typeof value.webSocketDebuggerUrl!=="string")throw new Error("Missing owned Chrome endpoint");
+    const parsed=new URL(value.webSocketDebuggerUrl);
+    const browser=/^\/devtools\/browser\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(parsed.pathname)?.[1];
+    if(parsed.protocol!=="ws:"||parsed.hostname!=="127.0.0.1"||parsed.port!==String(ownedPort)||parsed.username||parsed.password||parsed.search||parsed.hash||!browser||browser!==expectedBrowserUUID)throw new Error("Unrelated Chrome endpoint refused");
+    // Authority comes solely from our reserved port, never a file or page input.
+    const socket=new WebSocket(`ws://127.0.0.1:${ownedPort}/devtools/browser/${browser}`);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => { socket.close(); reject(new Error("CDP connection timeout")); }, 10_000);
       socket.addEventListener("open", () => { clearTimeout(timer); resolve(); }, { once: true });
@@ -129,6 +136,17 @@ export class ProtocolPage {
     if (response.exceptionDetails) throw new Error("Fixture page evaluation failed");
     return response.result.value as T;
   }
+  private async pageFunction<T>(functionDeclaration:string,values:unknown[]):Promise<T>{
+    const global=await this.call<{result:{objectId?:string};exceptionDetails?:unknown}>("Runtime.evaluate",{expression:"globalThis",returnByValue:false});
+    const objectId=global.result.objectId;
+    if(global.exceptionDetails||!objectId)throw new Error("Missing current fixture page context");
+    try{
+      const response=await this.call<{result:{value?:T};exceptionDetails?:unknown}>("Runtime.callFunctionOn",{
+        objectId,functionDeclaration,arguments:values.map(value=>({value})),awaitPromise:true,returnByValue:true});
+      if(response.exceptionDetails)throw new Error("Fixture page function failed");
+      return response.result.value as T;
+    }finally{await this.call("Runtime.releaseObject",{objectId}).catch(()=>{});}
+  }
   async navigate(url: string) {
     if (new URL(url).origin !== this.origin) throw new Error("Cross-origin fixture navigation refused");
     await this.documentLoad(async () => {
@@ -205,11 +223,15 @@ export class ProtocolPage {
     await this.call("Input.insertText", { text: value });
   }
   async setup(slot: string, key: string) {
-    const ready = await this.evaluate<boolean>(`(async()=>{const r=await fetch("/__get350/setup",{method:"POST",headers:{"content-type":"application/json","x-get350-control":${JSON.stringify(key)}},body:JSON.stringify({slot:${JSON.stringify(slot)}})});return r.ok;})()`);
+    const ready=await this.pageFunction<boolean>(
+      'async function(slot,key){const r=await fetch("/__get350/setup",{method:"POST",headers:{"content-type":"application/json","x-get350-control":key},body:JSON.stringify({slot})});return r.ok;}',
+      [slot,key]);
     if (!ready) throw new Error("Protected Next setup failed");
   }
   async inspect(ref: string, key: string):Promise<ProtocolFlow> {
-    const value=await this.evaluate<ProtocolFlow|null>(`(async()=>{const r=await fetch("/__get350/inspect",{method:"POST",headers:{"content-type":"application/json","x-get350-control":${JSON.stringify(key)}},body:JSON.stringify({ref:${JSON.stringify(ref)}})});if(!r.ok)return null;const x=await r.json();return {matches:x.matches,live:x.live,hasAttempt:x.hasAttempt,validEnvelope:x.validEnvelope,createdAtHash:x.createdAtHash,expHash:x.expHash,iatHash:x.iatHash,jtiHash:x.jtiHash,envelopeHash:x.envelopeHash};})()`);
+    const value=await this.pageFunction<ProtocolFlow|null>(
+      'async function(ref,key){const r=await fetch("/__get350/inspect",{method:"POST",headers:{"content-type":"application/json","x-get350-control":key},body:JSON.stringify({ref})});if(!r.ok)return null;const x=await r.json();return {matches:x.matches,live:x.live,hasAttempt:x.hasAttempt,validEnvelope:x.validEnvelope,createdAtHash:x.createdAtHash,expHash:x.expHash,iatHash:x.iatHash,jtiHash:x.jtiHash,envelopeHash:x.envelopeHash};}',
+      [ref,key]);
     if(!value || !value.matches || !value.live || !value.hasAttempt || !value.validEnvelope ||
       ![value.createdAtHash,value.expHash,value.iatHash,value.jtiHash,value.envelopeHash].every(digest=>typeof digest==="string"&&/^[0-9a-f]{64}$/.test(digest)))throw new Error("Invalid real flow-cookie inspection");
     return value;
