@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { PASSWORD_PATH } from "./get350NextProtocolApp.js";
 
+// Last observed setup status only; never headers, body or a capability.
+export let lastSetupHttpStatus:number|null=null;
 export type ProtocolAction = {requestId:string;keyHash:string;ordinal:number;enhanced:boolean;responseReceived:boolean;status:number;finished:boolean;failed:boolean};
 export type ProtocolFlow = {matches:boolean;live:boolean;hasAttempt:boolean;validEnvelope:boolean;
   createdAtHash:string;expHash:string;iatHash:string;jtiHash:string;envelopeHash:string};
@@ -223,10 +225,12 @@ export class ProtocolPage {
     await this.call("Input.insertText", { text: value });
   }
   async setup(slot: string, key: string) {
-    const ready=await this.pageFunction<boolean>(
-      'async function(slot,key){const r=await fetch("/__get350/setup",{method:"POST",headers:{"content-type":"application/json","x-get350-control":key},body:JSON.stringify({slot})});return r.ok;}',
+    lastSetupHttpStatus=null;
+    const ready=await this.pageFunction<{ok:boolean;status:number}>(
+      'async function(slot,key){const r=await fetch("/__get350/setup",{method:"POST",headers:{"content-type":"application/json","x-get350-control":key},body:JSON.stringify({slot})});return {ok:r.ok,status:r.status};}',
       [slot,key]);
-    if (!ready) throw new Error("Protected Next setup failed");
+    lastSetupHttpStatus=Number.isInteger(ready.status)&&ready.status>=100&&ready.status<=599?ready.status:null;
+    if (ready.ok!==true) throw new Error("Protected Next setup failed");
   }
   async inspect(ref: string, key: string):Promise<ProtocolFlow> {
     const value=await this.pageFunction<ProtocolFlow|null>(

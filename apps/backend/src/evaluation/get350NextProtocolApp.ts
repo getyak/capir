@@ -96,10 +96,10 @@ export async function writeProtocolApp(dir: string, repo: string) {
       export {default,metadata} from ${production("app/workspace/settings/link-complete/password/page.tsx","app/workspace/settings/link-complete/password/page.tsx")};`,
     "app/workspace/settings/link-complete/password/error.tsx": `"use client";
       export {default} from ${production("app/workspace/settings/link-complete/password/error.tsx","app/workspace/settings/link-complete/password/error.tsx")};`,
-    "app/__get350/setup/route.ts": `import {cookies} from "next/headers";
+    "app/%5F_get350/setup/route.ts": `import {cookies} from "next/headers";
       import {NextResponse} from "next/server";
-      import {sealAuthOperation,sessionFingerprint,type AuthOperation} from ${production("app/__get350/setup/route.ts","lib/server/stagedAuth.ts")};
-      import type {ProtocolSetup} from ${importSpecifier("app/__get350/setup/route.ts",join(repo,"apps/backend/src/evaluation/get350NextProtocolApp.ts"))};
+      import {sealAuthOperation,sessionFingerprint,type AuthOperation} from ${production("app/%5F_get350/setup/route.ts","lib/server/stagedAuth.ts")};
+      import type {ProtocolSetup} from ${importSpecifier("app/%5F_get350/setup/route.ts",join(repo,"apps/backend/src/evaluation/get350NextProtocolApp.ts"))};
       export async function POST(request:Request){
         if(request.headers.get("x-get350-control")!==process.env.GET350_CONTROL_KEY) return new Response(null,{status:403});
         const {slot}=await request.json();
@@ -124,9 +124,9 @@ export async function writeProtocolApp(dir: string, repo: string) {
         await sealAuthOperation(operation,false);
         return NextResponse.json({ready:true},{headers:{"cache-control":"no-store"}});
       }`,
-    "app/__get350/inspect/route.ts": `import {NextResponse} from "next/server";
+    "app/%5F_get350/inspect/route.ts": `import {NextResponse} from "next/server";
       import {cookies} from "next/headers";import {createHash} from "node:crypto";
-      import {readAuthOperation,flowIsLive,AUTH_OPERATION_COOKIE} from ${production("app/__get350/inspect/route.ts","lib/server/stagedAuth.ts")};
+      import {readAuthOperation,flowIsLive,AUTH_OPERATION_COOKIE} from ${production("app/%5F_get350/inspect/route.ts","lib/server/stagedAuth.ts")};
       export async function POST(request:Request){
         if(request.headers.get("x-get350-control")!==process.env.GET350_CONTROL_KEY) return new Response(null,{status:403});
         const {ref}=await request.json();const op=await readAuthOperation();
