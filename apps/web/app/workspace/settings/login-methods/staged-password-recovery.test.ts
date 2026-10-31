@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTRACT_VERSION } from "@talent-signal/contracts";
 import type { BackendSessionClaims } from "@/lib/server/backendAuth";
 
-const boundary = vi.hoisted(() => ({ jar: new Map<string, string>(), complete: vi.fn(), read: vi.fn(), primary: vi.fn(), effective: vi.fn(), cookieWrite: vi.fn() }));
+const boundary = vi.hoisted(() => ({ jar: new Map<string, string>(), complete: vi.fn(), read: vi.fn(), primary: vi.fn(), effective: vi.fn(), cookieWrite: vi.fn(), native: false }));
 vi.mock("next/headers", () => ({
-  headers: async () => new Headers({ "next-action": "synthetic-action" }),
+  headers: async () => new Headers(boundary.native ? {} : { "next-action": "synthetic-action" }),
   cookies: async () => ({
     get: (name: string) => boundary.jar.has(name) ? { value: boundary.jar.get(name)! } : undefined,
     set: (name: string, value: string) => { boundary.cookieWrite("set", name); boundary.jar.set(name, value); },
@@ -59,6 +59,7 @@ function expectPrivate(state: unknown) {
 }
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(Date.parse("2026-11-01T00:01:00.000Z"));
+  boundary.native = false;
   boundary.jar.clear(); boundary.complete.mockReset(); boundary.read.mockReset(); boundary.primary.mockReset(); boundary.effective.mockReset();
   boundary.primary.mockResolvedValue(session); boundary.effective.mockResolvedValue(session); boundary.read.mockResolvedValue(applied);
   await sealAuthOperation(operation, false);
@@ -143,5 +144,28 @@ describe("bounded staged password check", () => {
     const state = await completeStagedPassword({}, data);
     expect(boundary.complete).not.toHaveBeenCalled(); expect(boundary.read).not.toHaveBeenCalled();
     expect(state).toMatchObject({ passwordResult: { ref, state: "editing" } }); expectPrivate(state);
+  });
+});
+
+
+describe("native password result presentation", () => {
+  it("uses a real POST-to-GET redirect outside the mutation catch after an uncertain native save", async () => {
+    boundary.native = true;
+    boundary.complete.mockRejectedValue(new TypeError("Synthetic completion response lost"));
+    const data = form("save"); data.set("newPassword", "synthetic-new-password");
+    await expect(completeStagedPassword({}, data)).rejects.toMatchObject({ digest: expect.stringContaining(`/workspace/settings/link-complete/password?result=${ref}`) });
+    expect(boundary.complete).toHaveBeenCalledTimes(1); expect(boundary.read).not.toHaveBeenCalled();
+    expect(boundary.cookieWrite).not.toHaveBeenCalled(); expect(await readAuthOperation()).toMatchObject({ ref });
+  });
+  it("keeps native local validation on the same action form without dispatch or a redirect", async () => {
+    boundary.native = true;
+    const data = form("save"); data.set("newPassword", "short");
+    await expect(completeStagedPassword({}, data)).resolves.toMatchObject({ passwordResult: { ref, state: "editing" } });
+    expect(boundary.complete).not.toHaveBeenCalled(); expect(boundary.read).not.toHaveBeenCalled();
+  });
+  it("returns a native check postback state without a redirect loop or another password change", async () => {
+    boundary.native = true;
+    await expect(completeStagedPassword({}, form())).resolves.toMatchObject({ passwordResult: { ref, state: "applied" }, saved: true });
+    expect(boundary.read).toHaveBeenCalledTimes(1); expect(boundary.complete).not.toHaveBeenCalled();
   });
 });

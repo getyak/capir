@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { TalentSignalHttpError, type AccountSettings } from "@talent-signal/contracts";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 
 import { signIn } from "@/auth";
 import {
@@ -491,6 +492,25 @@ async function stagedPasswordAuthority(
 
 /** Same imported action serves save and read-only check; previous UI is no authority. */
 export async function completeStagedPassword(
+  previous: LoginMethodActionState,
+  form: FormData,
+): Promise<LoginMethodActionState> {
+  // Request metadata affects presentation only. All authority stays inside
+  // the same bound operation check; fetch responses never navigate over B.
+  const nativeSave = !(await headers()).has("next-action") &&
+    (form.get("passwordMode") ?? "save") === "save";
+  const result = await performStagedPassword(previous, form);
+  const outcome = result.passwordResult;
+  if (nativeSave && outcome &&
+    (outcome.state === "applied" || outcome.state === "unknown" || outcome.state === "pending")) {
+    // Framework redirect is outside the mutation catch. A received native
+    // response becomes GET; total response loss still needs explicit recovery.
+    redirect(`/workspace/settings/link-complete/password?result=${encodeURIComponent(outcome.ref)}`);
+  }
+  return result;
+}
+
+async function performStagedPassword(
   _previous: LoginMethodActionState,
   form: FormData,
 ): Promise<LoginMethodActionState> {
@@ -499,13 +519,12 @@ export async function completeStagedPassword(
   const submittedRef = String(form.get("operationRef") ?? "");
   const ref = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(submittedRef)
     ? submittedRef : "";
-  const state = (kind: NonNullable<LoginMethodActionState["passwordResult"]>["state"], error?: string): LoginMethodActionState => ({
+  const state = (kind: NonNullable<LoginMethodActionState["passwordResult"]>["state"]): LoginMethodActionState => ({
     passwordResult: { ref, state: kind },
     ...(kind === "applied" ? { saved: true } : {}),
-    ...(error ? { error } : {}),
   });
-  const invalid = () => state("invalid", "这次操作已过期或登录状态已变化。请回到设置重新验证。");
-  const unknown = () => state("unknown", "暂时无法确认这次更改的结果。请检查结果，不要重复提交密码。");
+  const invalid = () => state("invalid");
+  const unknown = () => state("unknown");
   const operation = await readAuthOperation();
   if (!ref || !(await stagedPasswordAuthority(operation, scope)) || !operation?.attempt ||
     (operation.intent !== "set_password" && operation.intent !== "change_password")) return invalid();
@@ -525,7 +544,7 @@ export async function completeStagedPassword(
         return state("applied");
       }
       if (result.state === "invalid") return invalid();
-      if (result.state === "pending") return state("pending", "这次更改仍在处理中，请稍后再检查结果。");
+      if (result.state === "pending") return state("pending");
       return unknown();
     } catch {
       return unknown();
@@ -535,7 +554,7 @@ export async function completeStagedPassword(
   const newPassword = String(form.get("newPassword") ?? "");
   if (newPassword.length < 8 || newPassword.length > 128) {
     // Only this correlated, pre-dispatch rejection can reopen the editor.
-    return state("editing", "新密码需要 8 到 128 个字符。");
+    return state("editing");
   }
   // Preserve the original bounded context. Late responses cannot clear B's
   // cookies or refresh A's lifetime; consumed grants remain one-use.

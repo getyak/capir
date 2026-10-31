@@ -1,5 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { afterAll, describe, expect, it } from "vitest";
+import { createServer, request as httpRequest } from "node:http";
+import type { Socket } from "node:net";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import { buildApp } from "../app.js";
 import type { BackendConfig } from "../config.js";
@@ -21,7 +23,7 @@ import {
   completeCredentialChange,
   startCredentialChange as startCredentialChangeRaw,
 } from "./accountLoginMethods.js";
-import type { PersistentSessionResponse, StartCredentialChangeRequest } from "@talent-signal/contracts";
+import { TalentSignalClient, type PersistentSessionResponse, type StartCredentialChangeRequest } from "@talent-signal/contracts";
 import {
   confirmPasswordRegistration,
   startPasswordRegistration,
@@ -2566,6 +2568,149 @@ describe.skipIf(!pool)("credential completion result routing (PostgreSQL)", () =
       await f.app.close();
     }
   }
+
+  // This proxy changes transport delivery only. The real backend must finish
+  // its exact completion response before the SDK's downstream socket is lost.
+  async function passwordCompletionLossProxy(upstreamAddress: string) {
+    const upstreamBase = new URL(upstreamAddress);
+    if (upstreamBase.protocol !== "http:" || upstreamBase.hostname !== "127.0.0.1") {
+      throw new Error("The response-loss fixture requires its owned loopback app.");
+    }
+    const completePath = "/v1/account/login-methods/complete";
+    const resultPath = "/v1/account/login-methods/result";
+    const sockets = new Set<Socket>();
+    const observeSocket = (socket: Socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    };
+    // Deliberately retain no headers, bodies, passwords or attempt proofs.
+    const observed = {
+      completionRequests: 0, resultRequests: 0,
+      completionStatus: 0, completionResponseEnded: false,
+      originsMatch: true,
+    };
+    const server = createServer((incoming, downstream) => {
+      if (incoming.method !== "POST" || ![completePath, resultPath].includes(incoming.url ?? "")) {
+        incoming.resume();
+        downstream.writeHead(404).end();
+        return;
+      }
+      const completion = incoming.url === completePath;
+      if (completion) observed.completionRequests++;
+      else observed.resultRequests++;
+      observed.originsMatch &&= incoming.headers.origin === "https://web.test";
+      const target = new URL(incoming.url!, upstreamBase);
+      const upstream = httpRequest(target, {
+        method: "POST", agent: false,
+        headers: { ...incoming.headers, host: target.host },
+      }, (response) => {
+        response.once("error", () => downstream.destroy());
+        if (completion) observed.completionStatus = response.statusCode ?? 0;
+        if (completion && response.statusCode === 200) {
+          response.once("end", () => {
+            observed.completionResponseEnded = response.complete;
+            // No success headers or body have been delivered downstream.
+            downstream.destroy();
+          });
+          response.resume();
+        } else {
+          downstream.writeHead(response.statusCode ?? 502, response.headers);
+          response.pipe(downstream);
+        }
+      });
+      upstream.once("socket", observeSocket);
+      upstream.once("error", () => downstream.destroy());
+      incoming.once("aborted", () => upstream.destroy());
+      incoming.pipe(upstream);
+    });
+    server.on("connection", observeSocket);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing loopback fixture port.");
+    return {
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      observed,
+      async close() {
+        // Only this proxy's accepted and upstream sockets are owned here.
+        const closed = new Promise<void>((resolve, reject) => {
+          server.close((error) => error ? reject(error) : resolve());
+        });
+        for (const socket of sockets) socket.destroy();
+        await closed;
+      },
+    };
+  }
+
+  it("recovers one committed password change through the real SDK after its HTTP success response is lost", async () => {
+    await withPasswordResult(false, async (f) => {
+      const held = (await pool!.query<{ session_id: string; expires_at: Date; consumed_at: Date | null }>(
+        "SELECT session_id,expires_at,consumed_at FROM credential_change_attempts WHERE id=$1",
+        [f.grant.attempt_id],
+      )).rows[0]!;
+      expect(held.session_id).toBe(f.auth.sessionId);
+      expect(held.consumed_at).toBeNull();
+      const pendingFingerprint = await passwordResultBusinessFingerprint(f);
+      const upstreamAddress = await f.app.listen({ host: "127.0.0.1", port: 0 });
+      const proxy = await passwordCompletionLossProxy(upstreamAddress);
+      const realFetch = globalThis.fetch;
+      // The current SDK uses global fetch, not a constructor fetch option.
+      // Supply the real browser Origin without replacing any HTTP response.
+      let restoreFetch = () => {};
+      try {
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          if (url.origin !== proxy.baseUrl) throw new Error("Unexpected non-fixture SDK destination.");
+          const headers = new Headers(init?.headers);
+          headers.set("origin", "https://web.test");
+          return realFetch(input, { ...init, headers });
+        });
+        restoreFetch = () => fetchSpy.mockRestore();
+        const client = new TalentSignalClient(proxy.baseUrl, f.token);
+        client.setClientPlatform("web");
+        await expect(client.completeLoginMethodChange({
+          attempt_id: f.grant.attempt_id, attempt_secret: f.grant.attempt_secret,
+          origin: "server-derived", password: "synthetic-result-boundary-after",
+        }, AbortSignal.timeout(5_000))).rejects.toMatchObject({ name: "TypeError" });
+        expect(proxy.observed).toMatchObject({
+          completionRequests: 1, resultRequests: 0,
+          completionStatus: 200, completionResponseEnded: true, originsMatch: true,
+        });
+        const appliedFingerprint = await passwordResultBusinessFingerprint(f);
+        expect(appliedFingerprint).not.toBe(pendingFingerprint);
+        let previousRead: Awaited<ReturnType<TalentSignalClient["readCredentialChangeResult"]>> | undefined;
+        for (let read = 0; read < 2; read++) {
+          expect(proxy.observed.completionRequests).toBe(1);
+          const result = await client.readCredentialChangeResult(f.payload, AbortSignal.timeout(5_000));
+          expect(result).toMatchObject({
+            state: "applied", attempt_id: f.grant.attempt_id, intent: "change_password",
+            account_id: f.account.accountId, user_id: f.account.userId,
+            outcome: "password_set", expires_at: held.expires_at.toISOString(),
+          });
+          expect(JSON.stringify(result)).not.toContain(f.grant.attempt_secret);
+          if (previousRead) expect(result).toEqual(previousRead);
+          previousRead = result;
+          expect(await passwordResultBusinessFingerprint(f)).toBe(appliedFingerprint);
+          expect(proxy.observed.completionRequests).toBe(1);
+        }
+        const stillHeld = (await pool!.query<{ session_id: string; expires_at: Date; consumed_at: Date | null }>(
+          "SELECT session_id,expires_at,consumed_at FROM credential_change_attempts WHERE id=$1",
+          [f.grant.attempt_id],
+        )).rows[0]!;
+        expect(stillHeld).toMatchObject({ session_id: held.session_id, expires_at: held.expires_at });
+        expect(stillHeld.consumed_at).toBeInstanceOf(Date);
+        expect(proxy.observed).toMatchObject({ completionRequests: 1, resultRequests: 2, originsMatch: true });
+        expect(await passwordResultBusinessFingerprint(f)).toBe(appliedFingerprint);
+      } finally {
+        try { restoreFetch(); } finally { await proxy.close(); }
+      }
+    });
+  }, 30_000);
 
   it("reads the same applied password receipt after real web-session enrollment and renewal", async () => {
     await withPasswordResult(true, async (f) => {

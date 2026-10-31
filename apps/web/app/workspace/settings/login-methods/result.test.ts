@@ -9,6 +9,7 @@ const boundary = vi.hoisted(() => ({
   claims: vi.fn(),
 }));
 vi.mock("next/headers", () => ({
+  headers: async () => new Headers({ "next-action": "synthetic-action" }),
   cookies: async () => ({
     get: (name: string) => boundary.jar.has(name) ? { value: boundary.jar.get(name)! } : undefined,
     set: (name: string, value: string) => { boundary.jar.set(name, value); },
