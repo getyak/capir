@@ -20,6 +20,10 @@ const hash = (value: string | Buffer) => createHash("sha256").update(value).dige
 const secret = () => randomBytes(32).toString("base64url");
 // Fixed source-authored message variants only; never hash or emit an unknown runtime message.
 const FIXTURE_FAILURE_CODES = new Map<string,string>([["absolute existing Chrome path required","ASSERT_84f6f77679eb"],["Action dispatch gate","ASSERT_b5a6a1ae7481"],["actual Error recovery or verified read-only automatic GET; never stale editor","ASSERT_24f24a6ca9a5"],["actual Git HEAD required","ASSERT_1b3b742e4998"],["actual native303 followed by GET","ASSERT_b19f64a7cfdd"],["Ambiguous browser Action dispatch","ASSERT_7c75f613a522"],["applied UI is read-only","ASSERT_329f4a083e3b"],["CDP command rejected","ASSERT_eb7ec85a2ba1"],["CDP connection failed","ASSERT_c9995e881017"],["CDP connection timeout","ASSERT_96211f1f2072"],["checkout bytes must match actual HEAD blob","ASSERT_50d71e1f4296"],["child must own detached group/session","ASSERT_b437f34bcd04"],["complete held Action response","ASSERT_cb7e98a0e49c"],["control envelope bound","ASSERT_5444effd3d54"],["Cross-origin fixture navigation refused","ASSERT_d3af097c75f7"],["dedicated loopback get350 database required","ASSERT_6d08f1f6ad3a"],["explicit protocol flag required; no skip","ASSERT_ca06d99af71f"],["explicit runner-temp receipt directory required","ASSERT_9eeb42990fcb"],["first GET recovery is business-read-only","ASSERT_0a71f92d929e"],["fixture hydration","ASSERT_2f2789637d83"],["Fixture navigation failed","ASSERT_d1304dd6c483"],["Fixture page evaluation failed","ASSERT_2065cd2f4bb4"],["Fixture page function failed","ASSERT_013265c436c5"],["fixture slot is one-use","ASSERT_412e0cadebd3"],["flow createdAt/exp/iat/jti/envelope changed","ASSERT_e7649e986bc1"],["gate precedes producer","ASSERT_cb3c055f7f39"],["HEAD source path missing","ASSERT_e4d273e7bdd6"],["HEAD/source/lock changed during protocol run","ASSERT_2ea8c4b79011"],["held HTTP and exact CDP Action must match","ASSERT_274f018e9609"],["initial real flow baseline required","ASSERT_b48a7803998a"],["installed framework changed during run","ASSERT_6881ad0346e7"],["installed framework must match actual lock","ASSERT_6234bcdaa43d"],["installed framework version required","ASSERT_76ec9073499e"],["Invalid owned Chrome port","ASSERT_bd7ef75fa7de"],["Invalid real flow-cookie inspection","ASSERT_8eaeb59d881f"],["late A cannot display success for B","ASSERT_4eed558bcfda"],["late A committed before B","ASSERT_731cb062b608"],["late A dispatch","ASSERT_5776512235d4"],["late A held/CDP request match","ASSERT_2be6b4503aa0"],["late A must not replace B editor","ASSERT_974177361e1f"],["late A real commit","ASSERT_59f101835566"],["late A response held","ASSERT_bdc6c3297440"],["late A was not replayed","ASSERT_4ae346a77d7c"],["late response has no B business effects","ASSERT_74af7b650ff4"],["Linux Node22+ with built-in WebSocket required","ASSERT_db285a1da112"],["loopback server address","ASSERT_8ef74b50a2ce"],["Missing controlled DOM target","ASSERT_f7d6a4ce7f77"],["Missing current fixture page context","ASSERT_390afcdd6365"],["Missing fixture click target","ASSERT_56043906bd5d"],["Missing owned Chrome endpoint","ASSERT_1a60f17ff6f1"],["Missing production password input","ASSERT_9cfce4c88e53"],["Missing specific Action tracker","ASSERT_6dc413fbd2ab"],["native GET reload never resubmits","ASSERT_49ee4c2b53de"],["native minlength prevents dispatch","ASSERT_014a211dd7eb"],["native real form","ASSERT_df5e85d69e3b"],["native validation sent no hidden Action POST","ASSERT_4156d0173378"],["Next build budget","ASSERT_9094c05c841c"],["Next build diagnostic output overflow","ASSERT_8337d1768ac5"],["no external browser request","ASSERT_2d3d538de912"],["no second browser Action","ASSERT_a946e64099ae"],["one actual locked framework selection required","ASSERT_07eb5975d9d3"],["one native rejected POST, no303/no backend complete","ASSERT_96990f69e25f"],["one owned action interception","ASSERT_564ec52c36d1"],["one owned Next port","ASSERT_8c71d7cbad30"],["one real successful completion","ASSERT_a39a4f21e792"],["original consumed grant TTL","ASSERT_1cc75ffe9dba"],["owned build output pipes required","ASSERT_4087657f7828"],["Owned CDP socket closed","ASSERT_b1e8fc632981"],["owned child Chrome endpoint proof required","ASSERT_191d9d9e94d1"],["owned child DevTools announcement","ASSERT_bffbaf3f5bd6"],["owned Chrome announcement pipe required","ASSERT_63229ebd0096"],["Owned Chrome metadata unavailable","ASSERT_c260fa9142f9"],["owned fixture cleanup failed","ASSERT_6d3213a801a5"],["owned front authority","ASSERT_dd82e41d2146"],["owned group identity changed","ASSERT_fd0690466426"],["owned group membership unavailable","ASSERT_b45a02ff8a77"],["owned group PID format","ASSERT_6f8d8cc00ddd"],["owned leader reused/changed","ASSERT_0d12d5b828fd"],["owned member PID reused","ASSERT_b4460af98e8c"],["Owned Next child error","ASSERT_bf7d2e73063e"],["owned process group still nonempty","ASSERT_610f8eb2ec7b"],["owned project cleanup scope","ASSERT_4af0e15d9a03"],["owned protocol PG required; no skip","ASSERT_793cf6b68ed8"],["owned runtime cleanup scope","ASSERT_59798dcc20b5"],["password grant has no provider challenge","ASSERT_8b1a2e38d675"],["process start identity unavailable","ASSERT_b8a2a57fcbf7"],["product checkpoint must exist before dispatch","ASSERT_a59db6eef644"],["production visible GET recovery link","ASSERT_36b604dcef0b"],["Protected Next setup failed","ASSERT_5b68bbd907f5"],["Protocol condition timed out: actual Error recovery or verified read-only automatic GET; never stale editor","ASSERT_24f24a6ca9a5"],["Protocol condition timed out: fixture hydration","ASSERT_2f2789637d83"],["Protocol condition timed out: late A real commit","ASSERT_59f101835566"],["Protocol condition timed out: native real form","ASSERT_df5e85d69e3b"],["Protocol condition timed out: owned child DevTools announcement","ASSERT_bffbaf3f5bd6"],["Protocol condition timed out: real applied UI","ASSERT_fb7fe68672c6"],["Protocol condition timed out: real native local rejection formState","ASSERT_4b6c7faa3285"],["Protocol condition timed out: real Next client navigation to B","ASSERT_bd7b04a1af1a"],["Protocol condition timed out: real Next readiness","ASSERT_93b2a02ed3d1"],["Protocol condition timed out: real producer200","ASSERT_43a83c46adb3"],["Protocol condition timed out: same Action responseReceived before body loss","ASSERT_456be2295d53"],["Protocol condition timed out: same Action transport loss","ASSERT_a9d260c20a9c"],["Protocol condition timed out: same held late A transport settled","ASSERT_3363ba0b9253"],["Protocol condition timed out: settled real network","ASSERT_9efd06e672aa"],["Protocol condition timed out: specific browser Action request","ASSERT_f00dd0a305ec"],["Protocol condition timed out: visible production GET recovery","ASSERT_ad1349a86634"],["protocol did not reach all three scenarios","ASSERT_9f282ed894ad"],["protocol PG must be migrated and empty","ASSERT_5da89526f481"],["quoted lock selection","ASSERT_619e8b6030d4"],["real applied UI","ASSERT_fb7fe68672c6"],["real complete Action response","ASSERT_c52c3f1617b9"],["real complete upstream Action","ASSERT_e163f3c2d6ed"],["real native local rejection formState","ASSERT_4b6c7faa3285"],["real Next build failed","ASSERT_32961970352c"],["real Next client navigation to B","ASSERT_bd7b04a1af1a"],["real Next readiness","ASSERT_93b2a02ed3d1"],["Real page load timed out","ASSERT_edc19e9d1f80"],["real producer200","ASSERT_43a83c46adb3"],["real rendered operation ref","ASSERT_f0776b39b781"],["real Web grant origin/session binding","ASSERT_9869e45874af"],["receipt directory identity","ASSERT_5958f67de335"],["receipt directory must start empty","ASSERT_79ba70301c9b"],["receipt directory outside owned runner-temp slot","ASSERT_33fcb0e9f966"],["received native redirect gives GET URL","ASSERT_f6094fc05f85"],["registry framework version required","ASSERT_646668ae857c"],["regular HEAD source blob required","ASSERT_9e663c3a2a66"],["regular source checkout required","ASSERT_4889f9683583"],["repeat GET same receipt and no replay","ASSERT_8a8e463a7959"],["same Action responseReceived before body loss","ASSERT_456be2295d53"],["same Action transport loss","ASSERT_a9d260c20a9c"],["same held late A transport settled","ASSERT_3363ba0b9253"],["server-rejected same-operation form remains editing","ASSERT_9f5ce1f673be"],["settled real network","ASSERT_9efd06e672aa"],["specific browser Action request","ASSERT_f00dd0a305ec"],["synthetic business fingerprint row","ASSERT_89a80d091d1f"],["unknown member after leader exit; refuse signals","ASSERT_bee161fb44ad"],["unregistered child group","ASSERT_9e4ffa6c1a86"],["Unrelated Chrome endpoint refused","ASSERT_68fe559173b6"],["unsupported/ambiguous pnpm lock block","ASSERT_90c6ce38b5a2"],["visible production GET recovery","ASSERT_ad1349a86634"],["Voice is outside this protocol fixture","ASSERT_061d8a207cad"]]);
+FIXTURE_FAILURE_CODES.set("no active frontend response before controlled connection drain","ASSERT_c239080432f2");
+FIXTURE_FAILURE_CODES.set("owned frontend connections drained before controlled action","ASSERT_949aa1c38ed7");
+FIXTURE_FAILURE_CODES.set("controlled Action is first HTTP request on frontend connection","ASSERT_8947e446ac77");
+FIXTURE_FAILURE_CODES.set("Protocol condition timed out: owned frontend connections drained before controlled action","ASSERT_949aa1c38ed7");
 const SOURCE_PATHS = [
   "apps/web/app/workspace/settings/link-complete/password/page.tsx",
   "apps/web/app/workspace/settings/link-complete/password/error.tsx",
@@ -199,13 +203,17 @@ let lastTransportDiagnostic:Record<string,unknown>|null=null;
 const transportObservations:Array<Record<string,unknown>>=[];
 const diagnosticBool=(value:unknown)=>typeof value==="boolean"?value:null;
 const diagnosticCount=(value:unknown)=>typeof value==="number"&&Number.isSafeInteger(value)&&value>=0&&value<=1_000_000?value:null;
-type Arm = { cutObservation?:()=>CutObservation; enhanced: boolean; actionKey:string; received: ReturnType<typeof deferred>; dispatch: ReturnType<typeof deferred>;
+type Arm = { frontendRequestOrdinal?:number; cutObservation?:()=>CutObservation; enhanced: boolean; actionKey:string; received: ReturnType<typeof deferred>; dispatch: ReturnType<typeof deferred>;
   response: ReturnType<typeof deferred>; status: number; outgoing?: import("node:http").ServerResponse;
   headers?: import("node:http").IncomingHttpHeaders; chunks: Buffer[]; size: number; terminal: boolean };
 function frontendProxy() {
   let nextPort:number|undefined,frontAuthority:string|undefined; let armed: Arm | undefined; let active: Arm | undefined;
   const observed = { passwordPosts: 0, native303: 0, native200:0, recoveryGets: 0 };
+  const frontendSockets=new Set<Socket>(),frontendRequests=new WeakMap<Socket,number>();
+  const activeFrontendResponses=new Set<import("node:http").ServerResponse>();
   const server = createServer((incoming, outgoing) => {
+    const requestOrdinal=(frontendRequests.get(incoming.socket)??0)+1;frontendRequests.set(incoming.socket,requestOrdinal);
+    activeFrontendResponses.add(outgoing);outgoing.once("finish",()=>activeFrontendResponses.delete(outgoing));outgoing.once("close",()=>activeFrontendResponses.delete(outgoing));
     if(!nextPort||!frontAuthority){outgoing.writeHead(503).end();return;}
     const requestTarget=incoming.url;
     if(!requestTarget?.startsWith("/")||requestTarget.startsWith("//")||/[\\\r\n#]/.test(requestTarget)||incoming.headers.host!==frontAuthority){outgoing.writeHead(404).end();return;}
@@ -216,7 +224,7 @@ function frontendProxy() {
     if (incoming.method === "GET" && url.pathname === PASSWORD_PATH && url.searchParams.has("result")) observed.recoveryGets++;
     const plan = passwordPost ? armed : undefined;
     if (passwordPost) { observed.passwordPosts++; armed = undefined; }
-    if (plan) { active = plan; plan.enhanced = typeof incoming.headers["next-action"] === "string";
+    if (plan) { active = plan; plan.frontendRequestOrdinal=requestOrdinal;plan.enhanced = typeof incoming.headers["next-action"] === "string";
       plan.actionKey=hash(`POST\0${incoming.url}\0${incoming.headers["next-action"]??""}`);plan.received.resolve(); }
     const forward = () => {
       const upstream = httpRequest({protocol:"http:",hostname:"127.0.0.1",port,path:requestTarget,
@@ -225,7 +233,7 @@ function frontendProxy() {
         response.once("error", () => outgoing.destroy());
         if (passwordPost && response.statusCode === 303) observed.native303++;
         if(passwordPost&&!incoming.headers["next-action"]&&response.statusCode===200)observed.native200++;
-        if (!plan) { outgoing.writeHead(response.statusCode ?? 502, response.headers); response.pipe(outgoing); return; }
+        if (!plan) { outgoing.writeHead(response.statusCode ?? 502, {...response.headers,connection:"close"}); response.pipe(outgoing); return; }
         plan.status = response.statusCode ?? 0; plan.headers = response.headers; plan.outgoing = outgoing;
         response.on("data", (chunk: Buffer) => {
           plan.size += chunk.length;
@@ -241,8 +249,15 @@ function frontendProxy() {
     };
     if (plan) void plan.dispatch.promise.then(forward); else forward();
   });
+  server.on("connection",socket=>{frontendSockets.add(socket);socket.once("close",()=>frontendSockets.delete(socket));});
   const owned = ownServer(server);
   return {server,observed,
+    async prepareFirstFrontendRequest(){
+      check(activeFrontendResponses.size===0,"no active frontend response before controlled connection drain");
+      const closed=frontendSockets.size;for(const socket of frontendSockets)socket.destroy();
+      await until(async()=>frontendSockets.size===0,"owned frontend connections drained before controlled action",5000);
+      return closed;
+    },
     setNextPort(port:number){check(nextPort===undefined&&Number.isInteger(port)&&port>0&&port<=65535,"one owned Next port");nextPort=port;},
     setFrontAuthority(host:string){check(frontAuthority===undefined&&/^127\.0\.0\.1:[1-9]\d{0,4}$/.test(host)&&Number(host.split(":")[1])<=65535,"owned front authority");frontAuthority=host;},
     arm() {
@@ -563,16 +578,18 @@ async function main() {
       let observeTransport:(()=>Record<string,unknown>)|undefined;
       try {
         const visibleHref = await page.attribute(`a[href*="?result="]`, "href"); check(visibleHref, "production visible GET recovery link");
+        await page.quiet();const frontendConnectionsDrained=await proxy.prepareFirstFrontendRequest();
         const pending = await fingerprint(f), beforePosts=page.observed.passwordPosts, plan = proxy.arm();
         const wirePostsBefore=proxy.observed.passwordPosts;
         await page.fillPassword(secret()); await page.click('button[type="submit"]'); await bounded(plan.received.promise, "Action dispatch gate");
         const action=await page.passwordAction(beforePosts);
-        observeTransport=()=>{const cut=plan.cutObservation?.();return {boundary,backendCompletionRequests:diagnosticCount(f.completionRequests),backendCompletionStatus:diagnosticCount(f.completionStatus),backendResultRequests:diagnosticCount(f.resultRequests),
+        observeTransport=()=>{const cut=plan.cutObservation?.();return {boundary,frontendConnectionsDrained:diagnosticCount(frontendConnectionsDrained),firstFrontendRequestOrdinal:diagnosticCount(plan.frontendRequestOrdinal),backendCompletionRequests:diagnosticCount(f.completionRequests),backendCompletionStatus:diagnosticCount(f.completionStatus),backendResultRequests:diagnosticCount(f.resultRequests),
           wirePasswordPosts:diagnosticCount(proxy.observed.passwordPosts),wirePasswordPostDelta:diagnosticCount(proxy.observed.passwordPosts-wirePostsBefore),recoveryGets:diagnosticCount(proxy.observed.recoveryGets),
           browserPasswordPosts:diagnosticCount(page.observed.passwordPosts),browserPasswordPostDelta:diagnosticCount(page.observed.passwordPosts-beforePosts),browserActionHeaders:diagnosticCount(page.observed.actionHeaders),
           browserFailedPasswordRequests:diagnosticCount(page.observed.failedPasswordRequests),browserFinishedPasswordRequests:diagnosticCount(page.observed.finishedPasswordRequests),blockedExternalRequests:diagnosticCount(page.observed.blockedExternal),
           actionResponseReceived:diagnosticBool(action.responseReceived),actionStatus:diagnosticCount(action.status),actionFinished:diagnosticBool(action.finished),actionFailed:diagnosticBool(action.failed),cut:cut?{responsePresent:cut.responsePresent,headersSentBefore:cut.headersSentBefore,responseEndedBefore:cut.responseEndedBefore,socketPresent:cut.socketPresent,socketDestroyedBefore:cut.socketDestroyedBefore,socketDestroyedAfter:cut.socketDestroyedAfter,responseDestroyedAfter:cut.responseDestroyedAfter,socketClosedByObservation:cut.socketClosedByObservation}:null};};
         check(plan.enhanced&&action.enhanced&&action.keyHash===plan.actionKey,"held HTTP and exact CDP Action must match");
+        check(plan.frontendRequestOrdinal===1,"controlled Action is first HTTP request on frontend connection");
         check(await page.currentUrl() === new URL(visibleHref, front).href, "product checkpoint must exist before dispatch");
         check(f.completionRequests === 0 && await fingerprint(f) === pending, "gate precedes producer");
         plan.dispatch.resolve(); await bounded(plan.response.promise, "real complete Action response");
@@ -646,8 +663,9 @@ async function main() {
     // Scenario 3: late real A response cannot overwrite B or clear B's sealed cookie.
     phase = "late:A-B"; const a = await makeFixture("late-a"), page = await open(a);
     try {
+      await page.quiet();await proxy.prepareFirstFrontendRequest();
       const beforePosts=page.observed.passwordPosts,plan = proxy.arm(); await page.fillPassword(secret()); await page.click('button[type="submit"]');
-      await bounded(plan.received.promise, "late A dispatch"); const action=await page.passwordAction(beforePosts);check(plan.enhanced&&action.enhanced&&action.keyHash===plan.actionKey,"late A held/CDP request match"); plan.dispatch.resolve();
+      await bounded(plan.received.promise, "late A dispatch"); const action=await page.passwordAction(beforePosts);check(plan.enhanced&&action.enhanced&&action.keyHash===plan.actionKey,"late A held/CDP request match"); check(plan.frontendRequestOrdinal===1,"controlled Action is first HTTP request on frontend connection");plan.dispatch.resolve();
       await bounded(plan.response.promise, "late A response held"); await until(async () => a.completionStatus === 200, "late A real commit");
       check(a.completionRequests === 1 && plan.status === 200 && plan.terminal, "late A committed before B");
       const aCommitted = await fingerprint(a), b = await makeFixture("late-b"), bPending = await fingerprint(b);
