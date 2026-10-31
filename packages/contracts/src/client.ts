@@ -435,6 +435,8 @@ export class TalentSignalClient {
       throw unverifiable();
     }
     if (payload.state === "applied" && (
+      !Number.isSafeInteger(payload.revision_before) ||
+      !Number.isSafeInteger(payload.revision_after) ||
       payload.revision_after !== payload.revision_before + 1 ||
       !Number.isFinite(Date.parse(payload.consumed_at)) ||
       Date.parse(payload.consumed_at) > Date.parse(payload.expires_at)

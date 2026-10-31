@@ -843,6 +843,7 @@ type CredentialResultRow = {
   current_user_revision: number;
   expires_at: Date;
   consumed_at: Date | null;
+  consumed_time_valid: boolean | null;
   event_present: boolean;
   event_scope_matches: boolean | null;
   receipt_hash: string | null;
@@ -871,6 +872,7 @@ export async function readCredentialChangeResult(
     `SELECT a.id, a.provider, a.origin, a.client_label,
             a.expected_revision, a.expected_user_revision,
             a.expires_at, a.consumed_at,
+            (a.consumed_at <= now() AND a.consumed_at <= a.expires_at) AS consumed_time_valid,
             ac.settings_revision AS current_account_revision,
             u.profile_revision AS current_user_revision,
             (e.id IS NOT NULL) AS event_present,
@@ -922,6 +924,7 @@ export async function readCredentialChangeResult(
     attempt: row.id, provider: row.provider, origin: row.origin,
   }));
   if (
+    row.consumed_time_valid !== true ||
     !row.event_present || row.event_scope_matches !== true ||
     row.receipt_target_matches !== true || row.receipt_hash !== expectedHash ||
     row.receipt_outcome !== "password_set" ||
