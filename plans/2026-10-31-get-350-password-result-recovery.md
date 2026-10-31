@@ -22,8 +22,9 @@ No new provider integration, persistent secret store or schema migration is plan
 - [x] Inspect current source, original dirty branch and accepted architecture; preserve the original branch/worktree.
 - [x] Independently review backend binding/transaction and installed Next16.4.2 action, form and navigation contracts; record unresolved runtime tests.
 - [x] Publish test-only baseline and observe correct context-loss RED: [Web job124557947844](https://github.com/getyak/capir/actions/runs/41208328135/job/124557947844), 3685 pass and only the two new retention assertions fail after the exact backend-call precondition. Boundary mock evidence is not a real database commit or browser failure.
-- [ ] Minimal context-retention GREEN; existing unrelated credential paths unchanged.
-- [ ] Real isolated PostgreSQL RED for the wrong audit after-revision and missing authenticated outcome route, then implement the typed reader and correct producer.
+- [x] Minimal context-retention GREEN: current-head Web quality passed lint/typecheck/all tests/build at [job124565035205](https://github.com/getyak/capir/actions/runs/41210737454/job/124565035205); other credential paths unchanged.
+- [x] Real isolated PostgreSQL RED: [job124565035186](https://github.com/getyak/capir/actions/runs/41210737454/job/124565035186) executed40 cases,38 passed and only the actual wrong after-revision and missing result-route assertions failed.
+- [ ] Implement and verify the typed read-only outcome producer and exact audit revision fix.
 - [ ] Verify actor/session renewal, wrong scope/origin/secret/intent, expiry/revocation, own and later revisions, missing/contradictory event, member access and zero repeated credential effect.
 - [ ] Actual Web save/check, action response loss, first save/local rejection, reload, native POST replay/GET recovery, A/B isolation and no secret serialization.
 - [ ] Controlled HTTP response loss uses the exact credential complete route and production producer/client; unrelated loss fixtures do not prove it.
@@ -32,4 +33,4 @@ No new provider integration, persistent secret store or schema migration is plan
 
 ## Current boundary
 
-Only the first Web regression evidence is executed. The new PG assertions and route test still need real execution in the existing CI-owned `account_proof` database; absence of that environment/skip does not count. A partial green suite cannot complete this plan. No real account password, provider or model was called by this work. Completion requires the actual outcome above and runtime acceptance, not just retained cookies.
+Web RED→context GREEN and real `account_proof` PG/route RED are executed. The backend reader/schema/route and producer correction now have an independent source review but still require current-head GREEN; no SDK or complete Web/transport recovery is claimed. A partial green suite cannot complete this plan. No real account password, provider or model was called by this work. Completion requires the actual outcome above and runtime acceptance, not just retained cookies.
