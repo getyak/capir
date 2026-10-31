@@ -41,11 +41,11 @@ export async function writeProtocolApp(dir: string, repo: string) {
       }} };`,
     "unavailable-auth.ts": `import type NextAuth from "next-auth";
       type AuthResult = ReturnType<typeof NextAuth>;
-      const unavailable = async () => { throw new Error("OAuth/Auth.js is outside this owned protocol fixture"); };
-      export const auth = unavailable as AuthResult["auth"];
-      export const signIn = unavailable as AuthResult["signIn"];
-      export const signOut = unavailable as AuthResult["signOut"];
-      export const handlers = {GET:unavailable,POST:unavailable} as AuthResult["handlers"];`,
+      const unavailable = ():never => { throw new Error("OAuth/Auth.js is outside this owned protocol fixture"); };
+      export const auth:AuthResult["auth"] = unavailable;
+      export const signIn:AuthResult["signIn"] = unavailable;
+      export const signOut:AuthResult["signOut"] = unavailable;
+      export const handlers:AuthResult["handlers"] = {GET:unavailable,POST:unavailable};`,
     "backend-auth.ts": `import "server-only";
       import {cache} from "react";
       import {cookies,headers} from "next/headers";
