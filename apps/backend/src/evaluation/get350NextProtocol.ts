@@ -135,8 +135,8 @@ function rememberGroup(process:ChildProcess|undefined){
   const group=ownedGroups.get(process);check(group,"unregistered child group");
   if(!group.closed)groupMembers(group);
 }
-function child(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, pipeStderr=false) {
-  const process=spawn(command,args,{cwd,env,detached:true,stdio:["ignore","ignore",pipeStderr?"pipe":"ignore"]});
+function child(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, pipeStderr=false, pipeStdout=false) {
+  const process=spawn(command,args,{cwd,env,detached:true,stdio:["ignore",pipeStdout?"pipe":"ignore",pipeStderr?"pipe":"ignore"]});
   // Readiness/build checks still fail; an unhandled spawn event must not bypass finally.
   process.on("error",()=>{});
   if(process.pid){
@@ -254,6 +254,67 @@ function frontendProxy() {
   };
 }
 
+type NextBuildDiagnostic={stage:string;frameworksValidated:boolean;compilerDependenciesResolved:boolean;templatesPrepared:boolean;capabilityPrepared:boolean;
+  childRegistered:boolean;exitCode:number|null;signal:string|null;timedOut:boolean;spawnErrorCode:string|null;
+  stdoutBytes:number;stderrBytes:number;captureTruncated:boolean;categories:string[];typescriptCodes:string[];
+  modules:string[];locations:Array<{path:string;line:number|null;column:number|null}>;rawOutputSuppressed:true};
+let nextBuildDiagnostic:NextBuildDiagnostic|undefined;
+function buildOutputCapture(process:ChildProcess){
+  check(process.stdout&&process.stderr,"owned build output pipes required");
+  const buffers:Record<"stdout"|"stderr",Buffer>={stdout:Buffer.alloc(0),stderr:Buffer.alloc(0)};
+  const bytes={stdout:0,stderr:0};
+  for(const name of ["stdout","stderr"] as const)process[name]!.on("data",(chunk:Buffer)=>{
+    bytes[name]+=chunk.length;buffers[name]=Buffer.from(Buffer.concat([buffers[name],chunk]).subarray(-32768));
+  });
+  return {summarize(repo:string,project:string,capabilities:string[]){
+    if(bytes.stdout>32768||bytes.stderr>32768){
+      buffers.stdout=Buffer.alloc(0);buffers.stderr=Buffer.alloc(0);
+      return {stdoutBytes:bytes.stdout,stderrBytes:bytes.stderr,captureTruncated:true,categories:["diagnostic-output-overflow"],typescriptCodes:[],modules:[],locations:[],rawOutputSuppressed:true as const};
+    }
+    let text=Buffer.concat([buffers.stdout,Buffer.from("\n"),buffers.stderr]).toString("utf8");
+    // Redact known raw/URL/JSON/base64 variants before deriving any allowed field.
+    const values=new Set<string>();
+    for(const capability of capabilities.filter(Boolean)){
+      values.add(capability);values.add(encodeURIComponent(capability));values.add(Buffer.from(capability).toString("base64"));
+      values.add(JSON.stringify(capability).slice(1,-1));
+    }
+    for(const capability of [...values].sort((a,b)=>b.length-a.length))text=text.split(capability).join("[CAPABILITY]");
+    text=text.replace(/\x1b\[[0-9;]*[A-Za-z]/g,"").replace(/\r/g,"");
+    const rules:Array<[string,RegExp]>=[["module-resolution",/Module not found|Cannot find module|Can't resolve/i],
+      ["typescript",/Type error:|error TS\d{4}|TS\d{4}/], ["syntax",/SyntaxError|Parsing .* failed|Unexpected token/i],
+      ["next-config",/Invalid next\.config|Unrecognized key|Failed to load next\.config/i],
+      ["turbopack",/Turbopack.*(?:error|failed)|Error.*Turbopack/i],
+      ["prerender",/Error occurred prerendering|Failed to collect page data/i],
+      ["resource",/ENOMEM|EAGAIN|heap out of memory|EACCES/] ];
+    const categories=rules.filter(([,pattern])=>pattern.test(text)).map(([name])=>name);
+    const typescriptCodes=[...new Set(text.match(/\bTS\d{4}\b/g)??[])].slice(0,8);
+    const modules:string[]=[];
+    for(const match of text.matchAll(/(?:Can't resolve|Cannot find module)\s+["']([^"'\n]{1,200})["']/gi)){
+      const value=match[1]!;
+      if(!value.startsWith("/")&&!value.startsWith("..")&&/^[A-Za-z0-9@_./+-]+$/.test(value)&&!/(?:CAPABILITY|chrome-profile|capability|\.env|_private)/i.test(value)&&!modules.includes(value))modules.push(value);
+      if(modules.length>=8)break;
+    }
+    const locations:Array<{path:string;line:number|null;column:number|null}>=[];
+    for(const match of text.matchAll(/([A-Za-z0-9_@./+\[\]()-]+\.(?:tsx?|jsx?|mjs|json|css))(?::(\d+)(?::(\d+))?)?/g)){
+      const raw=match[1]!,clean=raw.replace(/^\[project\]\//,"").replace(/^\.\//,"");
+      const absolute=raw.startsWith("/")?resolve(raw):resolve(clean.startsWith("apps/")||clean.startsWith("packages/")?repo:project,clean);
+      let path:string|undefined;
+      if(absolute.startsWith(project+"/"))path="fixture/"+absolute.slice(project.length+1);
+      else if(absolute.startsWith(repo+"/")){
+        const relative=absolute.slice(repo.length+1);
+        if(/^(?:apps\/web\/|apps\/backend\/src\/evaluation\/|packages\/)/.test(relative))path="repo/"+relative;
+      }
+      if(!path||/(?:CAPABILITY|chrome-profile|capability|\.env|_private)/i.test(path))continue;
+      const location={path,line:match[2]?Number(match[2]):null,column:match[3]?Number(match[3]):null};
+      if(!locations.some(prior=>JSON.stringify(prior)===JSON.stringify(location)))locations.push(location);
+      if(locations.length>=12)break;
+    }
+    // No raw line, source preview, arbitrary error message/payload, or profile path escapes.
+    buffers.stdout=Buffer.alloc(0);buffers.stderr=Buffer.alloc(0);
+    return {stdoutBytes:bytes.stdout,stderrBytes:bytes.stderr,captureTruncated:bytes.stdout>32768||bytes.stderr>32768,
+      categories,typescriptCodes,modules,locations,rawOutputSuppressed:true as const};
+  }};
+}
 let phase = "admission";
 let receiptPath: string | undefined;
 let observedSourceRevision = "unreported";
@@ -398,6 +459,9 @@ async function main() {
     controlOwned = ownServer(control); const controlUrl = await listen(control), front = await listen(proxy.server);
     proxy.setFrontAuthority(new URL(front).host);
     phase = "production Next build";
+    nextBuildDiagnostic={stage:"framework-lookup",frameworksValidated:false,compilerDependenciesResolved:false,templatesPrepared:false,capabilityPrepared:false,
+      childRegistered:false,exitCode:null,signal:null,timedOut:false,spawnErrorCode:null,stdoutBytes:0,stderrBytes:0,captureTruncated:false,
+      categories:[],typescriptCodes:[],modules:[],locations:[],rawOutputSuppressed:true};
     const requireWeb = createRequire(join(web, "package.json"));
     const lock=await readFile(join(repo,"pnpm-lock.yaml"),"utf8"),frameworks:Record<string,string>={};
     const packageVersion=async(name:string)=>{
@@ -408,15 +472,39 @@ async function main() {
       const selected=lockedWebVersion(lock,name);check(await packageVersion(name)===selected,"installed framework must match actual lock");frameworks[name]=selected;
     }
     frameworkCheck=async()=>{for(const [name,version] of Object.entries(frameworks))check(await packageVersion(name)===version,"installed framework changed during run");};
+    nextBuildDiagnostic.frameworksValidated=true;nextBuildDiagnostic.stage="compiler-dependencies";
     for (const dependency of ["typescript", "@types/react/package.json", "@types/node/package.json"]) requireWeb.resolve(dependency);
+    nextBuildDiagnostic.compilerDependenciesResolved=true;nextBuildDiagnostic.stage="write-temporary-project";
     await writeProtocolApp(project, repo);
+    nextBuildDiagnostic.templatesPrepared=true;nextBuildDiagnostic.stage="write-private-capability";
     const nextEnv: NodeJS.ProcessEnv = { ...env, NODE_ENV: "production", AUTH_SECRET: authSecret, AUTH_URL: front,
       TALENT_SIGNAL_ALLOW_LAN_HTTP: "true", TALENT_SIGNAL_BACKEND_URL: backend, GET350_CONTROL_URL: controlUrl, GET350_CONTROL_KEY: controlKey };
     // Capability/provenance file is private, never a CI artifact, removed in finally.
     await writeFile(join(runtime, "capability.json"), JSON.stringify({ front, controlUrl, controlKey }), { mode: 0o600, flag: "wx" });
-    build = child(process.execPath, [requireWeb.resolve("next/dist/bin/next"), "build", project], web, nextEnv);
-    const buildCode = await bounded(new Promise<number | null>((ok, bad) => { build!.once("error", bad); build!.once("exit", ok); }), "Next build budget", 300_000);
-    check(buildCode === 0, "real Next build failed"); await stop(build); build = undefined;
+    nextBuildDiagnostic.capabilityPrepared=true;nextBuildDiagnostic.stage="spawn-requested";
+    build = child(process.execPath, [requireWeb.resolve("next/dist/bin/next"), "build", project], web, nextEnv,true,true);
+    nextBuildDiagnostic.childRegistered=Boolean(build.pid);nextBuildDiagnostic.stage="child-running";
+    const output=buildOutputCapture(build);
+    const databaseParts=[database,db.href,db.username,db.password,`${db.username}:${db.password}`];
+    for(const value of [db.username,db.password,`${db.username}:${db.password}`]){try{databaseParts.push(decodeURIComponent(value));}catch{}}
+    let buildCode:number|null=null;
+    try{
+      buildCode = await bounded(new Promise<number | null>((ok, bad) => {
+        build!.once("error",(error)=>{const code=(error as NodeJS.ErrnoException).code;nextBuildDiagnostic!.spawnErrorCode=code&&/^[A-Z0-9_]{1,32}$/.test(code)?code:"OTHER";bad(new Error("Owned Next child error"));});
+        // close waits for the dedicated stdout/stderr pipes to drain after exit.
+        build!.once("close",(code,signal)=>{nextBuildDiagnostic!.exitCode=code;nextBuildDiagnostic!.signal=signal;ok(code);});
+      }), "Next build budget", 300_000);
+      nextBuildDiagnostic.stage=buildCode===0?"child-closed-zero":"child-closed-nonzero";
+    }catch(error){
+      nextBuildDiagnostic.timedOut=error instanceof Error&&error.message==="Next build budget";
+      nextBuildDiagnostic.stage=nextBuildDiagnostic.timedOut?"child-timeout":"child-failed";
+      throw error;
+    }finally{
+      Object.assign(nextBuildDiagnostic,output.summarize(repo,project,[authSecret,controlKey,...databaseParts]));
+    }
+    check(!nextBuildDiagnostic.captureTruncated,"Next build diagnostic output overflow");
+    check(buildCode === 0, "real Next build failed");
+    await stop(build); build = undefined;
     const reservation = createServer(); const reserved = await listen(reservation); const nextPort = new URL(reserved).port;
     await new Promise<void>((ok) => reservation.close(() => ok()));
     next = child(process.execPath, [requireWeb.resolve("next/dist/bin/next"), "start", project, "--hostname", "127.0.0.1", "--port", nextPort], web, nextEnv);
@@ -588,7 +676,7 @@ async function main() {
   phase = "passed"; await writeReceipt(passedSummary); console.log(JSON.stringify(passedSummary));
 }
 void main().catch(async () => {
-  const failure = {fixture:"GET350_NEXT_PROTOCOL",passed:false,phase,observedSourceRevision,source:actualSource??"not-bound",ownedProcessGroupsEmpty:[...ownedGroups.values()].every(group=>group.closed),ownedProcessGroupCount:ownedGroups.size,scenarios:completedScenarios};
+  const failure = {fixture:"GET350_NEXT_PROTOCOL",passed:false,phase,observedSourceRevision,source:actualSource??"not-bound",nextBuildDiagnostic:nextBuildDiagnostic??"not-started",ownedProcessGroupsEmpty:[...ownedGroups.values()].every(group=>group.closed),ownedProcessGroupCount:ownedGroups.size,scenarios:completedScenarios};
   try { await writeReceipt(failure); } catch { /* CI still fails; never upload private diagnostics instead. */ }
   console.error(JSON.stringify(failure)); process.exitCode = 1;
 });
