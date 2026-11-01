@@ -682,7 +682,56 @@ async function main() {
           diagnostic.passwordEditor=await page.has('input[name="newPassword"]');
         }catch{diagnostic.captureFailed=true;}
         // Capture primitives before closing the page; never emit raw URLs, refs, response bodies or cookies.
-        lastLateNavigationDiagnostic=diagnostic;throw error;
+        lastLateNavigationDiagnostic=diagnostic;
+        // Failure-only, non-atomic observation; never replaces the original timeout or makes this scenario pass.
+        try {
+          const probe:Record<string,unknown>={originalFailureSnapshot:structuredClone(diagnostic),
+            bVisibleImmediatelyBeforeRelease:null,releaseAttempted:false,released:false,samples:0,
+            bEditorObserved:false,lastBEditorVisible:null,bTargetInHistory:null,
+            bEnvelopeUnchanged:null,aBusinessFingerprintUnchanged:null,bBusinessFingerprintUnchanged:null,
+            observationTimedOut:false,windowExhausted:false,captureFailed:false};
+          diagnostic.postFailureReleaseObservation=probe;
+          let observationOpen=true;
+          try {
+            const deadline=Date.now()+4_000;
+            await bounded((async()=>{
+              const preRef=await page.attribute('input[name="operationRef"]',"value");if(!observationOpen)return;
+              const preEditor=await page.has('input[name="newPassword"]');if(!observationOpen)return;
+              probe.bVisibleImmediatelyBeforeRelease=preRef===b.ref&&preEditor;
+              probe.releaseAttempted=true;proxy.release(plan);probe.released=true;
+              let samples=0;
+              while(observationOpen&&Date.now()<deadline){
+                const ref=await page.attribute('input[name="operationRef"]',"value");if(!observationOpen)return;
+                const editor=await page.has('input[name="newPassword"]');if(!observationOpen)return;
+                const bEditor=ref===b.ref&&editor;
+                probe.samples=++samples;probe.lastBEditorVisible=bEditor;
+                if(bEditor)probe.bEditorObserved=true;
+                if((action.finished||action.failed)&&bEditor)break;
+                await delay(50);
+              }
+              if(!observationOpen)return;
+              probe.windowExhausted=Date.now()>=deadline;
+              const url=new URL(await page.currentUrl());if(!observationOpen)return;
+              probe.bTargetInHistory=url.origin===front&&url.pathname===PASSWORD_PATH&&url.searchParams.get("fixtureNavigation")==="b";
+              const flow=await page.inspect(b.ref,controlKey);if(!observationOpen)return;
+              probe.bEnvelopeUnchanged=JSON.stringify(flow)===JSON.stringify(flowBaselines.get(b.ref));
+              const aNow=await fingerprint(a);if(!observationOpen)return;
+              probe.aBusinessFingerprintUnchanged=aNow===aCommitted;
+              const bNow=await fingerprint(b);if(!observationOpen)return;
+              probe.bBusinessFingerprintUnchanged=bNow===bPending;
+            })(),"post-failure late A observation budget",4_500);
+          }catch(probeError){
+            probe.captureFailed=true;
+            probe.observationTimedOut=probeError instanceof Error&&probeError.message==="post-failure late A observation budget";
+          }finally{
+            observationOpen=false;
+            probe.heldAction={responseReceived:action.responseReceived,finished:action.finished,failed:action.failed};
+            probe.aCompletionRequests=diagnosticCount(a.completionRequests);probe.bCompletionRequests=diagnosticCount(b.completionRequests);
+            probe.browserPasswordPosts=diagnosticCount(page.observed.passwordPosts);
+            probe.noSecondActionObserved=page.observed.passwordPosts===beforePosts+1;
+          }
+        }catch{diagnostic.postFailureReleaseObservation={captureFailed:true};}
+        throw error;
       }
       await flowUnchanged(page,b);
       proxy.release(plan);
