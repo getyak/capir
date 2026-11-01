@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { TalentSignalHttpError } from "@talent-signal/contracts";
+import { CONTRACT_VERSION, TalentSignalHttpError } from "@talent-signal/contracts";
 import { BackendSessionExpiredError } from "../backend-session";
 const f=vi.hoisted(()=>({claims:vi.fn(),get:vi.fn(),save:vi.fn(),admit:vi.fn(),read:vi.fn(),mutate:vi.fn(),stream:vi.fn()}));
 const shutdown=vi.hoisted(()=>({source:null as EventEmitter|null,scope:{} as Record<symbol,AbortSignal|undefined>}));
@@ -146,4 +146,19 @@ it("keeps an unsupported dedicated admission definitively refused without fallin
   expect(await response.json()).toEqual({ code: "MEMORY_DRAFT_TARGET_UNSUPPORTED", message: "composer.memoryDraft.serviceUnavailable" });
   expect(f.admit).toHaveBeenCalledOnce();
   expect(f.admit.mock.calls[0][0].memory_draft_target).toEqual(memory_draft_target);
+});
+
+it("relays exact negotiated withdrawal identities and refuses stale login before mutation", async () => {
+  const mutation = { kind: "withdraw", queue_entry_id: mid, expected_revision: 7,
+    idempotency_key: "synthetic-withdrawal-receipt", include_withdrawn_message_ids: true };
+  const receipt = { contract_version: CONTRACT_VERSION, snapshot: { session_id: sid, revision: 8 },
+    applied: { kind: "withdraw", queue_entry_id: mid, run_id: null, status: null, withdrawn_message_ids: [mid] } };
+  f.mutate.mockResolvedValue(receipt);
+  const response = await conversationQueueRoute(request(mutation), sid, "mutate");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual(receipt);
+  expect(f.mutate).toHaveBeenCalledWith(sid, mutation, expect.any(AbortSignal));
+  f.mutate.mockClear();
+  expect((await conversationQueueRoute(request(mutation, "old-login"), sid, "mutate")).status).toBe(409);
+  expect(f.mutate).not.toHaveBeenCalled();
 });
