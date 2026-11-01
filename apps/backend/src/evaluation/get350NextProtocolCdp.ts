@@ -249,7 +249,7 @@ export class ProtocolPage {
   async setup(slot: string, key: string) {
     lastSetupHttpStatus=null;
     const ready=await this.pageFunction<{ok:boolean;status:number}>(
-      'async function(slot,key){const r=await fetch("/__get350/setup",{method:"POST",headers:{"content-type":"application/json","x-get350-control":key},body:JSON.stringify({slot})});return {ok:r.ok,status:r.status};}',
+      'async function(slot,key){const r=await fetch("/__get350/setup",{method:"POST",headers:{"content-type":"application/json","x-get350-control":key},body:JSON.stringify({slot})});await r.arrayBuffer();return {ok:r.ok,status:r.status};}',
       [slot,key]);
     lastSetupHttpStatus=Number.isInteger(ready.status)&&ready.status>=100&&ready.status<=599?ready.status:null;
     if (ready.ok!==true) throw new Error("Protected Next setup failed");
