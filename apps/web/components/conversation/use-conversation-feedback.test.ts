@@ -110,6 +110,7 @@ function memoryStore() {
     async put(key, images) { map.set(key, [...images]); return true; },
     async get(key) { return map.get(key) ?? []; },
     async delete(key) { map.delete(key); },
+    async deleteConfirmed(key) { map.delete(key); return !map.has(key); },
     async deletePrefix(prefix) { for (const key of [...map.keys()]) if (key.startsWith(prefix)) map.delete(key); },
     async inventory() { return [...map.entries()].map(([key, images]) => ({ key, expiresAt: images.reduce((min, image) => Math.min(min, image.expiresAt), Number.POSITIVE_INFINITY) })); },
   };
@@ -422,7 +423,7 @@ it("retains streamed text when preview and completion arrive in one network chun
   expect(chat.handoffPreviews[mid]?.text).toBe(text);
 });
 
-it.each(["confirmed", "ambiguous", "wrong receipt"])("retires a withdrawn group only with its exact %s receipt", async mode => {
+it.each(["confirmed", "ambiguous", "wrong receipt", "legacy receipt"])("retires a withdrawn group only with its exact %s receipt", async mode => {
   const member = "b072ed54-6d56-413d-af4b-3ebc01ba646a";
   const image = { attachment_id: "c072ed54-6d56-413d-af4b-3ebc01ba646a", file_name: "retained.png", media_type: "image/png" as const, byte_size: 8, content_hash: "a".repeat(64) };
   const rows = [entry(mid, { status: "failed", failure_code: "MODEL_TOKEN_BUDGET" }), entry(member, { queue_entry_id: member, status: "failed", sequence: 2, created_at: "2026-09-24T00:00:01.000Z", steers_run_id: entry(mid).run_id, steer_delivered: true })];
@@ -439,7 +440,7 @@ it.each(["confirmed", "ambiguous", "wrong receipt"])("retires a withdrawn group 
   await act(async () => chat.changeDraft("New unsent draft"));
   const base = fetcher.getMockImplementation()!;
   fetcher.mockImplementation((url: string, init?: RequestInit) => {
-    if (url.endsWith("/mutations")) return mode === "ambiguous" ? Promise.reject(new Error("lost receipt")) : Promise.resolve(Response.json({ snapshot: snapshot(6, null, [], true), applied: { kind: "withdraw", queue_entry_id: mode === "wrong receipt" ? member : mid, run_id: null, status: null } }));
+    if (url.endsWith("/mutations")) return mode === "ambiguous" ? Promise.reject(new Error("lost receipt")) : Promise.resolve(Response.json({ contract_version: "2026-08-24.10", snapshot: snapshot(6, null, [], true), applied: { kind: "withdraw", queue_entry_id: mode === "wrong receipt" ? member : mid, run_id: null, status: null, ...(mode === "legacy receipt" ? {} : { withdrawn_message_ids: [mid, member].sort() }) } }));
     if (url.endsWith("/conversation-queue") && !init?.method) return Promise.resolve(Response.json(snapshot(6, null, [], true)));
     return base(url, init);
   });
@@ -469,7 +470,7 @@ it("does not retire another queued intention when one withdrawal is confirmed", 
   await act(async () => root.render(createElement(Probe, { initial: detail() }))); await flush();
   await act(async () => emit?.(frame("snapshot", snapshot(5, null, rows, true)))); await flush();
   const base = fetcher.getMockImplementation()!;
-  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations") ? Promise.resolve(Response.json({ snapshot: snapshot(6, null, [rows[1]], true), applied: { kind: "withdraw", queue_entry_id: mid, run_id: null, status: null } })) : base(url, init));
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations") ? Promise.resolve(Response.json({ contract_version: "2026-08-24.10", snapshot: snapshot(6, null, [rows[1]], true), applied: { kind: "withdraw", queue_entry_id: mid, run_id: null, status: null, withdrawn_message_ids: [mid] } })) : base(url, init));
   await act(async () => { expect(await chat.mutate({ kind: "withdraw", queue_entry_id: mid })).toBe(true); }); await flush();
   expect(chat.messages.map(message => message.id)).toEqual([other]);
   expect(readConversationMessages("owner", sid).map(message => message.id)).toEqual([other]);
