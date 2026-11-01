@@ -246,6 +246,78 @@ export function QueuedConversation(props: Props) {
   // Readback and queue edits belong to the actual live Session, while Home
   // deliberately retains its stable IME owner during local ID resolution.
   const readbackOwner = useMemo(() => Symbol(`${composerScope}:${id ?? "unresolved"}`), [composerScope, id]);
+  // A durable Remove can finish after its focused button unmounts. Retain
+  // only that interaction's ownership, never a later account or user intent.
+  const canvas = useRef<HTMLElement | null>(null);
+  const [attachmentFocusCommit, setAttachmentFocusCommit] = useState(0);
+  const attachmentFocus = useRef<{
+    owner: symbol; composerOwner: symbol; session: string | null;
+    attachment: (typeof chat.attachments)[number]; trigger: HTMLButtonElement;
+    composer: HTMLTextAreaElement; canvas: HTMLElement; settled: boolean; stop: () => void;
+  } | null>(null);
+  function clearAttachmentFocus() {
+    attachmentFocus.current?.stop();
+    attachmentFocus.current = null;
+  }
+  useLayoutEffect(() => clearAttachmentFocus, [readbackOwner, composerOwner, id]);
+  function removeDraftAttachment(attachment: (typeof chat.attachments)[number], trigger: HTMLButtonElement) {
+    clearAttachmentFocus();
+    const surface = canvas.current;
+    const composer = surface?.querySelector<HTMLTextAreaElement>("#queued-conversation-composer");
+    if (surface && composer && document.activeElement === trigger && surface.contains(trigger)
+      && composer.isConnected && !composer.disabled && chat.ready && !chat.unavailable) {
+      const operation = { owner: readbackOwner, composerOwner, session: id, attachment,
+        trigger, composer, canvas: surface, settled: false, stop: () => {} };
+      const revoke = () => { if (attachmentFocus.current === operation) clearAttachmentFocus(); };
+      const pointed = (event: PointerEvent) => {
+        if (!(event.target instanceof Node) || !trigger.contains(event.target)) revoke();
+      };
+      const focused = (event: FocusEvent) => { if (event.target !== trigger) revoke(); };
+      // Explicit blur can leave focus at body without a focusin/Tab/pointer.
+      // An already detached trigger lost focus through its own removal.
+      const blurred = (event: FocusEvent) => {
+        if (event.target === trigger && trigger.isConnected) revoke();
+      };
+      const tabbed = (event: globalThis.KeyboardEvent) => { if (event.key === "Tab") revoke(); };
+      document.addEventListener("pointerdown", pointed, true);
+      document.addEventListener("focusin", focused, true);
+      document.addEventListener("focusout", blurred, true);
+      document.addEventListener("keydown", tabbed, true);
+      operation.stop = () => {
+        document.removeEventListener("pointerdown", pointed, true);
+        document.removeEventListener("focusin", focused, true);
+        document.removeEventListener("focusout", blurred, true);
+        document.removeEventListener("keydown", tabbed, true);
+      };
+      attachmentFocus.current = operation;
+      // Fulfillment is not success: the committed attachment set below must
+      // also have removed this exact item under the same live owners.
+      void chat.removeAttachment(attachment.id).then(() => {
+        if (attachmentFocus.current !== operation) return;
+        operation.settled = true;
+        setAttachmentFocusCommit(version => version + 1);
+      }, revoke);
+      return;
+    }
+    void chat.removeAttachment(attachment.id);
+  }
+  useLayoutEffect(() => {
+    const operation = attachmentFocus.current;
+    if (!operation) return;
+    if (operation.owner !== readbackOwner || operation.composerOwner !== composerOwner
+      || operation.session !== id || operation.canvas !== canvas.current || !chat.ready || chat.unavailable
+      || !operation.composer.isConnected || operation.composer.disabled
+      || operation.canvas.querySelector("#queued-conversation-composer") !== operation.composer
+      || chat.attachments.some(item => item.id === operation.attachment.id && item !== operation.attachment)) {
+      clearAttachmentFocus(); return;
+    }
+    if (!operation.settled) return;
+    const removed = !chat.attachments.includes(operation.attachment);
+    const restore = removed && !operation.trigger.isConnected
+      && (document.activeElement === document.body || document.activeElement === operation.trigger);
+    clearAttachmentFocus();
+    if (restore) operation.composer.focus({ preventScroll: true });
+  }, [attachmentFocusCommit, chat.attachments, chat.ready, chat.unavailable, readbackOwner, composerOwner, id]);
   const inspection = useConversationInspectionOwner({ owner: readbackOwner, viewportRef: viewport,
     followsLatestRef: follows, userScrollRef: userScroll, reading, onAwayChange: setAway });
   const draftIntentVersion = useRef(0);
@@ -709,7 +781,7 @@ export function QueuedConversation(props: Props) {
     onStop={runId => void chat.mutate({ kind: "stop", run_id: runId })} onContinue={() => void chat.mutate({ kind: "continue" })}
     onRetry={queueEntryId => void retryEntry(queueEntryId)} recoveryActions={renderContext.recoveryActions}>
   <ConversationInspectionContext.Provider value={inspection.controller}>
-  <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label={t("conversation.canvas.label")} data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
+  <main ref={canvas} id="main-content" tabIndex={-1} className={styles.canvas} aria-label={t("conversation.canvas.label")} data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
     {admitted && <header className={styles.header}>
       <div className={styles.headingText}><h1 {...(chat.detail ? workspaceSearchFocusTargetProps(`/workspace/sessions/${encodeURIComponent(chat.detail.session_id)}`) : {})} title={chat.detail?.title || t("conversation.new")}>{chat.detail?.title || t("conversation.new")}</h1></div>
       {personId && !chat.unavailable && <button className={styles.personContext} aria-label={t("conversation.person.view", { person: personLabel || t("conversation.person.fallback") })} onClick={event => personContextPanel.open(personId,event.currentTarget)}>{t("conversation.person.context")}</button>}
@@ -751,7 +823,7 @@ export function QueuedConversation(props: Props) {
         {chat.attachments.map((attachment, index) => <span className={styles.composerImage} key={attachment.id}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={attachment.manifest.file_name} src={attachment.url} />
-          <button aria-label={t("conversation.images.removeItem", { position: index + 1 })} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable || chat.preparing} onClick={() => chat.removeAttachment(attachment.id)} type="button"><X size={12} weight="bold"/></button>
+          <button aria-label={t("conversation.images.removeItem", { position: index + 1 })} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable || chat.preparing} onClick={event => removeDraftAttachment(attachment, event.currentTarget)} type="button"><X size={12} weight="bold"/></button>
         </span>)}
       </div>}
       {imageCount >= 10 && <p className={styles.composerImageHint} role="status">{t("conversation.images.limit")}</p>}
