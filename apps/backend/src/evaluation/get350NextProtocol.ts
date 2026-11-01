@@ -635,6 +635,8 @@ async function main() {
     lastTransportDiagnostic=null;
     phase = "native:no-js"; const native = await makeFixture("native"), nativePage = await open(native);
     try {
+      // Declared native-only full-HTML mode via Next's existing HTML-limited bot path.
+      await nativePage.call("Network.setUserAgentOverride", { userAgent: "GET350NativeFullHTML/1.0 (Twitterbot)" });
       await nativePage.call("Emulation.setScriptExecutionDisabled", { value: true });
       await nativePage.navigate(front + PASSWORD_PATH);
       await until(() => nativePage.has('input[name="newPassword"]'), "native real form");
@@ -657,7 +659,7 @@ async function main() {
       await nativePage.quiet();
       check(await fingerprint(native) === committed && nativePage.observed.blockedExternal === 0, "native GET reload never resubmits");await flowUnchanged(nativePage,native);
       check(proxy.observed.passwordPosts === initialPosts + 2 && nativePage.observed.passwordPosts === 2, "native validation sent no hidden Action POST");
-      scenarioSummaries.push({scenario:"native-no-js",htmlMinlengthPreventedPost:true,serverValidationPosts:1,savePosts:1,serverValidationEditingPreserved:true,flowEnvelopeUnchanged:true,passwordPosts:nativePage.observed.passwordPosts,
+      scenarioSummaries.push({scenario:"native-no-js",nativeHtmlMode:"declared-full-html",htmlMinlengthPreventedPost:true,serverValidationPosts:1,savePosts:1,serverValidationEditingPreserved:true,flowEnvelopeUnchanged:true,passwordPosts:nativePage.observed.passwordPosts,
         actual303:nativePage.observed.native303,completionRequests:native.completionRequests,businessFingerprintUnchanged:true,
         nativeTotalResponseLossAutoGetClaimed:false});
     } finally { await nativePage.close(); }
