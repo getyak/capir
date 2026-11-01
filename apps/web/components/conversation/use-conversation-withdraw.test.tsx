@@ -55,9 +55,9 @@ async function settleUntil(done: () => boolean) {
   while (!done() && performance.now() < deadline) await flush();
   expect(done()).toBe(true);
 }
-function Harness({ tab }: { tab: Mounted }) {
-  const state = useConversation({ id: SESSION, scope: SCOPE, chatBinding: tab.binding, detailBinding: "detail", initial: detail() });
-  useLayoutEffect(() => { tab.state = state; });
+function Harness({ binding, onState }: { binding: string; onState: (state: Chat) => void }) {
+  const state = useConversation({ id: SESSION, scope: SCOPE, chatBinding: binding, detailBinding: "detail", initial: detail() });
+  useLayoutEffect(() => { onState(state); });
   return createElement("section", null,
     createElement("textarea", { readOnly: true, value: state.draft }),
     ...state.messages.map(message => createElement("p", { key: message.id, "data-message-id": message.id }, message.objective)));
@@ -66,7 +66,7 @@ async function mount(binding: string, observeQueue = true) {
   const host = document.createElement("div"); document.body.append(host);
   const tab = { root: createRoot(host), host, binding } as Mounted;
   mounted.push(tab);
-  await act(async () => tab.root.render(createElement(Harness, { tab })));
+  await act(async () => tab.root.render(createElement(Harness, { binding, onState: (state: Chat) => { tab.state = state; } })));
   await flush();
   if (observeQueue) await emit(tab, server);
   return tab;

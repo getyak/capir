@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import {
   ConversationQueueAppliedSchema,
   ConversationQueueMutationRequestSchema,
-} from "../../../../packages/contracts/src/conversationQueueSchemas.js";
+} from "@talent-signal/contracts";
 
 FormatRegistry.Set("uuid", (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value));
 const base = { queue_entry_id: randomUUID(), expected_revision: 1, idempotency_key: "withdrawal-contract" };
