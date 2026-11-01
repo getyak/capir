@@ -686,7 +686,7 @@ async function main() {
         // Failure-only, non-atomic observation; never replaces the original timeout or makes this scenario pass.
         try {
           const probe:Record<string,unknown>={originalFailureSnapshot:structuredClone(diagnostic),
-            bVisibleImmediatelyBeforeRelease:null,releaseAttempted:false,released:false,samples:0,
+            bVisibleImmediatelyBeforeRelease:null,releaseAttempted:false,released:false,samples:0,sampleReadFailures:0,lastSampleReadError:null,
             bEditorObserved:false,lastBEditorVisible:null,bTargetInHistory:null,
             bEnvelopeUnchanged:null,aBusinessFingerprintUnchanged:null,bBusinessFingerprintUnchanged:null,
             observationTimedOut:false,windowExhausted:false,captureFailed:false};
@@ -699,10 +699,23 @@ async function main() {
               const preEditor=await page.has('input[name="newPassword"]');if(!observationOpen)return;
               probe.bVisibleImmediatelyBeforeRelease=preRef===b.ref&&preEditor;
               probe.releaseAttempted=true;proxy.release(plan);probe.released=true;
-              let samples=0;
+              let samples=0,sampleReadFailures=0;
               while(observationOpen&&Date.now()<deadline){
-                const ref=await page.attribute('input[name="operationRef"]',"value");if(!observationOpen)return;
-                const editor=await page.has('input[name="newPassword"]');if(!observationOpen)return;
+                let ref:string|undefined,editor:boolean;
+                try{
+                  ref=await page.attribute('input[name="operationRef"]',"value");if(!observationOpen)return;
+                  if(Date.now()>=deadline){probe.windowExhausted=true;return;}
+                  editor=await page.has('input[name="newPassword"]');if(!observationOpen)return;
+                  if(Date.now()>=deadline){probe.windowExhausted=true;return;}
+                }catch(sampleError){
+                  if(!observationOpen)return;
+                  if(Date.now()>=deadline){probe.windowExhausted=true;return;}
+                  sampleReadFailures=Math.min(sampleReadFailures+1,1_000);probe.sampleReadFailures=sampleReadFailures;
+                  probe.lastSampleReadError=cdpCommandErrorObservation(sampleError);
+                  await delay(50);if(!observationOpen)return;
+                  if(Date.now()>=deadline){probe.windowExhausted=true;return;}
+                  continue;
+                }
                 const bEditor=ref===b.ref&&editor;
                 probe.samples=++samples;probe.lastBEditorVisible=bEditor;
                 if(bEditor)probe.bEditorObserved=true;
