@@ -5,6 +5,8 @@ import {
   type CompleteCredentialChangeRequest,
   type CredentialChangeAttempt,
   type CredentialChangeResult,
+  type CredentialChangeReadback,
+  type ReadCredentialChangeResultRequest,
   type SignInMethodProvider,
   type StartCredentialChangeRequest,
 } from "@talent-signal/contracts";
@@ -107,6 +109,17 @@ export async function completeLoginMethodChange(
   return withAuthRequestTimeout(
     (signal) =>
       client.completeLoginMethodChange({ ...input, origin: "server-derived" }, signal),
+    { timeoutMs: 10_000 },
+  );
+}
+
+/** Inspect only the original held attempt; this never completes a change. */
+export async function readLoginMethodChangeResult(
+  input: ReadCredentialChangeResultRequest,
+): Promise<CredentialChangeReadback> {
+  const client = await backendClient();
+  return withAuthRequestTimeout(
+    (signal) => client.readCredentialChangeResult(input, signal),
     { timeoutMs: 10_000 },
   );
 }

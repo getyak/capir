@@ -4,10 +4,13 @@ import {
   CompleteCredentialChangeRequestSchema,
   CredentialChangeAttemptSchema,
   CredentialChangeResultSchema,
+  CredentialChangeReadbackSchema,
+  ReadCredentialChangeResultRequestSchema,
   ErrorResponseSchema,
   StartCredentialChangeRequestSchema,
   type AccountMutation,
   type CompleteCredentialChangeRequest,
+  type ReadCredentialChangeResultRequest,
   type StartCredentialChangeRequest,
 } from '@talent-signal/contracts';
 import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fastify';
@@ -19,6 +22,7 @@ import type { MailDelivery } from '../lib/mail.js';
 import { readAccountSettings, mutateAccountSettings } from './accountManagement.js';
 import {
   completeCredentialChange,
+  readCredentialChangeResult,
   startCredentialChange,
 } from './accountLoginMethods.js';
 import { registerPasswordSignupRoutes } from './accountPasswordSignup.js';
@@ -110,6 +114,26 @@ export function registerAccountManagement(
       {},
       labEnabled,
     );
+  });
+
+  // Outcome inspection is business-read-only. POST keeps the held proof
+  // out of URLs, and all replies (including denied lookups) are non-cacheable.
+  app.post<{ Body: ReadCredentialChangeResultRequest }>('/v1/account/login-methods/result', {
+    preHandler: authenticate,
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    onSend: async (_request, reply, payload) => {
+      reply.header('cache-control', 'private, no-store');
+      return payload;
+    },
+    schema: {
+      tags: ['account'], security,
+      body: ReadCredentialChangeResultRequestSchema,
+      response: { 200: CredentialChangeReadbackSchema, '4xx': ErrorResponseSchema },
+    },
+  }, async (request) => {
+    const origin = typeof request.headers.origin === 'string' && request.headers.origin.length > 0
+      ? trustedOrigin(config, request, '') : null;
+    return readCredentialChangeResult(pool, request.auth, request.body, origin);
   });
 
   registerPasswordSignupRoutes(app, pool, config, mail ?? mailDeliveryFromConfig(config.mailTransport));
