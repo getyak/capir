@@ -257,12 +257,19 @@ export async function mutateConversationQueueEntry(
 ): Promise<MutationOutcome> {
   const outcome = await inTransaction(pool, async (client) => {
     await assertSessionForChat(client, auth, sessionId);
-    const existingOperation = (
+    const findOperation = async () => (
       await client.query<{ request_hash: string; applied: ConversationQueueApplied }>(
         "SELECT request_hash,applied FROM conversation_queue_operations WHERE account_id=$1 AND actor_user_id=$2 AND idempotency_key=$3 FOR UPDATE",
         [auth.accountId, auth.userId, request.idempotency_key],
       )
     ).rows[0];
+    let existingOperation = await findOperation();
+    if (!existingOperation) {
+      await lockConversationQueueSession(client, sessionId);
+      // A concurrent same-key operation can commit while this transaction
+      // waits for the session lock. Replay its receipt before revision CAS.
+      existingOperation = await findOperation();
+    }
     if (existingOperation) {
       if (existingOperation.request_hash !== mutationHash(sessionId, request)) {
         throw new ApiError(
@@ -274,7 +281,6 @@ export async function mutateConversationQueueEntry(
       const snapshot = await readConversationQueueSnapshot(client, auth, sessionId);
       return { snapshot, applied: existingOperation.applied, replayed: true };
     }
-    await lockConversationQueueSession(client, sessionId);
     const state = await readConversationQueueState(client, auth.accountId, sessionId);
     if (state.revision !== request.expected_revision) {
       throw new ApiError(
@@ -489,12 +495,34 @@ async function applyMutation(
     // Withdrawing a task message removes its remaining steering messages
     // together (they are one unprocessed intention). Terminal folded work is
     // never reachable here: completed and cancelled rows are not withdrawable.
-    await client.query(
-      "DELETE FROM conversation_queue_entries WHERE account_id=$1 AND (id=$2 OR steer_group_entry_id=$2)",
+    // The steering FK is account-scoped and cascades. Lock the actual group
+    // before deleting so a corrupt cross-Session or nested member cannot be
+    // silently deleted beyond the exact receipt's scope.
+    const group = (await client.query<ConversationQueueEntryRow>(
+      "SELECT * FROM conversation_queue_entries WHERE account_id=$1 AND (id=$2 OR steer_group_entry_id=$2) FOR UPDATE",
       [auth.accountId, row.id],
+    )).rows;
+    const invalid = () => new ApiError(409, "CONVERSATION_QUEUE_WITHDRAWAL_INVALID", "This withdrawal cannot produce a complete, bounded deletion receipt.");
+    if (group.length === 0 || group.length > 51 || group.some((member) =>
+      member.session_id !== sessionId || !["queued", "failed", "interrupted"].includes(member.status),
+    ) || row.steer_group_entry_id === row.id || (row.steer_group_entry_id !== null && group.length > 1)) throw invalid();
+    const memberIds = group.filter((member) => member.id !== row.id).map((member) => member.id);
+    if (memberIds.length > 0 && (await client.query(
+      "SELECT 1 FROM conversation_queue_entries WHERE account_id=$1 AND steer_group_entry_id=ANY($2::uuid[]) LIMIT 1",
+      [auth.accountId, memberIds],
+    )).rowCount) throw invalid();
+    const removed = await client.query<{ message_id: string }>(
+      "DELETE FROM conversation_queue_entries WHERE account_id=$1 AND session_id=$2 AND (id=$3 OR steer_group_entry_id=$3) RETURNING message_id",
+      [auth.accountId, sessionId, row.id],
     );
+    const withdrawnMessageIds = removed.rows.map((member) => member.message_id).sort();
+    const expectedIds = group.map((member) => member.message_id).sort();
+    if (withdrawnMessageIds.length === 0 || withdrawnMessageIds.length > 51 ||
+      new Set(withdrawnMessageIds).size !== withdrawnMessageIds.length ||
+      withdrawnMessageIds.length !== expectedIds.length ||
+      withdrawnMessageIds.some((id, index) => id !== expectedIds[index])) throw invalid();
     await bumpConversationQueueState(client, auth.accountId, sessionId);
-    return { kind: "withdraw", queue_entry_id: row.id, run_id: null, status: null };
+    return { kind: "withdraw", queue_entry_id: row.id, run_id: null, status: null, withdrawn_message_ids: withdrawnMessageIds };
   }
   // retry: an explicit action that re-queues one entry. Only an explicit
   // Continue clears the pause, so a failed old message can never move silently

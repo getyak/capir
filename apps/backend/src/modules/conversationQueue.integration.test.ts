@@ -28,7 +28,7 @@ import { readDesktopCaptureResult } from "./desktopCaptureResult.js";
 import { registerConversationQueueRoutes } from "./conversationQueueRoutes.js";
 import { ApiError } from "../lib/apiError.js";
 import { subscribeConversationQueueLive, type ConversationQueueLivePreview } from "./conversationQueueLive.js";
-import { assertConversationQueueOwnedClaim, closeConversationQueueSteeringIntake, refreshConversationQueueLease } from "./conversationQueueState.js";
+import { acknowledgeConversationQueueSteeringMembers, claimConversationQueueSteeringMembers, assertConversationQueueOwnedClaim, closeConversationQueueSteeringIntake, refreshConversationQueueLease } from "./conversationQueueState.js";
 import { persistConversationQueueCompletion, type ConversationQueueExecutionResult } from "./conversationQueueCompletion.js";
 import { beginQueueRunMonitoring, completeQueueRunMonitoring, reconcileRecoveredQueueRunMonitoring } from "./conversationQueueMonitoring.js";
 import { executeUnscopedChatTask } from "./unscopedChat.js";
@@ -3356,5 +3356,248 @@ suite("steering ownership and legacy recovery", () => {
       if(tampered) expect(row.result).not.toBeNull();
       expect((await getAgentSession(pool!,seeded.auth,seeded.sessionId)).payload!.turns).toHaveLength(1);
     } finally {await runner.close();await removeProofAccount(seeded.accountId);}
+  });
+});
+
+suite("withdrawal receipt", () => {
+  async function admitProof(seeded: SeededSession) {
+    return (await admitConversationQueueEntry(pool!, seeded.auth, {
+      idempotency_key: randomUUID(), session_id: seeded.sessionId,
+      message_id: randomUUID(), objective: "Synthetic withdrawal receipt",
+    })).response;
+  }
+  async function withdrawal(seeded: SeededSession, entryId: string) {
+    const snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+    return { kind: "withdraw" as const, queue_entry_id: entryId, expected_revision: snapshot.revision,
+      idempotency_key: randomUUID(), include_withdrawn_message_ids: true as const };
+  }
+  async function groupProof(seeded: SeededSession) {
+    const leader = await admitProof(seeded);
+    const member = await admitProof(seeded);
+    await pool!.query("UPDATE conversation_queue_entries SET steer_group_entry_id=$3 WHERE account_id=$1 AND id=$2", [seeded.accountId, member.queue_entry_id, leader.queue_entry_id]);
+    return { leader, member };
+  }
+
+  it("withdrawal receipt persists exact sorted group IDs including an unseen member, and replays them with a fresh snapshot", async () => {
+    const seeded = await seedSession();
+    try {
+      const { leader, member } = await groupProof(seeded);
+      const neighbour = await admitProof(seeded);
+      const history = await admitProof(seeded);
+      await pool!.query("UPDATE conversation_queue_entries SET status='completed' WHERE account_id=$1 AND id=$2", [seeded.accountId, history.queue_entry_id]);
+      const request = await withdrawal(seeded, leader.queue_entry_id);
+      // A's visible snapshot may contain only the leader; the producer must
+      // return the whole committed group, never derive identities from A.
+      const first = await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, request);
+      const exact = [leader.message_id, member.message_id].sort();
+      expect(first.applied).toEqual({ kind: "withdraw", queue_entry_id: leader.queue_entry_id, run_id: null, status: null, withdrawn_message_ids: exact });
+      expect(first.replayed).toBe(false);
+      const stored = (await pool!.query("SELECT applied FROM conversation_queue_operations WHERE account_id=$1 AND actor_user_id=$2 AND idempotency_key=$3", [seeded.accountId, seeded.userId, request.idempotency_key])).rows[0]!.applied;
+      expect(stored).toEqual(first.applied);
+      const later = await admitProof(seeded);
+      const replay = await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, request);
+      expect(replay.replayed).toBe(true);
+      expect(replay.applied).toEqual(first.applied);
+      expect(replay.snapshot.revision).toBeGreaterThan(first.snapshot.revision);
+      expect(replay.snapshot.queued.map((entry) => entry.message_id).sort()).toEqual([neighbour.message_id, later.message_id].sort());
+      const retained = (await pool!.query("SELECT message_id FROM conversation_queue_entries WHERE account_id=$1 ORDER BY message_id", [seeded.accountId])).rows.map((row) => row.message_id);
+      expect(retained).toEqual([neighbour.message_id, history.message_id, later.message_id].sort());
+      await expect(mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, { ...request, expected_revision: replay.snapshot.revision })).rejects.toMatchObject({ code: "CONVERSATION_QUEUE_IDEMPOTENCY_CONFLICT" });
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it("withdrawal receipt for a standalone supplement names only that supplement", async () => {
+    const seeded = await seedSession();
+    try {
+      const { leader, member } = await groupProof(seeded);
+      const result = await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, await withdrawal(seeded, member.queue_entry_id));
+      expect(result.applied.withdrawn_message_ids).toEqual([member.message_id]);
+      expect(result.snapshot.queued.map((entry) => entry.message_id)).toEqual([leader.message_id]);
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it.each(["running", "completed", "cancelled", "dispatching", "delivered"])("withdrawal receipt refuses %s targets without deleting rows or recording authority", async (state) => {
+    const seeded = await seedSession();
+    try {
+      const { leader, member } = await groupProof(seeded);
+      const entry = ["dispatching", "delivered"].includes(state) ? member : leader;
+      if (["dispatching", "delivered"].includes(state)) {
+        await pool!.query("UPDATE conversation_queue_entries SET steer_state=$3,steer_delivered_at=CASE WHEN $3='delivered' THEN now() ELSE NULL END WHERE account_id=$1 AND id=$2", [seeded.accountId, entry.queue_entry_id, state]);
+      } else await pool!.query("UPDATE conversation_queue_entries SET status=$3 WHERE account_id=$1 AND id=$2", [seeded.accountId, entry.queue_entry_id, state]);
+      const request = await withdrawal(seeded, entry.queue_entry_id);
+      await expect(mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, request)).rejects.toMatchObject({ code: ["dispatching", "delivered"].includes(state) ? "CONVERSATION_QUEUE_ENTRY_STEERED" : "CONVERSATION_QUEUE_ENTRY_CLAIMED" });
+      expect((await pool!.query("SELECT id FROM conversation_queue_entries WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(2);
+      expect((await pool!.query("SELECT idempotency_key FROM conversation_queue_operations WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(0);
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it("withdrawal receipt refuses foreign ownership", async () => {
+    const seeded = await seedSession(); const foreign = await seedSession();
+    try {
+      const target = await admitProof(seeded);
+      await expect(mutateConversationQueueEntry(pool!, foreign.auth, seeded.sessionId, await withdrawal(seeded, target.queue_entry_id))).rejects.toMatchObject({ statusCode: 404 });
+      expect((await pool!.query("SELECT id FROM conversation_queue_entries WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(1);
+    } finally { await removeProofAccount(seeded.accountId); await removeProofAccount(foreign.accountId); }
+  });
+
+  it.each(["failed", "interrupted"] as const)("withdrawal receipt preserves legal %s leader policy at full active capacity with delivered members", async (status) => {
+    const seeded = await seedSession();
+    try {
+      const leader = await admitProof(seeded);
+      const claimed = await claimNextConversationQueueEntry(pool!, { accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "withdrawal-bound-proof", acceptsSteering: true });
+      expect(claimed).not.toBeNull();
+      const fence = { accountId: claimed!.accountId, sessionId: claimed!.sessionId, entryId: claimed!.entryId, runId: claimed!.runId, leaseOwner: claimed!.leaseOwner, leaseGeneration: claimed!.leaseGeneration };
+      const delivered = await admitProof(seeded);
+      await claimConversationQueueSteeringMembers(pool!, fence, [delivered.queue_entry_id]);
+      await acknowledgeConversationQueueSteeringMembers(pool!, fence, [delivered.queue_entry_id]);
+      const members = [delivered];
+      for (let n = 0; n < 48; n += 1) members.push(await admitProof(seeded));
+      await expect(admitProof(seeded)).rejects.toMatchObject({ code: "CONVERSATION_QUEUE_FULL" });
+      expect(await finalizeConversationQueueEntry(pool!, { fence, status, failureCode: "SYNTHETIC_WITHDRAWAL_BOUND" })).toMatchObject({ applied: true, effectiveStatus: status });
+      // Delivered members stay active through failure, so none evade the 50
+      // entry admission bound or become terminal history in the failed group.
+      await expect(admitProof(seeded)).rejects.toMatchObject({ code: "CONVERSATION_QUEUE_FULL" });
+      const result = await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, await withdrawal(seeded, leader.queue_entry_id));
+      expect(result.applied.withdrawn_message_ids).toEqual([leader.message_id, ...members.map(member => member.message_id)].sort());
+      expect(result.applied.withdrawn_message_ids).toHaveLength(50);
+      expect((await pool!.query("SELECT id FROM conversation_queue_entries WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(0);
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it("withdrawal receipt rejects an oversized group and rolls back every deletion", async () => {
+    const seeded = await seedSession();
+    try {
+      const leader = await admitProof(seeded);
+      const members = Array.from({ length: 51 }, () => randomUUID());
+      await pool!.query(`INSERT INTO conversation_queue_entries(account_id,session_id,id,message_id,created_by_user_id,sequence,status,objective,idempotency_key,expires_at,steer_group_entry_id)
+        SELECT $1,$2,id,id,$3,n+1,'queued','Synthetic overbound group',id::text,now()+interval '1 day',$4
+        FROM unnest($5::uuid[]) WITH ORDINALITY AS member(id,n)`, [seeded.accountId, seeded.sessionId, seeded.userId, leader.queue_entry_id, members]);
+      const request = await withdrawal(seeded, leader.queue_entry_id);
+      await expect(mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, request)).rejects.toMatchObject({ code: "CONVERSATION_QUEUE_WITHDRAWAL_INVALID" });
+      expect((await pool!.query("SELECT id FROM conversation_queue_entries WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(52);
+      expect((await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId)).revision).toBe(request.expected_revision);
+      expect((await pool!.query("SELECT idempotency_key FROM conversation_queue_operations WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(0);
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it("withdrawal receipt rejects a corrupt cross-session cascade group without deleting either session", async () => {
+    const seeded = await seedSession();
+    try {
+      const { leader, member } = await groupProof(seeded);
+      const otherSession = randomUUID();
+      await pool!.query("INSERT INTO agent_sessions(account_id,id,created_by_user_id,revision,payload,created_at,expires_at) SELECT account_id,$3::uuid,created_by_user_id,1,jsonb_set(payload,'{id}',to_jsonb(($3::uuid)::text)),created_at,expires_at FROM agent_sessions WHERE account_id=$1 AND id=$2", [seeded.accountId, seeded.sessionId, otherSession]);
+      await pool!.query("UPDATE conversation_queue_entries SET session_id=$3 WHERE account_id=$1 AND id=$2", [seeded.accountId, member.queue_entry_id, otherSession]);
+      await expect(mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, await withdrawal(seeded, leader.queue_entry_id))).rejects.toMatchObject({ code: "CONVERSATION_QUEUE_WITHDRAWAL_INVALID" });
+      expect((await pool!.query("SELECT id FROM conversation_queue_entries WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(2);
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it.each(["running", "completed", "cancelled"])("withdrawal receipt rejects a corrupt %s group member atomically", async (status) => {
+    const seeded = await seedSession();
+    try {
+      const { leader, member } = await groupProof(seeded);
+      await pool!.query("UPDATE conversation_queue_entries SET status=$3 WHERE account_id=$1 AND id=$2", [seeded.accountId, member.queue_entry_id, status]);
+      await expect(mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, await withdrawal(seeded, leader.queue_entry_id))).rejects.toMatchObject({ code: "CONVERSATION_QUEUE_WITHDRAWAL_INVALID" });
+      expect((await pool!.query("SELECT id FROM conversation_queue_entries WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(2);
+      expect((await pool!.query("SELECT idempotency_key FROM conversation_queue_operations WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(0);
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it("withdrawal receipt rejects nested cascade membership atomically", async () => {
+    const seeded = await seedSession();
+    try {
+      const { leader, member } = await groupProof(seeded);
+      const nested = await admitProof(seeded);
+      await pool!.query("UPDATE conversation_queue_entries SET steer_group_entry_id=$3 WHERE account_id=$1 AND id=$2", [seeded.accountId, nested.queue_entry_id, member.queue_entry_id]);
+      await expect(mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, await withdrawal(seeded, leader.queue_entry_id))).rejects.toMatchObject({ code: "CONVERSATION_QUEUE_WITHDRAWAL_INVALID" });
+      expect((await pool!.query("SELECT id FROM conversation_queue_entries WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(3);
+      expect((await pool!.query("SELECT idempotency_key FROM conversation_queue_operations WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(0);
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it.each([false, true])("withdrawal receipt rechecks a same-key receipt after a real two-connection lock wait (changed body: %s)", async (changedBody) => {
+    const seeded = await seedSession();
+    const authority = await pool!.connect();
+    const firstConnection = await pool!.connect();
+    const secondConnection = await pool!.connect();
+    let settled: Promise<PromiseSettledResult<Awaited<ReturnType<typeof mutateConversationQueueEntry>>>[]> | undefined;
+    const pending: ReturnType<typeof mutateConversationQueueEntry>[] = [];
+    // Pin real PostgreSQL connections without replacing query execution.
+    const pinned = (client: typeof firstConnection) => ({ connect: async () => ({ query: client.query.bind(client), release: () => undefined }) }) as unknown as Pool;
+    try {
+      const { leader, member } = await groupProof(seeded);
+      const neighbour = await admitProof(seeded);
+      const request = await withdrawal(seeded, leader.queue_entry_id);
+      const firstPid = (await firstConnection.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      const secondPid = (await secondConnection.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      await authority.query("BEGIN");
+      await authority.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`conversation-queue:${seeded.sessionId}`]);
+      const waitsOnSessionLock = async (pid: number) => (await pool!.query<{ blocked: boolean }>(
+        "SELECT wait_event_type='Lock' AND wait_event='advisory' AND cardinality(pg_blocking_pids(pid))>0 AS blocked FROM pg_stat_activity WHERE pid=$1", [pid],
+      )).rows[0]?.blocked === true;
+      const first = mutateConversationQueueEntry(pinned(firstConnection), seeded.auth, seeded.sessionId, request);
+      pending.push(first); void first.catch(() => undefined);
+      // Observable SQL lock waits establish both requests passed their initial
+      // receipt miss, and A reached the lock before B. No timing assumption.
+      await waitFor(() => waitsOnSessionLock(firstPid));
+      const second = mutateConversationQueueEntry(pinned(secondConnection), seeded.auth, seeded.sessionId,
+        changedBody ? { ...request, queue_entry_id: neighbour.queue_entry_id } : request);
+      pending.push(second);
+      settled = Promise.allSettled(pending);
+      await waitFor(() => waitsOnSessionLock(secondPid));
+      await authority.query("COMMIT");
+      const [one, two] = await settled;
+      expect(one!.status).toBe("fulfilled");
+      if (one!.status !== "fulfilled") throw one!.reason;
+      expect(one!.value.replayed).toBe(false);
+      expect(one!.value.applied.withdrawn_message_ids).toEqual([leader.message_id, member.message_id].sort());
+      if (changedBody) {
+        expect(two!.status).toBe("rejected");
+        if (two!.status === "rejected") expect(two!.reason).toMatchObject({ code: "CONVERSATION_QUEUE_IDEMPOTENCY_CONFLICT" });
+      } else {
+        expect(two!.status).toBe("fulfilled");
+        if (two!.status === "fulfilled") {
+          expect(two!.value.replayed).toBe(true);
+          expect(two!.value.applied).toEqual(one!.value.applied);
+          expect(two!.value.snapshot.revision).toBe(one!.value.snapshot.revision);
+        }
+      }
+      expect((await pool!.query("SELECT idempotency_key FROM conversation_queue_operations WHERE account_id=$1", [seeded.accountId])).rowCount).toBe(1);
+      expect((await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId)).revision).toBe(request.expected_revision + 1);
+      expect((await pool!.query("SELECT message_id FROM conversation_queue_entries WHERE account_id=$1", [seeded.accountId])).rows.map(row => row.message_id)).toEqual([neighbour.message_id]);
+    } finally {
+      await authority.query("ROLLBACK");
+      await Promise.allSettled(pending);
+      authority.release(); firstConnection.release(); secondConnection.release();
+      await removeProofAccount(seeded.accountId);
+    }
+  });
+
+  it("withdrawal receipt survives real route serialization only for opted-in callers", async () => {
+    const seeded = await seedSession(); const app = Fastify();
+    app.decorateRequest("auth", null as unknown as AuthContext);
+    registerConversationQueueRoutes(app, pool!, async (request) => { (request as unknown as { auth: AuthContext }).auth = seeded.auth; });
+    try {
+      await app.ready();
+      for (const optIn of [false, true]) {
+        const { leader, member } = await groupProof(seeded);
+        const canonicalRequest = await withdrawal(seeded, leader.queue_entry_id);
+        const { include_withdrawn_message_ids: _, ...legacy } = canonicalRequest;
+        const request = optIn ? canonicalRequest : legacy;
+        const response = await app.inject({ method: "POST", url: `/v1/agent-sessions/${seeded.sessionId}/conversation-queue/mutations`, payload: request });
+        expect(response.statusCode).toBe(200);
+        const wire = response.json();
+        expect(wire.contract_version).toBe(CONTRACT_VERSION);
+        const exact = [leader.message_id, member.message_id].sort();
+        if (optIn) expect(wire.applied.withdrawn_message_ids).toEqual(exact);
+        else expect(wire.applied).toEqual({ kind: "withdraw", queue_entry_id: leader.queue_entry_id, run_id: null, status: null });
+        // Serialization must project legacy output, never mutate the stored
+        // canonical result or cause replay to lose the identities.
+        const stored = (await pool!.query("SELECT applied FROM conversation_queue_operations WHERE account_id=$1 AND idempotency_key=$2", [seeded.accountId, request.idempotency_key])).rows[0]!.applied;
+        expect(stored.withdrawn_message_ids).toEqual(exact);
+        const replay = await app.inject({ method: "POST", url: `/v1/agent-sessions/${seeded.sessionId}/conversation-queue/mutations`, payload: request });
+        expect(replay.statusCode).toBe(200); expect(replay.json().applied).toEqual(wire.applied);
+      }
+    } finally { await app.close(); await removeProofAccount(seeded.accountId); }
   });
 });
