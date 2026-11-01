@@ -317,7 +317,7 @@ it("retries the exact failed queue entry through its inline control without hidi
 
 it("withdraws only the selected message after the same-ID receipt confirms removal", async () => {
   await renderWithQueuedEntry();
-  mutations = () => Response.json({ applied: { kind: "withdraw", queue_entry_id: MID, status: null }, snapshot: snapshot(6, []) });
+  mutations = () => Response.json({ contract_version: "2026-08-24.10", applied: { kind: "withdraw", queue_entry_id: MID, run_id: null, status: null, withdrawn_message_ids: [MID] }, snapshot: snapshot(6, []) });
   const remove = document.querySelector<HTMLButtonElement>('[aria-label="移除第 1 条待处理消息"]')!;
   expect(remove.closest('[role="region"]')).not.toBeNull();
   await act(async () => remove.click()); await flush();

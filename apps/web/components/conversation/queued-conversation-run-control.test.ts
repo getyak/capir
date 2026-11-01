@@ -92,6 +92,8 @@ async function flush(times = 6): Promise<void> {
 }
 
 beforeEach(() => {
+  // Positive active-session fixtures must outlive this case's clock.
+  initialDetail.expires_at = new Date(Date.now() + 3_600_000).toISOString();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.clear();
   router.push.mockReset();

@@ -233,10 +233,14 @@ export function registerConversationQueueRoutes(
         request.params.id,
         request.body,
       );
+      // Project legacy output without mutating the canonical replay receipt.
+      const { withdrawn_message_ids: _ids, ...legacyApplied } = outcome.applied;
       return {
         contract_version: outcome.snapshot.contract_version,
         snapshot: outcome.snapshot,
-        applied: outcome.applied,
+        applied: request.body.kind === "withdraw" && request.body.include_withdrawn_message_ids
+          ? outcome.applied
+          : legacyApplied,
       };
     },
   );

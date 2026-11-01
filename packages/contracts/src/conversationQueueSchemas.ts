@@ -218,6 +218,7 @@ export const ConversationQueueMutationRequestSchema = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("withdraw"),
+      include_withdrawn_message_ids: Type.Optional(Type.Literal(true)),
       queue_entry_id: id,
       expected_revision: Type.Integer({ minimum: 0 }),
       idempotency_key: Type.String({ minLength: 1, maxLength: 128 }),
@@ -267,6 +268,8 @@ export type ConversationQueueMutationRequest = Static<
 
 export const ConversationQueueAppliedSchema = Type.Object(
   {
+    // Exact same-transaction deletion identities, negotiated by Withdraw.
+    withdrawn_message_ids: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 51, uniqueItems: true })),
     kind: Type.Union([
       Type.Literal("edit"),
       Type.Literal("withdraw"),

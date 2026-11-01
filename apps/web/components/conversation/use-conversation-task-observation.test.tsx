@@ -286,10 +286,14 @@ it.each(["binding ABA", "same-ID scope switch"] as const)("does not retire a sam
   await act(async () => streams.at(-1)!.emit({ ...emptyQueue(1), paused: true, queued: [{ ...entry, status: "failed" }] }));
   await flush();
   const held = heldJson(); const base = fetcher.getMockImplementation()!;
-  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations") ? Promise.resolve(held.response) : base(url, init));
+  let requests = 0;
+  // A remounted current binding may legitimately recover the saved operation.
+  // Its independent failed response must not share the departed request's JSON.
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations")
+    ? Promise.resolve(++requests === 1 ? held.response : Response.json({ message: "Synthetic recovery unavailable" }, { status: 503 })) : base(url, init));
   const old = await beginMutation({ kind: "withdraw", queue_entry_id: entry.queue_entry_id });
   await newMutationOwner(change);
-  await act(async () => { held.resolve({ snapshot: emptyQueue(2), applied: { kind: "withdraw", queue_entry_id: entry.queue_entry_id, run_id: null, status: null } }); expect(await old.result).toBe(false); });
+  await act(async () => { held.resolve({ snapshot: emptyQueue(2), applied: { kind: "withdraw", queue_entry_id: entry.queue_entry_id, run_id: null, status: null, withdrawn_message_ids: [MESSAGE] } }); expect(await old.result).toBe(false); });
   await flush();
   expect(readConversationMessages(SCOPE, A).map(message => message.id)).toEqual([MESSAGE]);
   expect(state.messages.map(message => message.id)).toEqual([MESSAGE]);
@@ -305,4 +309,40 @@ it("does not submit a withdrawal using the departed scope's queue revision befor
   await act(async () => { expect(await state.mutate({ kind: "withdraw", queue_entry_id: entry.queue_entry_id })).toBe(false); });
   expect(mutationPosts()).toHaveLength(0);
   expect(readConversationMessages(other, A)).toHaveLength(1);
+});
+
+it.each(["binding ABA", "same-ID scope switch", "session switch"] as const)("does not continue an old exact cleanup or release the current lock across %s", async change => {
+  unknown(); await render();
+  await act(async () => streams.at(-1)!.emit({ ...emptyQueue(1), paused: true, queued: [{ ...entry, status: "failed" }] })); await flush();
+  const supplement = "88888888-8888-4888-8888-888888888888";
+  writeConversationMessage(SCOPE, A, { id: supplement, objective: "Synthetic supplement", createdAt: entry.created_at, delivery: "accepted", expiresAt: Date.now() + 60000 });
+  const supplementKey = `talent-signal:conversation:v1:${SCOPE}:${A}:message:${supplement}`;
+
+  const deletes: string[] = []; let release!: () => void;
+  const gate = new Promise<void>(yes => { release = yes; });
+  setConversationImageStoreForTest({ async get() { return []; }, async put() { return true; }, async delete() {}, async deletePrefix() {}, async inventory() { return []; },
+    async deleteConfirmed(key) { deletes.push(key); if (deletes.length > 1) return false; await gate; return true; } });
+  const base = fetcher.getMockImplementation()!;
+  let mutationCount = 0; const currentBody = heldJson();
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.endsWith("/mutations")) return Promise.resolve(++mutationCount === 1 ? Response.json({ snapshot: emptyQueue(2),
+      applied: { kind: "withdraw", queue_entry_id: MESSAGE, run_id: null, status: null, withdrawn_message_ids: [MESSAGE, supplement] } }) : currentBody.response);
+    return base(url, init);
+  });
+  const old = await beginMutation({ kind: "withdraw", queue_entry_id: MESSAGE });
+  expect(deletes).toEqual([`${SCOPE}:${A}:${MESSAGE}`]);
+  const composer = host.querySelector("textarea");
+  if (change === "session switch") {
+    writeConversationMessage(SCOPE, B, { id: MESSAGE, objective: "New session", createdAt: entry.created_at, delivery: "unknown", expiresAt: Date.now() + 60000 });
+    await render(B); await act(async () => state.changeDraft("New session draft")); await snapshot(5, null);
+  } else await newMutationOwner(change);
+  const owner = state.taskObservation.owner; const currentDraft = state.draft; const attachments = state.attachments;
+  const current = await beginMutation({ kind: "continue" }); expect(state.mutating).toBe(true);
+  const currentDeletes = [...deletes]; const currentSupplement = localStorage.getItem(supplementKey);
+  await act(async () => { release(); expect(await old.result).toBe(false); }); await flush();
+  expect(deletes).toEqual(currentDeletes); expect(localStorage.getItem(supplementKey)).toBe(currentSupplement);
+  expect(state.taskObservation.owner).toBe(owner); expect(state.mutating).toBe(true);
+  expect(state.draft).toBe(currentDraft); expect(state.attachments).toEqual(attachments); expect(host.querySelector("textarea")).toBe(composer);
+  if (change !== "binding ABA") expect(state.messages.map(row => row.id)).toEqual([MESSAGE]);
+  await act(async () => { currentBody.resolve({ snapshot: { ...emptyQueue(6), session_id: change === "session switch" ? B : A } }); await current.result; });
 });

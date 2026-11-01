@@ -24,6 +24,8 @@ export interface ConversationImageStore {
   get(key: string): Promise<DurableConversationImage[]>;
   /** Optional cutoff is checked atomically against the current record. Explicit clears omit it. */
   delete(key: string, expiredBefore?: number): Promise<void>;
+  /** True only after the exact delete transaction has committed. */
+  deleteConfirmed?(key: string): Promise<boolean>;
   deletePrefix(prefix: string): Promise<void>;
   inventory(): Promise<Array<{ key: string; expiresAt: number }>>;
 }
@@ -129,6 +131,17 @@ export function createIndexedDbConversationImageStore(
       } catch {
         /* Best effort; an accepted message is already durable on the server. */
       }
+    },
+    async deleteConfirmed(key) {
+      try {
+        const db = await open();
+        const transaction = db.transaction(STORE_NAME, "readwrite");
+        const done = transactionDone(transaction);
+        void done.catch(() => undefined);
+        transaction.objectStore(STORE_NAME).delete(key);
+        await done;
+        return true;
+      } catch { return false; }
     },
     async deletePrefix(prefix) {
       try {
@@ -327,6 +340,13 @@ export async function removeConversationImages(
   messageId: string,
 ): Promise<void> {
   await conversationImageStore()?.delete(conversationImageKey(scope, session, messageId));
+}
+
+/** Withdrawal cleanup never treats an unavailable or legacy adapter as proof. */
+export async function removeConversationImagesConfirmed(scope: string, session: string, messageId: string): Promise<boolean> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(messageId)) return false;
+  try { return await conversationImageStore()?.deleteConfirmed?.(conversationImageKey(scope, session, messageId)) === true; }
+  catch { return false; }
 }
 
 export function clearConversationImages(

@@ -2711,5 +2711,9 @@
   "返回账号设置": "Return to account settings",
   "页面没有收到更改结果。请通过只读页面核对结果。": "This page did not receive the outcome. Open the read-only page to check the result.",
   "这个链接属于更早的操作。请回到账号设置。": "This link belongs to an earlier operation. Return to account settings.",
-  "检查结果只核对这次操作，不会再次提交密码。": "Checking the result only inspects this operation and never submits the password again."
+  "检查结果只核对这次操作，不会再次提交密码。": "Checking the result only inspects this operation and never submits the password again.",
+  "本机消息记录暂时无法读取，内容已保留。恢复存储后请刷新重试。": "Local message records cannot be read right now. Your content is retained. Restore storage access, then refresh to retry.",
+  "撤回尚未发出。本机无法保存恢复记录，内容已保留，请恢复存储后重试。": "The withdrawal has not been sent. This device could not save its recovery record. Your content is retained. Restore storage access and retry.",
+  "服务端已撤回，但本机记录尚未保存。内容已保留，请恢复存储后刷新重试。": "The server has withdrawn the message, but this device could not save the confirmation. Your content is retained. Restore storage access, then refresh to retry.",
+  "消息已撤回，本机清理尚未确认。恢复存储后刷新可重试清理。": "The message has been withdrawn. Cleanup on this device is not yet confirmed. Restore storage access, then refresh to retry cleanup."
 }

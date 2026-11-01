@@ -58,6 +58,8 @@ async function open() { expect(capsule(), "observed task must expose a capsule")
 function actions() { return fetcher.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => JSON.parse(init.body)); }
 function stopButtons() { return [...host.querySelectorAll<HTMLButtonElement>("button")].filter(button => button.textContent === "Stop"); }
 beforeEach(() => {
+  // Positive active-session fixtures must outlive this case's clock.
+  initial.expires_at = new Date(Date.now() + 3_600_000).toISOString();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
