@@ -286,6 +286,9 @@ export class ProtocolPage {
     const {model}=await this.call<{model:{width:number;height:number}}>("DOM.getBoxModel",{nodeId});return model.width>0&&model.height>0;
   }
   async fillPassword(value: string) {
+    // Bridge hydration can precede the streamed route editor becoming actionable.
+    await until(()=>this.pageFunction<boolean>(
+      "function(){const input=document.querySelector('input[name=\"newPassword\"]');if(!(input instanceof HTMLInputElement)||input.type!==\"password\"||!input.isConnected||input.disabled||input.readOnly||input.matches(\":disabled\")||input.closest(\"[inert]\"))return false;if(!input.checkVisibility({opacityProperty:true,visibilityProperty:true})||input.getClientRects().length===0)return false;const box=input.getBoundingClientRect();return Number.isFinite(box.width)&&Number.isFinite(box.height)&&box.width>0&&box.height>0;}",[]), "actionable production password input");
     const nodeId = await this.node('input[name="newPassword"]'); if (!nodeId) throw new Error("Missing production password input");
     await this.call("DOM.focus", { nodeId });
     await this.call("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 });
