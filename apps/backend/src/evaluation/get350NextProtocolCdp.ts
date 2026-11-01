@@ -84,6 +84,8 @@ export async function until(condition: () => Promise<boolean>, label: string, mi
 export class ProtocolPage {
   readonly observed = { passwordPosts: 0, actionHeaders: 0, native303: 0, failedPasswordRequests: 0, finishedPasswordRequests: 0, blockedExternal: 0 };
   private passwordRequests = new Set<string>();
+  private bNavigationRequests = new Set<string>();
+  private bNavigation = {passwordGets:0,targetGets:0,responseReceived:0,finished:0,failed:0,lastStatus:null as number|null};
   private actions = new Map<string,ProtocolAction>();
   private activeRequests = new Set<string>();
   private requestMetadata=new Map<string,{method:string;resourceType:string;routeClass:string;loaderId:string;startedAt:number}>();
@@ -111,6 +113,10 @@ export class ProtocolPage {
       try{page.networkTotals.started++;
       page.requestMetadata.set(String(params.requestId),{method:request.method==="GET"?"GET":request.method==="POST"?"POST":"OTHER",resourceType:typeof params.type==="string"?(OBSERVED_NETWORK_TYPES.get(params.type)??"Other"):"Other",routeClass:observedRouteClass(request.url),loaderId:typeof params.loaderId==="string"?params.loaderId:"",startedAt:Date.now()});}catch{}
       if (new URL(request.url).pathname !== PASSWORD_PATH) return;
+      try{if(request.method==="GET"){
+        page.bNavigation.passwordGets++;const url=new URL(request.url);
+        if(url.origin===origin&&url.searchParams.get("fixtureNavigation")==="b"){page.bNavigation.targetGets++;page.bNavigationRequests.add(String(params.requestId));}
+      }}catch{}
       if (request.method === "POST") {
         const requestId=String(params.requestId),url=new URL(request.url);
         page.passwordRequests.add(requestId);page.observed.passwordPosts++;
@@ -122,6 +128,10 @@ export class ProtocolPage {
       if (request.method === "GET" && redirect?.status === 303) page.observed.native303++;
     }));
     page.disposers.push(cdp.on(sessionId, "Network.responseReceived", (params) => {
+      try{if(page.bNavigationRequests.has(String(params.requestId))){
+        page.bNavigation.responseReceived++;const status=(params.response as {status:number}).status;
+        page.bNavigation.lastStatus=Number.isInteger(status)&&status>=100&&status<=599?status:null;
+      }}catch{}
       if (page.passwordRequests.has(String(params.requestId))) page.observed.actionHeaders++;
       const action=page.actions.get(String(params.requestId));
       if(action){action.responseReceived=true;action.status=(params.response as {status:number}).status;}
@@ -129,12 +139,14 @@ export class ProtocolPage {
     page.disposers.push(cdp.on(sessionId, "Network.loadingFailed", (params) => {
       page.activeRequests.delete(String(params.requestId)); page.networkChangedAt = Date.now();
       try{page.networkTotals.failed++;page.requestMetadata.delete(String(params.requestId));}catch{}
+      try{if(page.bNavigationRequests.has(String(params.requestId)))page.bNavigation.failed++;}catch{}
       if (page.passwordRequests.has(String(params.requestId))) page.observed.failedPasswordRequests++;
       const action=page.actions.get(String(params.requestId));if(action)action.failed=true;
     }));
     page.disposers.push(cdp.on(sessionId, "Network.loadingFinished", (params) => {
       page.activeRequests.delete(String(params.requestId)); page.networkChangedAt = Date.now();
       try{page.networkTotals.finished++;page.requestMetadata.delete(String(params.requestId));}catch{}
+      try{if(page.bNavigationRequests.has(String(params.requestId)))page.bNavigation.finished++;}catch{}
       if (page.passwordRequests.has(String(params.requestId))) page.observed.finishedPasswordRequests++;
       const action=page.actions.get(String(params.requestId));if(action)action.finished=true;
     }));
@@ -189,6 +201,10 @@ export class ProtocolPage {
       lastQuietNetworkObservation={pending:safeNetworkCount(this.activeRequests.size),started:safeNetworkCount(this.networkTotals.started),finished:safeNetworkCount(this.networkTotals.finished),failed:safeNetworkCount(this.networkTotals.failed),lastEventAgeMs:safeNetworkCount(now-this.networkChangedAt),truncated:this.activeRequests.size>16,active};}catch{lastQuietNetworkObservation={captureFailed:true};}
       throw error;
     }
+  }
+  navigationObservation(){
+    const n=this.bNavigation;return {passwordGets:safeNetworkCount(n.passwordGets),targetGets:safeNetworkCount(n.targetGets),
+      responseReceived:safeNetworkCount(n.responseReceived),finished:safeNetworkCount(n.finished),failed:safeNetworkCount(n.failed),lastStatus:n.lastStatus};
   }
   async currentUrl() {
     const history = await this.call<{ currentIndex: number; entries: Array<{ url: string }> }>("Page.getNavigationHistory");

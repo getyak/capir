@@ -199,6 +199,7 @@ type Fixture = ProtocolSetup & {
   completionRequests:number;completionStatus:number;resultRequests:number;
 };
 type CutObservation={responsePresent:boolean;headersSentBefore:boolean|null;responseEndedBefore:boolean|null;socketPresent:boolean;socketDestroyedBefore:boolean|null;socketDestroyedAfter:boolean|null;responseDestroyedAfter:boolean|null;socketClosedByObservation:boolean|null};
+let lastLateNavigationDiagnostic:Record<string,unknown>|null=null;
 let lastTransportDiagnostic:Record<string,unknown>|null=null;
 const transportObservations:Array<Record<string,unknown>>=[];
 const diagnosticBool=(value:unknown)=>typeof value==="boolean"?value:null;
@@ -670,7 +671,19 @@ async function main() {
       check(a.completionRequests === 1 && plan.status === 200 && plan.terminal, "late A committed before B");
       const aCommitted = await fingerprint(a), b = await makeFixture("late-b"), bPending = await fingerprint(b);
       await page.setup(b.slot, controlKey);flowBaselines.set(b.ref,await page.inspect(b.ref,controlKey));await page.click("#fixture-next-navigation");
-      await until(async () => await page.attribute('input[name="operationRef"]', "value") === b.ref, "real Next client navigation to B");
+      try {
+        await until(async () => await page.attribute('input[name="operationRef"]', "value") === b.ref, "real Next client navigation to B");
+      } catch(error) {
+        const diagnostic:Record<string,unknown>={network:page.navigationObservation(),domScope:"unobserved",fixtureTargetInHistory:null,passwordEditor:null,
+          heldAction:{responseReceived:action.responseReceived,finished:action.finished,failed:action.failed},captureFailed:false};
+        try{
+          const ref=await page.attribute('input[name="operationRef"]',"value");diagnostic.domScope=ref===b.ref?"b":ref===a.ref?"a":ref===undefined?"absent":"other";
+          const url=new URL(await page.currentUrl());diagnostic.fixtureTargetInHistory=url.origin===front&&url.pathname===PASSWORD_PATH&&url.searchParams.get("fixtureNavigation")==="b";
+          diagnostic.passwordEditor=await page.has('input[name="newPassword"]');
+        }catch{diagnostic.captureFailed=true;}
+        // Capture primitives before closing the page; never emit raw URLs, refs, response bodies or cookies.
+        lastLateNavigationDiagnostic=diagnostic;throw error;
+      }
       await flowUnchanged(page,b);
       proxy.release(plan);
       await until(async()=>action.finished||action.failed,"same held late A transport settled");
@@ -720,7 +733,7 @@ async function main() {
   phase = "passed"; await writeReceipt(passedSummary); console.log(JSON.stringify(passedSummary));
 }
 void main().catch(async (error:unknown) => {
-  const failure = {fixture:"GET350_NEXT_PROTOCOL",passed:false,failureCode:error instanceof Error?(FIXTURE_FAILURE_CODES.get(error.message)??"UNCLASSIFIED_ERROR"):"NON_ERROR_THROWN",lastSetupHttpStatus:typeof lastSetupHttpStatus==="number"&&Number.isInteger(lastSetupHttpStatus)&&lastSetupHttpStatus>=100&&lastSetupHttpStatus<=599?lastSetupHttpStatus:null,transportDiagnostic:lastTransportDiagnostic,networkQuietDiagnostic:lastQuietNetworkObservation,phase,observedSourceRevision,source:actualSource??"not-bound",nextBuildDiagnostic:nextBuildDiagnostic??"not-started",ownedProcessGroupsEmpty:[...ownedGroups.values()].every(group=>group.closed),ownedProcessGroupCount:ownedGroups.size,scenarios:completedScenarios};
+  const failure = {fixture:"GET350_NEXT_PROTOCOL",passed:false,failureCode:error instanceof Error?(FIXTURE_FAILURE_CODES.get(error.message)??"UNCLASSIFIED_ERROR"):"NON_ERROR_THROWN",lastSetupHttpStatus:typeof lastSetupHttpStatus==="number"&&Number.isInteger(lastSetupHttpStatus)&&lastSetupHttpStatus>=100&&lastSetupHttpStatus<=599?lastSetupHttpStatus:null,transportDiagnostic:lastTransportDiagnostic,networkQuietDiagnostic:lastQuietNetworkObservation,lateNavigationDiagnostic:lastLateNavigationDiagnostic,phase,observedSourceRevision,source:actualSource??"not-bound",nextBuildDiagnostic:nextBuildDiagnostic??"not-started",ownedProcessGroupsEmpty:[...ownedGroups.values()].every(group=>group.closed),ownedProcessGroupCount:ownedGroups.size,scenarios:completedScenarios};
   try { await writeReceipt(failure); } catch { /* CI still fails; never upload private diagnostics instead. */ }
   console.error(JSON.stringify(failure)); process.exitCode = 1;
 });
