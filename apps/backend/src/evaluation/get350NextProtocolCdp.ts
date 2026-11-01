@@ -5,6 +5,15 @@ import { PASSWORD_PATH } from "./get350NextProtocolApp.js";
 
 // Last observed setup status only; never headers, body or a capability.
 export let lastSetupHttpStatus:number|null=null;
+// Associate bounded diagnostics with the same rejected Error, not cleanup calls.
+export type CdpCommandErrorObservation={method:string;code:number|null;kind:string};
+const CDP_COMMAND_METHODS=new Map(["Browser.close","Browser.getVersion","DOM.enable","DOM.focus","DOM.getAttributes","DOM.getBoxModel","DOM.getDocument","DOM.getOuterHTML","DOM.querySelector","DOM.scrollIntoViewIfNeeded","DOM.setAttributeValue","Emulation.setScriptExecutionDisabled","Fetch.continueRequest","Fetch.enable","Fetch.failRequest","Input.dispatchKeyEvent","Input.dispatchMouseEvent","Input.insertText","Network.enable","Network.setCacheDisabled","Page.enable","Page.getNavigationHistory","Page.navigate","Page.reload","Runtime.callFunctionOn","Runtime.evaluate","Runtime.releaseObject","Target.attachToTarget","Target.createBrowserContext","Target.createTarget","Target.disposeBrowserContext"].map(value=>[value,value] as const));
+const CDP_ERROR_MESSAGE_KINDS=new Map<string,string>([["Could not find node with given id","NODE_NOT_FOUND"],["No node with given id found","NODE_NOT_FOUND"],["Node is detached from document","NODE_DETACHED"],["Cannot find context with specified id","CONTEXT_NOT_FOUND"],["Cannot find default execution context","CONTEXT_NOT_FOUND"],["Execution context was destroyed.","CONTEXT_DESTROYED"],["Execution context was destroyed","CONTEXT_DESTROYED"],["Could not compute box model.","BOX_MODEL_UNAVAILABLE"],["Could not find object with given id","OBJECT_NOT_FOUND"],["Could not find document","DOCUMENT_NOT_FOUND"],["Cannot find frame with id","FRAME_NOT_FOUND"],["Target closed.","TARGET_CLOSED"],["Not attached to an active page","PAGE_NOT_ATTACHED"]]);
+const CDP_COMMAND_ERROR_OBSERVATIONS=new WeakMap<Error,CdpCommandErrorObservation>();
+export function cdpCommandErrorObservation(error:unknown):CdpCommandErrorObservation|null{
+  return error instanceof Error?CDP_COMMAND_ERROR_OBSERVATIONS.get(error)??null:null;
+}
+
 export type QuietNetworkObservation={pending:number|null;started:number|null;finished:number|null;failed:number|null;lastEventAgeMs:number|null;truncated:boolean;active:Array<{method:string;resourceType:string;routeClass:string;currentMainDocument:boolean|null;ageMs:number|null}>}|{captureFailed:true};
 export let lastQuietNetworkObservation:QuietNetworkObservation|null=null;
 const OBSERVED_NETWORK_TYPES=new Map(["Document","Stylesheet","Image","Media","Font","Script","TextTrack","XHR","Fetch","Prefetch","EventSource","WebSocket","Manifest","SignedExchange","Ping","CSPViolationReport","Preflight","Other"].map(value=>[value,value] as const));
@@ -20,7 +29,7 @@ type Params = Record<string, unknown>;
 type Message = { id?: number; sessionId?: string; method?: string; params?: Params; result?: unknown; error?: unknown };
 export class ProtocolCdp {
   private sequence = 0;
-  private waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; method:string }>();
   private handlers = new Map<string, Set<(params: Params) => void>>();
   private constructor(private socket: WebSocket) {
     socket.addEventListener("message", (event) => {
@@ -29,7 +38,16 @@ export class ProtocolCdp {
         const pending = this.waiting.get(message.id);
         if (!pending) return;
         clearTimeout(pending.timer); this.waiting.delete(message.id);
-        if (message.error) pending.reject(new Error("CDP command rejected"));
+        if (message.error) {
+          const error=new Error("CDP command rejected");
+          const detail:{code?:unknown;message?:unknown}=typeof message.error==="object"&&message.error!==null?message.error as {code?:unknown;message?:unknown}:{};
+          CDP_COMMAND_ERROR_OBSERVATIONS.set(error,Object.freeze({
+            method:CDP_COMMAND_METHODS.get(pending.method)??"OTHER",
+            code:typeof detail.code==="number"&&Number.isSafeInteger(detail.code)&&detail.code>=-32768&&detail.code<=32767?detail.code:null,
+            kind:typeof detail.message==="string"?CDP_ERROR_MESSAGE_KINDS.get(detail.message)??"OTHER":"OTHER",
+          }));
+          pending.reject(error);
+        }
         else pending.resolve(message.result);
       } else if (message.method) {
         for (const handler of this.handlers.get(`${message.sessionId ?? ""}:${message.method}`) ?? []) handler(message.params ?? {});
@@ -62,7 +80,7 @@ export class ProtocolCdp {
     const id = ++this.sequence;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => { this.waiting.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, 10_000);
-      this.waiting.set(id, { resolve: (value) => resolve(value as T), reject, timer });
+      this.waiting.set(id, { resolve: (value) => resolve(value as T), reject, timer, method });
       this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }

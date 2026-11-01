@@ -180,21 +180,35 @@ function pausedRegressionPool() {
   let reached!: () => void, resume!: () => void;
   const paused = new Promise<void>((resolve) => { reached = resolve; });
   const continuation = new Promise<void>((resolve) => { resume = resolve; });
+  let pausedBackendPid: number | null = null;
   const controlled = { query: pool!.query.bind(pool), async connect() {
     const client = await pool!.connect();
     return { release: client.release.bind(client), query: async (sql: string, values?: unknown[]) => {
-      if (sql.startsWith("INSERT INTO lab_regressions")) { reached(); await continuation; }
+      if (sql.startsWith("INSERT INTO lab_regressions")) {
+        // Same already-locked transaction; builtin identity read takes no business-row lock.
+        const identity = await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+        const value = identity.rows[0]?.pid;
+        pausedBackendPid = typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+        reached(); await continuation;
+      }
       return client.query(sql, values);
     } };
   } } as unknown as Pool;
-  return { pool: controlled, paused, resume };
+  return { pool: controlled, paused, resume, get pausedBackendPid() { return pausedBackendPid; } };
 }
 
 async function revokeWhilePaused(capture: string, gate: ReturnType<typeof pausedRegressionPool>) {
   const client = await pool!.connect();
   const pid = (await client.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
-  const deletion = client.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE capture_id=$1", [capture]);
-  let waiting = false;
+  const statement = "UPDATE source_retention_receipts SET authorization_state='revoked' WHERE capture_id=$1";
+  const deletion = client.query(statement, [capture]);
+  let waiting = false, failed = false, cleanupFailed = false, updateSettled = false, updateRejected = false;
+  let affectedRows: number | null = null, settledAtFailure: boolean | null = null;
+  let observation: Record<string, unknown> = { captureFailed: false };
+  const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000 ? value : null;
+  // Observe only; the original promise is still awaited by the original cleanup.
+  void deletion.then((result) => { updateSettled = true; affectedRows = count(result.rowCount); },
+    () => { updateSettled = true; updateRejected = true; });
   try {
     for (let attempt = 0; attempt < 50; attempt++) {
       const state = (await pool!.query("SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1", [pid])).rows[0];
@@ -202,7 +216,38 @@ async function revokeWhilePaused(capture: string, gate: ReturnType<typeof paused
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     expect(waiting, "Source retraction must wait for the frozen execution held by derivation").toBe(true);
-  } finally { gate.resume(); await deletion; client.release(); }
+  } catch (error) {
+    failed = true; settledAtFailure = updateSettled;
+    // Extra observation is AFTER the unchanged sampler failed, while the writer is still paused.
+    // pool.query uses a separate available connection/autocommit statement; no BEGIN or business write.
+    try {
+      const row = (await pool!.query(`WITH blockers AS MATERIALIZED (SELECT pg_blocking_pids($1) AS pids)
+        SELECT a.wait_event_type,a.state,a.query=$3 AS expected_update,
+          cardinality(blockers.pids) AS blocking_count,
+          CASE WHEN $2::integer IS NULL THEN NULL ELSE $2::integer=ANY(blockers.pids) END AS blocked_by_writer,
+          CASE WHEN $2::integer IS NULL THEN NULL ELSE pg_backend_pid()<>$1 AND pg_backend_pid()<>$2::integer END AS independent_observer
+        FROM pg_stat_activity a CROSS JOIN blockers WHERE a.pid=$1`, [pid, gate.pausedBackendPid, statement])).rows[0];
+      const states = new Set(["active", "idle", "idle in transaction", "idle in transaction (aborted)", "fastpath function call", "disabled"]);
+      const waits = new Set(["Activity", "BufferPin", "Client", "Extension", "IO", "IPC", "Lock", "LWLock", "Timeout", "InjectionPoint"]);
+      const boolean = (value: unknown) => typeof value === "boolean" ? value : null;
+      observation = { captureFailed: false, waiterPresent: Boolean(row),
+        waiterState: typeof row?.state === "string" && states.has(row.state) ? row.state : "UNOBSERVED_OR_OTHER",
+        waitKind: row?.wait_event_type === null ? "NONE" : typeof row?.wait_event_type === "string" && waits.has(row.wait_event_type) ? row.wait_event_type : "UNOBSERVED_OR_OTHER",
+        expectedUpdate: boolean(row?.expected_update), blockingCount: count(row?.blocking_count),
+        blockedByPausedWriter: boolean(row?.blocked_by_writer), independentObserver: boolean(row?.independent_observer) };
+    } catch { observation = { captureFailed: true }; }
+    throw error;
+  } finally {
+    const settledBeforeResume = updateSettled;
+    gate.resume();
+    try { await deletion; client.release(); }
+    catch (error) { failed = true; cleanupFailed = true; throw error; }
+    finally {
+      if (failed) try { console.error(JSON.stringify({ diagnostic: "PG_FROZEN_SOURCE_FENCE", waiting,
+        settledAtFailure, settledBeforeResume, settledAfterCleanup: updateSettled, updateRejected,
+        affectedRows, pausedWriterKnown: gate.pausedBackendPid !== null, cleanupFailed, observation })); } catch {}
+    }
+  }
 }
 
 describe.skipIf(!pool)("Authenticated product feedback learning PostgreSQL loop", () => {
