@@ -6,7 +6,7 @@ import type { ConversationQueueEntry, ConversationQueueMutationResponse, Convers
 
 import { useConversation } from "./use-conversation";
 import { conversationImageKey, setConversationImageStoreForTest, type DurableConversationImage } from "@/lib/conversation-image-store";
-import { readConversationMessages, writeConversationDraft, writeConversationMessage, type LocalMessage } from "@/lib/conversation-local";
+import { readConversationMessages, writeConversationDraft, writeConversationMessage, readConversationWithdrawals, reserveConversationWithdrawal, type LocalMessage } from "@/lib/conversation-local";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 
 const fetcher = vi.hoisted(() => vi.fn());
@@ -49,6 +49,11 @@ function localMessage(id: string, delivery: LocalMessage["delivery"] = "accepted
 }
 async function flush() {
   await act(async () => { for (let i = 0; i < 6; i++) { await Promise.resolve(); await new Promise(resolve => setTimeout(resolve, 1)); } });
+}
+async function settleUntil(done: () => boolean) {
+  const deadline = performance.now() + 1000;
+  while (!done() && performance.now() < deadline) await flush();
+  expect(done()).toBe(true);
 }
 function Harness({ tab }: { tab: Mounted }) {
   const state = useConversation({ id: SESSION, scope: SCOPE, chatBinding: tab.binding, detailBinding: "detail", initial: detail() });
@@ -108,8 +113,7 @@ async function withdraw(tab: Mounted) {
   await flush();
   expect(mutations()).toHaveLength(1);
   expect(JSON.parse(mutations()[0][1].body)).toMatchObject({ kind: "withdraw", queue_entry_id: TARGET, expected_revision: 7, idempotency_key: expect.any(String) });
-  expect(tab.state.snapshot?.session_id).toBe(SESSION);
-  expect(tab.state.snapshot?.revision).toBe(8);
+
   return result;
 }
 beforeEach(() => {
@@ -127,6 +131,7 @@ beforeEach(() => {
     },
     async get(key) { return readImages ? readImages(key) : images.get(key) ?? []; },
     async delete(key) { images.delete(key); },
+    async deleteConfirmed(key) { images.delete(key); return true; },
     async deletePrefix(prefix) { for (const key of images.keys()) if (key.startsWith(prefix)) images.delete(key); },
     async inventory() { return [...images].map(([key, records]) => ({ key, expiresAt: Math.min(...records.map(record => record.expiresAt)) })); },
   });
@@ -143,7 +148,7 @@ beforeEach(() => {
     if (url.endsWith("/mutations") && init?.method === "POST") {
       server = snapshot(8, false);
       const response: ConversationQueueMutationResponse = { contract_version: VERSION, snapshot: server,
-        applied: { kind: "withdraw", queue_entry_id: TARGET, run_id: null, status: null } };
+        applied: { kind: "withdraw", queue_entry_id: TARGET, run_id: null, status: null, withdrawn_message_ids: [TARGET] } };
       return Promise.resolve(Response.json(response));
     }
     if (url === `/api/workspace-sessions/${SESSION}` && !init?.method) return Promise.resolve(Response.json({ detail: detail() }));
@@ -241,8 +246,163 @@ it.each([true, false])("does not POST or recreate a captured image after A withd
   expect(images.has(imageKey)).toBe(false);
   expect(readConversationMessages(SCOPE, SESSION).map(message => message.id)).toEqual([NEIGHBOUR]);
   if (deliverEvent) await dispatchStorageChanges(changes);
-  await act(async () => resolve([record])); await flush();
+  await act(async () => resolve([record]));
+  // Observable drain completion: retirement must be applied to B even when the
+  // event was withheld. Fixed microtask counts cannot certify a completed drain.
+  await settleUntil(() => !ids(b).includes(TARGET));
   assertUnaffected(a); assertUnaffected(b); expect(b.host.querySelector("textarea")).toBe(composer);
   expect(admissions().map(([, init]) => JSON.parse(init.body).message_id)).not.toContain(TARGET);
   expect(readConversationMessages(SCOPE, SESSION).map(message => message.id)).toEqual([NEIGHBOUR]);
+});
+
+function reservation(operation = "66666666-6666-4666-8666-666666666666") {
+  return { version: 1 as const, operation, queueEntryId: TARGET, targetMessageId: TARGET, expectedRevision: 7,
+    createdAt: Date.now(), protectUntil: Date.now() + 86_400_000, state: "pending" as const };
+}
+it("does not POST when a durable withdrawal cannot be reserved", async () => {
+  const a = await mount("tab-a"); const previous = localStorage.setItem.bind(localStorage);
+  vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => { if (key.includes(":withdrawal:")) throw new Error("quota"); previous(key, value); });
+  let result!: boolean; await act(async () => { result = await a.state.mutate({ kind: "withdraw", queue_entry_id: TARGET }); });
+  expect(result).toBe(false); expect(mutations()).toHaveLength(0); expect(ids(a)).toEqual([TARGET, NEIGHBOUR]); assertUnaffected(a);
+});
+it("keeps a durable pending operation when confirmation promotion fails and replays identical bytes after reload", async () => {
+  const a = await mount("tab-a"); const previous = localStorage.setItem.bind(localStorage);
+  vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => { if (key.includes(":withdrawal:") && JSON.parse(value).state === "confirmed") throw new Error("quota"); previous(key, value); });
+  expect(await withdraw(a)).toBe(false);
+  expect(ids(a)).toEqual([TARGET, NEIGHBOUR]); expect(a.state.messages.every(message => message.delivery === "unknown")).toBe(true);
+  const operation = readConversationWithdrawals(SCOPE, SESSION);
+  expect(operation.status).toBe("known"); if (operation.status !== "known") throw new Error("missing operation");
+  expect(operation.records).toHaveLength(1); expect(operation.records[0].state).toBe("pending");
+  const originalBody = mutations()[0][1].body;
+  await unmount(a); vi.mocked(localStorage.setItem).mockImplementation(previous);
+  const b = await mount("reloaded");
+  await settleUntil(() => ids(b).length === 1 && ids(b)[0] === NEIGHBOUR);
+  expect(mutations()).toHaveLength(2); expect(mutations()[1][1].body).toBe(originalBody); expect(admissions()).toHaveLength(0);
+  const recovered = readConversationWithdrawals(SCOPE, SESSION);
+  expect(recovered.status === "known" && recovered.records[0]).toMatchObject({ ...operation.records[0], state: "confirmed", cleanup: "confirmed" });
+});
+it("replays an existing pending operation at its original revision and never admits its unknown content", async () => {
+  const saved = reservation(); reserveConversationWithdrawal(SCOPE, SESSION, saved);
+  const a = await mount("recovery");
+  expect(mutations()).toHaveLength(1); expect(JSON.parse(mutations()[0][1].body)).toEqual({ kind: "withdraw", queue_entry_id: TARGET,
+    expected_revision: 7, idempotency_key: saved.operation, include_withdrawn_message_ids: true });
+  expect(ids(a)).toEqual([NEIGHBOUR]); expect(admissions()).toHaveLength(0); assertUnaffected(a);
+});
+it.each(["legacy", "empty", "duplicate", "too many", "missing target", "malformed", "foreign session", "stale revision", "non-null run", "wrong kind", "wrong queue entry", "non-null status"] as const)("retains unknown evidence for an unconfirmed %s receipt", async kind => {
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (!url.endsWith("/mutations")) return base(url, init);
+    const applied: Record<string, unknown> = { kind: "withdraw", queue_entry_id: TARGET, run_id: null, status: null, withdrawn_message_ids: [TARGET] };
+    const next = snapshot(8, false);
+    if (kind === "legacy") delete applied.withdrawn_message_ids;
+    if (kind === "empty") applied.withdrawn_message_ids = [];
+    if (kind === "duplicate") applied.withdrawn_message_ids = [TARGET, TARGET];
+    if (kind === "too many") applied.withdrawn_message_ids = [TARGET, ...Array.from({ length: 51 }, (_, n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`)];
+    if (kind === "missing target") applied.withdrawn_message_ids = [NEIGHBOUR];
+    if (kind === "malformed") applied.withdrawn_message_ids = [TARGET, "composer-draft"];
+    if (kind === "foreign session") next.session_id = OTHER_SESSION;
+    if (kind === "stale revision") next.revision = 7;
+    if (kind === "non-null run") applied.run_id = TARGET;
+    if (kind === "wrong kind") applied.kind = "retry";
+    if (kind === "wrong queue entry") applied.queue_entry_id = NEIGHBOUR;
+    if (kind === "non-null status") applied.status = "queued";
+    return Promise.resolve(Response.json({ contract_version: VERSION, snapshot: next, applied }));
+  });
+  const a = await mount("tab-a"); expect(await withdraw(a)).toBe(false);
+  expect(ids(a)).toEqual([TARGET, NEIGHBOUR]); expect(a.state.messages.every(message => message.delivery === "unknown")).toBe(true);
+  expect(readConversationWithdrawals(SCOPE, SESSION)).toMatchObject({ status: "known", records: [{ state: "pending" }] });
+  assertUnaffected(a); expect(admissions()).toHaveLength(0);
+});
+it("uses exact receipt group IDs to retire an unobserved supplement and preserve an absent unrelated neighbour", async () => {
+  const supplement = "77777777-7777-4777-8777-777777777777";
+  writeConversationMessage(SCOPE, SESSION, { ...localMessage(supplement), objective: "unobserved supplement" });
+  const a = await mount("a"); const b = await mount("b"); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations") ? Promise.resolve(Response.json({ contract_version: VERSION,
+    snapshot: { ...snapshot(8, false), queued: [] }, applied: { kind: "withdraw", queue_entry_id: TARGET, run_id: null, status: null, withdrawn_message_ids: [TARGET, supplement] } })) : base(url, init));
+  const changes = captureStorageChanges(); expect(await withdraw(a)).toBe(true); await dispatchStorageChanges(changes);
+  expect(ids(a)).toEqual([NEIGHBOUR]); expect(ids(b)).toEqual([NEIGHBOUR]); assertUnaffected(a); assertUnaffected(b);
+});
+it("keeps positive proof and retries only local cleanup after an unavailable byte store recovers", async () => {
+  const a = await mount("a"); setConversationImageStoreForTest(null);
+  expect(await withdraw(a)).toBe(false); expect(ids(a)).toEqual([NEIGHBOUR]);
+  expect(a.state.error).toContain("本机清理");
+  expect(readConversationWithdrawals(SCOPE, SESSION)).toMatchObject({ status: "known", records: [{ state: "confirmed", cleanup: "pending" }] });
+  await unmount(a); const deleted: string[] = [];
+  setConversationImageStoreForTest({ async get() { return []; }, async put() { return false; }, async delete() {}, async deletePrefix() {}, async inventory() { return []; }, async deleteConfirmed(key) { deleted.push(key); return true; } });
+  const b = await mount("b"); expect(ids(b)).toEqual([NEIGHBOUR]); expect(mutations()).toHaveLength(1);
+  expect(deleted).toEqual([conversationImageKey(SCOPE, SESSION, TARGET)]);
+  expect(readConversationWithdrawals(SCOPE, SESSION)).toMatchObject({ status: "known", records: [{ state: "confirmed", cleanup: "confirmed" }] });
+});
+
+it("denied withdrawal inventory retains content as unknown and blocks admission", async () => {
+  const a = await mount("a");
+  vi.spyOn(localStorage, "key").mockImplementation(() => { throw new Error("inventory denied"); });
+  await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: `talent-signal:conversation:v1:${SCOPE}:${SESSION}:withdrawal:unknown`, storageArea: localStorage })));
+  expect(ids(a)).toEqual([TARGET, NEIGHBOUR]); expect(a.state.messages.every(row => row.delivery === "unknown")).toBe(true);
+  await act(async () => a.state.retryDelivery(a.state.messages[0]));
+  expect(admissions()).toHaveLength(0); expect(mutations()).toHaveLength(0);
+});
+it("a late admission JSON cannot recreate retired RAM or metadata", async () => {
+  const a = await mount("a");
+  let resolve!: (body: unknown) => void;
+  const json = new Promise<unknown>(yes => { resolve = yes; });
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/conversation-queue") && init?.method === "POST"
+    ? Promise.resolve({ ok: true, headers: new Headers(), json: () => json } as Response) : base(url, init));
+  writeConversationMessage(SCOPE, SESSION, { ...localMessage(TARGET, "pending"), receiptUncertain: false });
+  const b = await mount("b", false); expect(admissions()).toHaveLength(1);
+  expect(await withdraw(a)).toBe(true);
+  await act(async () => resolve({ session_id: SESSION, message_id: TARGET }));
+  await settleUntil(() => !ids(b).includes(TARGET));
+  expect(readConversationMessages(SCOPE, SESSION).map(row => row.id)).toEqual([NEIGHBOUR]);
+  expect(admissions()).toHaveLength(1); assertUnaffected(a); assertUnaffected(b);
+});
+it("a late retry readback cannot re-pend a retired message", async () => {
+  const a = await mount("a"); const b = await mount("b");
+  let resolve!: (body: unknown) => void;
+  const json = new Promise<unknown>(yes => { resolve = yes; }); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/conversation-queue") && !init?.method
+    ? Promise.resolve({ ok: true, headers: new Headers(), json: () => json } as Response) : base(url, init));
+  let retry!: Promise<void>;
+  await act(async () => { retry = b.state.retryDelivery(b.state.messages.find(row => row.id === TARGET)!); });
+  expect(await withdraw(a)).toBe(true);
+  await act(async () => { resolve(snapshot(7, false)); await retry; });
+  expect(ids(b)).toEqual([NEIGHBOUR]); expect(admissions()).toHaveLength(0); assertUnaffected(b);
+});
+it("a definitive structured CAS rejection retires only the reservation without rebasing or admitting", async () => {
+  const a = await mount("a"); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations")
+    ? Promise.resolve(Response.json({ code: "CONVERSATION_QUEUE_REVISION_CONFLICT", message: "synthetic CAS" }, { status: 409 })) : base(url, init));
+  expect(await withdraw(a)).toBe(false); expect(mutations()).toHaveLength(1);
+  expect(readConversationWithdrawals(SCOPE, SESSION)).toEqual({ status: "known", records: [] });
+  expect(ids(a)).toEqual([TARGET, NEIGHBOUR]); expect(admissions()).toHaveLength(0); assertUnaffected(a);
+});
+
+it("does not POST an expired captured image even after completed proof is safely collected", async () => {
+  const expiresAt = Date.now() + 60000;
+  const bytes = new Blob([new Uint8Array([1, 2, 3, 4])], { type: "image/png" });
+  const record: DurableConversationImage = { attachment_id: "55555555-5555-4555-8555-555555555555", file_name: "synthetic.png", media_type: "image/png", byte_size: bytes.size, content_hash: "a".repeat(64), position: 0, blob: bytes, expiresAt };
+  const manifest = { attachment_id: record.attachment_id, file_name: record.file_name, media_type: record.media_type, byte_size: record.byte_size, content_hash: record.content_hash };
+  const imageKey = conversationImageKey(SCOPE, SESSION, TARGET); images.set(imageKey, [record]);
+  writeConversationMessage(SCOPE, SESSION, { ...localMessage(TARGET), expiresAt, images: [manifest] });
+  const a = await mount("a"); let resolve!: (value: DurableConversationImage[]) => void;
+  const held = new Promise<DurableConversationImage[]>(yes => { resolve = yes; });
+  readImages = key => key === imageKey ? held : Promise.resolve(images.get(key) ?? []);
+  writeConversationMessage(SCOPE, SESSION, { ...localMessage(TARGET, "pending"), expiresAt, images: [manifest], receiptUncertain: false });
+  const b = await mount("b", false); expect(b.state.messages[0].delivery).toBe("pending");
+  expect(await withdraw(a)).toBe(true);
+  const inventory = readConversationWithdrawals(SCOPE, SESSION); if (inventory.status !== "known") throw new Error("missing proof");
+  const future = inventory.records[0].protectUntil + 1; vi.spyOn(Date, "now").mockReturnValue(future);
+  const { removeConversationWithdrawalIfSafe } = await import("@/lib/conversation-local");
+  expect(removeConversationWithdrawalIfSafe(SCOPE, SESSION, inventory.records[0].operation, future)).toBe(true);
+  await act(async () => resolve([record]));
+  await settleUntil(() => b.state.messages.find(row => row.id === TARGET)?.delivery === "unknown");
+  expect(admissions()).toHaveLength(0);
+  expect(localStorage.getItem(`talent-signal:conversation:v1:${SCOPE}:${SESSION}:message:${TARGET}`)).toBeNull();
+});
+it("does not present a denied authority inventory as a known empty outbox after reload", async () => {
+  vi.spyOn(localStorage, "key").mockImplementation(() => { throw new Error("denied inventory"); });
+  const a = await mount("a");
+  expect(a.state.error).toContain("本机"); expect(a.state.error).toContain("刷新");
+  expect(admissions()).toHaveLength(0); expect(mutations()).toHaveLength(0);
 });

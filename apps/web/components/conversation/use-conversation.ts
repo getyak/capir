@@ -16,7 +16,7 @@ import { sessionHumanMessages } from "@/lib/session-human-messages";
 import { workspaceSessionFetch } from "../workspace-session-request";
 import { validateAttachmentBatch } from "../contact-agent/capture-intake";
 import { acceptConversationPreview, acceptConversationSnapshot, ConversationFrames } from "@/lib/conversation-stream";
-import { clearConversationLocal, conversationExpiry, readConversationDraft, readConversationMessages, removeConversationMessage, writeConversationDraft, writeConversationMessage, type LocalMessage } from "@/lib/conversation-local";
+import { clearConversationLocal, conversationExpiry, readConversationDraft, readConversationMessages, removeConversationMessage, writeConversationDraft, writeConversationMessage, type LocalMessage, type LocalWithdrawalRecord, reserveConversationWithdrawal, confirmConversationWithdrawal, readConversationWithdrawals, removeConversationMessageConfirmed, completeConversationWithdrawalCleanup, removeRejectedConversationWithdrawal, removeConversationWithdrawalIfSafe } from "@/lib/conversation-local";
 import {
   base64FromBlob,
   conversationImageGeneration,
@@ -25,6 +25,7 @@ import {
   loadConversationImages,
   persistConversationImages,
   removeConversationImages,
+  removeConversationImagesConfirmed,
   sha256Hex,
   type DurableConversationImage,
   type ConversationImageDraftRevision,
@@ -35,6 +36,16 @@ import { sameConversationImages, unresolvedConversationCount } from "./conversat
 
 import { isConversationMemoryDraftTarget, memoryDraftFailureKey, sameConversationMemoryDraftTarget } from "@/lib/conversation-memory-draft-target";
 
+const WITHDRAW_STORAGE_UNKNOWN = "本机消息记录暂时无法读取，内容已保留。恢复存储后请刷新重试。";
+const WITHDRAW_RESERVE_FAILED = "撤回尚未发出。本机无法保存恢复记录，内容已保留，请恢复存储后重试。";
+const WITHDRAW_CONFIRM_FAILED = "服务端已撤回，但本机记录尚未保存。内容已保留，请恢复存储后刷新重试。";
+const WITHDRAW_CLEANUP_PENDING = "消息已撤回，本机清理尚未确认。恢复存储后刷新可重试清理。";
+// Initial dispatch and recovery must preserve the same property order: the
+// existing server operation hash includes the serialized request order.
+function withdrawalRequest(record: LocalWithdrawalRecord) {
+  return { kind: "withdraw" as const, queue_entry_id: record.queueEntryId, expected_revision: record.expectedRevision,
+    idempotency_key: record.operation, include_withdrawn_message_ids: true as const };
+}
 const UNVERIFIED_IMAGE_DRAFT = "这批图片未添加。无法确认原有图片有完整的本机副本，离开或刷新可能丢失。请保留此页并重试保存。";
 
 type Options = { entryCapability?: string | null; bootstrap?: string | null; id: string | null; scope: string; chatBinding: string; detailBinding: string; initial?: SessionDetail; onAdmitted?: (id: string) => void };
@@ -143,6 +154,101 @@ export function useConversation(options: Options) {
     controller !== null && lifecycle.current === controller && !controller.signal.aborted, []);
 
   const storeMessages = useCallback((next: LocalMessage[]) => { local.current = next; setMessages(next); setTaskMessageOwner(taskOwner); }, [taskOwner]);
+  function retireWithdrawn(retired: Set<string>) {
+    if (!retired.size) return;
+    if (local.current.some(message => retired.has(message.id))) storeMessages(local.current.filter(message => !retired.has(message.id)));
+    setHandoffEntries(current => Object.fromEntries(Object.entries(current).filter(([key]) => !retired.has(key))));
+    setHandoffPreviews(current => Object.fromEntries(Object.entries(current).filter(([key]) => !retired.has(key))));
+    setRunOutcome(current => Object.fromEntries(Object.entries(current).filter(([key]) => !retired.has(key))));
+    setTaskHandoffOwners(current => Object.fromEntries(Object.entries(current).filter(([key]) => !retired.has(key))));
+    setReadbackStalled(current => current.filter(key => !retired.has(key)));
+  }
+  function withdrawalAuthority() {
+    const inventory = id ? readConversationWithdrawals(scope, id) : { status: "unknown" as const };
+    const retired = new Set(inventory.status === "known" ? inventory.records.flatMap(record => record.state === "confirmed" ? record.messageIds : []) : []);
+    retireWithdrawn(retired);
+    const blocked = inventory.status === "unknown" || inventory.records.some(record => record.state === "pending");
+    if (inventory.status === "unknown") setError(WITHDRAW_STORAGE_UNKNOWN);
+    else setError(current => current === WITHDRAW_STORAGE_UNKNOWN ? "" : current);
+    if (blocked && local.current.some(message => message.delivery !== "unknown" || !message.receiptUncertain)) {
+      storeMessages(local.current.map(message => ({ ...message, delivery: "unknown", receiptUncertain: true })));
+    }
+    return { inventory, retired, blocked };
+  }
+  function liveDelivery(message: LocalMessage, delivery: LocalMessage["delivery"]) {
+    const authority = withdrawalAuthority();
+    if (message.expiresAt <= Date.now() && local.current.find(item => item.id === message.id) === message) {
+      storeMessages(local.current.map(item => item === message ? { ...item, delivery: "unknown", receiptUncertain: true } : item));
+      return false;
+    }
+    return !authority.blocked && !authority.retired.has(message.id) && message.expiresAt > Date.now() &&
+      local.current.find(item => item.id === message.id) === message && message.delivery === delivery;
+  }
+  async function cleanupWithdrawal(record: LocalWithdrawalRecord, owned: () => boolean) {
+    if (!id || record.state !== "confirmed" || !owned()) return false;
+    retireWithdrawn(new Set(record.messageIds));
+    if (record.cleanup === "confirmed") { removeConversationWithdrawalIfSafe(scope, id, record.operation, Date.now()); return true; }
+    let clean = true;
+    for (const messageId of record.messageIds) {
+      if (!owned()) return false;
+      const metadata = removeConversationMessageConfirmed(scope, id, messageId);
+      const bytes = await removeConversationImagesConfirmed(scope, id, messageId);
+      if (!owned()) return false;
+      clean = metadata && bytes && clean;
+    }
+    if (!owned()) return false;
+    if (clean) clean = completeConversationWithdrawalCleanup(scope, id, record.operation);
+    if (!clean) setError(WITHDRAW_CLEANUP_PENDING);
+    else setError(current => current === WITHDRAW_CLEANUP_PENDING || current === WITHDRAW_CONFIRM_FAILED ? "" : current);
+    return clean;
+  }
+  async function dispatchWithdrawal(record: LocalWithdrawalRecord, owned: () => boolean) {
+    const response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify(withdrawalRequest(record)) });
+    if (!owned()) return false;
+    const body = await response.json();
+    if (!owned()) return false;
+    const applied = body.applied; const ids: unknown = applied?.withdrawn_message_ids;
+    const inventory = readConversationWithdrawals(scope, id!);
+    const reserved = inventory.status === "known" ? inventory.records.find(item => item.operation === record.operation) : null;
+    const sameIdentity = reserved && ["operation", "queueEntryId", "targetMessageId", "expectedRevision", "createdAt", "protectUntil"].every(field =>
+      reserved[field as keyof LocalWithdrawalRecord] === record[field as keyof LocalWithdrawalRecord]);
+    if (!sameIdentity || applied?.kind !== "withdraw" || applied.queue_entry_id !== record.queueEntryId || applied.status !== null || applied.run_id !== null ||
+        body.snapshot?.session_id !== id || !Number.isSafeInteger(body.snapshot.revision) || body.snapshot.revision <= record.expectedRevision ||
+        !Array.isArray(ids) || ids.length < 1 || ids.length > 51 || new Set(ids).size !== ids.length || !ids.includes(record.targetMessageId) ||
+        ids.some(value => typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value))) throw new Error("WITHDRAW_RECEIPT_UNCONFIRMED");
+    if (!confirmConversationWithdrawal(scope, id!, record.operation, ids)) {
+      withdrawalAuthority(); setError(WITHDRAW_CONFIRM_FAILED); return false;
+    }
+    commitSnapshot(body.snapshot);
+    return cleanupWithdrawal({ ...record, state: "confirmed", messageIds: ids, cleanup: "pending" }, owned);
+  }
+  function definitiveWithdrawalRejection(caught: unknown) {
+    return caught instanceof RequestError && caught.status >= 400 && caught.status < 500 && [
+      "CONVERSATION_QUEUE_REVISION_CONFLICT", "CONVERSATION_QUEUE_ENTRY_NOT_FOUND", "CONVERSATION_QUEUE_ENTRY_CLAIMED",
+      "CONVERSATION_QUEUE_ENTRY_STEERED", "CONVERSATION_QUEUE_WITHDRAWAL_INVALID", "CONVERSATION_QUEUE_IDEMPOTENCY_CONFLICT",
+    ].includes(caught.code ?? "");
+  }
+  async function recoverWithdrawals() {
+    const controller = lifecycle.current;
+    if (!id || !stillCurrent(controller) || mutationBusy.current) return;
+    const { inventory } = withdrawalAuthority();
+    if (inventory.status !== "known" || !inventory.records.length) return;
+    const lock = { controller: controller! }; mutationBusy.current = lock; setMutating(true);
+    const owned = () => stillCurrent(controller) && mutationBusy.current === lock;
+    try {
+      for (const record of inventory.records) {
+        if (!owned()) return;
+        try {
+          if (record.state === "confirmed") await cleanupWithdrawal(record, owned);
+          else await dispatchWithdrawal(record, owned);
+        } catch (caught) {
+          if (!owned()) return;
+          if (record.state === "pending" && definitiveWithdrawalRejection(caught)) removeRejectedConversationWithdrawal(scope, id, record.operation);
+          withdrawalAuthority(); setError("操作结果尚未确认，已保留内容。请核对队列后重试。");
+        }
+      }
+    } finally { if (owned()) { mutationBusy.current = null; setMutating(false); handoffWhenSettled(); } }
+  }
   // Canonical history retires a local outbox row. An exact confirmed Withdraw
   // receipt also retires its pending intention, including removed supplements.
   // Until its turn exists — carrying the same ordered image manifests — the
@@ -151,6 +257,8 @@ export function useConversation(options: Options) {
   // message for rendering; it never deletes the outbox evidence early.
   const reconcile = useCallback((_server: ConversationQueueSnapshot | null, history: SessionDetail | null) => {
     if (!id) return;
+    const authority = readConversationWithdrawals(scope, id);
+    if (authority.status === "unknown" || authority.records.some(record => record.state === "pending")) return;
     const settled = new Set((history?.turns ?? []).flatMap(sessionHumanMessages).filter(human => {
       const message = local.current.find(item => item.id === human.id);
       return Boolean(message) && sameConversationImages(message?.images, human.images) && sameConversationMemoryDraftTarget(message?.memoryDraftTarget, human.memoryDraftTarget);
@@ -198,7 +306,7 @@ export function useConversation(options: Options) {
     // Scope fencing: a late readback from a previous account, endpoint or
     // scope generation is dropped instead of painting stale data.
     if (generation !== undefined && generation !== workspaceRefreshGeneration(scope)) return;
-    if (body.detail && stillCurrent(controller)) applyDetail(body.detail);
+    if (body.detail && stillCurrent(controller)) { applyDetail(body.detail); await recoverWithdrawals(); }
   }
 
   // Shared bounded active refresh for the OPEN conversation on the default
@@ -284,7 +392,16 @@ export function useConversation(options: Options) {
     }
   }
   function updateMessage(id: string, update: Partial<LocalMessage>) {
-    storeMessages(local.current.map(message => { if (message.id !== id) return message; const next = { ...message, ...update }; writeConversationMessage(scope, options.id!, next); return next; }));
+    const authority = withdrawalAuthority();
+    let updated: LocalMessage | undefined;
+    storeMessages(local.current.map(message => {
+      if (message.id !== id) return message;
+      const next = authority.blocked ? { ...message, delivery: "unknown" as const, receiptUncertain: true } : { ...message, ...update };
+      const saved = writeConversationMessage(scope, options.id!, next);
+      updated = saved ? next : { ...message, delivery: "unknown", receiptUncertain: true };
+      return updated;
+    }));
+    return updated;
   }
   // Minimal bounded passive readback after a settled run leaves the active
   // slot: GET only, never a POST and never a new authorization, and only while
@@ -307,6 +424,7 @@ export function useConversation(options: Options) {
   function commitSnapshot(next: ConversationQueueSnapshot) {
     const accepted = acceptConversationSnapshot(snapshotRef.current, next, id!);
     if (!accepted || accepted !== next) return;
+    const { retired } = withdrawalAuthority();
     const previous = snapshotRef.current;
     const previousTaskOwner = taskSnapshotOwnerRef.current;
     taskSnapshotOwnerRef.current = taskOwner; setTaskSnapshotOwner(taskOwner);
@@ -327,7 +445,7 @@ export function useConversation(options: Options) {
     // blank transcript.
     const previousActive = previous?.active?.message_id ?? null;
     const stillListed = next.active?.message_id === previousActive || (next.queued ?? []).some(entry => entry.message_id === previousActive);
-    if (previousActive && !stillListed && !detailRef.current?.turns.some(turn => turn.id === previousActive)) {
+    if (previousActive && !retired.has(previousActive) && !stillListed && !detailRef.current?.turns.some(turn => turn.id === previousActive)) {
       const outcome = previous?.active?.run_id && stopObserved.current.has(previous.active.run_id) ? "stopped" : "completed";
       setHandoffEntries(current => ({ ...current, [previousActive]: previous!.active! }));
       if (previousTaskOwner === taskOwner) setTaskHandoffOwners(current => ({ ...current, [previousActive]: taskOwner }));
@@ -359,18 +477,20 @@ export function useConversation(options: Options) {
         if (!controller || controller.signal.aborted || lifecycle.current !== controller) break;
         const message = local.current.find(item => item.delivery !== "accepted");
         if (!message || message.delivery !== "pending") break;
+        if (!liveDelivery(message, "pending")) break;
         const uploads = await uploadsFor(message);
-        if (!controller || controller.signal.aborted || lifecycle.current !== controller) break;
+        if (!stillCurrent(controller) || !liveDelivery(message, "pending")) break;
         if (message.images?.length && !uploads) {
           const uncertain = message.receiptUncertain !== false;
           updateMessage(message.id, { delivery: uncertain ? "unknown" : "rejected", error: uncertain ? "本机图片暂时无法读取，送达结果仍未确认。恢复连接后请核对。" : "本机图片数据已丢失，无法重发。请移除这条消息后重新选择图片。" });
           break;
         }
-        updateMessage(message.id, { delivery: "sending", receiptUncertain: true, error: undefined });
+        const sending = updateMessage(message.id, { delivery: "sending", receiptUncertain: true, error: undefined });
+        if (!sending || !stillCurrent(controller) || !liveDelivery(sending, "sending")) break;
         try {
           const response = await request(`${queueUrl}${message.memoryDraftTarget ? "/memory-draft" : ""}`, { method: "POST", body: JSON.stringify({ session_id: id, message_id: message.id, idempotency_key: `web-queue:${message.id}`, objective: message.objective, ...(message.memoryDraftTarget ? { memory_draft_target: message.memoryDraftTarget } : {}), time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(uploads && uploads.length ? { images: uploads } : {}) }) });
           const admission = await response.json();
-          if (!controller || controller.signal.aborted || lifecycle.current !== controller) break;
+          if (!stillCurrent(controller) || !liveDelivery(sending, "sending")) break;
           if (typeof admission.memory_entry_capability === "string") {
             entryCapabilityRef.current = admission.memory_entry_capability;
             setEntryCapability(admission.memory_entry_capability);
@@ -386,7 +506,7 @@ export function useConversation(options: Options) {
           updateMessage(message.id, { delivery: "accepted" }); setServerExists(true); didAdmit = true;
         } catch (caught) {
           // No response is not a rejected message. Its immutable identity stays in the outbox.
-          if (!controller || controller.signal.aborted || lifecycle.current !== controller) break;
+          if (!stillCurrent(controller) || !liveDelivery(sending, "sending")) break;
           const definitive = message.receiptUncertain === false && caught instanceof RequestError && caught.status >= 400 && caught.status < 500 && caught.status !== 408;
           const failure = message.images?.length
             ? caught instanceof RequestError && caught.status >= 500
@@ -492,13 +612,15 @@ export function useConversation(options: Options) {
     draftRef.current = value; setDraft(value);
     storeMessages(readConversationMessages(scope, id).map(message => message.delivery === "sending" ? { ...message, delivery: "unknown" } : message));
     loaded.current = true; setReady(true);
+    void recoverWithdrawals();
     });
     function changed(event: StorageEvent) {
       if (!event.key?.startsWith(`talent-signal:conversation:v1:${scope}:${id}:`)) return;
       const other = readConversationDraft(scope, id!);
       if (other && other.writer !== writer.current && other.updatedAt > draftStamp.current && other.value !== draftRef.current) setDraftConflict(true);
+      const authority = withdrawalAuthority();
       const found = readConversationMessages(scope, id!);
-      const own = new Map(local.current.map(item => [item.id, item]));
+      const own = new Map(local.current.filter(item => !authority.retired.has(item.id)).map(item => [item.id, item]));
       for (const message of found) if (!own.has(message.id)) own.set(message.id, { ...message, delivery: message.delivery === "pending" || message.delivery === "sending" ? "unknown" : message.delivery });
       storeMessages([...own.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
     }
@@ -748,6 +870,8 @@ export function useConversation(options: Options) {
   async function retryDelivery(message: LocalMessage) {
     const controller = lifecycle.current;
     if (!stillCurrent(controller) || !controller || deliveryChecks.current.has(message.id)) return;
+    const authority = withdrawalAuthority();
+    if (authority.blocked || authority.retired.has(message.id) || message.expiresAt <= Date.now()) { await recoverWithdrawals(); return; }
     deliveryChecks.current.set(message.id, controller);
     setCheckingDeliveries([...deliveryChecks.current.keys()]);
     try { await reconcileDelivery(message); }
@@ -801,6 +925,8 @@ export function useConversation(options: Options) {
       }
     }
     if (!stillCurrent(controller) || confirmed) return;
+    const authority = withdrawalAuthority();
+    if (authority.blocked || authority.retired.has(message.id) || message.expiresAt <= Date.now()) return;
     if (message.memoryDraftTarget && (
       [observedReceipt?.active, ...(observedReceipt?.queued ?? []), snapshotRef.current?.active, ...(snapshotRef.current?.queued ?? [])].some(entry => entry?.message_id === message.id)
       || detailRef.current?.turns.flatMap(sessionHumanMessages).some(turn => turn.id === message.id)
@@ -828,8 +954,20 @@ export function useConversation(options: Options) {
     const before = snapshotRef.current;
     mutationBusy.current = lock; setMutating(true); setError("");
     const owned = () => stillCurrent(controller) && mutationBusy.current === lock;
+    let withdrawal: LocalWithdrawalRecord | null = null;
     try {
       const operation = crypto.randomUUID();
+      if (input.kind === "withdraw") {
+        const authority = withdrawalAuthority();
+        const target = before.queued.find(entry => entry.queue_entry_id === input.queue_entry_id);
+        if (!target || authority.blocked) return false;
+        const now = Date.now();
+        withdrawal = { version: 1, operation, queueEntryId: target.queue_entry_id, targetMessageId: target.message_id,
+          expectedRevision: before.revision, createdAt: now, protectUntil: now + 86_400_000, state: "pending" };
+        if (!reserveConversationWithdrawal(scope, id!, withdrawal)) { setError(WITHDRAW_RESERVE_FAILED); return false; }
+        withdrawalAuthority();
+        return await dispatchWithdrawal(withdrawal, owned);
+      }
       let response: Response;
       try {
         response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: before.revision, idempotency_key: operation }) });
@@ -851,33 +989,11 @@ export function useConversation(options: Options) {
       }
       const body = await response.json();
       if (!owned()) return false;
-      if (input.kind === "withdraw") {
-        const target = before.queued.find(entry => entry.queue_entry_id === input.queue_entry_id);
-        // Queue absence alone never erases evidence. Bind the explicit receipt
-        // to this operation, Session and CAS snapshot before retiring anything.
-        if (!target || body.applied?.kind !== "withdraw" || body.applied.queue_entry_id !== input.queue_entry_id ||
-            body.applied.status !== null || body.snapshot?.session_id !== id || body.snapshot.revision <= before.revision) {
-          throw new Error("WITHDRAW_RECEIPT_UNCONFIRMED");
-        }
-        const retained = new Set([body.snapshot.active, ...body.snapshot.queued].filter(Boolean).map((entry: ConversationQueueEntry) => entry.message_id));
-        const withdrawn = new Set(before.queued.filter(entry => !retained.has(entry.message_id)).map(entry => entry.message_id));
-        if (!withdrawn.has(target.message_id)) throw new Error("WITHDRAW_RECEIPT_UNCONFIRMED");
-        commitSnapshot(body.snapshot);
-        for (const messageId of withdrawn) {
-          removeConversationMessage(scope, id!, messageId);
-          void removeConversationImages(scope, id!, messageId);
-        }
-        storeMessages(local.current.filter(message => !withdrawn.has(message.id)));
-        setHandoffEntries(current => Object.fromEntries(Object.entries(current).filter(([key]) => !withdrawn.has(key))));
-        setHandoffPreviews(current => Object.fromEntries(Object.entries(current).filter(([key]) => !withdrawn.has(key))));
-        setRunOutcome(current => Object.fromEntries(Object.entries(current).filter(([key]) => !withdrawn.has(key))));
-        setTaskHandoffOwners(current => Object.fromEntries(Object.entries(current).filter(([key]) => !withdrawn.has(key))));
-        setReadbackStalled(current => current.filter(key => !withdrawn.has(key)));
-        return true;
-      }
       commitSnapshot(body.snapshot); return true;
     } catch (caught) {
       if (!owned()) return false;
+      if (withdrawal && definitiveWithdrawalRejection(caught)) removeRejectedConversationWithdrawal(scope, id!, withdrawal.operation);
+      withdrawalAuthority();
       refuse(caught); setError(caught instanceof RequestError && caught.status === 409 ? "队列刚刚有变化，已更新。请核对后再操作。" : "操作结果尚未确认，已保留内容。请核对队列后重试。");
       try {
         const response = await request(queueUrl);
