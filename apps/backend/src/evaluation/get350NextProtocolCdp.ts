@@ -8,6 +8,9 @@ export let lastSetupHttpStatus:number|null=null;
 export type QuietNetworkObservation={pending:number|null;started:number|null;finished:number|null;failed:number|null;lastEventAgeMs:number|null;truncated:boolean;active:Array<{method:string;resourceType:string;routeClass:string;currentMainDocument:boolean|null;ageMs:number|null}>}|{captureFailed:true};
 export let lastQuietNetworkObservation:QuietNetworkObservation|null=null;
 const OBSERVED_NETWORK_TYPES=new Map(["Document","Stylesheet","Image","Media","Font","Script","TextTrack","XHR","Fetch","Prefetch","EventSource","WebSocket","Manifest","SignedExchange","Ping","CSPViolationReport","Preflight","Other"].map(value=>[value,value] as const));
+// Exact allowlists only: unknown browser messages never escape as text or hashes.
+const B_NAVIGATION_FAILURE_KINDS=new Map(["net::ERR_ABORTED","net::ERR_CONTENT_LENGTH_MISMATCH","net::ERR_INCOMPLETE_CHUNKED_ENCODING","net::ERR_INVALID_CHUNKED_ENCODING","net::ERR_CONNECTION_CLOSED","net::ERR_CONNECTION_RESET","net::ERR_EMPTY_RESPONSE","net::ERR_FAILED","net::ERR_HTTP_RESPONSE_CODE_FAILURE"].map(value=>[value,value] as const));
+const B_NAVIGATION_MIME_KINDS=new Map([["text/x-component","RSC"],["text/html","HTML"],["application/json","JSON"]]);
 const safeNetworkCount=(value:unknown)=>typeof value==="number"&&Number.isSafeInteger(value)&&value>=0&&value<=1_000_000?value:null;
 function observedRouteClass(value:string){try{const url=new URL(value);if(url.pathname===PASSWORD_PATH)return "password";if(url.pathname==="/__get350/setup")return "fixture-setup";if(url.pathname==="/__get350/inspect")return "fixture-inspect";if(url.pathname.startsWith("/_next/"))return "next-resource";if(url.protocol==="data:")return "embedded";if(url.pathname==="/")return "root-document";return "other";}catch{return "unclassified";}}
 export type ProtocolAction = {requestId:string;keyHash:string;ordinal:number;enhanced:boolean;responseReceived:boolean;status:number;finished:boolean;failed:boolean};
@@ -85,7 +88,8 @@ export class ProtocolPage {
   readonly observed = { passwordPosts: 0, actionHeaders: 0, native303: 0, failedPasswordRequests: 0, finishedPasswordRequests: 0, blockedExternal: 0 };
   private passwordRequests = new Set<string>();
   private bNavigationRequests = new Set<string>();
-  private bNavigation = {passwordGets:0,targetGets:0,responseReceived:0,finished:0,failed:0,lastStatus:null as number|null};
+  private bNavigation = {passwordGets:0,targetGets:0,responseReceived:0,finished:0,failed:0,lastStatus:null as number|null,
+    lastResourceType:"UNOBSERVED",lastMimeKind:"UNOBSERVED",failureKind:"UNOBSERVED",canceled:null as boolean|null,blocked:null as boolean|null};
   private actions = new Map<string,ProtocolAction>();
   private activeRequests = new Set<string>();
   private requestMetadata=new Map<string,{method:string;resourceType:string;routeClass:string;loaderId:string;startedAt:number}>();
@@ -115,7 +119,10 @@ export class ProtocolPage {
       if (new URL(request.url).pathname !== PASSWORD_PATH) return;
       try{if(request.method==="GET"){
         page.bNavigation.passwordGets++;const url=new URL(request.url);
-        if(url.origin===origin&&url.searchParams.get("fixtureNavigation")==="b"){page.bNavigation.targetGets++;page.bNavigationRequests.add(String(params.requestId));}
+        if(url.origin===origin&&url.searchParams.get("fixtureNavigation")==="b"){
+          page.bNavigation.targetGets++;page.bNavigationRequests.add(String(params.requestId));
+          page.bNavigation.lastResourceType=typeof params.type==="string"?(OBSERVED_NETWORK_TYPES.get(params.type)??"Other"):"Other";
+        }
       }}catch{}
       if (request.method === "POST") {
         const requestId=String(params.requestId),url=new URL(request.url);
@@ -129,8 +136,9 @@ export class ProtocolPage {
     }));
     page.disposers.push(cdp.on(sessionId, "Network.responseReceived", (params) => {
       try{if(page.bNavigationRequests.has(String(params.requestId))){
-        page.bNavigation.responseReceived++;const status=(params.response as {status:number}).status;
+        page.bNavigation.responseReceived++;const response=params.response as {status:number;mimeType?:unknown},status=response.status;
         page.bNavigation.lastStatus=Number.isInteger(status)&&status>=100&&status<=599?status:null;
+        page.bNavigation.lastMimeKind=typeof response.mimeType==="string"?(B_NAVIGATION_MIME_KINDS.get(response.mimeType)??"OTHER"):"UNOBSERVED";
       }}catch{}
       if (page.passwordRequests.has(String(params.requestId))) page.observed.actionHeaders++;
       const action=page.actions.get(String(params.requestId));
@@ -139,7 +147,12 @@ export class ProtocolPage {
     page.disposers.push(cdp.on(sessionId, "Network.loadingFailed", (params) => {
       page.activeRequests.delete(String(params.requestId)); page.networkChangedAt = Date.now();
       try{page.networkTotals.failed++;page.requestMetadata.delete(String(params.requestId));}catch{}
-      try{if(page.bNavigationRequests.has(String(params.requestId)))page.bNavigation.failed++;}catch{}
+      try{if(page.bNavigationRequests.has(String(params.requestId))){
+        page.bNavigation.failed++;
+        page.bNavigation.failureKind=typeof params.errorText==="string"?(B_NAVIGATION_FAILURE_KINDS.get(params.errorText)??"OTHER"):"UNOBSERVED";
+        page.bNavigation.canceled=typeof params.canceled==="boolean"?params.canceled:null;
+        page.bNavigation.blocked=typeof params.blockedReason==="string";
+      }}catch{}
       if (page.passwordRequests.has(String(params.requestId))) page.observed.failedPasswordRequests++;
       const action=page.actions.get(String(params.requestId));if(action)action.failed=true;
     }));
@@ -204,7 +217,8 @@ export class ProtocolPage {
   }
   navigationObservation(){
     const n=this.bNavigation;return {passwordGets:safeNetworkCount(n.passwordGets),targetGets:safeNetworkCount(n.targetGets),
-      responseReceived:safeNetworkCount(n.responseReceived),finished:safeNetworkCount(n.finished),failed:safeNetworkCount(n.failed),lastStatus:n.lastStatus};
+      responseReceived:safeNetworkCount(n.responseReceived),finished:safeNetworkCount(n.finished),failed:safeNetworkCount(n.failed),lastStatus:n.lastStatus,
+      lastResourceType:n.lastResourceType,lastMimeKind:n.lastMimeKind,failureKind:n.failureKind,canceled:n.canceled,blocked:n.blocked};
   }
   async currentUrl() {
     const history = await this.call<{ currentIndex: number; entries: Array<{ url: string }> }>("Page.getNavigationHistory");
