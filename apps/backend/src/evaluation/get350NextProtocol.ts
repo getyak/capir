@@ -13,7 +13,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Pool as PgPool } from "pg";
 import type { BackendConfig } from "../config.js";
 import { PASSWORD_PATH, writeProtocolApp, type ProtocolSetup } from "./get350NextProtocolApp.js";
-import { ProtocolCdp, ProtocolPage, until, lastSetupHttpStatus, type ProtocolFlow } from "./get350NextProtocolCdp.js";
+import { ProtocolCdp, ProtocolPage, until, lastSetupHttpStatus, lastQuietNetworkObservation, type ProtocolFlow } from "./get350NextProtocolCdp.js";
 
 function check(value: unknown, label: string): asserts value { if (!value) throw new Error(label); }
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -720,7 +720,7 @@ async function main() {
   phase = "passed"; await writeReceipt(passedSummary); console.log(JSON.stringify(passedSummary));
 }
 void main().catch(async (error:unknown) => {
-  const failure = {fixture:"GET350_NEXT_PROTOCOL",passed:false,failureCode:error instanceof Error?(FIXTURE_FAILURE_CODES.get(error.message)??"UNCLASSIFIED_ERROR"):"NON_ERROR_THROWN",lastSetupHttpStatus:typeof lastSetupHttpStatus==="number"&&Number.isInteger(lastSetupHttpStatus)&&lastSetupHttpStatus>=100&&lastSetupHttpStatus<=599?lastSetupHttpStatus:null,transportDiagnostic:lastTransportDiagnostic,phase,observedSourceRevision,source:actualSource??"not-bound",nextBuildDiagnostic:nextBuildDiagnostic??"not-started",ownedProcessGroupsEmpty:[...ownedGroups.values()].every(group=>group.closed),ownedProcessGroupCount:ownedGroups.size,scenarios:completedScenarios};
+  const failure = {fixture:"GET350_NEXT_PROTOCOL",passed:false,failureCode:error instanceof Error?(FIXTURE_FAILURE_CODES.get(error.message)??"UNCLASSIFIED_ERROR"):"NON_ERROR_THROWN",lastSetupHttpStatus:typeof lastSetupHttpStatus==="number"&&Number.isInteger(lastSetupHttpStatus)&&lastSetupHttpStatus>=100&&lastSetupHttpStatus<=599?lastSetupHttpStatus:null,transportDiagnostic:lastTransportDiagnostic,networkQuietDiagnostic:lastQuietNetworkObservation,phase,observedSourceRevision,source:actualSource??"not-bound",nextBuildDiagnostic:nextBuildDiagnostic??"not-started",ownedProcessGroupsEmpty:[...ownedGroups.values()].every(group=>group.closed),ownedProcessGroupCount:ownedGroups.size,scenarios:completedScenarios};
   try { await writeReceipt(failure); } catch { /* CI still fails; never upload private diagnostics instead. */ }
   console.error(JSON.stringify(failure)); process.exitCode = 1;
 });

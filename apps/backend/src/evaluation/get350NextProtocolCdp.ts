@@ -5,6 +5,11 @@ import { PASSWORD_PATH } from "./get350NextProtocolApp.js";
 
 // Last observed setup status only; never headers, body or a capability.
 export let lastSetupHttpStatus:number|null=null;
+export type QuietNetworkObservation={pending:number|null;started:number|null;finished:number|null;failed:number|null;lastEventAgeMs:number|null;truncated:boolean;active:Array<{method:string;resourceType:string;routeClass:string;currentMainDocument:boolean|null;ageMs:number|null}>}|{captureFailed:true};
+export let lastQuietNetworkObservation:QuietNetworkObservation|null=null;
+const OBSERVED_NETWORK_TYPES=new Map(["Document","Stylesheet","Image","Media","Font","Script","TextTrack","XHR","Fetch","Prefetch","EventSource","WebSocket","Manifest","SignedExchange","Ping","CSPViolationReport","Preflight","Other"].map(value=>[value,value] as const));
+const safeNetworkCount=(value:unknown)=>typeof value==="number"&&Number.isSafeInteger(value)&&value>=0&&value<=1_000_000?value:null;
+function observedRouteClass(value:string){try{const url=new URL(value);if(url.pathname===PASSWORD_PATH)return "password";if(url.pathname==="/__get350/setup")return "fixture-setup";if(url.pathname==="/__get350/inspect")return "fixture-inspect";if(url.pathname.startsWith("/_next/"))return "next-resource";if(url.protocol==="data:")return "embedded";if(url.pathname==="/")return "root-document";return "other";}catch{return "unclassified";}}
 export type ProtocolAction = {requestId:string;keyHash:string;ordinal:number;enhanced:boolean;responseReceived:boolean;status:number;finished:boolean;failed:boolean};
 export type ProtocolFlow = {matches:boolean;live:boolean;hasAttempt:boolean;validEnvelope:boolean;
   createdAtHash:string;expHash:string;iatHash:string;jtiHash:string;envelopeHash:string};
@@ -81,6 +86,9 @@ export class ProtocolPage {
   private passwordRequests = new Set<string>();
   private actions = new Map<string,ProtocolAction>();
   private activeRequests = new Set<string>();
+  private requestMetadata=new Map<string,{method:string;resourceType:string;routeClass:string;loaderId:string;startedAt:number}>();
+  private networkTotals={started:0,finished:0,failed:0};
+  private mainLoaderId="";
   private networkChangedAt = Date.now();
   private disposers: Array<() => void> = [];
   private constructor(private cdp: ProtocolCdp, readonly session: string, readonly context: string, private origin: string) {}
@@ -89,6 +97,7 @@ export class ProtocolPage {
     const { targetId } = await cdp.call<{ targetId: string }>("Target.createTarget", { url: "about:blank", browserContextId });
     const { sessionId } = await cdp.call<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
     const page = new ProtocolPage(cdp, sessionId, browserContextId, origin);
+    page.disposers.push(cdp.on(sessionId,"Page.frameNavigated",params=>{try{const frame=params.frame as {parentId?:unknown;loaderId?:unknown};if(frame&&!frame.parentId&&typeof frame.loaderId==="string")page.mainLoaderId=frame.loaderId;}catch{}}));
     page.disposers.push(cdp.on(sessionId, "Fetch.requestPaused", (params) => {
       const request = params.request as { url: string };
       const local = request.url.startsWith("data:") || request.url === "about:blank" || new URL(request.url).origin === origin;
@@ -99,6 +108,8 @@ export class ProtocolPage {
     page.disposers.push(cdp.on(sessionId, "Network.requestWillBeSent", (params) => {
       const request = params.request as { url: string; method: string; headers:Record<string,string> };
       page.activeRequests.add(String(params.requestId)); page.networkChangedAt = Date.now();
+      try{page.networkTotals.started++;
+      page.requestMetadata.set(String(params.requestId),{method:request.method==="GET"?"GET":request.method==="POST"?"POST":"OTHER",resourceType:typeof params.type==="string"?(OBSERVED_NETWORK_TYPES.get(params.type)??"Other"):"Other",routeClass:observedRouteClass(request.url),loaderId:typeof params.loaderId==="string"?params.loaderId:"",startedAt:Date.now()});}catch{}
       if (new URL(request.url).pathname !== PASSWORD_PATH) return;
       if (request.method === "POST") {
         const requestId=String(params.requestId),url=new URL(request.url);
@@ -117,11 +128,13 @@ export class ProtocolPage {
     }));
     page.disposers.push(cdp.on(sessionId, "Network.loadingFailed", (params) => {
       page.activeRequests.delete(String(params.requestId)); page.networkChangedAt = Date.now();
+      try{page.networkTotals.failed++;page.requestMetadata.delete(String(params.requestId));}catch{}
       if (page.passwordRequests.has(String(params.requestId))) page.observed.failedPasswordRequests++;
       const action=page.actions.get(String(params.requestId));if(action)action.failed=true;
     }));
     page.disposers.push(cdp.on(sessionId, "Network.loadingFinished", (params) => {
       page.activeRequests.delete(String(params.requestId)); page.networkChangedAt = Date.now();
+      try{page.networkTotals.finished++;page.requestMetadata.delete(String(params.requestId));}catch{}
       if (page.passwordRequests.has(String(params.requestId))) page.observed.finishedPasswordRequests++;
       const action=page.actions.get(String(params.requestId));if(action)action.finished=true;
     }));
@@ -167,7 +180,16 @@ export class ProtocolPage {
     finally { clearTimeout(timer); dispose(); mark(); }
   }
   reload() { return this.documentLoad(() => this.call("Page.reload", { ignoreCache: true })); }
-  quiet() { return until(async () => this.activeRequests.size === 0 && Date.now() - this.networkChangedAt > 250, "settled real network"); }
+  async quiet() {
+    lastQuietNetworkObservation=null;
+    try{return await until(async () => this.activeRequests.size === 0 && Date.now() - this.networkChangedAt > 250, "settled real network");}
+    catch(error){
+      try{const now=Date.now(),active:Array<{method:string;resourceType:string;routeClass:string;currentMainDocument:boolean|null;ageMs:number|null}>=[];
+      for(const id of [...this.activeRequests].slice(0,16)){const meta=this.requestMetadata.get(id);active.push({method:meta?.method??"UNOBSERVED",resourceType:meta?.resourceType??"Other",routeClass:meta?.routeClass??"unclassified",currentMainDocument:meta?.loaderId&&this.mainLoaderId?meta.loaderId===this.mainLoaderId:null,ageMs:meta?safeNetworkCount(now-meta.startedAt):null});}
+      lastQuietNetworkObservation={pending:safeNetworkCount(this.activeRequests.size),started:safeNetworkCount(this.networkTotals.started),finished:safeNetworkCount(this.networkTotals.finished),failed:safeNetworkCount(this.networkTotals.failed),lastEventAgeMs:safeNetworkCount(now-this.networkChangedAt),truncated:this.activeRequests.size>16,active};}catch{lastQuietNetworkObservation={captureFailed:true};}
+      throw error;
+    }
+  }
   async currentUrl() {
     const history = await this.call<{ currentIndex: number; entries: Array<{ url: string }> }>("Page.getNavigationHistory");
     return history.entries[history.currentIndex]!.url;
