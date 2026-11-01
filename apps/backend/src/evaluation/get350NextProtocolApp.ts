@@ -91,6 +91,7 @@ export async function writeProtocolApp(dir: string, repo: string) {
         return <Link id="fixture-next-navigation" prefetch={false} href=${JSON.stringify(PASSWORD_PATH+"?fixtureNavigation=b")}>Fixture Next navigation</Link>;
       }`,
     "app/page.tsx": "export default function Home(){return <p>Owned GET350 protocol fixture</p>;}",
+    "app/workspace/loading.tsx": `export {default} from ${production("app/workspace/loading.tsx","app/workspace/loading.tsx")};`,
     "app/workspace/settings/page.tsx": "export default function Settings(){return <p>Fixture settings boundary</p>;}",
     "app/workspace/settings/link-complete/password/page.tsx": `export const dynamic="force-dynamic";
       export {default,metadata} from ${production("app/workspace/settings/link-complete/password/page.tsx","app/workspace/settings/link-complete/password/page.tsx")};`,
