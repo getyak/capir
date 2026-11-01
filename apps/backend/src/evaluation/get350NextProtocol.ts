@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Pool as PgPool } from "pg";
 import type { BackendConfig } from "../config.js";
-import { PASSWORD_PATH, writeProtocolApp, type ProtocolSetup } from "./get350NextProtocolApp.js";
+import { PASSWORD_PATH, SESSION_COOKIE, writeProtocolApp, type ProtocolSetup } from "./get350NextProtocolApp.js";
 import { ProtocolCdp, ProtocolPage, until, cdpCommandErrorObservation, lastSetupHttpStatus, lastQuietNetworkObservation, type ProtocolFlow } from "./get350NextProtocolCdp.js";
 
 function check(value: unknown, label: string): asserts value { if (!value) throw new Error(label); }
@@ -24,6 +24,15 @@ FIXTURE_FAILURE_CODES.set("no active frontend response before controlled connect
 FIXTURE_FAILURE_CODES.set("owned frontend connections drained before controlled action","ASSERT_949aa1c38ed7");
 FIXTURE_FAILURE_CODES.set("controlled Action is first HTTP request on frontend connection","ASSERT_8947e446ac77");
 FIXTURE_FAILURE_CODES.set("Protocol condition timed out: owned frontend connections drained before controlled action","ASSERT_949aa1c38ed7");
+FIXTURE_FAILURE_CODES.set("independent sealed B identity","ASSERT_82bec726dae4");
+FIXTURE_FAILURE_CODES.set("independent sealed B authority","ASSERT_f79f4d5a30ea");
+FIXTURE_FAILURE_CODES.set("A response held before B navigation","ASSERT_07a065a5f054");
+FIXTURE_FAILURE_CODES.set("no prior B target request","ASSERT_0d05850507c4");
+FIXTURE_FAILURE_CODES.set("Protocol condition timed out: real Next B target request while A held","ASSERT_43e8c3c72a90");
+FIXTURE_FAILURE_CODES.set("one real B target request while A held","ASSERT_f3a1edc7feca");
+FIXTURE_FAILURE_CODES.set("sealed B business state before A release","ASSERT_d96835c56192");
+FIXTURE_FAILURE_CODES.set("browser session matches sealed B","ASSERT_fadf990cc9c5");
+FIXTURE_FAILURE_CODES.set("sealed B shared navigation deadline","ASSERT_db01a7eccf83");
 const SOURCE_PATHS = [
   "apps/web/app/workspace/settings/link-complete/password/page.tsx",
   "apps/web/app/workspace/settings/link-complete/password/error.tsx",
@@ -661,8 +670,10 @@ async function main() {
         actual303:nativePage.observed.native303,completionRequests:native.completionRequests,businessFingerprintUnchanged:true,
         nativeTotalResponseLossAutoGetClaimed:false});
     } finally { await nativePage.close(); }
-    // Scenario 3: late real A response cannot overwrite B or clear B's sealed cookie.
-    phase = "late:A-B"; const a = await makeFixture("late-a"), page = await open(a);
+    // Scenario 3: B's sealed authority and real navigation request precede A transfer.
+    // Real Next may commit B only after A settles. This checks final B isolation;
+    // component late-ref/key tests cover B that was already mounted before A.
+    phase = "late:sealed-B-navigation"; const a = await makeFixture("late-a"), page = await open(a);
     try {
       await proxy.prepareFirstFrontendRequest();
       const beforePosts=page.observed.passwordPosts,plan = proxy.arm(); await page.fillPassword(secret()); await page.click('button[type="submit"]');
@@ -670,92 +681,73 @@ async function main() {
       await bounded(plan.response.promise, "late A response held"); await until(async () => a.completionStatus === 200, "late A real commit");
       check(a.completionRequests === 1 && plan.status === 200 && plan.terminal, "late A committed before B");
       const aCommitted = await fingerprint(a), b = await makeFixture("late-b"), bPending = await fingerprint(b);
-      await page.setup(b.slot, controlKey);flowBaselines.set(b.ref,await page.inspect(b.ref,controlKey));await page.click("#fixture-next-navigation");
+      check([a.ref,b.ref,a.accountId,b.accountId,a.userId,b.userId,a.claims.backendSessionId,b.claims.backendSessionId,a.grant.attempt_id,b.grant.attempt_id,b.handle].every(value=>typeof value==="string"&&value.length>0)&&b.ref!==a.ref&&b.accountId!==a.accountId&&b.userId!==a.userId&&b.claims.backendSessionId!==a.claims.backendSessionId&&b.grant.attempt_id!==a.grant.attempt_id,"independent sealed B identity");
+      await page.setup(b.slot, controlKey);
+      const aFlow=flowBaselines.get(a.ref),bFlow=await page.inspect(b.ref,controlKey);
+      check(aFlow&&bFlow.matches===true&&bFlow.live===true&&bFlow.hasAttempt===true&&bFlow.validEnvelope===true&&bFlow.envelopeHash!==aFlow.envelopeHash,"independent sealed B authority");
+      flowBaselines.set(b.ref,bFlow);
+      const browserSessionMatchesB=async()=>{
+        const result=await page.call<{cookies?:Array<{name?:unknown;value?:unknown;domain?:unknown;path?:unknown;httpOnly?:unknown}>}>("Network.getCookies",{urls:[front+PASSWORD_PATH]});
+        const sessions=Array.isArray(result.cookies)?result.cookies.filter(cookie=>cookie?.name===SESSION_COOKIE):[];
+        return sessions.length===1&&sessions[0]?.value===b.handle&&sessions[0]?.domain===new URL(front).hostname&&sessions[0]?.path==="/"&&sessions[0]?.httpOnly===true;
+      };
+      // Compare only this synthetic fixture cookie in memory; never log values.
+      check(await browserSessionMatchesB(),"browser session matches sealed B");
+      const responseStillHeld=()=>action.responseReceived===false&&action.finished===false&&action.failed===false&&plan.outgoing?.headersSent===false&&plan.outgoing.writableEnded===false&&plan.outgoing.destroyed===false;
+      check(responseStillHeld(),"A response held before B navigation");
+      const targetGetsBefore=page.navigationObservation().targetGets;
+      check(targetGetsBefore===0,"no prior B target request");
+      const navigationDeadline=Date.now()+20_000;
+      let aResponseReleased=false;
       try {
-        await until(async () => await page.attribute('input[name="operationRef"]', "value") === b.ref, "real Next client navigation to B");
+        await page.click("#fixture-next-navigation");
+        // This is the existing CDP requestWillBeSent count for the exact local
+        // password path and fixtureNavigation=b; a click alone is not proof.
+        await until(async()=>{const count=page.navigationObservation().targetGets;return typeof count==="number"&&count>targetGetsBefore;},"real Next B target request while A held",Math.max(0,navigationDeadline-Date.now()));
+        check(page.navigationObservation().targetGets===targetGetsBefore+1&&responseStillHeld()&&Date.now()<navigationDeadline,"one real B target request while A held");
+        await flowUnchanged(page,b);
+        check(responseStillHeld()&&Date.now()<navigationDeadline,"A response held before B navigation");
+        const aBeforeRelease=await fingerprint(a);
+        check(responseStillHeld()&&Date.now()<navigationDeadline,"A response held before B navigation");
+        const bBeforeRelease=await fingerprint(b);
+        check(responseStillHeld()&&Date.now()<navigationDeadline,"A response held before B navigation");
+        check(aBeforeRelease===aCommitted&&bBeforeRelease===bPending,"sealed B business state before A release");
+        check(await browserSessionMatchesB(),"browser session matches sealed B");
+        check(responseStillHeld()&&Date.now()<navigationDeadline,"A response held before B navigation");
+        proxy.release(plan);aResponseReleased=true;
+        // Request dispatch and final B rendering share the original 20s budget.
+        // No second navigation, reload or Action is used to obtain this state.
+        await until(async () => {
+          const ref=await page.attribute('input[name="operationRef"]', "value");
+          if(Date.now()>=navigationDeadline||ref!==b.ref)return false;
+          const visible=await page.visible('input[name="newPassword"]');
+          return Date.now()<navigationDeadline&&visible;
+        }, "real Next client navigation to B",Math.max(0,navigationDeadline-Date.now()));
+        check(Date.now()<navigationDeadline,"sealed B shared navigation deadline");
       } catch(error) {
         const diagnostic:Record<string,unknown>={network:page.navigationObservation(),domScope:"unobserved",fixtureTargetInHistory:null,passwordEditor:null,
-          heldAction:{responseReceived:action.responseReceived,finished:action.finished,failed:action.failed},captureFailed:false};
+          aResponseReleased,heldAction:{responseReceived:action.responseReceived,finished:action.finished,failed:action.failed},captureFailed:false};
         try{
           const ref=await page.attribute('input[name="operationRef"]',"value");diagnostic.domScope=ref===b.ref?"b":ref===a.ref?"a":ref===undefined?"absent":"other";
           const url=new URL(await page.currentUrl());diagnostic.fixtureTargetInHistory=url.origin===front&&url.pathname===PASSWORD_PATH&&url.searchParams.get("fixtureNavigation")==="b";
           diagnostic.passwordEditor=await page.has('input[name="newPassword"]');
         }catch{diagnostic.captureFailed=true;}
-        // Capture primitives before closing the page; never emit raw URLs, refs, response bodies or cookies.
+        // Read-only failure snapshot. Never release/replay from this catch.
         lastLateNavigationDiagnostic=diagnostic;
-        // Failure-only, non-atomic observation; never replaces the original timeout or makes this scenario pass.
-        try {
-          const probe:Record<string,unknown>={originalFailureSnapshot:structuredClone(diagnostic),
-            bVisibleImmediatelyBeforeRelease:null,releaseAttempted:false,released:false,samples:0,sampleReadFailures:0,lastSampleReadError:null,
-            bEditorObserved:false,lastBEditorVisible:null,bTargetInHistory:null,
-            bEnvelopeUnchanged:null,aBusinessFingerprintUnchanged:null,bBusinessFingerprintUnchanged:null,
-            observationTimedOut:false,windowExhausted:false,captureFailed:false};
-          diagnostic.postFailureReleaseObservation=probe;
-          let observationOpen=true;
-          try {
-            const deadline=Date.now()+4_000;
-            await bounded((async()=>{
-              const preRef=await page.attribute('input[name="operationRef"]',"value");if(!observationOpen)return;
-              const preEditor=await page.has('input[name="newPassword"]');if(!observationOpen)return;
-              probe.bVisibleImmediatelyBeforeRelease=preRef===b.ref&&preEditor;
-              probe.releaseAttempted=true;proxy.release(plan);probe.released=true;
-              let samples=0,sampleReadFailures=0;
-              while(observationOpen&&Date.now()<deadline){
-                let ref:string|undefined,editor:boolean;
-                try{
-                  ref=await page.attribute('input[name="operationRef"]',"value");if(!observationOpen)return;
-                  if(Date.now()>=deadline){probe.windowExhausted=true;return;}
-                  editor=await page.has('input[name="newPassword"]');if(!observationOpen)return;
-                  if(Date.now()>=deadline){probe.windowExhausted=true;return;}
-                }catch(sampleError){
-                  if(!observationOpen)return;
-                  if(Date.now()>=deadline){probe.windowExhausted=true;return;}
-                  sampleReadFailures=Math.min(sampleReadFailures+1,1_000);probe.sampleReadFailures=sampleReadFailures;
-                  probe.lastSampleReadError=cdpCommandErrorObservation(sampleError);
-                  await delay(50);if(!observationOpen)return;
-                  if(Date.now()>=deadline){probe.windowExhausted=true;return;}
-                  continue;
-                }
-                const bEditor=ref===b.ref&&editor;
-                probe.samples=++samples;probe.lastBEditorVisible=bEditor;
-                if(bEditor)probe.bEditorObserved=true;
-                if((action.finished||action.failed)&&bEditor)break;
-                await delay(50);
-              }
-              if(!observationOpen)return;
-              probe.windowExhausted=Date.now()>=deadline;
-              const url=new URL(await page.currentUrl());if(!observationOpen)return;
-              probe.bTargetInHistory=url.origin===front&&url.pathname===PASSWORD_PATH&&url.searchParams.get("fixtureNavigation")==="b";
-              const flow=await page.inspect(b.ref,controlKey);if(!observationOpen)return;
-              probe.bEnvelopeUnchanged=JSON.stringify(flow)===JSON.stringify(flowBaselines.get(b.ref));
-              const aNow=await fingerprint(a);if(!observationOpen)return;
-              probe.aBusinessFingerprintUnchanged=aNow===aCommitted;
-              const bNow=await fingerprint(b);if(!observationOpen)return;
-              probe.bBusinessFingerprintUnchanged=bNow===bPending;
-            })(),"post-failure late A observation budget",4_500);
-          }catch(probeError){
-            probe.captureFailed=true;
-            probe.observationTimedOut=probeError instanceof Error&&probeError.message==="post-failure late A observation budget";
-          }finally{
-            observationOpen=false;
-            probe.heldAction={responseReceived:action.responseReceived,finished:action.finished,failed:action.failed};
-            probe.aCompletionRequests=diagnosticCount(a.completionRequests);probe.bCompletionRequests=diagnosticCount(b.completionRequests);
-            probe.browserPasswordPosts=diagnosticCount(page.observed.passwordPosts);
-            probe.noSecondActionObserved=page.observed.passwordPosts===beforePosts+1;
-          }
-        }catch{diagnostic.postFailureReleaseObservation={captureFailed:true};}
         throw error;
       }
       await flowUnchanged(page,b);
-      proxy.release(plan);
       await until(async()=>action.finished||action.failed,"same held late A transport settled");
       await page.quiet();
       check(await page.attribute('input[name="operationRef"]', "value") === b.ref && await page.has('input[name="newPassword"]'), "late A must not replace B editor");
       check(!(await page.messageIncludes("已保存并核验。")),"late A cannot display success for B");await flowUnchanged(page,b);
+      check(await browserSessionMatchesB(),"browser session matches sealed B");
       check(page.observed.passwordPosts===beforePosts+1,"late A was not replayed");
       check(a.completionRequests === 1 && await fingerprint(a) === aCommitted && await fingerprint(b) === bPending && b.completionRequests === 0 && page.observed.blockedExternal === 0, "late response has no B business effects");
-      scenarioSummaries.push({scenario:"late-A-B",aCompletionRequests:a.completionRequests,bCompletionRequests:b.completionRequests,
-        bCookiePreserved:true,bFlowEnvelopeUnchanged:true,bEditorPreserved:true,heldActionMatched:true,bBusinessFingerprintUnchanged:true,
+      scenarioSummaries.push({scenario:"late-A-sealed-B-navigation",aCompletionRequests:a.completionRequests,bCompletionRequests:b.completionRequests,
+        independentBIdentity:true,bSealedAuthorityBeforeARelease:true,bBrowserSessionMatchedBeforeARelease:true,bBrowserSessionPreserved:true,bTargetRequestBeforeARelease:true,aReleasedOnce:true,
+        bDomBeforeAReleaseRequired:false,finalBEditorPreserved:true,transientDomIsolationObserved:false,
+        bCookiePreserved:true,bFlowEnvelopeUnchanged:true,heldActionMatched:true,bBusinessFingerprintUnchanged:true,
         aResponseFinished:action.finished,aResponseCancelled:action.failed});
     } finally { await page.close(); }
     passedSummary = { fixture: "GET350_NEXT_PROTOCOL", passed: true, logicalScenarios: 3,
