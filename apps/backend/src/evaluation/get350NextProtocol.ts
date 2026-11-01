@@ -578,7 +578,7 @@ async function main() {
       let observeTransport:(()=>Record<string,unknown>)|undefined;
       try {
         const visibleHref = await page.attribute(`a[href*="?result="]`, "href"); check(visibleHref, "production visible GET recovery link");
-        await page.quiet();const frontendConnectionsDrained=await proxy.prepareFirstFrontendRequest();
+        const frontendConnectionsDrained=await proxy.prepareFirstFrontendRequest();
         const pending = await fingerprint(f), beforePosts=page.observed.passwordPosts, plan = proxy.arm();
         const wirePostsBefore=proxy.observed.passwordPosts;
         await page.fillPassword(secret()); await page.click('button[type="submit"]'); await bounded(plan.received.promise, "Action dispatch gate");
@@ -663,7 +663,7 @@ async function main() {
     // Scenario 3: late real A response cannot overwrite B or clear B's sealed cookie.
     phase = "late:A-B"; const a = await makeFixture("late-a"), page = await open(a);
     try {
-      await page.quiet();await proxy.prepareFirstFrontendRequest();
+      await proxy.prepareFirstFrontendRequest();
       const beforePosts=page.observed.passwordPosts,plan = proxy.arm(); await page.fillPassword(secret()); await page.click('button[type="submit"]');
       await bounded(plan.received.promise, "late A dispatch"); const action=await page.passwordAction(beforePosts);check(plan.enhanced&&action.enhanced&&action.keyHash===plan.actionKey,"late A held/CDP request match"); check(plan.frontendRequestOrdinal===1,"controlled Action is first HTTP request on frontend connection");plan.dispatch.resolve();
       await bounded(plan.response.promise, "late A response held"); await until(async () => a.completionStatus === 200, "late A real commit");
