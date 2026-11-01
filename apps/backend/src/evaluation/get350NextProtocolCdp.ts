@@ -243,9 +243,19 @@ export class ProtocolPage {
     return history.entries[history.currentIndex]!.url;
   }
   async node(selector: string) {
-    const { root } = await this.call<{ root: { nodeId: number } }>("DOM.getDocument", { depth: 0 });
-    const { nodeId } = await this.call<{ nodeId: number }>("DOM.querySelector", { nodeId: root.nodeId, selector });
-    return nodeId;
+    const locate=async()=>{
+      const { root } = await this.call<{ root: { nodeId: number } }>("DOM.getDocument", { depth: 0 });
+      const { nodeId } = await this.call<{ nodeId: number }>("DOM.querySelector", { nodeId: root.nodeId, selector });
+      return nodeId;
+    };
+    try{return await locate();}
+    catch(error){
+      // Document updates or another getDocument can invalidate this frontend root ID.
+      const stale=cdpCommandErrorObservation(error);
+      if(!stale||stale.method!=="DOM.querySelector"||stale.code!==-32000||stale.kind!=="NODE_NOT_FOUND")throw error;
+      // Reacquire only the read pair once; never replay the caller's action.
+      return locate();
+    }
   }
   async has(selector: string) { return Boolean(await this.node(selector)); }
   async attribute(selector: string, name: string) {
