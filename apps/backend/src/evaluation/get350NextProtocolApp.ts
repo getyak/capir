@@ -88,7 +88,7 @@ export async function writeProtocolApp(dir: string, repo: string) {
     "app/bridge.tsx": `"use client";
       import Link from "next/link"; import {useEffect} from "react";
       export default function Bridge(){useEffect(()=>{document.documentElement.dataset.get350Ready="true";},[]);
-        return <Link id="fixture-next-navigation" prefetch={false} href=${JSON.stringify(PASSWORD_PATH)}>Fixture Next navigation</Link>;
+        return <Link id="fixture-next-navigation" prefetch={false} href=${JSON.stringify(PASSWORD_PATH+"?fixtureNavigation=b")}>Fixture Next navigation</Link>;
       }`,
     "app/page.tsx": "export default function Home(){return <p>Owned GET350 protocol fixture</p>;}",
     "app/workspace/settings/page.tsx": "export default function Settings(){return <p>Fixture settings boundary</p>;}",
