@@ -440,7 +440,7 @@ test("the unused mammoth CLI argparse/sprintf-js graph is gone and the SDK pin h
   assert.doesNotMatch(lock, /\n {4}sprintf-js: /);
   assert.match(workspace, /"mammoth@1\.13\.0>argparse": "-"/);
   assert.match(lock, /mammoth@1\.13\.0>argparse: '-'/);
-  assert.deepEqual(resolvedVersions("@anthropic-ai/claude-agent-sdk"), ["0.3.310"]);
+  assert.deepEqual(resolvedVersions("@anthropic-ai/claude-agent-sdk"), ["0.3.312"]);
   assert.doesNotMatch(lock, /0\.3\.241/);
   assert.doesNotMatch(workspace, /^ *- .*0\.3\.241/m);
   assert.ok(workspace.includes("opik@2.2.45"));

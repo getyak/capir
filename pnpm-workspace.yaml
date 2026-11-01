@@ -51,7 +51,7 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   # Anthropic agent SDK age exclusions for 0.3.241 were removed: that version
-  # is absent from the resolved graph. The SDK is pinned at 0.3.310; no SDK
+  # is absent from the resolved graph. The SDK is pinned at 0.3.312; no SDK
   # release-age exception is added.
   - opik@2.2.45
 
