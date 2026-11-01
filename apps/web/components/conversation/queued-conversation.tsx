@@ -3,7 +3,7 @@
 import { workspaceSearchFocusTargetProps } from "@/lib/workspace-search-focus";
 import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { isConversationMemoryDraftTarget, memoryDraftHasAuthoredText, memoryDraftFailureKey, reconcileMemoryDraftTarget, type ComposerMemoryDraftTarget } from "@/lib/conversation-memory-draft-target";
 import { conversationHome } from "@/lib/conversation-local";
@@ -253,8 +253,17 @@ export function QueuedConversation(props: Props) {
   const attachmentFocus = useRef<{
     owner: symbol; composerOwner: symbol; session: string | null;
     attachment: (typeof chat.attachments)[number]; trigger: HTMLButtonElement;
-    composer: HTMLTextAreaElement; canvas: HTMLElement; settled: boolean; stop: () => void;
+    composer: HTMLTextAreaElement; canvas: HTMLElement; settled: boolean; detaching: boolean; stop: () => void;
   } | null>(null);
+  // React detaches stable refs before native removeChild can emit focusout.
+  // Setup also clears a replayed cleanup marker on this exact live control.
+  const attachmentRemoveRef = useCallback((node: HTMLButtonElement | null) => {
+    if (!node) return;
+    if (attachmentFocus.current?.trigger === node) attachmentFocus.current.detaching = false;
+    return () => {
+      if (attachmentFocus.current?.trigger === node) attachmentFocus.current.detaching = true;
+    };
+  }, []);
   function clearAttachmentFocus() {
     attachmentFocus.current?.stop();
     attachmentFocus.current = null;
@@ -267,16 +276,17 @@ export function QueuedConversation(props: Props) {
     if (surface && composer && document.activeElement === trigger && surface.contains(trigger)
       && composer.isConnected && !composer.disabled && chat.ready && !chat.unavailable) {
       const operation = { owner: readbackOwner, composerOwner, session: id, attachment,
-        trigger, composer, canvas: surface, settled: false, stop: () => {} };
+        trigger, composer, canvas: surface, settled: false, detaching: false, stop: () => {} };
       const revoke = () => { if (attachmentFocus.current === operation) clearAttachmentFocus(); };
       const pointed = (event: PointerEvent) => {
         if (!(event.target instanceof Node) || !trigger.contains(event.target)) revoke();
       };
       const focused = (event: FocusEvent) => { if (event.target !== trigger) revoke(); };
       // Explicit blur can leave focus at body without a focusin/Tab/pointer.
-      // An already detached trigger lost focus through its own removal.
+      // Native removal can emit focusout while still connected; only this
+      // exact control's React ref cleanup identifies that commit transition.
       const blurred = (event: FocusEvent) => {
-        if (event.target === trigger && trigger.isConnected) revoke();
+        if (event.target === trigger && trigger.isConnected && !operation.detaching) revoke();
       };
       const tabbed = (event: globalThis.KeyboardEvent) => { if (event.key === "Tab") revoke(); };
       document.addEventListener("pointerdown", pointed, true);
@@ -823,7 +833,7 @@ export function QueuedConversation(props: Props) {
         {chat.attachments.map((attachment, index) => <span className={styles.composerImage} key={attachment.id}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={attachment.manifest.file_name} src={attachment.url} />
-          <button aria-label={t("conversation.images.removeItem", { position: index + 1 })} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable || chat.preparing} onClick={event => removeDraftAttachment(attachment, event.currentTarget)} type="button"><X size={12} weight="bold"/></button>
+          <button ref={attachmentRemoveRef} aria-label={t("conversation.images.removeItem", { position: index + 1 })} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable || chat.preparing} onClick={event => removeDraftAttachment(attachment, event.currentTarget)} type="button"><X size={12} weight="bold"/></button>
         </span>)}
       </div>}
       {imageCount >= 10 && <p className={styles.composerImageHint} role="status">{t("conversation.images.limit")}</p>}
