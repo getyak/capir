@@ -4,10 +4,12 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { TalentSignalHttpError, type AccountSettings } from "@talent-signal/contracts";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 
 import { signIn } from "@/auth";
 import {
   completeLoginMethodChange,
+  readLoginMethodChangeResult,
   startLoginMethodChange,
 } from "@/lib/server/loginMethods";
 import { bindAppleNonce } from "@/lib/server/apple-session";
@@ -17,11 +19,12 @@ import {
   continuityReturnTo,
   settingsLinkErrorTarget,
 } from "@/lib/login-continuity";
-import { authenticatedBackendClient, readPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
+import { authenticatedBackendClient, readBackendSessionClaims, readPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
 import {
   LINK_COMPLETE_PATH,
   clearStagedAuth,
   flowExpiresAt,
+  flowIsLive,
   readAuthOperation,
   recoveryOperationFor,
   renderedScopeFrom,
@@ -99,6 +102,10 @@ export type LoginMethodActionState = {
   data?: AccountSettings;
   error?: string;
   saved?: boolean;
+  passwordResult?: {
+    ref: string;
+    state: "editing" | "pending" | "applied" | "unknown" | "invalid";
+  };
 };
 
 const failure = (error: unknown): LoginMethodActionState => {
@@ -462,39 +469,107 @@ export async function startPasswordStepUpLink(
   }
 }
 
-/**
- * Collect the NEW password after provider reauthentication. The sealed
- * attempt stays server-side; only the new password crosses this form.
- */
+/** Both primary and effective identities must still own the original session. */
+async function stagedPasswordAuthority(
+  operation: AuthOperation | null,
+  scope: RenderedOperationScope | null,
+): Promise<boolean> {
+  if (!operation?.attempt || !flowIsLive(operation) ||
+    (operation.intent !== "set_password" && operation.intent !== "change_password") ||
+    !renderedScopeMatchesOperation(operation, scope)) return false;
+  try {
+    const primary = await readPrimaryBackendSessionClaims();
+    const effective = await readBackendSessionClaims();
+    return [primary, effective].every((claims) => Boolean(
+      claims && claims.backendAccountId === operation.accountId &&
+      claims.backendUserId === operation.userId &&
+      sessionFingerprint(claims) === operation.sessionFingerprint,
+    ));
+  } catch {
+    return false;
+  }
+}
+
+/** Same imported action serves save and read-only check; previous UI is no authority. */
 export async function completeStagedPassword(
+  previous: LoginMethodActionState,
+  form: FormData,
+): Promise<LoginMethodActionState> {
+  // Request metadata affects presentation only. All authority stays inside
+  // the same bound operation check; fetch responses never navigate over B.
+  const nativeSave = !(await headers()).has("next-action") &&
+    (form.get("passwordMode") ?? "save") === "save";
+  const result = await performStagedPassword(previous, form);
+  const outcome = result.passwordResult;
+  if (nativeSave && outcome &&
+    (outcome.state === "applied" || outcome.state === "unknown" || outcome.state === "pending")) {
+    // Framework redirect is outside the mutation catch. A received native
+    // response becomes GET; total response loss still needs explicit recovery.
+    redirect(`/workspace/settings/link-complete/password?result=${encodeURIComponent(outcome.ref)}`);
+  }
+  return result;
+}
+
+async function performStagedPassword(
   _previous: LoginMethodActionState,
   form: FormData,
 ): Promise<LoginMethodActionState> {
+  const scope = renderedScopeFrom(form);
+  // Echo only an opaque operation UUID, never arbitrary submitted text.
+  const submittedRef = String(form.get("operationRef") ?? "");
+  const ref = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(submittedRef)
+    ? submittedRef : "";
+  const state = (kind: NonNullable<LoginMethodActionState["passwordResult"]>["state"]): LoginMethodActionState => ({
+    passwordResult: { ref, state: kind },
+    ...(kind === "applied" ? { saved: true } : {}),
+  });
+  const invalid = () => state("invalid");
+  const unknown = () => state("unknown");
+  const operation = await readAuthOperation();
+  if (!ref || !(await stagedPasswordAuthority(operation, scope)) || !operation?.attempt ||
+    (operation.intent !== "set_password" && operation.intent !== "change_password")) return invalid();
+  const attempt = operation.attempt;
+  const mode = form.get("passwordMode") ?? "save";
+  if (mode === "check") {
+    try {
+      const result = await readLoginMethodChangeResult({
+        attempt_id: attempt.attempt_id, attempt_secret: attempt.attempt_secret,
+        intent: operation.intent,
+      });
+      if (result.attempt_id !== attempt.attempt_id || result.intent !== operation.intent) return unknown();
+      if (result.state === "applied") {
+        if (result.account_id !== operation.accountId || result.user_id !== operation.userId ||
+          result.revision_before !== operation.accountRevision ||
+          result.revision_after !== operation.accountRevision + 1) return unknown();
+        return state("applied");
+      }
+      if (result.state === "invalid") return invalid();
+      if (result.state === "pending") return state("pending");
+      return unknown();
+    } catch {
+      return unknown();
+    }
+  }
+  if (mode !== "save") return invalid();
   const newPassword = String(form.get("newPassword") ?? "");
   if (newPassword.length < 8 || newPassword.length > 128) {
-    return { error: "新密码至少 8 个字符。" };
+    // Only this correlated, pre-dispatch rejection can reopen the editor.
+    return state("editing");
   }
-  const operation = await readAuthOperation();
-  const attempt = operation?.attempt;
-  const scope = renderedScopeFrom(form);
-  // A stale form can never write to a newer operation or another account: the
-  // rendered scope must match the sealed operation and the live session.
-  if (!operation || !attempt || !(await stagedScopeMatches(operation, scope))) {
-    return {
-      error: "这个表单属于更早的操作，已失效。请回到设置重新开始；当前账号没有被这个表单修改。",
-    };
-  }
+  // Preserve the original bounded context. Late responses cannot clear B's
+  // cookies or refresh A's lifetime; consumed grants remain one-use.
   try {
     const result = await completeLoginMethodChange({
-      attempt_id: attempt.attempt_id,
-      attempt_secret: attempt.attempt_secret,
+      attempt_id: attempt.attempt_id, attempt_secret: attempt.attempt_secret,
       password: newPassword,
     });
-    await clearStagedAuth();
-    return { data: result.settings, saved: true };
-  } catch (error) {
-    await clearStagedAuth();
-    return failure(error);
+    if (result.status !== "password_set" ||
+      result.settings.workspace.id !== operation.accountId ||
+      result.settings.user.id !== operation.userId ||
+      result.settings.workspace.revision !== operation.accountRevision + 1) return unknown();
+    return state("applied");
+  } catch {
+    return unknown();
   }
 }
 

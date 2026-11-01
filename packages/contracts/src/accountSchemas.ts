@@ -174,6 +174,35 @@ export const CredentialChangeResultSchema = Type.Object({
   settings: AccountSettingsSchema,
 }, { additionalProperties: false });
 
+// Read-only, same-attempt recovery. Proof stays in the request body; a result
+// never authorizes another mutation or asserts the current password value.
+export const PasswordCredentialChangeIntentSchema = Type.Union([
+  Type.Literal("set_password"), Type.Literal("change_password"),
+]);
+export const ReadCredentialChangeResultRequestSchema = Type.Object({
+  attempt_id: ID,
+  attempt_secret: Type.String({ minLength: 32, maxLength: 200 }),
+  intent: PasswordCredentialChangeIntentSchema,
+}, { additionalProperties: false });
+const CredentialReadbackCommon = {
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  attempt_id: ID,
+  intent: PasswordCredentialChangeIntentSchema,
+};
+export const CredentialChangeReadbackSchema = Type.Union([
+  Type.Object({ ...CredentialReadbackCommon, state: Type.Literal("pending"), expires_at: Time }, { additionalProperties: false }),
+  Type.Object({ ...CredentialReadbackCommon, state: Type.Literal("unknown"), expires_at: Time }, { additionalProperties: false }),
+  Type.Object({ ...CredentialReadbackCommon, state: Type.Literal("invalid") }, { additionalProperties: false }),
+  Type.Object({
+    ...CredentialReadbackCommon, state: Type.Literal("applied"),
+    outcome: Type.Literal("password_set"), account_id: ID, user_id: ID,
+    consumed_at: Time, expires_at: Time,
+    revision_before: Revision, revision_after: Revision,
+  }, { additionalProperties: false }),
+]);
+export type ReadCredentialChangeResultRequest = Static<typeof ReadCredentialChangeResultRequestSchema>;
+export type CredentialChangeReadback = Static<typeof CredentialChangeReadbackSchema>;
+
 // --- Verified password signup -----------------------------------------------
 
 export const PasswordRegistrationStartResponseSchema = Type.Object({
