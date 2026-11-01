@@ -11,30 +11,49 @@ attachment identity, API contracts, provider calls and submission stay intact.
 
 ## Evidence and approach
 
-The baseline at `8b11167` reproduced three real asynchronous focus failures:
-durable success, refusal followed by retry, and rejection followed by retry.
-Five ownership and user-intent controls passed. The button unmounted while the
-same composer remained available, leaving the active element at the document body.
+The initial baseline at `8b11167` reproduced three asynchronous focus failures
+through the real conversation hook: durable success, refusal followed by retry,
+and rejection followed by retry. Five ownership and user-intent controls passed.
+The first fix passed 13 focused and 141 adjacent local cases, ESLint, documentation
+checks and Web typecheck; its applicable CI passed and PR #508 merged normally as
+`92219990b63b6bc5600d33b741abaea5143000db`. The initial 1024 MiB typecheck ran out
+of heap; the same normal configuration passed once with a 2048 MiB heap.
 
-Retain a temporary operation owned by the current draft, session, trigger and
+Actual Chrome 156 with real IndexedDB then exposed a native failure that happy-dom
+did not reproduce. V3 preserved durable ACK at 3104.5 ms, trusted Remove-button
+focusout at 3106.9 ms while the node was still connected, and detachment by the
+3107.2 ms microtask. The same enabled composer, authored text and correct remaining
+durable image survived, but focus stayed on BODY. The connected-only blur guard
+rejects that native removal transition.
+
+Retain the temporary operation owned by the current draft, session, trigger and
 composer nodes. Wait for durable settlement and committed attachment absence.
-Cancel on intervening focus, connected-trigger blur, pointer or Tab intent, owner
-replacement, disabled composer or unmount. Remove every temporary listener.
+Use a stable React callback ref to mark cleanup for only the current operation's
+exact trigger before native removeChild. Ref setup clears the marker for the same
+node, including StrictMode replay or re-attachment. Explicit blur of a mounted
+control still cancels immediately; known React commit detachment is the exception.
+Keep intervening foreign focus, pointer or Tab intent, owner replacement, disabled
+composer, unmount and ABA protection. Remove every temporary listener. Restore
+only after the original image is absent and its exact trigger is disconnected.
 
-## Milestones
+## Follow-up milestones
 
-1. Complete: reproduce through the real conversation hook and durable queue.
-2. Complete in a private source snapshot: the reviewed candidate passed 13
-   focused cases, including explicit blur, the last image and two removals.
-3. Complete locally: the isolated branch passed 13 focused and 141 adjacent
-   cases, changed-file ESLint, the four documentation checks, and Web typecheck.
-   Three workspace packages each built once. A 1024 MiB typecheck ran out of
-   heap; the same normal configuration passed once with a 2048 MiB heap.
-   Current-head CI and normal repository merge gates remain pending.
-4. Pending: verify settled active-element behavior in a real browser and deploy
-   the affected resident Web service from clean committed source.
+1. Complete: preserve the actual native RED and its passive event timeline.
+2. Complete locally: all 16 focused controls and 141 adjacent regressions passed
+   with no skips, as did changed-file ESLint, Web typecheck at 2048 MiB and the
+   four documentation checks. Each ran once and reused the existing package builds.
+   The exact component candidate passed all five native Chrome cases: pointer,
+   Enter, Space, later foreign focus and explicit connected blur. The private
+   candidate bytes equal the component applied to this normal branch.
+3. Pending: applicable published-head CI and normal repository review/merge
+   gates for the follow-up commit. The first PR's green checks and merge do not
+   satisfy these new gates.
+4. Pending: deploy the affected resident Web service from clean committed source,
+   verify its live revision and finish actual product acceptance.
 
-The keyboard cases exercise events with an explicit default-activation fixture;
-they do not establish browser Enter/Space defaults. Happy DOM evidence does not
-establish real IndexedDB, provider or deployed-product acceptance. Resident
-deployment and live revision readback remain separate completion gates.
+Unit keyboard cases use an explicit default-activation fixture. Native Enter and
+Space defaults require the actual browser cases. Preserve native RED, private
+candidate results, normal source checks, CI, merge, deployment and product
+acceptance as separate records. Browser network/session data and Next navigation
+are isolated fixtures; native DOM and IndexedDB are real. These local results do
+not establish published-head CI, resident deployment or product acceptance.

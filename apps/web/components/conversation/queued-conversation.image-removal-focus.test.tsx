@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // Keep the real queue hook, message projection and Session runtime. Only the
 // network, durable browser storage and native layout are deterministic seams.
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ConversationImageManifest, ConversationQueueSnapshot } from "@talent-signal/contracts";
@@ -83,10 +83,11 @@ async function flush() {
     await Promise.resolve(); await new Promise(resolve => setTimeout(resolve, 1));
   } });
 }
-async function render(scope = SCOPE, binding = "chat-binding") {
-  await act(async () => root.render(createElement(QueuedConversation, {
+async function render(scope = SCOPE, binding = "chat-binding", strict = false) {
+  const conversation = createElement(QueuedConversation, {
     scope, chatBinding: binding, detailBinding: `detail-${binding}`, initialDetail: emptyDetail,
-  })));
+  });
+  await act(async () => root.render(strict ? createElement(StrictMode, null, conversation) : conversation));
   await flush();
 }
 beforeEach(() => {
@@ -181,9 +182,9 @@ function holdOneDraftRemoval(retainedCount = 1) {
   });
   return { entered, release };
 }
-async function stageTwoDraftImages(count = 2) {
+async function stageTwoDraftImages(count = 2, strict = false) {
   queue = snapshot(false);
-  await render();
+  await render(SCOPE, "chat-binding", strict);
   const file = (name: string) => new File([new Uint8Array([137, 80, 78, 71, 1, 2, 3, 4])], name, { type: "image/png" });
   await act(async () => { state.chat.changeDraft("Retain authored text"); await state.chat.addFiles([file("first.png"), file("second.png")].slice(0, count)); });
   await flush();
@@ -322,4 +323,42 @@ it("G189: two pending real removals hand off once from only the latest focused o
   expect(composerFocuses).toBe(1);
   await flush(); expect(document.activeElement).toBe(composer); expect(composerFocuses).toBe(1);
   checkpoint("two-real-pending-removals", { composerFocuses, attachments: state.chat.attachments.length, durableRemaining: (localRecords.get(conversationImageKey(SCOPE, SESSION, "composer-draft")) ?? []).length });
+});
+
+// Native removeChild/focusout ordering is covered by the real Chromium case;
+// happy-dom does not reproduce that browser behavior. These are ref-lifecycle
+// controls, not a synthetic focus-event imitation of the browser regression.
+it.each([false, true])("G189: mounted explicit blur still revokes after rerenders (StrictMode %j)", async strict => {
+  const { composer, trigger } = await stageTwoDraftImages(2, strict);
+  const gate = holdOneDraftRemoval();
+  await act(async () => { trigger.focus(); trigger.click(); }); await gate.entered;
+  await render(SCOPE, "chat-binding", strict);
+  await render(SCOPE, "chat-binding", strict);
+  expect(host.querySelector('button[aria-label="移除第 1 张图片"]')).toBe(trigger);
+  expect(host.querySelector("#queued-conversation-composer")).toBe(composer);
+  expect(document.activeElement).toBe(trigger);
+  await act(async () => trigger.blur());
+  expect(trigger.isConnected).toBe(true); expect(document.activeElement).toBe(document.body);
+  await act(async () => gate.release("accept")); await flush();
+  expect(trigger.isConnected).toBe(false);
+  expect(state.chat.attachments.map(item => item.file.name)).toEqual(["second.png"]);
+  expect(document.activeElement).toBe(document.body);
+  await flush(); expect(document.activeElement).toBe(document.body);
+});
+it("G189: StrictMode ref replay and a same-owner rerender preserve the exact pending handoff", async () => {
+  const { composer, trigger } = await stageTwoDraftImages(2, true);
+  const gate = holdOneDraftRemoval();
+  let composerFocuses = 0;
+  composer.addEventListener("focus", () => { composerFocuses += 1; });
+  await act(async () => { trigger.focus(); trigger.click(); }); await gate.entered;
+  await render(SCOPE, "chat-binding", true);
+  expect(host.querySelector('button[aria-label="移除第 1 张图片"]')).toBe(trigger);
+  expect(document.activeElement).toBe(trigger); expect(composerFocuses).toBe(0);
+  await act(async () => gate.release("accept")); await flush();
+  expect(trigger.isConnected).toBe(false);
+  expect(host.querySelector("#queued-conversation-composer")).toBe(composer);
+  expect(composer.value).toBe("Retain authored text"); expect(composer.disabled).toBe(false);
+  expect(state.chat.attachments.map(item => item.file.name)).toEqual(["second.png"]);
+  expect(document.activeElement).toBe(composer); expect(composerFocuses).toBe(1);
+  await flush(); expect(document.activeElement).toBe(composer); expect(composerFocuses).toBe(1);
 });
