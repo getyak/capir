@@ -36,14 +36,14 @@
     "test": "vitest run src"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.310",
+    "@anthropic-ai/claude-agent-sdk": "0.3.312",
     "@talent-signal/contracts": "workspace:*",
     "quickjs-emscripten": "0.32.0",
     "sharp": "0.35.5",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^5.0.5"
   }
