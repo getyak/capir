@@ -2083,7 +2083,8 @@
 .shell:has(.sidebarState[data-collapsed="true"]) :is(.brandRow,.sidebarTools,.railRow) { display:none; }
 .shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { align-items:center; display:flex; flex:1; flex-direction:column; min-height:0; overflow-y:auto; overscroll-behavior:none; scrollbar-width:thin; }
 .railCollapsedTop { flex:none; }
-.railSessions { display:flex; flex:none; flex-direction:column; gap:8px; margin-top:20px; max-height:40dvh; overflow:auto; scrollbar-width:none; }
+/* Recent shortcuts yield space to navigation and bottom tools before the rail scrolls. */
+.railSessions { display:flex; flex:0 1 auto; flex-direction:column; gap:8px; margin-top:20px; max-height:40dvh; min-height:44px; overflow:auto; scrollbar-width:none; }
 .railSessionAvatar,.railIconLink { align-items:center; border-radius:12px; color:var(--muted-strong); display:flex; flex:none; height:44px; justify-content:center; text-decoration:none; transition:background-color var(--workspace-transition-duration,180ms) var(--ease-out),color var(--workspace-transition-duration,180ms) var(--ease-out); width:44px; }
 .railSessionAvatar:hover,.railIconLink:hover { background:var(--workspace-row-hover); color:var(--ink); }
 .railSessionAvatar[aria-current="page"],.railIconLink[aria-current="page"],.railIconLink[aria-current="location"] { background:var(--workspace-row-selected); color:var(--ink); }
