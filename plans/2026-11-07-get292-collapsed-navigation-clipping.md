@@ -61,6 +61,39 @@ remaining P0/P1/P2.
 Supplementary PR: https://github.com/getyak/capir/pull/513. Its first head passed
 all applicable GitHub Actions checks; two non-required Vercel statuses report
 "Account is blocked." The repository requires `CI required` and `Security required`,
-not those previews. Latest-head gates must still be read back before merge.
+not those previews. Latest head `89bf29b4` passed both required gates; PR #513 merged as
+`12f39808e6bf3d4e866cecc857a40ebec1c0b93c`. Post-merge checks are separate.
 WKWebView readback and serial resident deployment remain pending. Formal
 evidence: `/Users/cubxxw/ops/runs/get292-sidebar-clipping-20261107/`.
+
+
+## Current-source WKWebView follow-up
+
+Base: freshly fetched main `12f39808`; branch `codex/get-292-webview-sidebar`.
+The installed 0.2.47 (258) executable exactly matches the official ZIP binary
+(SHA-256 `9a854817ec57cb9f8e25eccdb94ad8ca6df67aeabfb6c694b96b1951ffc9f9e0`).
+Its source tag resolves to `0580dbf6`. Live Web is still `99ce3138`. These are
+provenance facts, not candidate acceptance.
+
+An isolated WKWebView host loads the same current-source Frame, Nav, global
+styles, theme and CSS fixture, with the product user agent and desktop display
+metadata. It uses a distinct bundle identifier, a nonpersistent store and only
+loopback synthetic content. It has no account, model, capture or ASR capability.
+The current main reproduces the installed symptom: initial rail rows are 44px
+and nav 182px; after collapse/expand, computed state returns correctly but used
+row heights become 106/232/124/88px and nav 556px. A normal Reload restores it.
+
+The `height:max-content` hypothesis failed and was removed. The single-property
+candidate `grid-auto-rows:max-content` restores content-sized grid tracks. The
+observed first pass and three repeated English transitions remain 44px / 182px;
+Chinese, desktop 761px, mobile 760/390px, and 480px-short desktop transitions
+pass. At 200% root text size rows naturally grow to 52px / nav 214px, preserving
+content instead of fixing row heights. All samples wait for loaded fonts and
+settled layout. Host tests: 97 passed again. Independent source review has no
+remaining P0/P1/P2; Chrome desktop, 200% text, 761/760px and Chinese 390px checks passed;
+console warnings/errors are empty. Final independent evidence review is pending.
+
+The fixture and private installed-client screenshots remain local. Keep the
+single GET-292 issue In Progress through serialized resident deployment and
+actual installed-client acceptance; disable any premature linked close by
+restoring the issue status if needed. No resident service was switched here.
