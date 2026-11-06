@@ -23,11 +23,11 @@ genuinely short viewports rather than disabling keyboard visibility.
 
 Milestones:
 
-1. Active: preserve a failing browser geometry sample using current source and
+1. Complete: preserve a failing browser geometry sample using current source and
    synthetic recent shortcuts; confirm the smallest layout change fixes it.
-2. Run affected host tests and real Chrome transition/keyboard checks at the
+2. Complete for Chrome: run affected host tests and real Chrome transition/keyboard checks at the
    reported viewport and shorter/narrower viewports. Check WKWebView separately.
-3. Obtain independent review, open a supplementary GET-292 PR, pass applicable
+3. Active: obtain independent review, open a supplementary GET-292 PR, pass applicable
    latest-head gates and merge. Keep the issue In Progress until the resident
    release owner serially deploys and the actual surfaces pass acceptance.
 
@@ -49,5 +49,18 @@ contracts; initial missing-build import failures are retained as setup evidence.
 Focused ESLint and `pnpm docs:check` passed. A synthetic source-component fixture
 is available for candidate browser regression; it substitutes only directory
 data/search presentation and footer data, and invokes no backend or model.
-Candidate Chrome transition/short-window checks, WKWebView readback, PR CI, merge,
-and serial resident deployment remain pending.
+Candidate Chrome source-layout regression passed at 1387x733 and 1387x600,
+with 480px keyboard/wheel/pointer reachability, 0/1/5/failed shortcut states,
+761/760/390px boundaries, and Chinese navigation. All 44 native keyboard focus
+samples were fully visible. Relevant transitions and fonts were bounded and
+settled; screenshots were checked against actual dimensions. An initial fixture
+missing global styles and an overbroad 44px assertion are preserved as harness
+corrections, not product failures. Final independent outcome review found no
+remaining P0/P1/P2.
+
+Supplementary PR: https://github.com/getyak/capir/pull/513. Its first head passed
+all applicable GitHub Actions checks; two non-required Vercel statuses report
+"Account is blocked." The repository requires `CI required` and `Security required`,
+not those previews. Latest-head gates must still be read back before merge.
+WKWebView readback and serial resident deployment remain pending. Formal
+evidence: `/Users/cubxxw/ops/runs/get292-sidebar-clipping-20261107/`.
