@@ -86,8 +86,12 @@ row heights become 106/232/124/88px and nav 556px. A normal Reload restores it.
 The `height:max-content` hypothesis failed and was removed. The single-property
 candidate `grid-auto-rows:max-content` restores content-sized grid tracks. The
 observed first pass and three repeated English transitions remain 44px / 182px;
-Chinese, desktop 761px, mobile 760/390px, and 480px-short desktop transitions
-pass. At 200% root text size rows naturally grow to 52px / nav 214px, preserving
+Chinese, desktop 761px and mobile 760/390px transitions pass. In the 480px
+short desktop window, the existing scroll area clips Time initially; ordinary
+scrolling advances it by 44px and paints all four targets fully. The first
+visibility assertion omitted clipping ancestors, was rejected by independent
+review, and is retained as a harness failure. The corrected proof intersects
+target bounds with clipping ancestors and verifies real scroll reachability. At 200% root text size rows naturally grow to 52px / nav 214px, preserving
 content instead of fixing row heights. All samples wait for loaded fonts and
 settled layout. Host tests: 97 passed again. Independent source review has no
 remaining P0/P1/P2; Chrome desktop, 200% text, 761/760px and Chinese 390px checks passed;
