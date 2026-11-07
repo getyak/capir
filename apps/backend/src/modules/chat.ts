@@ -1,6 +1,8 @@
 import {createHarnessRunFiles,listHarnessRunArtifacts} from "./harnessRunFiles.js";
 import { calendarDraftContextForRequest } from "./calendarDraftContext.js";
 import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
+import { LegacyChatTerminated, type LegacyChatAuthority } from "./legacyChatAuthority.js";
+import { guardLegacyProvider } from "./legacyChatProviderGuard.js";
 import { createHarnessEvidenceImageReader, loadHarnessEvidenceImageScope } from "./harnessEvidenceImages.js";
 import { loadAgentResponsePreference } from "./agentPreferences.js";
 import { createHarnessContinuationFactory } from "./harnessSessions.js";
@@ -18,7 +20,7 @@ import type {
   LabFeatureAdoptionReceipt,
 } from "@talent-signal/contracts";
 import { CONTRACT_VERSION } from "@talent-signal/contracts";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
@@ -795,7 +797,25 @@ async function loadActiveAttention(
   return result.rows[0] ?? null;
 }
 
+/** Trusted domain/evaluation API; real legacy HTTP uses the required-proof service. */
 export async function createChatTask(
+  pool: Pool, auth: AuthContext, request: ChatTaskRequest,
+  provider: RemoteChatAnswerProviding | null = null, storage: ChatMediaStorage | null = null,
+  research: PersonResearchAgentProviding | null = null,
+  select?: (client: DatabaseClient) => Promise<RemoteChatAnswerProviding | null>,
+  receipt?: (client: DatabaseClient) => Promise<LabFeatureAdoptionReceipt | null>,
+): Promise<ChatTaskMutationResult> {
+  return createChatTaskInternal(pool, auth, request, provider, storage, research, select, receipt, null);
+}
+
+export async function createLegacyChatTask(authority: LegacyChatAuthority,
+  ...args: Parameters<typeof createChatTask>): Promise<ChatTaskMutationResult> {
+  const [pool, auth, request, provider, storage, research, select, receipt] = args;
+  try { return await createChatTaskInternal(pool, auth, request, provider, storage, research, select, receipt, authority); }
+  finally { authority.dispose(); }
+}
+
+async function createChatTaskInternal(
   pool: Pool,
   auth: AuthContext,
   request: ChatTaskRequest,
@@ -804,10 +824,11 @@ export async function createChatTask(
   personResearchProvider: PersonResearchAgentProviding | null = null,
   selectRemoteProvider?: (client: DatabaseClient) => Promise<RemoteChatAnswerProviding | null>,
   resolveLabFeatureReceipt?: (client: DatabaseClient) => Promise<LabFeatureAdoptionReceipt | null>,
+  legacyAuthority: LegacyChatAuthority | null = null,
 ): Promise<ChatTaskMutationResult> {
   const chatStartedAt = new Date().toISOString();
   if (request.session_id) await purgeUnavailableSessionChatSources(pool, auth);
-  return inTransaction(pool, async (client) => {
+  const execute = async (client: PoolClient): Promise<ChatTaskMutationResult> => {
     if (request.session_id) await assertSessionForChat(client, auth, request.session_id);
     const idempotency = await claimIdempotency(
       client,
@@ -840,6 +861,9 @@ export async function createChatTask(
           throw new ApiError(410,"RUN_ARTIFACT_UNAVAILABLE","This reply's file source is no longer available. Start a new request using current evidence.");
         replay.artifacts=current;
       }
+      await legacyAuthority?.lockAccountsForFinalization(client);
+      await legacyAuthority?.lockReadersForFinalization(client);
+      await legacyAuthority?.assertFinalCurrent(client);
       return {
         body: replay,
         replayed: true,
@@ -861,6 +885,18 @@ export async function createChatTask(
         const refs = sourceObservation?.source_refs;
         return refs?.kind === "product" ? { expiresAt: new Date(refs.expires_at), personIDs: refs.person_ids } : undefined;
       }, pool) : undefined;
+    // A separate HTTP fence does not change the original source-admission
+    // presence used below to select SDK/history/image capabilities.
+    const legacySourceCurrent = legacyAuthority ? assertHarnessCurrent
+      ?? await legacyAuthority.source(() => createHarnessSourceGuard(client, auth, request.session_id, () => {
+        const refs = sourceObservation?.source_refs;
+        return refs?.kind === "product" ? { expiresAt: new Date(refs.expires_at), personIDs: refs.person_ids } : undefined;
+      }, pool)) : undefined;
+    if (legacySourceCurrent) legacyAuthority!.observeSource(legacySourceCurrent);
+    const sourceRead = <T>(operation: () => Promise<T>): Promise<T> =>
+      legacyAuthority ? legacyAuthority.source(operation) : operation();
+    if (legacyAuthority && remoteChatProvider)
+      remoteChatProvider = guardLegacyProvider(remoteChatProvider, legacyAuthority, legacySourceCurrent);
     const assertPreviousCurrent = async () => {
       if (!previousRunID) return;
       if (!previousRunExpiresAt || previousRunExpiresAt.valueOf() <= Date.now())
@@ -1079,7 +1115,7 @@ export async function createChatTask(
         remoteStartedAt = new Date().toISOString();
         const images = mediaIds.length === 0 || !chatMediaStorage
           ? []
-          : await Promise.all(media.map(async (item) => {
+          : await sourceRead(() => Promise.all(media.map(async (item) => {
               const stored = await getChatMediaContent(
                 client,
                 auth,
@@ -1091,9 +1127,9 @@ export async function createChatTask(
                 media_type: item.media_type,
                 data: stored.body,
               };
-            }));
+            })));
         const sourceImages = assertCurrent && chatMediaStorage && remoteChatProvider.supportsImageInput
-          ? await loadHarnessEvidenceImageScope(pool,auth,request.person_id,request.relationship_context_id,evidenceFragmentIds) : null;
+          ? await sourceRead(() => loadHarnessEvidenceImageScope(pool,auth,request.person_id,request.relationship_context_id,evidenceFragmentIds)) : null;
         feedbackInput = {
           ...(responsePreference ? { responsePreference } : {}),
           ...(assertCurrent ? { assertCurrent } : {}),
@@ -1222,9 +1258,9 @@ export async function createChatTask(
           feedbackInput.readEvidenceImage = createHarnessEvidenceImageReader(pool, auth, request.person_id,
             request.relationship_context_id, evidenceFragmentIds, chatMediaStorage, assertBaseCurrent, (id,guard)=>imageGuards.set(id,guard));
         }
-        runFiles=await createHarnessRunFiles(client,auth,feedbackInput,manifestId,request.session_id,
+        runFiles=await sourceRead(() => createHarnessRunFiles(client,auth,feedbackInput!,manifestId,request.session_id,
           [...new Set([...(sourceImages?.taskIDs??[]),...(sessionConversation.sources?.map(source=>source.taskID)??[])])],
-          previousRunID&&previousRunExpiresAt?{id:previousRunID,expiresAt:previousRunExpiresAt}:undefined);
+          previousRunID&&previousRunExpiresAt?{id:previousRunID,expiresAt:previousRunExpiresAt}:undefined));
         if(runFiles)feedbackInput.runFiles=runFiles.admission;
         await assertCurrent?.();
         if (remoteChatProvider.providerId === "claude-agent-sdk" && request.session_id && !images.length && !feedbackInput.readEvidenceImage
@@ -1243,7 +1279,13 @@ export async function createChatTask(
         );
         remoteChatStatus = nextBlocks === blocks ? "fallback" : "completed";
         blocks = nextBlocks;
-      } catch {
+      } catch (error) {
+        if (error instanceof LegacyChatTerminated) throw error;
+        if (legacyAuthority) {
+          legacyAuthority.throwIfTerminated();
+          await legacyAuthority.assertCurrent();
+          if (legacySourceCurrent) await legacyAuthority.source(legacySourceCurrent);
+        }
         remoteEndedAt = new Date().toISOString();
         remoteFailed = true;
         remoteChatStatus = "fallback";
@@ -1269,23 +1311,25 @@ export async function createChatTask(
       if (remoteChatStatus !== "completed") await client.query("ROLLBACK TO SAVEPOINT harness_product_reply");
       await client.query("RELEASE SAVEPOINT harness_product_reply");
     }
-    const personResearch = await runPersonResearchChatIngress({
+    const researchOperation = () => runPersonResearchChatIngress({
       provider: personResearchProvider,
       media,
       loadMedia: async (mediaID) => {
         if (!chatMediaStorage) {
           throw new Error("Chat media storage is unavailable.");
         }
-        return (await getChatMediaContent(
+        return (await sourceRead(() => getChatMediaContent(
           client,
           auth,
           chatMediaStorage,
           mediaID,
-        )).body;
+        ))).body;
       },
       runID: personResearchRunID(auth.accountId, request.idempotency_key),
       objective: request.objective,
     });
+    const personResearch = legacyAuthority
+      ? await legacyAuthority.provider(researchOperation, legacySourceCurrent) : await researchOperation();
     const personResearchStatus = personResearch.status;
     if (personResearch.block) {
       blocks = insertAfterPersonBrief(blocks, personResearch.block);
@@ -1396,6 +1440,7 @@ export async function createChatTask(
         remote_chat_output_tokens: remoteChatResult?.output_tokens ?? null,
       },
     );
+    await legacyAuthority?.lockAccountsForFinalization(client);
     await recordSessionChatSources(client, auth, request.session_id, taskId, sessionConversation.sources ?? [], conversationHistory.filter((message) => message.role === "assistant").map((message) => message.message_id));
     if (request.session_id) {
       await recordMeetingDraftsForTask(client, auth, {
@@ -1423,12 +1468,15 @@ export async function createChatTask(
     }
     if(remoteChatStatus==="completed")await runFiles?.persist();
     if (previousRunID) await assertPreviousCurrent();
+    await legacyAuthority?.lockReadersForFinalization(client);
     await completeIdempotency(client, idempotency, 201, response);
+    await legacyAuthority?.assertFinalCurrent(client);
     return {
       body: response,
       replayed: false,
       status: 201,
       labProductOutcome: remoteChatStatus === "completed" ? "accepted" : "fallback",
     };
-  });
+  };
+  return inTransaction(pool, client => legacyAuthority ? legacyAuthority.withClient(client, execute) : execute(client));
 }

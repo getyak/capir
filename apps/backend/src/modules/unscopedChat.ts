@@ -2,6 +2,8 @@ import { conversationRunDiagnostics } from "./conversationRunDiagnostics.js";
 import { recordProductEvent } from "@talent-signal/agent";
 import { calendarDraftContextForRequest } from "./calendarDraftContext.js";
 import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
+import { LegacyChatTerminated, type LegacyChatAuthority } from "./legacyChatAuthority.js";
+import { guardLegacyProvider } from "./legacyChatProviderGuard.js";
 import { admitSessionHistoryOwner, createSessionHistorySnapshot } from "./sessionHistorySnapshot.js";
 import { loadAgentResponsePreference } from "./agentPreferences.js";
 import { claudeHarnessInterruptionCode, type AgentProviderInputPart, type RuntimeObservationContext } from "@talent-signal/agent";
@@ -132,6 +134,8 @@ export async function executeUnscopedChatTask(input: {
   hostResult?: import("@talent-signal/contracts").McpHumanResult | null;
   /** Live queue run claim; the only host staging authority. */
   hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
+  /** HTTP-only original credential fence; never a queue staging authority. */
+  legacyAuthority?: LegacyChatAuthority;
   /** Host queue admission for this message's review-only Person draft. */
   memoryDraftTarget?: import("@talent-signal/contracts").ConversationMemoryDraftTarget | null;
   provider: RemoteChatAnswerProviding | null;
@@ -180,6 +184,14 @@ export async function executeUnscopedChatTask(input: {
   };
   const assertCurrent = input.provider?.providerId === "claude-agent-sdk" && input.database && input.auth
     ? await createHarnessSourceGuard(input.database, input.auth, input.request.session_id, sources, input.probePool ?? input.database) : undefined;
+  // Keep `assertCurrent` presence and every existing capability selection as
+  // before. The additional HTTP source fence grants no history/tool capability.
+  const legacySourceCurrent = input.legacyAuthority && input.database && input.auth
+    ? assertCurrent ?? await input.legacyAuthority.source(() => createHarnessSourceGuard(
+      input.database!, input.auth!, input.request.session_id, sources, input.probePool ?? input.database)) : undefined;
+  if (legacySourceCurrent) input.legacyAuthority!.observeSource(legacySourceCurrent);
+  if (input.legacyAuthority && input.provider)
+    input = { ...input, provider: guardLegacyProvider(input.provider, input.legacyAuthority, legacySourceCurrent) };
   // Scope failures must escape before provider fallbacks; they are not model errors.
   const responsePreference = !input.memoryDraftTarget && assertCurrent && input.database && input.auth
     ? await loadAgentResponsePreference(input.database, input.auth) : undefined;
@@ -361,6 +373,12 @@ export async function executeUnscopedChatTask(input: {
         remoteStatus = "completed";
       }
     } catch (error) {
+      if (error instanceof LegacyChatTerminated) throw error;
+      if (input.legacyAuthority) {
+        input.legacyAuthority.throwIfTerminated();
+        await input.legacyAuthority.assertCurrent();
+        if (legacySourceCurrent) await input.legacyAuthority.source(legacySourceCurrent);
+      }
       if (input.memoryDraftTarget) {
         if (error instanceof ApiError || input.signal?.aborted) throw error;
         throw new ApiError(409, "MEMORY_DRAFT_TARGET_NOT_STAGED", "The selected-person Memory draft was not prepared. Retry this message without changing its target.");
@@ -403,7 +421,13 @@ export async function executeUnscopedChatTask(input: {
         }
         block = responseBlock(providerResult);
         proposedSessionTitle = providerResult.session_title ?? null;
-      } catch {
+      } catch (error) {
+        if (error instanceof LegacyChatTerminated) throw error;
+        if (input.legacyAuthority) {
+          input.legacyAuthority.throwIfTerminated();
+          await input.legacyAuthority.assertCurrent();
+          if (legacySourceCurrent) await input.legacyAuthority.source(legacySourceCurrent);
+        }
         providerResult = null;
         block = localFallbackBlock(input.request.objective, true);
       }
@@ -447,16 +471,34 @@ export async function executeUnscopedChatTask(input: {
   };
 }
 
+/** Trusted domain/evaluation API. Public HTTP ingress uses the required-proof
+ * service below; callers cannot select that service's authority via request data. */
 export async function createUnscopedChatTask(
+  pool: Pool, auth: AuthContext, request: UnscopedChatTaskRequest,
+  provider: RemoteChatAnswerProviding | null,
+  selectRemoteProvider?: (client: DatabaseClient) => Promise<RemoteChatAnswerProviding | null>, referenceTime?: Date,
+): Promise<UnscopedChatTaskMutationResult> {
+  return createUnscopedChatTaskInternal(pool, auth, request, provider, selectRemoteProvider, referenceTime, null);
+}
+
+export async function createLegacyUnscopedChatTask(authority: LegacyChatAuthority,
+  ...args: Parameters<typeof createUnscopedChatTask>): Promise<UnscopedChatTaskMutationResult> {
+  const [pool, auth, request, provider, select, reference] = args;
+  try { return await createUnscopedChatTaskInternal(pool, auth, request, provider, select, reference, authority); }
+  finally { authority.dispose(); }
+}
+
+async function createUnscopedChatTaskInternal(
   pool: Pool,
   auth: AuthContext,
   request: UnscopedChatTaskRequest,
   provider: RemoteChatAnswerProviding | null,
   selectRemoteProvider?: (client: DatabaseClient) => Promise<RemoteChatAnswerProviding | null>,
   referenceTime?: Date,
+  legacyAuthority: LegacyChatAuthority | null = null,
 ): Promise<UnscopedChatTaskMutationResult> {
   if (request.session_id) await purgeUnavailableSessionChatSources(pool, auth);
-  return inTransaction(pool, async (client) => {
+  const execute = async (client: PoolClient): Promise<UnscopedChatTaskMutationResult> => {
     if (request.session_id) await assertSessionForChat(client, auth, request.session_id);
     const requestIdentity = {
       objective_hash: createHash("sha256")
@@ -493,6 +535,9 @@ export async function createUnscopedChatTask(
           "The prior unscoped Chat task could not be resolved.",
         );
       }
+      await legacyAuthority?.lockAccountsForFinalization(client);
+      await legacyAuthority?.lockReadersForFinalization(client);
+      await legacyAuthority?.assertFinalCurrent(client);
       return {
         body: replay,
         replayed: true,
@@ -509,6 +554,7 @@ export async function createUnscopedChatTask(
       database: client,
       probePool: pool,
       auth,
+      ...(legacyAuthority ? { legacyAuthority } : {}),
       ...(referenceTime ? { referenceTime } : {}),
       ...(request.session_id ? { continuation: (sources: () => { expiresAt: Date; personIDs: readonly string[] }) => createHarnessContinuationFactory(client, pool, auth, request.session_id!, { kind: "workspace_conversation" }, sources) } : {}),
     });
@@ -522,11 +568,15 @@ export async function createUnscopedChatTask(
       if (execution.remoteStatus === "fallback") await client.query("ROLLBACK TO SAVEPOINT harness_product_reply");
       await client.query("RELEASE SAVEPOINT harness_product_reply");
     }
+    await legacyAuthority?.lockAccountsForFinalization(client);
     await recordUnscopedChatCompletionEvidence(client, auth, request, execution);
+    await legacyAuthority?.lockReadersForFinalization(client);
     await completeIdempotency(client, idempotency, 201, execution.body);
+    await legacyAuthority?.assertFinalCurrent(client);
     return { body: execution.body, replayed: false, status: 201,
       labProductOutcome: execution.remoteStatus === "agent_completed" || execution.remoteStatus === "completed" ? "accepted" : "fallback" };
-  });
+  };
+  return inTransaction(pool, client => legacyAuthority ? legacyAuthority.withClient(client, execute) : execute(client));
 }
 
 /**

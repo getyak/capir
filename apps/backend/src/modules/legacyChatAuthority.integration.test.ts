@@ -1,13 +1,16 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import type { LightMyRequestResponse } from "fastify";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { describe, expect, it } from "vitest";
 
 import { buildApp } from "../app.js";
 import { inTransaction } from "../database/pool.js";
 import type { RemoteChatAnswerProviding, RemoteChatAnswerResult } from "./chatAnswerProvider.js";
 import { encodePasswordCredential } from "./passwordCredential.js";
+import { mutateAgentSession } from "./agentSessions.js";
+import type { SessionResponse } from "@talent-signal/contracts";
+import type { AuthContext } from "./auth.js";
 
 const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
 if (database) {
@@ -34,7 +37,8 @@ async function waitForDispatch(entered: Promise<void>) {
   }
 }
 
-// This is the first-red milestone for GET449, not a lifecycle implementation.
+// The first case is the Hosted-confirmed original red; phase1 cases below
+// retain real HTTP/auth/PG and prove only the original-credential boundary.
 // The normal pure job skips it; the explicit Hosted PostgreSQL selector must
 // run it. All identities and credentials below are generated test-only values.
 describe.skipIf(!database)("legacy Chat original login authority over real HTTP handlers and PostgreSQL", () => {
@@ -144,5 +148,335 @@ describe.skipIf(!database)("legacy Chat original login authority over real HTTP 
         }
       }
     }
+  });
+});
+
+type ContinuationProbe = { positiveDelivered: number; positiveSawSeed: number; lateAttempts: number;
+  lateDelivered: number; lateSawSeed: number; lateRejected: number; resumed: boolean[];
+  sdkSessionIDs: string[]; seedID: string };
+type HttpFixture = {
+  pool: Pool; control: Pool; app: Awaited<ReturnType<typeof buildApp>>;
+  accountId: string; userId: string; sessionId: string;
+  entered: ReturnType<typeof barrier>; release: ReturnType<typeof barrier>;
+  calls(): number; hold(value: boolean): void;
+  post(key: string): Promise<LightMyRequestResponse>;
+  current(): Promise<number>; enroll(): Promise<LightMyRequestResponse>;
+  replayWithNewLogin(key: string): Promise<LightMyRequestResponse>;
+  pending(): Promise<LightMyRequestResponse> | undefined;
+  continuationProbe: ContinuationProbe | null;
+};
+
+async function withHttpFixture(options: { scoped?: boolean; failure?: boolean; agent?: boolean; continuation?: boolean;
+  finalLock?: { entered: ReturnType<typeof barrier>; release: ReturnType<typeof barrier> } },
+operation: (fixture: HttpFixture) => Promise<void>) {
+  const pool = new Pool({ connectionString: database!, max: 4, connectionTimeoutMillis: 2_000,
+    statement_timeout: 5_000, query_timeout: 6_000 });
+  const control = new Pool({ connectionString: database!, max: 1, connectionTimeoutMillis: 2_000,
+    statement_timeout: 5_000, query_timeout: 6_000 });
+  const entered = barrier(), release = barrier();
+  const accountId = randomUUID(), userId = randomUUID(), personId = randomUUID(), contextId = randomUUID();
+  const email = `legacy-phase1-${userId}@example.invalid`, password = randomBytes(24).toString("base64url");
+  const renewalSecret = randomBytes(32).toString("base64url");
+  let productSessionID: string | undefined;
+  const continuationProbe: ContinuationProbe | null = options.continuation ? {
+    positiveDelivered: 0, positiveSawSeed: 0, lateAttempts: 0, lateDelivered: 0, lateSawSeed: 0,
+    lateRejected: 0, resumed: [], sdkSessionIDs: [], seedID: randomUUID(),
+  } : null;
+  let app: HttpFixture["app"] | undefined, pending: Promise<LightMyRequestResponse> | undefined;
+  let hold = false, calls = 0;
+  const answer: RemoteChatAnswerResult = { kind: "answer", title: "Synthetic reply", body: "Synthetic phase1 reply.",
+    citation_ids: [], provider_id: options.continuation ? "claude-agent-sdk" : "zhipu-chat-completions", model: "synthetic-phase1", provider_request_id: null,
+    input_tokens: 10, output_tokens: 5 };
+  const dispatch = async () => {
+    calls++;
+    if (hold) { entered.resolve(); await release.promise; }
+    if (options.failure) throw new Error("Synthetic ordinary provider failure");
+  };
+  const provider: RemoteChatAnswerProviding = { providerId: answer.provider_id, model: answer.model,
+    supportsImageInput: false, answer: async request => {
+      if (!continuationProbe) { await dispatch(); return answer; }
+      calls++;
+      // This is the real HTTP host's continuation, not a substituted store or
+      // Agent capability. The synthetic adapter remains answer-only.
+      expect(request.continuation).toBeTypeOf("function");
+      const continuation = await request.continuation!("c".repeat(64));
+      const key = { projectKey: "synthetic-host-mirror", sessionId: continuation.sessionID };
+      const containsSeed = (rows: unknown) => Array.isArray(rows) && rows.some((row: unknown) =>
+        row !== null && typeof row === "object" && "uuid" in row && row.uuid === continuationProbe.seedID);
+      continuationProbe.resumed.push(continuation.resume);
+      continuationProbe.sdkSessionIDs.push(continuation.sessionID);
+      if (!hold) {
+        await continuation.store.append(key, [{ type: "user", uuid: continuationProbe.seedID,
+          message: { role: "user", content: "Synthetic retained original-login mirror entry." } }]);
+        const rows = await continuation.store.load(key);
+        continuationProbe.positiveDelivered++;
+        continuationProbe.positiveSawSeed += Number(containsSeed(rows));
+        await continuation.finish(true);
+      } else {
+        entered.resolve(); // The real resumed lease exists before withdrawal.
+        await release.promise;
+        continuationProbe.lateAttempts++;
+        try {
+          const rows = await continuation.store.load(key);
+          // Count any data delivery BEFORE the outer provider postcheck. A409
+          // at that later boundary cannot make an earlier mirror leak pass.
+          continuationProbe.lateDelivered++;
+          continuationProbe.lateSawSeed += Number(containsSeed(rows));
+        } catch (error) { continuationProbe.lateRejected++; throw error; }
+        finally { await continuation.finish(false); }
+      }
+      return { ...answer, provider_request_id: continuation.sessionID };
+    },
+    ...(options.agent ? { id: "zhipu-chat-completions", sdkVersion: "synthetic", inputCapabilities: { images: false },
+      run: async () => { await dispatch(); return { structuredOutput: { outcome: "reply", title: answer.title, body: answer.body },
+        inputTokens: 10, outputTokens: 5, estimatedUsd: 0, turns: 1, permissionDenials: [] }; } } : {}) };
+  // Instrument only the product's explicit connect(), never callback-based
+  // pool.query. The real final row lock is already held before the test pause.
+  const productPool = options.finalLock ? new Proxy(pool, { get(target, key) {
+    if (key === "connect") return async () => {
+      const client = await target.connect();
+      return new Proxy(client, { get(connection, member) {
+        if (member === "query") return async (...args: Parameters<PoolClient["query"]>) => {
+          const result = await Reflect.apply(connection.query, connection, args);
+          if (args[0] === "SELECT id FROM sessions WHERE account_id=$1 AND user_id=$2 AND id=$3 FOR SHARE NOWAIT") {
+            options.finalLock!.entered.resolve();
+            await options.finalLock!.release.promise;
+          }
+          return result;
+        };
+        const value = Reflect.get(connection, member, connection);
+        return typeof value === "function" ? value.bind(connection) : value;
+      } });
+    };
+    const value = Reflect.get(target, key, target);
+    return typeof value === "function" ? value.bind(target) : value;
+  } }) : pool;
+  try {
+    await inTransaction(pool, async client => {
+      await client.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic phase1')", [accountId, `legacy-phase1-${accountId}`]);
+      await client.query("INSERT INTO account_email_reservations(normalized_email,state,account_id,user_id) VALUES($1,'owned',$2,$3)",
+        [email, accountId, userId]);
+      await client.query("INSERT INTO users(id,account_id,email,display_name,kind,username) VALUES($1,$2,$3,'Synthetic owner','password_human',$3)",
+        [userId, accountId, email]);
+      await client.query("INSERT INTO password_credentials(account_id,user_id,password_scrypt) VALUES($1,$2,$3)",
+        [accountId, userId, await encodePasswordCredential(password)]);
+      if (options.scoped) {
+        await client.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Synthetic Person')", [personId, accountId]);
+        await client.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label) VALUES($1::uuid,$2,$3,$1::text,'Synthetic context')", [contextId, accountId, personId]);
+        const snapshotId = randomUUID();
+        await client.query(`INSERT INTO knowledge_snapshots(id,account_id,subject_id,assignment_id,source_state_cursor,compiler_name,compiler_version,policy_version,status,quality,compiled_at)
+          VALUES($1,$2,$3,$4,0,'synthetic','1','synthetic','published','{"verdict":"gold"}',clock_timestamp())`, [snapshotId, accountId, personId, contextId]);
+        await client.query(`INSERT INTO knowledge_blocks(id,account_id,snapshot_id,block_key,block_type,status,structured_content,sensitivity,semantic_hash)
+          VALUES($1,$2,$3,'synthetic.no-action','no_action','confirmed','{"headline":"No action needed.","items":[]}','restricted',$4)`,
+        [randomUUID(), accountId, snapshotId, "a".repeat(64)]);
+      }
+    });
+    app = await buildApp({ pool: productPool, config: { databaseUrl: database!, host: "127.0.0.1", port: 0,
+      allowedOrigins: [], appleSignInAudiences: [], appleSignInEnabled: false, passwordAuthEnabled: true,
+      passwordRegistrationEnabled: false, simulatedAuthEnabled: false, internalLabEnabled: false,
+      retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3_600 }, remoteChatProvider: provider,
+    personResearchProvider: null, privateConversationProvider: null, labProviders: new Map(), labJobWorkerEnabled: false,
+    conversationQueueWorkerEnabled: false, labCIVerifier: null, screenshotContact: null });
+    await app.ready();
+    const login = await app.inject({ method: "POST", url: "/v1/auth/password/login", payload: { identifier: email, password, client_label: "Synthetic phase1" } });
+    expect(login.statusCode).toBe(200); // Do not put any credential body in assertions.
+    const signedIn = login.json<SessionResponse>();
+    const sessionId = signedIn.session_id;
+    if (!sessionId) throw new Error("The synthetic password login omitted its session identity.");
+    const headers = { authorization: `Bearer ${signedIn.access_token}` };
+    if (options.continuation) {
+      // Seed a canonical empty ProductSession through its production owner,
+      // using the actual login response's identity. No raw session-row insert.
+      const auth: AuthContext = { accountId: signedIn.account.id, accountSlug: signedIn.account.slug,
+        userId: signedIn.user.id, userEmail: signedIn.user.email, userKind: signedIn.user.kind,
+        sessionId };
+      productSessionID = randomUUID();
+      await mutateAgentSession(pool, auth, productSessionID, { expected_revision: 0, idempotency_key: randomUUID(), payload: {
+        id: productSessionID, scopeKind: "unresolved_intent", personDisplayLabel: "New session", contextDisplayLabel: "Conversation",
+        title: "Synthetic original-login continuation", updatedAt: new Date().toISOString(), isUnread: false, turns: [],
+      } });
+    }
+    const activeApp = app;
+    await operation({ pool, control, app, accountId, userId, sessionId, entered, release,
+      calls: () => calls, hold: value => { hold = value; }, pending: () => pending, continuationProbe,
+      current: async () => (await activeApp.inject({ method: "GET", url: "/v1/auth/session", headers })).statusCode,
+      enroll: () => activeApp.inject({ method: "POST", url: "/v1/auth/persistent/enroll", headers,
+        payload: { renewal_secret: renewalSecret, client_kind: "web" } }).then(response => response),
+      replayWithNewLogin: async key => {
+        const fresh = await activeApp.inject({ method: "POST", url: "/v1/auth/password/login",
+          payload: { identifier: email, password, client_label: "Synthetic lawful replay" } });
+        expect(fresh.statusCode).toBe(200);
+        const value = fresh.json<{ access_token: string }>();
+        return activeApp.inject({ method: "POST", url: "/v1/chat/unscoped-tasks",
+          headers: { authorization: `Bearer ${value.access_token}` },
+          payload: { idempotency_key: key, objective: "Reply with a short synthetic greeting." } }).then(result => result);
+      },
+      post: key => { pending = activeApp.inject({ method: "POST", url: options.scoped ? "/v1/chat/tasks" : "/v1/chat/unscoped-tasks", headers,
+        payload: { idempotency_key: key, objective: "Reply with a short synthetic greeting.",
+          ...(productSessionID ? { session_id: productSessionID } : {}),
+          ...(options.scoped ? { person_id: personId, relationship_context_id: contextId } : {}) } }).then(result => result);
+        void pending.catch(() => {}); return pending; },
+    });
+  } finally {
+    release.resolve(); options.finalLock?.release.resolve();
+    try { await pending?.catch(() => {}); }
+    finally { try { await app?.close(); } finally { await Promise.all([pool.end(), control.end()]); } }
+  }
+}
+
+async function noCompletedAttempt(f: HttpFixture, key: string) {
+  const row = await f.control.query<{ count: number }>(`SELECT count(*)::int AS count FROM idempotency_records
+    WHERE account_id=$1 AND actor_user_id=$2 AND idempotency_key=$3 AND status='completed' AND response_status<400`,
+  [f.accountId, f.userId, key]);
+  expect(row.rows[0]?.count).toBe(0);
+}
+function denied(result: LightMyRequestResponse) {
+  expect(result.statusCode).toBe(409);
+  expect(result.json<{ error: { code: string } }>().error.code).toBe("LEGACY_CHAT_AUTHORITY_UNAVAILABLE");
+  expect(result.body.includes("Synthetic phase1 reply.")).toBe(false);
+}
+
+describe.skipIf(!database)("phase1 original credential publication (Hosted PostgreSQL only)", () => {
+  it("does not deliver a real resumed continuation mirror after its original HTTP login is revoked", async () => {
+    await withHttpFixture({ continuation: true }, async f => {
+      const probe = f.continuationProbe!;
+      expect(await f.current()).toBe(200);
+      const positive = await f.post(randomUUID());
+      expect(positive.statusCode).toBe(201);
+      expect(positive.body.includes("Synthetic phase1 reply.")).toBe(true);
+      expect(probe.positiveDelivered).toBe(1);
+      expect(probe.positiveSawSeed).toBe(1);
+      expect(probe.resumed).toEqual([false]);
+      const mirrorCount = async () => (await f.control.query<{ count: number }>(`SELECT count(*)::int AS count
+        FROM harness_session_entries e JOIN harness_sessions h ON h.account_id=e.account_id AND h.id=e.harness_session_id
+        WHERE h.account_id=$1 AND h.sdk_session_id=$2 AND e.entry_uuid=$3 AND h.committed_turns=1`,
+      [f.accountId, probe.sdkSessionIDs[0], probe.seedID])).rows[0]?.count;
+      expect(await mirrorCount()).toBe(1); // A real committed PG mirror exists.
+      f.hold(true);
+      const key = randomUUID(), pending = f.post(key);
+      await waitForDispatch(f.entered.promise);
+      expect(probe.resumed).toEqual([false, true]);
+      expect(probe.sdkSessionIDs[1]).toBe(probe.sdkSessionIDs[0]);
+      expect((await f.control.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1", [f.sessionId])).rowCount).toBe(1);
+      expect(await f.current()).toBe(401);
+      f.release.resolve();
+      const result = await pending;
+      expect(probe.lateAttempts).toBe(1);
+      expect.soft(probe.lateDelivered).toBe(0);
+      expect.soft(probe.lateSawSeed).toBe(0);
+      expect.soft(probe.lateRejected).toBe(1);
+      denied(result);
+      expect(f.calls()).toBe(2); // One lawful answer and one held attempt, no fallback.
+      await noCompletedAttempt(f, key);
+      expect(await mirrorCount()).toBe(1); // Prior lawful checkpoint is retained.
+    });
+  });
+
+  it.each([{ scoped: true }, { agent: true }])("preserves lawful201 then rejects revoked original login: %j", async options => {
+    await withHttpFixture(options, async f => {
+      const positive = await f.post(randomUUID());
+      expect(positive.statusCode).toBe(201);
+      expect(positive.body.includes("Synthetic phase1 reply.")).toBe(true);
+      f.hold(true);
+      const key = randomUUID(), pending = f.post(key);
+      await waitForDispatch(f.entered.promise);
+      const revoked = await f.control.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1", [f.sessionId]);
+      expect(revoked.rowCount).toBe(1); // Must finish while the provider is still held.
+      expect(await f.current()).toBe(401);
+      f.release.resolve();
+      denied(await pending);
+      expect(f.calls()).toBe(2);
+      await noCompletedAttempt(f, key);
+    });
+  });
+
+  it.each([false, true])("ordinary provider failure keeps the existing fallback201 (scoped=%s)", async scoped => {
+    await withHttpFixture({ scoped, failure: true }, async f => {
+      const result = await f.post(randomUUID());
+      expect(result.statusCode).toBe(201);
+      expect(f.calls()).toBe(scoped ? 1 : 2);
+    });
+  });
+
+  it("accepts actual current-to-previous renewal while the original deadline is still live", async () => {
+    await withHttpFixture({}, async f => {
+      f.hold(true);
+      const pending = f.post(randomUUID());
+      await waitForDispatch(f.entered.promise);
+      expect((await f.enroll()).statusCode).toBe(200); // Actual owner rotation; no new session lock across await.
+      expect(await f.current()).toBe(200); // Original token is now the accepted previous branch.
+      f.release.resolve();
+      expect((await pending).statusCode).toBe(201);
+      expect(f.calls()).toBe(1);
+    });
+  });
+
+  it.each(["current", "previous", "extended-previous"] as const)("cannot borrow a renewed deadline after %s admission", async branch => {
+    await withHttpFixture({}, async f => {
+      // A real accepted login with a subsecond original deadline. Database
+      // formatting/pg_sleep retain microseconds; JavaScript never rounds it.
+      await f.control.query("UPDATE sessions SET expires_at=clock_timestamp()+interval '0.8 seconds' WHERE id=$1", [f.sessionId]);
+      if (branch !== "current") expect((await f.enroll()).statusCode).toBe(200);
+      expect(await f.current()).toBe(200);
+      f.hold(true);
+      const key = randomUUID(), pending = f.post(key);
+      await waitForDispatch(f.entered.promise);
+      if (branch === "current") expect((await f.enroll()).statusCode).toBe(200);
+      // Wait for the exact ORIGINAL previous deadline without reading hashes.
+      await f.control.query("SELECT pg_sleep(GREATEST(0,extract(epoch FROM (previous_token_expires_at-clock_timestamp())))+0.01) FROM sessions WHERE id=$1", [f.sessionId]);
+      if (branch === "extended-previous") {
+        // Even an independently extended accepted previous slot cannot extend
+        // a proof frozen before that write. Normal renewal never does this.
+        await f.control.query("UPDATE sessions SET previous_token_expires_at=clock_timestamp()+interval '1 hour' WHERE id=$1", [f.sessionId]);
+        expect(await f.current()).toBe(200);
+      } else expect(await f.current()).toBe(401);
+      f.release.resolve();
+      denied(await pending);
+      expect(f.calls()).toBe(1);
+      await noCompletedAttempt(f, key);
+    });
+  });
+
+  it("does not fallback after a source generation is withdrawn while auth remains live", async () => {
+    await withHttpFixture({}, async f => {
+      f.hold(true);
+      const key = randomUUID(), pending = f.post(key);
+      await waitForDispatch(f.entered.promise);
+      await f.control.query("UPDATE harness_source_generations SET generation=generation+1 WHERE account_id=$1", [f.accountId]);
+      expect(await f.current()).toBe(200);
+      f.release.resolve();
+      denied(await pending);
+      expect(f.calls()).toBe(1);
+      await noCompletedAttempt(f, key);
+    });
+  });
+
+  it("serializes final publication with a real session UPDATE and retains lawful completed replay", async () => {
+    const finalLock = { entered: barrier(), release: barrier() };
+    await withHttpFixture({ finalLock }, async f => {
+      const key = randomUUID(), pending = f.post(key);
+      await waitForDispatch(finalLock.entered.promise);
+      const client = await f.control.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL lock_timeout='150ms'");
+        // FOR KEY SHARE would incorrectly allow this non-key mutation.
+        await expect(client.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1", [f.sessionId]))
+          .rejects.toMatchObject({ code: "55P03" });
+      } finally { await client.query("ROLLBACK"); client.release(); }
+      finalLock.release.resolve();
+      const result = await pending;
+      expect(result.statusCode).toBe(201);
+      expect(f.calls()).toBe(1);
+      expect((await f.control.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1", [f.sessionId])).rowCount).toBe(1);
+      expect(await f.current()).toBe(401);
+      const retained = await f.control.query<{ count: number }>(`SELECT count(*)::int AS count FROM idempotency_records
+        WHERE account_id=$1 AND actor_user_id=$2 AND idempotency_key=$3 AND status='completed' AND response_status=201`, [f.accountId, f.userId, key]);
+      expect(retained.rows[0]?.count).toBe(1);
+      const replay = await f.replayWithNewLogin(key);
+      expect(replay.statusCode).toBe(201);
+      expect(replay.json<{ task_id: string }>().task_id).toBe(result.json<{ task_id: string }>().task_id);
+      expect(f.calls()).toBe(1); // A lawful new login reads, never reruns a completed provider attempt.
+    });
   });
 });

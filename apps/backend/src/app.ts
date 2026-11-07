@@ -260,8 +260,9 @@ import {
   getTemporalState,
 } from "./modules/captures.js";
 import { decideAssertion } from "./modules/decisions.js";
-import { createChatTask, getChatTaskReadback } from "./modules/chat.js";
-import { createUnscopedChatTask } from "./modules/unscopedChat.js";
+import { createLegacyChatTask, getChatTaskReadback } from "./modules/chat.js";
+import { createLegacyUnscopedChatTask } from "./modules/unscopedChat.js";
+import { admitLegacyChatAuthority } from "./modules/legacyChatAuthority.js";
 import {
   createEnvironmentPersonResearchAgentClient,
   type PersonResearchAgentProviding,
@@ -2444,8 +2445,10 @@ export async function buildApp(
     async (request, reply) => {
       const trial = config.internalLabEnabled ? labTrials.taskContext(request.auth, "unscoped_chat", request.body.idempotency_key) : null;
       let productOutcome: "accepted" | "fallback" | "product_failed" | "unverified" = "product_failed";
-      const result = await createUnscopedChatTask(
-        pool, request.auth, request.body, remoteChatProvider, trial?.select, dependencies.chatReferenceClock?.(),
+      const originalAuthority = await admitLegacyChatAuthority(pool, request.auth, request.headers.authorization,
+        config, deploymentExposure?.workspaceIds);
+      const result = await createLegacyUnscopedChatTask(
+        originalAuthority, pool, request.auth, request.body, remoteChatProvider, trial?.select, dependencies.chatReferenceClock?.(),
       ).then((result) => { productOutcome = result.labProductOutcome ?? "unverified"; return result; }).finally(async () => {
         const persisted = await trial?.finish(productOutcome);
         if (persisted != null) reply.header("lab-observation-persisted", String(persisted));
@@ -2484,8 +2487,10 @@ export async function buildApp(
       const trial = config.internalLabEnabled ? labTrials.taskContext(request.auth,
         request.body.media_ids?.length ? "relationship_image" : "relationship_text", request.body.idempotency_key) : null;
       let productOutcome: "accepted" | "fallback" | "product_failed" | "unverified" = "product_failed";
-      const result = await createChatTask(
-        pool, request.auth, request.body, remoteChatProvider, chatMediaStorage, personResearchProvider, trial?.select,
+      const originalAuthority = await admitLegacyChatAuthority(pool, request.auth, request.headers.authorization,
+        config, deploymentExposure?.workspaceIds);
+      const result = await createLegacyChatTask(
+        originalAuthority, pool, request.auth, request.body, remoteChatProvider, chatMediaStorage, personResearchProvider, trial?.select,
         config.internalLabEnabled ? (client) => labFeatures.adoptionReceipt(client, request.auth) : undefined,
       ).then((result) => { productOutcome = result.labProductOutcome ?? "unverified"; return result; }).finally(async () => {
         const persisted = await trial?.finish(productOutcome);

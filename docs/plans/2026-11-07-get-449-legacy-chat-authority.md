@@ -1,8 +1,8 @@
 # Keep legacy Chat within its original authority
 
 Tracking: GET-449, GitHub issue523. Parent: GET-439. Related: GET-298,
-GET-445 and GET-447. Status: source audit and design; not implemented or
-accepted. Starting main:28cc0f9fe1f418d3a898677d62848f0e42863535.
+GET-445 and GET-447. Status: actual first regression red reproduced; original-credential guard
+implementation active. Full lifecycle is neither implemented nor accepted. Starting main:28cc0f9fe1f418d3a898677d62848f0e42863535.
 
 ## Outcome and boundaries
 
@@ -35,15 +35,20 @@ counterexample is an ordinary authenticated unscoped request without a product
 Session: hold an injected provider answer, revoke the original login through a
 second test connection, prove the old token is rejected, then release the answer.
 The current wrapper has no late-login check before completing the old intent.
-This is a source-derived counterexample, not an executed red test.
+At exact541c1ec1bd06e270f2392409a39b67ed51832450, Hosted run42394097203
+actually executed this case against disposable PostgreSQL: the positive control
+returned201; fresh authentication returned401 after exact-session revocation;
+the held original request nevertheless returned201 with the answer and one
+completed-success receipt. Those three safety assertions failed while the
+positive/provider/withdrawal controls passed. Root independently read the full
+test and actual job log. This is a genuine product regression, not a setup red.
 
-Only source inspection has run. A late-authority regression, disconnect
-ownership, pool starvation and restart outcome still require executable red
-cases. Before coding, map every current provider/tool await, admission write,
-readback predicate, idempotency identity and source-availability function.
-Inspect the current native transport so status can be resolved even if the
-original admission reply was lost. Determine the next unused migration identity
-from the full migration manifest, not from an old numeric prefix.
+The43-source ownership map and original-credential design are complete enough
+for the first guard slice. Actual TCP disconnect, one-client starvation,
+duplicate ownership, restart uncertainty and full lawful retention scenarios
+remain unexecuted. No real provider or resident deployment was used. Determine
+the next unused migration identity from a fresh full remote manifest before
+any ledger creation; no migration is authorized by the guard-only milestone.
 
 The real iOS transport waits up to120 seconds and decodes the existing reply
 body. Preserve successful201 responses; substituting202/status would break that
@@ -86,24 +91,90 @@ uncertain-dispatch lifecycles before creating it. Do not roll back or rename an
 older migration, and do not manufacture another idempotency identity by adding
 the login Session to the original operation/key.
 
+## Phase2 review conditions (not implementation authorization)
+
+The independent31-source review narrows the first short-transaction slice to
+no product Session and an actual answer-only provider (production DeepSeek) or
+disabled result. No Session alone is insufficient: Zhipu also exposes run and
+can stage Memory, so that branch keeps the current phase1 atomic transaction.
+Freeze the selected provider/configuration at admission, never reselect after
+an uncertain dispatch or a new login.
+
+Reuse the existing exact idempotency tuple as stable intent and canonical201;
+one account-scoped execution table can hold the single immutable attempt and
+owner generation. A legacy completed record without the new row still replays
+lawfully; legacy processing without a row stays conservatively unavailable,
+never receives a replacement attempt. Durable dispatch_started precedes the
+actual RPC, and uncertainty cannot delete the key or dispatch again.
+
+Execution progress requires original authority. Current-owner explicit cancel
+and internal expiry/withdrawal cleanup only reduce authority and must still
+work after the original credential dies. Private checkpoints are bounded
+whitelisted final DTOs, not whole execution/prompt snapshots;1MiB is not a
+proven limit for every Agent branch. Complete metadata/Unicode/usage/byte
+bounds, exact Lab classification/writeguard/cleanup and real startup/periodic
+retirement must be reviewed before fresh migration allocation.
+
+Short final transactions and duplicate readers use the same passed client;
+no pool probe or waiter holds the only connection across await. Lock order
+must compose with the frozen phase1 Lab/account/source protocol before taking
+idempotency and execution rows. Actual pool1/TCP/child-restart/cleanup cases
+remain required. Runtime cutover must drain old unledgered requests honestly;
+the new ledger cannot reconstruct historic unknown dispatches.
+
+## Continuation-store review repair
+
+The first independent phase1 review found that the wrapper named get/list/clear
+instead of the actual SDK store load/listSubkeys/delete methods. A late provider
+postcheck could reject the HTTP response after mirror data had already reached
+the adapter. The guard now enumerates append/load/listSubkeys/delete and the
+pinned SDK's optional listSessions/listSessionSummaries with an exhaustive typed
+map against the owning HarnessContinuation store contract. Only actual callable
+methods are wrapped; absent capabilities stay absent. Future SDK method additions
+cannot silently bypass review.
+
+Twelve pure cases check each method both before and during withdrawal,
+including its original receiver and whether any return value reached the
+adapter before the outer provider boundary. The original wrapper produced six
+failures; the first four-method repair passed187 cases. Independent review of
+the exact pinned0.3.312 declaration then found the two optional methods; the
+exact-source compiler rejected the four-key map and four new callback cases
+failed. The six-method repair passed the expanded191-case pure suite and
+seven-root TypeScript6.0.3 check mapped to the exact pinned declaration. This
+checks the locked store shape with existing peer dependencies, not a full
+installed pinned-dependency build; Hosted remains required. The added
+real HTTP/PG case requires a lawful committed mirror and resumed identity before
+revoking the actual login, then checks zero delivered rows before the final409.
+The full12-case phase1 PG suite has not yet executed at this source revision.
+Pure tests and static checks do not establish that PG checkpoint behavior.
+
 ## Milestones
 
-1. Active: the current-source ownership, transaction, native and idempotency
-   map is complete. Write and execute the real buildApp/Auth/PostgreSQL
-   late-login counterexample first, with a deferred synthetic provider and
-   guaranteed cleanup. Then prove one-client starvation, actual TCP disconnect,
-   owner-versus-duplicate cancellation, process restart/same-key uncertainty and
-   lawful completed-result readback. Freeze the original-authority model and
-   scoped transaction/source-DTO decomposition for independent review.
-2. Implement the reviewed short-transaction lifecycle and fresh migration;
-   retain old-client response/readback compatibility and explicit truthful
-   status/cancel/recovery behavior.
-3. Run pure and real Hosted PostgreSQL authority, concurrency, disconnect,
-   restart, retention and one-client-pool checks. Independently review storage,
-   authority and effect replay before normal PR/merge.
-4. Deploy every affected existing resident from clean committed source through
+1. Active: implement and verify only the original-credential guard on both
+   legacy routes and every enabled awaited provider/tool/fallback/final boundary.
+   Freeze the accepted current/previous-token branch and original expiry, never
+   a renewed deadline. Auth/source/DB authority failures are terminal and cannot
+   select another provider. Admission must not hold a new session lock across
+   slow work; the final write segment must lock/recheck in the existing order
+   so a concurrent original-session revocation serializes with publication.
+   Add real PG positive/late-revoke/expiry/rotation/previous-token cases. This
+   slice deliberately retains current product transactions and does not solve
+   starvation, disconnect, restart or the full C02 lifecycle.
+2. Independently review the proposed ordinary-unscoped short-transaction ledger,
+   exact idempotency/unknown-dispatch behavior, source cleanup and one-client
+   cases before authorizing schema/production implementation. Candidate112 is
+   not allocated until the latest remote manifest is checked.
+3. Preserve current atomic publication for scoped Memory staging and manifests.
+   Do not convert it to early independently committed partial effects. A real
+   attempt-private pending-publication protocol with truthful typed receipts,
+   SDK mirror CAS and unchanged queue authority requires separate review.
+4. Execute all seven actual scenario groups, preserve201/native compatibility,
+   independently review latest storage/authority/effect replay, and pass current
+   applicable gates before normal merge. Initial guard success is not delivery
+   of the whole lifecycle.
+5. Deploy every affected existing resident from clean committed source through
    the owning operational workflow, verify live revision and changed behavior,
-   and complete native acceptance. Keep the issue open for any missing proof.
+   and complete native acceptance. Keep the issue open for missing evidence.
 
 ## Completion evidence
 
