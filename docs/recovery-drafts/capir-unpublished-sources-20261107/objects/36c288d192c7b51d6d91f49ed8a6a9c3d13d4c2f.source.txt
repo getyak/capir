@@ -1,0 +1,343 @@
+// Registered synthetic proof of source-owned default heartbeat and physical settlement.
+import { randomUUID } from "node:crypto";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { Pool, type PoolClient } from "pg";
+import { buildApp } from "../app.js";
+import { compileRelationshipWiki } from "./wiki.js";
+import type { AuthContext } from "./auth.js";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { composeLifecycleSignals, startLifecycleHeartbeat, type LifecycleHeartbeatStop, pendingLifecycleRunForAttempt } from "./legacyChatLifecycle.js";
+const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) throw new Error("Use owned disposable loopback proof database.");
+const pool = database ? new Pool({connectionString: database, max: 4}) : null;
+afterAll(async () => { await pool?.end(); });
+async function fixture() {
+  const accountId = randomUUID(), userId = randomUUID(), person = randomUUID(), context = randomUUID();
+  const accountSlug = `m4-${randomUUID()}`, userEmail = `${randomUUID()}@synthetic.invalid`;
+  const auth: AuthContext = { accountId, accountSlug, userId, userEmail, userKind: "simulated_human", sessionId: randomUUID() };
+  await pool!.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic observation')", [accountId, accountSlug]);
+  await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic owner','simulated_human')", [userId,accountId,userEmail]);
+  await pool!.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'synthetic',now()+interval '2 hours')", [auth.sessionId,accountId,userId,randomUUID()]);
+  await pool!.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Synthetic Person')", [person,accountId]);
+  await pool!.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label) VALUES($1::uuid,$2,$3,$1::text,'Synthetic Context')", [context,accountId,person]);
+  const capture = randomUUID(), resource = randomUUID(), fragment = randomUUID();
+  await pool!.query(`INSERT INTO captures(id,account_id,created_by_user_id,subject_id,assignment_id,source_kind,source_metadata,identity_status,identity_context,purpose)
+    VALUES($1,$2,$3,$4,$5,'conversation_transcript','{}','bound','{}','Synthetic observation proof')`,[capture,accountId,userId,person,context]);
+  await pool!.query(`INSERT INTO source_resources(id,account_id,capture_id,created_by_user_id,client_resource_id,resource_kind,input_channel,display_name,media_type,observed_at,retention_scope,processing_state)
+    VALUES($1::uuid,$2,$3,$4,$1::text,'conversation_transcript','chat','Synthetic source','text/plain',now(),'reviewed_selected_text','ready')`,[resource,accountId,capture,userId]);
+  await pool!.query(`INSERT INTO source_retention_receipts(receipt_id,account_id,capture_id,policy_version,requested_mode,effective_mode,source_scope,source_access_state,source_access_reason,created_at,updated_at)
+    VALUES($1,$2,$3,'source-retention.v2','ephemeral','ephemeral','reviewed_selected_text','available','awaiting_review_completion',now(),now())`,[randomUUID(),accountId,capture]);
+  await pool!.query(`INSERT INTO evidence_fragments(id,account_id,capture_id,resource_id,fragment_kind,sequence,text_content,content_hash,locator,attributed_actor,attribution_status,parser_name,parser_version,review_status)
+    VALUES($1,$2,$3,$4,'message',0,'Synthetic source: two preparation hours and five discussion hours.',repeat('a',64),'{"kind":"message","source_message_id":"synthetic-work-log","sequence":0,"speaker_side":"right"}','recruiter','confirmed','fixture','1','reviewed')`,[fragment,accountId,capture,resource]);
+  await compileRelationshipWiki(pool!,auth,person,context,{idempotency_key:randomUUID(),objective:"Compile synthetic observation evidence"});
+  return {auth,person,context,capture,fragment};
+}
+describe.skipIf(!pool)("ordinary Chat selected-source heartbeat", () => {
+  it.each(["renewed", "withdrawn", "unselected", "user-first"] as const)("M4 fences actual default heartbeat through %s", async mode => {
+    const f = await fixture(), extra = randomUUID(), session = randomUUID(), key = randomUUID();
+    await pool!.query(`INSERT INTO captures(id,account_id,created_by_user_id,subject_id,assignment_id,source_kind,source_metadata,identity_status,identity_context,purpose)
+      VALUES($1,$2,$3,$4,$5,'conversation_transcript','{}','bound','{}','Synthetic heartbeat clock')`, [extra,f.auth.accountId,f.auth.userId,f.person,f.context]);
+    await pool!.query(`INSERT INTO source_retention_receipts(receipt_id,account_id,capture_id,policy_version,requested_mode,effective_mode,source_scope,source_access_state,source_access_reason,created_at,updated_at)
+      VALUES($1,$2,$3,'source-retention.v2','ephemeral','ephemeral','reviewed_selected_text','available','awaiting_review_completion',now(),now())`, [randomUUID(),f.auth.accountId,extra]);
+    if (mode !== "unselected") {
+      const resource = randomUUID();
+      await pool!.query(`INSERT INTO source_resources(id,account_id,capture_id,created_by_user_id,client_resource_id,resource_kind,input_channel,display_name,media_type,observed_at,retention_scope,processing_state,created_at)
+        VALUES($1::uuid,$2,$3,$4,$1::text,'conversation_transcript','chat','Synthetic resource-only heartbeat source','text/plain',now(),'reviewed_selected_text','ready',now()+interval '1 millisecond')`, [resource,f.auth.accountId,extra,f.auth.userId]);
+      await compileRelationshipWiki(pool!,f.auth,f.person,f.context,{idempotency_key:randomUUID(),objective:"Compile actual heartbeat resource-only provenance"});
+    }
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    let signal: AbortSignal | undefined, watch = false, abortReleaseCount: number | undefined;
+    const ticks: Array<{statements: string[]}> = [];
+    const entry = vi.fn(async (request: Parameters<RemoteChatAnswerProviding["answer"]>[0]) => {
+      signal = request.signal;
+      signal?.addEventListener("abort", () => { abortReleaseCount = ticks.length; }, {once: true});
+      await barrier;
+      return {kind:"answer" as const,title:"Synthetic",body:"Synthetic current source answer",citation_ids:[],
+        provider_id:"zhipu-chat-completions" as const,model:"synthetic",provider_request_id:null,input_tokens:1,output_tokens:1};
+    });
+    const watched = {query:(sql:string, values?:unknown[]) => pool!.query(sql,values),connect:async () => {
+      const client = await pool!.connect();
+      let heartbeat = false;
+      const statements: string[] = [];
+      return {release:() => { client.release(); if (heartbeat) ticks.push({statements}); },query:async (sql:string,values?:unknown[]) => {
+        const normalized = sql.replace(/\s+/gu," ").trim();
+        if (watch && normalized.startsWith("SELECT original_authority FROM legacy_chat_task_attempts")) heartbeat = true;
+        const result = await client.query(sql,values);
+        if (heartbeat && (/^(COMMIT|ROLLBACK)$/u.test(normalized) || normalized.includes("SET heartbeat_at=")))
+          statements.push(normalized.includes("SET heartbeat_at=") ? "lease_update" : normalized);
+        return result;
+      }};
+    }};
+    let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+    let running: Promise<Awaited<ReturnType<Awaited<ReturnType<typeof buildApp>>["inject"]>>> | undefined;
+    try {
+      app = await buildApp({pool:watched,config:{databaseUrl:database!,host:"127.0.0.1",port:0,allowedOrigins:[],appleSignInAudiences:[],appleSignInEnabled:false,
+        passwordAuthEnabled:false,passwordRegistrationEnabled:false,simulatedAuthEnabled:true,internalLabEnabled:false,retentionSweepIntervalMs:60000,sessionTtlSeconds:3600},
+        remoteChatProvider:{providerId:"zhipu-chat-completions",model:"synthetic",supportsImageInput:false,answer:entry},personResearchProvider:null} as never);
+      const login = await app.inject({method:"POST",url:"/v1/auth/simulated-login",payload:{account_slug:f.auth.accountSlug,user_email:f.auth.userEmail,client_label:"m4-heartbeat-proof"}});
+      expect(login.statusCode,login.body).toBe(200);
+      const headers = {authorization:`Bearer ${login.json().access_token}`};
+      const readStatus = async (taskID: string) => {
+        const result = await app!.inject({method:"GET",url:`/v1/chat/tasks/${taskID}/status`,headers});
+        expect(result.statusCode,result.body).toBe(200);return result.json();
+      };
+      const cancel = async (taskID: string) => {
+        const status = await readStatus(taskID);
+        const result = await app!.inject({method:"POST",url:`/v1/chat/tasks/${taskID}/cancel`,headers,payload:{attempt_id:status.attempt_id,expected_revision:status.revision}});
+        expect(result.statusCode,result.body).toBe(200);return result.json();
+      };
+      const saved = await app.inject({method:"PUT",url:`/v1/agent-sessions/${session}`,headers,payload:{idempotency_key:randomUUID(),expected_revision:0,payload:{
+        id:session,scopeKind:"relationship",personID:f.person,relationshipContextID:f.context,personDisplayLabel:"Synthetic Person",contextDisplayLabel:"Synthetic Context",
+        title:"Heartbeat proof",updatedAt:new Date().toISOString(),isUnread:false,turns:[]}}});
+      expect(saved.statusCode,saved.body).toBe(200);
+      await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()+interval '1 hour' WHERE account_id=$1 AND capture_id=$2", [f.auth.accountId,f.capture]);
+      const cutoff = (await pool!.query<{authorization_expires_at:Date}>("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()+($3::double precision * interval '1 second') WHERE account_id=$1 AND capture_id=$2 RETURNING authorization_expires_at", [f.auth.accountId,extra,mode === "withdrawn" ? 90 : 6])).rows[0]!.authorization_expires_at;
+      const payload = {idempotency_key:key,person_id:f.person,relationship_context_id:f.context,session_id:session,objective:"Use only current selected synthetic evidence."};
+      running = app.inject({method:"POST",url:"/v1/chat/tasks",headers,payload}).then(result => result);
+      await vi.waitFor(() => expect(entry).toHaveBeenCalledOnce(), {timeout:15000});
+      const before = (await pool!.query(`SELECT a.id AS attempt_id,a.task_id,a.run_id AS physical_run_id,a.fencing_generation::text AS fence,a.intent_id,a.heartbeat_at,a.lease_until,i.manifest_id,i.canonical_retention_expires_at AS canonical,
+        m.selected_source_expires_at AS selected,m.source_selection FROM legacy_chat_task_intents i
+        JOIN legacy_chat_task_attempts a ON a.account_id=i.account_id AND a.id=i.current_attempt_id
+        JOIN context_manifests m ON m.account_id=i.account_id AND m.id=i.manifest_id WHERE i.account_id=$1 AND i.idempotency_key=$2`, [f.auth.accountId,key])).rows[0]!;
+      expect(before).toBeDefined();
+      expect(before.source_selection.sources.some((x:{id:string}) => x.id === extra)).toBe(mode !== "unselected");
+      expect(before.selected.valueOf()).toBeLessThanOrEqual(before.canonical.valueOf());
+      if (mode !== "unselected") expect(before.selected).toEqual(cutoff);
+      if (mode === "renewed" || mode === "user-first") await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()+interval '1 hour' WHERE account_id=$1 AND capture_id=$2", [f.auth.accountId,extra]);
+      if (mode === "withdrawn") {
+        await pool!.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE account_id=$1 AND capture_id=$2", [f.auth.accountId,extra]);
+        await pool!.query("UPDATE source_retention_receipts SET authorization_state='authorized' WHERE account_id=$1 AND capture_id=$2", [f.auth.accountId,extra]);
+      }
+      if (mode === "user-first") {
+        expect((await cancel(before.task_id)).state).toBe("cancelling");
+        expect(signal?.aborted).toBe(true);
+      }
+      watch = true;
+      // No shortened lease or mocked clock: wait for the actual default16.25s tick.
+      await vi.waitFor(() => expect(ticks.length).toBeGreaterThan(0), {timeout:25000,interval:50});
+      watch = false;
+      const after = (await pool!.query(`SELECT a.heartbeat_at,a.lease_until,m.source_loss_at,
+        i.canonical_retention_expires_at>clock_timestamp() AS original_live,m.selected_source_expires_at<=clock_timestamp() AS selected_expired,
+        sr.authorization_expires_at>clock_timestamp() AND sr.authorization_state='authorized' AS current_receipt_live
+        FROM legacy_chat_task_attempts a JOIN legacy_chat_task_intents i ON i.account_id=a.account_id AND i.id=a.intent_id
+        JOIN context_manifests m ON m.account_id=i.account_id AND m.id=i.manifest_id
+        JOIN source_retention_receipts sr ON sr.account_id=a.account_id AND sr.capture_id=$3
+        WHERE a.account_id=$1 AND a.id=$2`, [f.auth.accountId,before.attempt_id,extra])).rows[0]!;
+      expect(after.original_live).toBe(true);
+      if (mode !== "unselected") expect(after.current_receipt_live).toBe(true);
+      if (mode === "withdrawn") { expect(after.selected_expired).toBe(false); expect(after.source_loss_at).not.toBeNull(); }
+      else if (mode !== "unselected") { expect(after.selected_expired).toBe(true); expect(after.source_loss_at).toBeNull(); }
+      console.log(JSON.stringify({event:"synthetic_M4_default_heartbeat",mode,signal_aborted:signal?.aborted,
+        heartbeat_advanced:after.heartbeat_at.valueOf()>before.heartbeat_at.valueOf(),lease_advanced:after.lease_until.valueOf()>before.lease_until.valueOf(),
+        tick_statements:ticks,original_live:after.original_live,selected_expired:after.selected_expired,source_loss:after.source_loss_at!==null,abort_release_count:abortReleaseCount ?? null}));
+      expect(pendingLifecycleRunForAttempt(before.attempt_id)).not.toBeNull();
+      expect(signal?.aborted).toBe(mode !== "unselected");
+      if (mode === "unselected") {
+        expect(after.heartbeat_at.valueOf()).toBeGreaterThan(before.heartbeat_at.valueOf());
+        expect(after.lease_until.valueOf()).toBeGreaterThan(before.lease_until.valueOf());
+        expect(ticks[0]!.statements).toContain("COMMIT");
+      } else {
+        expect(after.heartbeat_at).toEqual(before.heartbeat_at);
+        expect(after.lease_until).toEqual(before.lease_until);
+        expect(ticks[0]!.statements).toContain("ROLLBACK");
+        if (mode !== "user-first") expect(abortReleaseCount).toBeGreaterThanOrEqual(1);
+      }
+      if (mode !== "unselected") await vi.waitFor(async () => expect((await readStatus(before.task_id)).state).toBe("cancelling"), {timeout:5000});
+      const duplicate = await app.inject({method:"POST",url:"/v1/chat/tasks",headers,payload});
+      expect(duplicate.statusCode,duplicate.body).toBe(409);
+      expect(duplicate.json().error.code).toBe(mode === "unselected" ? "IDEMPOTENCY_REQUEST_IN_PROGRESS" : "LEGACY_CHAT_PHYSICAL_OWNER_PENDING");
+      expect(duplicate.json().error.details).toMatchObject({task_id:before.task_id,attempt_id:before.attempt_id,state:mode === "unselected" ? "running" : "cancelling"});
+      const owner = pendingLifecycleRunForAttempt(before.attempt_id)!;
+      expect({intentID:owner.intentID,taskID:owner.taskID,runID:owner.runID,fence:String(owner.fencingGeneration)}).toEqual({intentID:before.intent_id,taskID:before.task_id,runID:before.physical_run_id,fence:before.fence});
+      expect(entry).toHaveBeenCalledOnce();
+      if (mode === "renewed") {
+        expect((await cancel(before.task_id)).state).toBe("cancelling");
+      }
+      release();
+      const completed = await running;
+      expect(completed.statusCode,completed.body).toBe(mode === "unselected" ? 201 : mode === "user-first" ? 499 : 409);
+      if (mode !== "unselected") expect(completed.json().error.code).toBe(mode === "user-first" ? "LEGACY_CHAT_CANCELLED" : "CHAT_COMPLETION_SOURCE_CHANGED");
+      expect(entry).toHaveBeenCalledOnce();
+      expect(pendingLifecycleRunForAttempt(before.attempt_id)).toBeNull();
+      const terminal = (await pool!.query("SELECT state,terminal_reason,dispatch_state,usage_uncertain FROM legacy_chat_task_attempts WHERE account_id=$1 AND id=$2", [f.auth.accountId,before.attempt_id])).rows[0]!;
+      expect(terminal.state).toBe(mode === "unselected" ? "completed" : mode === "user-first" ? "cancelled" : "failed_retryable");
+      if (mode !== "unselected") {
+        expect(terminal.terminal_reason).toBe(mode === "user-first" ? "request_cancelled" : "selected_source_changed");
+        expect(terminal.dispatch_state).toBe("dispatched");expect(terminal.usage_uncertain).toBe(true);
+        expect((await pool!.query("SELECT 1 FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2 AND (status='completed' OR response_body IS NOT NULL)", [f.auth.accountId,key])).rowCount).toBe(0);
+      }
+      expect((await pool!.query("SELECT legacy_chat_task_publicly_available($1,$2) AS available", [f.auth.accountId,before.task_id])).rows[0]!.available).toBe(mode === "unselected");
+      const clocks = (await pool!.query("SELECT m.selected_source_expires_at AS selected,i.canonical_retention_expires_at AS canonical FROM context_manifests m JOIN legacy_chat_task_intents i ON i.account_id=m.account_id AND i.id=m.lifecycle_intent_id WHERE m.account_id=$1 AND m.id=$2", [f.auth.accountId,before.manifest_id])).rows[0]!;
+      expect(clocks).toEqual({selected:before.selected,canonical:before.canonical});
+    } finally { watch = false; release(); try { await running; } finally { await app?.close(); } }
+  }, 40000);
+});
+
+// Additional controls keep real route/DB proof separate from transport units.
+async function heldChat(f: Awaited<ReturnType<typeof fixture>>, suppliedPool: unknown = pool!) {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const producer: {signal?: AbortSignal | undefined; returned: boolean} = {returned:false};
+  const entry = vi.fn(async (request: Parameters<RemoteChatAnswerProviding["answer"]>[0]) => {
+    producer.signal = request.signal;await gate;producer.returned = true;
+    return {kind:"answer" as const,title:"Synthetic",body:"Synthetic control answer",citation_ids:[],
+      provider_id:"zhipu-chat-completions" as const,model:"synthetic",provider_request_id:null,input_tokens:1,output_tokens:1};
+  });
+  let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+  let running: Promise<Awaited<ReturnType<Awaited<ReturnType<typeof buildApp>>["inject"]>>> | undefined;
+  const cleanup = async () => { release();try { await running; } finally { await app?.close(); } };
+  try {
+    app = await buildApp({pool:suppliedPool,config:{databaseUrl:database!,host:"127.0.0.1",port:0,allowedOrigins:[],appleSignInAudiences:[],appleSignInEnabled:false,
+      passwordAuthEnabled:false,passwordRegistrationEnabled:false,simulatedAuthEnabled:true,internalLabEnabled:false,retentionSweepIntervalMs:60000,sessionTtlSeconds:3600},
+      remoteChatProvider:{providerId:"zhipu-chat-completions",model:"synthetic",supportsImageInput:false,answer:entry},personResearchProvider:null} as never);
+    const login = await app.inject({method:"POST",url:"/v1/auth/simulated-login",payload:{account_slug:f.auth.accountSlug,user_email:f.auth.userEmail,client_label:"m4-control-proof"}});
+    expect(login.statusCode,login.body).toBe(200);
+    const headers = {authorization:`Bearer ${login.json().access_token}`}, session = randomUUID();
+    const saved = await app.inject({method:"PUT",url:`/v1/agent-sessions/${session}`,headers,payload:{idempotency_key:randomUUID(),expected_revision:0,payload:{
+      id:session,scopeKind:"relationship",personID:f.person,relationshipContextID:f.context,personDisplayLabel:"Synthetic Person",contextDisplayLabel:"Synthetic Context",
+      title:"Heartbeat control",updatedAt:new Date().toISOString(),isUnread:false,turns:[]}}});
+    expect(saved.statusCode,saved.body).toBe(200);
+    const key = randomUUID(), payload = {idempotency_key:key,person_id:f.person,relationship_context_id:f.context,session_id:session,objective:"Use current synthetic control evidence."};
+    running = app.inject({method:"POST",url:"/v1/chat/tasks",headers,payload}).then(result => result);
+    await vi.waitFor(() => expect(entry).toHaveBeenCalledOnce(), {timeout:15000});
+    const tuple = (await pool!.query(`SELECT a.id AS attempt_id,a.task_id,a.run_id,a.fencing_generation,a.heartbeat_at,a.lease_until,i.manifest_id,
+      i.canonical_retention_expires_at AS canonical,m.selected_source_expires_at AS selected,m.source_selection
+      FROM legacy_chat_task_intents i JOIN legacy_chat_task_attempts a ON a.account_id=i.account_id AND a.id=i.current_attempt_id
+      JOIN context_manifests m ON m.account_id=i.account_id AND m.id=i.manifest_id WHERE i.account_id=$1 AND i.idempotency_key=$2`, [f.auth.accountId,key])).rows[0]!;
+    expect(tuple).toBeDefined();expect(pendingLifecycleRunForAttempt(tuple.attempt_id)).not.toBeNull();
+    return {app,headers,key,payload,producer,entry,tuple,release,running,cleanup};
+  } catch (error) { await cleanup();throw error; }
+}
+
+describe.skipIf(!pool)("ordinary selected-heartbeat transaction controls", () => {
+  it("M4 drains the real pending tick before final promotion and prevents a second tick during its own final lock", async () => {
+    const f = await fixture();
+    let releaseTick!: () => void, releaseFinal!: () => void;
+    const tickGate = new Promise<void>(resolve => { releaseTick = resolve; });
+    const finalGate = new Promise<void>(resolve => { releaseFinal = resolve; });
+    let watch = false, tickHeld = false, tickReleased = false, finalEntered = false, postProducerProbes = 0, probesDuringFinal = 0;
+    let h: Awaited<ReturnType<typeof heldChat>> | undefined;
+    const watched = {query:(sql:string,values?:unknown[]) => pool!.query(sql,values),connect:async () => {
+      const client = await pool!.connect();let heldTick = false;
+      return {release:() => { client.release();if (heldTick) tickReleased = true; },query:async (sql:string,values?:unknown[]) => {
+        const normalized = sql.replace(/\s+/gu," ").trim();
+        const probe = normalized.startsWith("SELECT original_authority FROM legacy_chat_task_attempts");
+        if (probe && finalEntered) probesDuringFinal += 1;
+        const result = await client.query(sql,values);
+        if (watch && probe && !tickHeld) { tickHeld = true;heldTick = true;await tickGate; }
+        else if (probe && h?.producer.returned && !heldTick && !finalEntered) postProducerProbes += 1;
+        if (normalized.startsWith("UPDATE context_manifests SET status='active'")) {
+          expect(tickReleased,"actual heartbeat client release precedes our final mutation").toBe(true);
+          finalEntered = true;await finalGate;
+        }
+        return result;
+      }};
+    }};
+    try {
+      h = await heldChat(f,watched);watch = true;
+      await vi.waitFor(() => expect(tickHeld).toBe(true), {timeout:23000});
+      h.release();
+      await vi.waitFor(() => { expect(h!.producer.returned).toBe(true);expect(postProducerProbes).toBeGreaterThanOrEqual(2); }, {timeout:10000});
+      expect(finalEntered,"no final transaction overtakes the held heartbeat").toBe(false);
+      expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).not.toBeNull();
+      releaseTick();
+      await vi.waitFor(() => expect(finalEntered).toBe(true), {timeout:10000});
+      await pool!.query("SELECT pg_sleep(17.2)");
+      expect(probesDuringFinal,"no future default tick competes with our final manifest lock").toBe(0);
+      expect(h.producer.signal?.aborted).toBe(false);expect(h.entry).toHaveBeenCalledOnce();
+      expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).not.toBeNull();
+      expect((await pool!.query("SELECT 1 FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2 AND status='completed'", [f.auth.accountId,h.key])).rowCount).toBe(0);
+      releaseFinal();const result = await h.running;
+      expect(result.statusCode,result.body).toBe(201);expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).toBeNull();
+      expect((await pool!.query("SELECT legacy_chat_task_publicly_available($1,$2) AS current", [f.auth.accountId,h.tuple.task_id])).rows[0]!.current).toBe(true);
+    } finally { watch = false;releaseTick();releaseFinal();await h?.cleanup(); }
+  }, 60000);
+
+  it("M4 treats an actual selected-row lock as busy without inventing source withdrawal", async () => {
+    const f = await fixture();
+    const selectedCutoff = (await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()+interval '1 hour' WHERE account_id=$1 AND capture_id=$2 RETURNING authorization_expires_at", [f.auth.accountId,f.capture])).rows[0]!.authorization_expires_at;
+    const h = await heldChat(f);
+    let holder: PoolClient | undefined;
+    try {
+      expect(h.tuple.selected).toEqual(selectedCutoff);
+      holder = await pool!.connect();await holder.query("BEGIN");
+      const locked = await holder.query("SELECT r.id FROM source_resources r JOIN evidence_fragments e ON e.account_id=r.account_id AND e.resource_id=r.id WHERE e.account_id=$1 AND e.id=$2 FOR UPDATE OF r", [f.auth.accountId,f.fragment]);
+      expect(locked.rowCount).toBe(1);
+      const blockedBaseline = (await pool!.query("SELECT heartbeat_at,lease_until FROM legacy_chat_task_attempts WHERE account_id=$1 AND id=$2", [f.auth.accountId,h.tuple.attempt_id])).rows[0]!;
+      await vi.waitFor(() => expect(h.producer.signal?.reason).toMatchObject({code:"LEGACY_CHAT_AUTHORITY_BUSY"}), {timeout:23000});
+      const after = (await pool!.query(`SELECT a.heartbeat_at,a.lease_until,m.source_loss_at,m.selected_source_expires_at>clock_timestamp() AS selected_live,
+        legacy_chat_manifest_selected_sources_available($1,$3,$4,$5) AS sources_live FROM legacy_chat_task_attempts a
+        JOIN context_manifests m ON m.account_id=a.account_id AND m.lifecycle_attempt_id=a.id WHERE a.account_id=$1 AND a.id=$2`,
+        [f.auth.accountId,h.tuple.attempt_id,h.tuple.task_id,f.person,f.context])).rows[0]!;
+      expect(after).toMatchObject({heartbeat_at:blockedBaseline.heartbeat_at,lease_until:blockedBaseline.lease_until,source_loss_at:null,selected_live:true,sources_live:true});
+      expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).not.toBeNull();expect(h.entry).toHaveBeenCalledOnce();
+      await holder.query("ROLLBACK");holder.release();holder = undefined;
+      h.release();const result = await h.running;
+      expect(result.statusCode,result.body).toBe(409);expect(result.json().error.code).toBe("LEGACY_CHAT_AUTHORITY_BUSY");
+      expect((await pool!.query("SELECT state,terminal_reason,usage_uncertain FROM legacy_chat_task_attempts WHERE id=$1", [h.tuple.attempt_id])).rows[0]).toMatchObject({state:"failed_retryable",terminal_reason:"authority_busy",usage_uncertain:true});
+      expect((await pool!.query("SELECT source_loss_at FROM context_manifests WHERE id=$1", [h.tuple.manifest_id])).rows[0]!.source_loss_at).toBeNull();
+      expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).toBeNull();
+    } finally {
+      try { if (holder) { try { await holder.query("ROLLBACK").catch(() => undefined); } finally { holder.release(); } } }
+      finally { await h.cleanup(); }
+    }
+  }, 40000);
+
+  it("M4 renews an actual metadata-only sealed answer with a null selected cutoff and finite original authority", async () => {
+    const f = await fixture(), person = randomUUID(), context = randomUUID();
+    await pool!.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Synthetic metadata only')", [person,f.auth.accountId]);
+    await pool!.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label) VALUES($1::uuid,$2,$3,$1::text,'Synthetic empty context')", [context,f.auth.accountId,person]);
+    await compileRelationshipWiki(pool!,f.auth,person,context,{idempotency_key:randomUUID(),objective:"Compile actual empty evidence context"});
+    const h = await heldChat({...f,person,context});
+    try {
+      expect(h.tuple.selected).toBeNull();expect(h.tuple.canonical).toBeInstanceOf(Date);
+      expect(Number.isFinite(h.tuple.canonical.valueOf())).toBe(true);expect(h.tuple.source_selection.version).toBe(1);
+      await vi.waitFor(async () => {
+        const row = (await pool!.query("SELECT heartbeat_at,lease_until FROM legacy_chat_task_attempts WHERE id=$1", [h.tuple.attempt_id])).rows[0]!;
+        expect(row.heartbeat_at.valueOf()).toBeGreaterThan(h.tuple.heartbeat_at.valueOf());expect(row.lease_until.valueOf()).toBeGreaterThan(h.tuple.lease_until.valueOf());
+      }, {timeout:23000,interval:100});
+      expect(h.producer.signal?.aborted).toBe(false);expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).not.toBeNull();
+      h.release();const result = await h.running;expect(result.statusCode,result.body).toBe(201);expect(h.entry).toHaveBeenCalledOnce();
+      expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).toBeNull();
+      const clocks = (await pool!.query("SELECT m.selected_source_expires_at AS selected,i.canonical_retention_expires_at AS canonical FROM context_manifests m JOIN legacy_chat_task_intents i ON i.account_id=m.account_id AND i.id=m.lifecycle_intent_id WHERE m.id=$1", [h.tuple.manifest_id])).rows[0]!;
+      expect(clocks).toEqual({selected:null,canonical:h.tuple.canonical});
+    } finally { await h.cleanup(); }
+  }, 40000);
+});
+
+describe("heartbeat transport and signal composition units", () => {
+  it("keeps the first actual Error through synchronous notification reentry and a throwing hook", () => {
+    const first = new AbortController(), later = new AbortController(), winning = new Error("synthetic_first"), other = new Error("synthetic_later");
+    const seen: Error[] = [];
+    const composed = composeLifecycleSignals([first.signal,later.signal], (_message,error) => { seen.push(error);later.abort(other);throw new Error("synthetic_hook"); });
+    try { first.abort(winning);expect(composed.signal.reason).toBe(winning);expect(seen).toEqual([winning]); }
+    finally { composed.dispose(); }
+  });
+  it("registers the in-flight promise before reentrant connect/drain and releases before a throwing failure hook or abort", async () => {
+    vi.useFakeTimers();
+    let releaseConnect!: () => void, stop: LifecycleHeartbeatStop | undefined, drain: Promise<void> | undefined, drained = false;
+    const connectGate = new Promise<void>(resolve => { releaseConnect = resolve; });
+    const events: string[] = [], controller = new AbortController();
+    controller.signal.addEventListener("abort", () => { events.push("abort"); });
+    const broken = {connect:async () => {
+      events.push("connect");drain = stop!.drain();void drain.then(() => { drained = true; }, () => { drained = true; });
+      await connectGate;
+      return {release:() => { events.push("release"); },query:async (sql:string) => {
+        if (sql === "BEGIN") throw new Error("synthetic_database_unavailable");events.push(sql);return {rows:[],rowCount:0};
+      }};
+    }};
+    const identity = {intentID:randomUUID(),taskID:randomUUID(),attemptID:randomUUID(),runID:randomUUID(),fencingGeneration:1,revision:1,
+      state:"running" as const,dispatchState:"not_dispatched" as const,executionAuthorityExpiresAt:new Date(Date.now()+60000),canonicalRetentionExpiresAt:new Date(Date.now()+60000)};
+    try {
+      stop = startLifecycleHeartbeat(broken as never,{} as never,identity,controller,4000,undefined,{
+        manifestID:randomUUID(),expiresAt:null,assertCurrent:async () => undefined,onFailure:() => { events.push("hook");throw new Error("synthetic_hook"); },
+      });
+      await vi.advanceTimersByTimeAsync(1000);expect(events).toEqual(["connect"]);expect(drained).toBe(false);expect(controller.signal.aborted).toBe(false);
+      releaseConnect();await drain;
+      expect(events).toEqual(["connect","ROLLBACK","release","hook","abort"]);expect(drained).toBe(true);
+      expect(controller.signal.reason).toMatchObject({code:"LEGACY_CHAT_AUTHORITY_LOST"});
+      await vi.advanceTimersByTimeAsync(5000);expect(events.filter(x => x === "connect")).toHaveLength(1);
+    } finally { stop?.();releaseConnect();await drain?.catch(() => undefined);vi.useRealTimers(); }
+  });
+});

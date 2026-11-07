@@ -1,0 +1,914 @@
+import { randomUUID } from "node:crypto";
+
+import { Pool } from "pg";
+import { afterAll, describe, expect, it } from "vitest";
+
+import type { AuthContext } from "./auth.js";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { listTimeActivities } from "./timeActivities.js";
+import { reviewTimeRange } from "./timeReview.js";
+import {
+  deleteTimeSchedule,
+  getTimeSchedule,
+  putTimeSchedule,
+} from "./timeSchedules.js";
+import {
+  decodeTimeActivityCursor,
+  encodeTimeActivityCursor,
+  timeScopeFingerprint,
+} from "./timeWorkspaceShared.js";
+
+const database = process.env.TIME_WORKSPACE_TEST_DATABASE_URL;
+if (database && !["127.0.0.1", "localhost"].includes(new URL(database).hostname)) {
+  throw new Error(
+    "Use an isolated local PostgreSQL database for time workspace tests.",
+  );
+}
+const pool = database ? new Pool({ connectionString: database, max: 6 }) : null;
+const suite = database ? describe : describe.skip;
+
+const createdAccounts = new Set<string>();
+
+function authFor(accountId: string, userId: string): AuthContext {
+  return {
+    accountId,
+    accountSlug: `time-${accountId}`,
+    userId,
+    userEmail: `${userId}@example.test`,
+    sessionId: randomUUID(),
+    userKind: "simulated_human",
+  };
+}
+
+async function createAccount(): Promise<{ auth: AuthContext; peer: AuthContext }> {
+  const accountId = randomUUID();
+  const userId = randomUUID();
+  const peerUserId = randomUUID();
+  createdAccounts.add(accountId);
+  await pool!.query(
+    "INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Time workspace proof')",
+    [accountId, `time-${accountId}`],
+  );
+  await pool!.query(
+    `INSERT INTO users(id,account_id,email,display_name,kind)
+     VALUES($1,$2,$3,'Time proof','simulated_human'),($4,$2,$5,'Peer','simulated_human')`,
+    [userId, accountId, `${userId}@example.test`, peerUserId, `${peerUserId}@example.test`],
+  );
+  return { auth: authFor(accountId, userId), peer: authFor(accountId, peerUserId) };
+}
+
+async function createPersonContext(
+  accountId: string,
+  status: "active" | "deleted" = "active",
+  createdAt = "2026-03-02T12:00:00.000Z",
+  label = "Ada Lovelace",
+  contextStatus: "active" | "deleted" = "active",
+): Promise<{ personID: string; contextID: string }> {
+  const personID = randomUUID();
+  const contextID = randomUUID();
+  await pool!.query(
+    `INSERT INTO subjects(id,account_id,external_ref,display_label,status,created_at)
+     VALUES($1,$2,$3,$4,$5,$6)`,
+    [personID, accountId, `person-${personID}`, label, status, createdAt],
+  );
+  await pool!.query(
+    `INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label,status)
+     VALUES($1,$2,$3,$4,$5,$6)`,
+    [contextID, accountId, personID, `context-${contextID}`, "Ada context", contextStatus],
+  );
+  return { personID, contextID };
+}
+
+interface SessionOptions {
+  scopeKind?: string;
+  title?: string;
+  sensitiveBlock?: string;
+}
+
+async function createSession(
+  accountId: string,
+  userId: string,
+  personID: string,
+  contextID: string,
+  turns: string[],
+  options: SessionOptions = {},
+): Promise<string> {
+  const sessionID = randomUUID();
+  const payload = {
+    id: sessionID,
+    scopeKind: options.scopeKind ?? "relationship",
+    personID,
+    relationshipContextID: contextID,
+    personDisplayLabel: "Ada Lovelace",
+    contextDisplayLabel: "Ada context",
+    title: options.title ?? "Ada intro",
+    turns: turns.map((createdAt) => ({
+      id: randomUUID(),
+      objective: "Prepare intro",
+      response: {
+        taskID: randomUUID(),
+        disposition: "answered",
+        ...(options.sensitiveBlock
+          ? { savedBlocks: [{ id: randomUUID(), text: options.sensitiveBlock }] }
+          : {}),
+      },
+      createdAt,
+    })),
+  };
+  await pool!.query(
+    `INSERT INTO agent_sessions(
+       account_id,id,created_by_user_id,revision,payload,created_at,expires_at
+     ) VALUES($1,$2,$3,1,$4::jsonb,statement_timestamp(),
+       statement_timestamp()+interval '20 days')`,
+    [accountId, sessionID, userId, JSON.stringify(payload)],
+  );
+  return sessionID;
+}
+
+async function createMeetingDraft(
+  accountId: string,
+  userId: string,
+  sessionID: string,
+  startsAt: string,
+  endsAt: string,
+  title = "Sensitive draft title",
+): Promise<{ draftID: string; taskID: string }> {
+  const taskID = randomUUID();
+  const draftID = randomUUID();
+  await pool!.query(
+    `INSERT INTO agent_session_chat_tasks(
+       account_id,task_id,actor_user_id,origin_session_id,expires_at
+     ) VALUES($1,$2,$3,$4,statement_timestamp()+interval '10 days')`,
+    [accountId, taskID, userId, sessionID],
+  );
+  await pool!.query(
+    `SELECT record_meeting_draft(
+       $1,$2,$3,$4,$5,NULL,$6,$7,$8,'UTC','Sensitive source excerpt',
+       statement_timestamp(),statement_timestamp()+interval '5 days'
+     )`,
+    [accountId, draftID, userId, taskID, sessionID, title, startsAt, endsAt],
+  );
+  return { draftID, taskID };
+}
+
+async function removeAccount(accountId: string): Promise<void> {
+  const tables = (
+    await pool!.query<{ table_name: string }>(
+      `SELECT table_name FROM lab_test_workspace_table_manifest
+       WHERE scope='account' ORDER BY table_name`,
+    )
+  ).rows.map((row) => row.table_name);
+  const ordered = [
+    "time_activity_snapshot_items",
+    "time_activity_snapshots",
+    "time_schedule_operations",
+    "time_schedules",
+    "meeting_draft_list_snapshot_items",
+    "meeting_draft_list_snapshots",
+    "meeting_draft_operations",
+    "meeting_drafts",
+    "agent_session_chat_sources",
+    "agent_session_chat_tasks",
+    "agent_session_operations",
+    "agent_session_retracted_tasks",
+    "agent_sessions",
+  ];
+  // These are intentionally deferred: deleting subjects/assignments and other
+  // source tables fires the account-wide harness invalidation trigger, which
+  // re-creates a harness_source_generations row. They must be removed last so
+  // the accounts row can finally be deleted.
+  const deferred = new Set([
+    "harness_source_generations",
+    "harness_sessions",
+    "harness_session_entries",
+    "subjects",
+    "assignments",
+  ]);
+  for (const table of ordered) {
+    await pool!.query(`DELETE FROM "${table}" WHERE account_id=$1`, [accountId]);
+  }
+  for (const table of tables) {
+    if (ordered.includes(table) || deferred.has(table)) continue;
+    try {
+      await pool!.query(`DELETE FROM "${table}" WHERE account_id=$1`, [accountId]);
+    } catch {
+      // Best-effort cleanup for unrelated fixture tables.
+    }
+  }
+  await pool!.query("DELETE FROM assignments WHERE account_id=$1", [accountId]);
+  await pool!.query("DELETE FROM subjects WHERE account_id=$1", [accountId]);
+  await pool!.query("DELETE FROM harness_session_entries WHERE account_id=$1", [accountId]);
+  await pool!.query("DELETE FROM harness_sessions WHERE account_id=$1", [accountId]);
+  await pool!.query("DELETE FROM harness_source_generations WHERE account_id=$1", [accountId]);
+  await pool!.query("DELETE FROM users WHERE account_id=$1", [accountId]);
+  await pool!.query("DELETE FROM accounts WHERE id=$1", [accountId]);
+  createdAccounts.delete(accountId);
+}
+
+afterAll(async () => {
+  if (!pool) return;
+  for (const accountId of createdAccounts) {
+    await removeAccount(accountId);
+  }
+  await pool.end();
+}, 60000);
+
+function scheduleInput(overrides: Record<string, unknown> = {}) {
+  return {
+    expected_revision: 0,
+    idempotency_key: randomUUID(),
+    title: "Intro call",
+    note: "Prepare notes",
+    kind: "meeting" as const,
+    person_id: null,
+    starts_at: "2026-03-03T15:00:00.000Z",
+    ends_at: "2026-03-03T16:00:00.000Z",
+    time_zone: "UTC",
+    all_day: false,
+    status: "planned" as const,
+    reminder_minutes: 15 as const,
+    ...overrides,
+  };
+}
+
+const scope = {
+  from: "2026-03-01",
+  to: "2026-03-10",
+  time_zone: "UTC",
+} as const;
+
+async function insertBulkSubjects(accountId: string, count: number): Promise<void> {
+  await pool!.query(
+    `INSERT INTO subjects(id,account_id,external_ref,display_label,status,created_at)
+     SELECT gen_random_uuid(),$1,'bulk-'||g,'Bulk '||g,'active',
+       '2026-03-02T00:00:00.000Z'::timestamptz
+     FROM generate_series(1,$2) g`,
+    [accountId, count],
+  );
+}
+
+suite("time workspace activity projection", () => {
+  it("groups actual Session turns by local day with validated person binding", async () => {
+    const { auth } = await createAccount();
+    const sensitiveTitle = `SENSITIVE-OLD-TITLE-${randomUUID()}`;
+    const sensitiveBlock = `SENSITIVE-BLOCK-${randomUUID()}`;
+    const { personID, contextID } = await createPersonContext(auth.accountId);
+    const sessionID = await createSession(
+      auth.accountId,
+      auth.userId,
+      personID,
+      contextID,
+      ["2026-03-02T23:30:00.000Z", "2026-03-03T01:30:00.000Z"],
+      { title: sensitiveTitle, sensitiveBlock },
+    );
+    try {
+      const page = await listTimeActivities(pool!, auth, { ...scope });
+      expect(page.complete).toBe(true);
+      expect(JSON.stringify(page)).not.toContain(sensitiveTitle);
+      expect(JSON.stringify(page)).not.toContain(sensitiveBlock);
+      const sessionActivities = page.activities.filter(
+        (activity) => activity.kind === "session_activity",
+      );
+      expect(sessionActivities).toHaveLength(2);
+      expect(new Set(sessionActivities.map((activity) => activity.source_id))).toEqual(
+        new Set([sessionID]),
+      );
+      expect(sessionActivities.map((activity) => activity.local_day).sort()).toEqual([
+        "2026-03-02",
+        "2026-03-03",
+      ]);
+      for (const activity of sessionActivities) {
+        expect(activity.person_id).toBe(personID);
+        expect(activity.person_label).toBe("Ada Lovelace");
+        expect(activity.relationship_context_id).toBe(contextID);
+        expect(activity.authority).toBe("system_record");
+        expect(activity.status).toBe("recorded");
+        expect(activity.title).toBe("会话活动 · Ada Lovelace");
+        expect(activity.summary).toContain("条当日会话记录");
+      }
+      expect(page.activities.some((activity) => activity.kind === "person_created")).toBe(true);
+
+      const filtered = await listTimeActivities(pool!, auth, {
+        ...scope,
+        person_id: personID,
+      });
+      expect(
+        filtered.activities.every(
+          (activity) =>
+            activity.kind === "person_created" || activity.person_id === personID,
+        ),
+      ).toBe(true);
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("drops the whole person/context binding when the relationship context is deleted", async () => {
+    const { auth } = await createAccount();
+    const { personID, contextID } = await createPersonContext(auth.accountId);
+    await createSession(auth.accountId, auth.userId, personID, contextID, [
+      "2026-03-02T23:30:00.000Z",
+    ]);
+    try {
+      await pool!.query(
+        "UPDATE assignments SET status='deleted' WHERE account_id=$1 AND id=$2",
+        [auth.accountId, contextID],
+      );
+      const page = await listTimeActivities(pool!, auth, { ...scope });
+      const sessionActivity = page.activities.find(
+        (activity) => activity.kind === "session_activity",
+      );
+      expect(sessionActivity?.person_id).toBeNull();
+      expect(sessionActivity?.person_label).toBeNull();
+      expect(sessionActivity?.relationship_context_id).toBeNull();
+      expect(sessionActivity?.context_label).toBeNull();
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("does not leak stale person labels when the subject is deleted", async () => {
+    const { auth } = await createAccount();
+    const { personID, contextID } = await createPersonContext(
+      auth.accountId,
+      "active",
+    );
+    await createSession(auth.accountId, auth.userId, personID, contextID, [
+      "2026-03-02T23:30:00.000Z",
+    ]);
+    try {
+      await pool!.query("UPDATE subjects SET status='deleted' WHERE account_id=$1 AND id=$2", [
+        auth.accountId,
+        personID,
+      ]);
+      const page = await listTimeActivities(pool!, auth, { ...scope });
+      const sessionActivity = page.activities.find(
+        (activity) => activity.kind === "session_activity",
+      );
+      expect(sessionActivity?.person_id).toBeNull();
+      expect(sessionActivity?.person_label).toBeNull();
+      const personCreated = page.activities.find(
+        (activity) => activity.kind === "person_created",
+      );
+      expect(personCreated).toBeUndefined();
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("groups repeated local times across a DST fall-back without duplicating", async () => {
+    const { auth } = await createAccount();
+    const { personID, contextID } = await createPersonContext(auth.accountId);
+    await createSession(auth.accountId, auth.userId, personID, contextID, [
+      "2026-11-01T05:30:00.000Z",
+      "2026-11-01T06:30:00.000Z",
+    ]);
+    try {
+      const page = await listTimeActivities(pool!, auth, {
+        from: "2026-11-01",
+        to: "2026-11-03",
+        time_zone: "America/New_York",
+      });
+      const sessionActivities = page.activities.filter(
+        (activity) => activity.kind === "session_activity",
+      );
+      expect(sessionActivities).toHaveLength(1);
+      expect(sessionActivities[0]!.local_day).toBe("2026-11-01");
+      expect(sessionActivities[0]!.occurred_at).toBe(
+        "2026-11-01T05:30:00.000Z",
+      );
+      expect(sessionActivities[0]!.summary).toContain("2 条");
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("keeps pagination complete and duplicate-free across a late upload", async () => {
+    const { auth } = await createAccount();
+    try {
+      await insertBulkSubjects(auth.accountId, 105);
+      const first = await listTimeActivities(pool!, auth, { ...scope });
+      expect(first.activities).toHaveLength(100);
+      expect(first.complete).toBe(false);
+      expect(first.next_cursor).not.toBeNull();
+      const firstIDs = new Set(first.activities.map((activity) => activity.id));
+
+      // A concurrent backfill must not enter an already materialized snapshot.
+      await createPersonContext(auth.accountId, "active", "2026-03-02T18:00:00.000Z");
+
+      const second = await listTimeActivities(
+        pool!,
+        auth,
+        { ...scope },
+        first.next_cursor!,
+      );
+      expect(second.complete).toBe(true);
+      expect(second.next_cursor).toBeNull();
+      for (const activity of second.activities) {
+        expect(firstIDs.has(activity.id)).toBe(false);
+      }
+      expect(first.activities.length + second.activities.length).toBe(105);
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("binds by stable person id and clips a cross-midnight schedule into range", async () => {
+    const { auth } = await createAccount();
+    const personA = await createPersonContext(
+      auth.accountId,
+      "active",
+      "2026-02-01T00:00:00.000Z",
+      "Sam Rivera",
+    );
+    const personB = await createPersonContext(
+      auth.accountId,
+      "active",
+      "2026-02-01T00:00:00.000Z",
+      "Sam Rivera",
+    );
+    const scheduleID = randomUUID();
+    try {
+      await putTimeSchedule(pool!, auth, scheduleID, {
+        ...scheduleInput({ idempotency_key: randomUUID() }),
+        person_id: personA.personID,
+        starts_at: "2026-02-28T23:00:00.000Z",
+        ends_at: "2026-03-01T01:00:00.000Z",
+      });
+      const page = await listTimeActivities(pool!, auth, {
+        ...scope,
+        kind: "schedule",
+      });
+      expect(page.activities).toHaveLength(1);
+      expect(page.activities[0]!.source_id).toBe(scheduleID);
+      expect(page.activities[0]!.person_id).toBe(personA.personID);
+      expect(page.activities[0]!.person_label).toBe("Sam Rivera");
+      expect(page.activities[0]!.local_day).toBe("2026-03-01");
+
+      const otherPerson = await listTimeActivities(pool!, auth, {
+        ...scope,
+        kind: "schedule",
+        person_id: personB.personID,
+      });
+      expect(otherPerson.activities).toHaveLength(0);
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("discovers a cross-midnight meeting draft and drops it when its source is withdrawn", async () => {
+    const { auth } = await createAccount();
+    const { personID, contextID } = await createPersonContext(auth.accountId);
+    const sessionID = await createSession(auth.accountId, auth.userId, personID, contextID, [
+      "2026-03-02T12:00:00.000Z",
+    ]);
+    const draft = await createMeetingDraft(
+      auth.accountId,
+      auth.userId,
+      sessionID,
+      "2026-02-28T23:00:00.000Z",
+      "2026-03-01T01:00:00.000Z",
+      "SENSITIVE-DRAFT-TITLE",
+    );
+    try {
+      const page = await listTimeActivities(pool!, auth, {
+        ...scope,
+        kind: "meeting_draft",
+      });
+      expect(page.activities).toHaveLength(1);
+      expect(page.activities[0]!.source_id).toBe(draft.draftID);
+      expect(page.activities[0]!.local_day).toBe("2026-03-01");
+      expect(page.activities[0]!.status).toBe("needs_review");
+      expect(page.activities[0]!.authority).toBe("unconfirmed");
+      expect(page.activities[0]!.person_id).toBe(personID);
+
+      // Withdraw the originating task; the draft must disappear from the read
+      // model even though its stored row still holds the title.
+      await pool!.query(
+        `UPDATE agent_session_chat_tasks SET expires_at=statement_timestamp()-interval '1 hour'
+         WHERE account_id=$1 AND task_id=$2`,
+        [auth.accountId, draft.taskID],
+      );
+      const withdrawn = await listTimeActivities(pool!, auth, {
+        ...scope,
+        kind: "meeting_draft",
+      });
+      expect(withdrawn.activities).toHaveLength(0);
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("rejects a forged cursor scope and a cursor from another owner", async () => {
+    const { auth, peer } = await createAccount();
+    try {
+      await insertBulkSubjects(auth.accountId, 105);
+      const first = await listTimeActivities(pool!, auth, { ...scope });
+      expect(first.next_cursor).not.toBeNull();
+      const decoded = decodeTimeActivityCursor(first.next_cursor!);
+
+      const otherScope = { ...scope, time_zone: "America/New_York" } as const;
+      const forged = encodeTimeActivityCursor({
+        ...decoded,
+        scope_fingerprint: timeScopeFingerprint(otherScope),
+      });
+      await expect(
+        listTimeActivities(pool!, auth, otherScope, forged),
+      ).rejects.toMatchObject({ code: "TIME_ACTIVITY_CURSOR_SCOPE_MISMATCH" });
+
+      await expect(
+        listTimeActivities(pool!, peer, { ...scope }, first.next_cursor!),
+      ).rejects.toMatchObject({ code: "TIME_ACTIVITY_CURSOR_EXPIRED" });
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+});
+
+suite("time schedule lifecycle", () => {
+  it("fences revisions, replays idempotently, and redacts on delete", async () => {
+    const { auth, peer } = await createAccount();
+    const scheduleID = randomUUID();
+    const createKey = randomUUID();
+    try {
+      const created = await putTimeSchedule(
+        pool!,
+        auth,
+        scheduleID,
+        scheduleInput({ idempotency_key: createKey }),
+      );
+      expect(created.schedule.revision).toBe(1);
+      expect(created.schedule.content_available).toBe(true);
+      expect(created.schedule.last_operation_id).toBe(createKey);
+      expect(created.schedule.external_effect).toBe("none");
+      expect(created.schedule.authority).toBe("user_authored");
+
+      const replay = await putTimeSchedule(
+        pool!,
+        auth,
+        scheduleID,
+        scheduleInput({ idempotency_key: createKey, title: "Intro call" }),
+      );
+      expect(replay.schedule.revision).toBe(1);
+      expect(replay.schedule.last_operation_id).toBe(createKey);
+
+      const updated = await putTimeSchedule(
+        pool!,
+        auth,
+        scheduleID,
+        scheduleInput({
+          expected_revision: 1,
+          idempotency_key: randomUUID(),
+          title: "Intro call revised",
+          status: "completed",
+          starts_at: "2026-03-01T15:00:00.000Z",
+          ends_at: "2026-03-01T16:00:00.000Z",
+        }),
+      );
+      expect(updated.schedule.revision).toBe(2);
+      expect(updated.schedule.status).toBe("completed");
+
+      await expect(
+        putTimeSchedule(
+          pool!,
+          auth,
+          scheduleID,
+          scheduleInput({
+            expected_revision: 1,
+            idempotency_key: randomUUID(),
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "TIME_SCHEDULE_REVISION_CONFLICT" });
+
+      const cancelled = await putTimeSchedule(
+        pool!,
+        auth,
+        scheduleID,
+        scheduleInput({
+          expected_revision: 2,
+          idempotency_key: randomUUID(),
+          status: "cancelled",
+        }),
+      );
+      expect(cancelled.schedule.status).toBe("cancelled");
+      expect(cancelled.schedule.title).toBe("Intro call");
+
+      const deleteKey = randomUUID();
+      const deleted = await deleteTimeSchedule(pool!, auth, scheduleID, {
+        expected_revision: 3,
+        idempotency_key: deleteKey,
+      });
+      expect(deleted.schedule.status).toBe("deleted");
+      expect(deleted.schedule.content_available).toBe(false);
+      expect(deleted.schedule.title).toBeNull();
+      expect(deleted.schedule.person_id).toBeNull();
+      expect(deleted.schedule.last_operation_id).toBe(deleteKey);
+
+      const readBack = await getTimeSchedule(pool!, auth, scheduleID);
+      expect(readBack.schedule.content_available).toBe(false);
+      expect(readBack.schedule.title).toBeNull();
+
+      // Replaying the delete and the create must both stay redacted.
+      const replayedDelete = await deleteTimeSchedule(pool!, auth, scheduleID, {
+        expected_revision: 3,
+        idempotency_key: deleteKey,
+      });
+      expect(replayedDelete.schedule.status).toBe("deleted");
+      expect(replayedDelete.schedule.title).toBeNull();
+
+      const resurrected = await putTimeSchedule(
+        pool!,
+        auth,
+        scheduleID,
+        scheduleInput({ idempotency_key: createKey, title: "Intro call" }),
+      );
+      expect(resurrected.schedule.status).toBe("deleted");
+      expect(resurrected.schedule.title).toBeNull();
+
+      await expect(
+        deleteTimeSchedule(pool!, auth, scheduleID, {
+          expected_revision: 4,
+          idempotency_key: randomUUID(),
+        }),
+      ).rejects.toMatchObject({ code: "TIME_SCHEDULE_ALREADY_DELETED" });
+
+      await expect(getTimeSchedule(pool!, peer, scheduleID)).rejects.toMatchObject({
+        code: "TIME_SCHEDULE_NOT_FOUND",
+      });
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("serializes concurrent create, update, and delete for one schedule UUID", async () => {
+    const { auth } = await createAccount();
+    const scheduleID = randomUUID();
+    try {
+      const creates = await Promise.allSettled([
+        putTimeSchedule(pool!, auth, scheduleID, scheduleInput()),
+        putTimeSchedule(pool!, auth, scheduleID, scheduleInput()),
+      ]);
+      const created = creates.filter((result) => result.status === "fulfilled");
+      const rejected = creates.filter((result) => result.status === "rejected");
+      expect(created).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(
+        (rejected[0] as PromiseRejectedResult).reason,
+      ).toMatchObject({ code: "TIME_SCHEDULE_ALREADY_EXISTS", statusCode: 409 });
+
+      const updates = await Promise.allSettled([
+        putTimeSchedule(
+          pool!,
+          auth,
+          scheduleID,
+          scheduleInput({
+            expected_revision: 1,
+            idempotency_key: randomUUID(),
+            title: "并发 A",
+          }),
+        ),
+        putTimeSchedule(
+          pool!,
+          auth,
+          scheduleID,
+          scheduleInput({
+            expected_revision: 1,
+            idempotency_key: randomUUID(),
+            title: "并发 B",
+          }),
+        ),
+      ]);
+      expect(updates.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const conflicts = updates.filter((r) => r.status === "rejected");
+      expect(conflicts).toHaveLength(1);
+      expect((conflicts[0] as PromiseRejectedResult).reason).toMatchObject({
+        code: "TIME_SCHEDULE_REVISION_CONFLICT",
+      });
+
+      const current = await getTimeSchedule(pool!, auth, scheduleID);
+      expect(current.schedule.revision).toBe(2);
+
+      const deletes = await Promise.allSettled([
+        deleteTimeSchedule(pool!, auth, scheduleID, {
+          expected_revision: 2,
+          idempotency_key: randomUUID(),
+        }),
+        deleteTimeSchedule(pool!, auth, scheduleID, {
+          expected_revision: 2,
+          idempotency_key: randomUUID(),
+        }),
+      ]);
+      const deleted = deletes.filter((r) => r.status === "fulfilled");
+      expect(deleted).toHaveLength(1);
+      const receipt = (
+        deleted[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof deleteTimeSchedule>>>
+      ).value.schedule;
+      expect(receipt.status).toBe("deleted");
+      expect(receipt.content_available).toBe(false);
+      expect(receipt.title).toBeNull();
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("rejects cancelled creation, future completion, and inactive Persons", async () => {
+    const { auth } = await createAccount();
+    const scheduleID = randomUUID();
+    const inactive = await createPersonContext(auth.accountId, "deleted");
+    try {
+      await expect(
+        putTimeSchedule(
+          pool!,
+          auth,
+          scheduleID,
+          scheduleInput({ idempotency_key: randomUUID(), status: "cancelled" }),
+        ),
+      ).rejects.toMatchObject({ code: "TIME_SCHEDULE_INVALID" });
+      await expect(
+        putTimeSchedule(
+          pool!,
+          auth,
+          scheduleID,
+          scheduleInput({
+            idempotency_key: randomUUID(),
+            status: "completed",
+            starts_at: "2999-01-01T00:00:00.000Z",
+            ends_at: "2999-01-01T01:00:00.000Z",
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "TIME_SCHEDULE_INVALID" });
+      await expect(
+        putTimeSchedule(
+          pool!,
+          auth,
+          scheduleID,
+          scheduleInput({
+            idempotency_key: randomUUID(),
+            person_id: inactive.personID,
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "TIME_SCHEDULE_PERSON_UNAVAILABLE" });
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+});
+
+suite("time range review", () => {
+  function provider(
+    answer: RemoteChatAnswerProviding["answer"],
+  ): RemoteChatAnswerProviding {
+    return {
+      providerId: "zhipu-chat-completions",
+      model: "glm-test",
+      supportsImageInput: false,
+      answer,
+    } as RemoteChatAnswerProviding;
+  }
+
+  it("reviews the full authorized range beyond the paginated activity-list size", async () => {
+    const { auth } = await createAccount();
+    try {
+      await insertBulkSubjects(auth.accountId, 130);
+      let count = 0;
+      const result = await reviewTimeRange(pool!, auth,
+        { scope: { ...scope }, objective: "回顾全部活动" },
+        provider(async input => {
+          count = input.context_blocks.length;
+          return { kind: "answer", title: "全部活动", body: "已回顾全部记录。",
+            citation_ids: input.allowed_citation_ids,
+            provider_id: "zhipu-chat-completions", model: "glm-test",
+            provider_request_id: null, input_tokens: 39_509, output_tokens: 12 };
+        }));
+      expect(count).toBe(130);
+      expect(result.sources).toHaveLength(130);
+      expect(result.complete).toBe(true);
+      expect(new Set(result.sources.map(source => source.id)).size).toBe(130);
+    } finally { await removeAccount(auth.accountId); }
+  });
+
+  it("returns admitted metadata sources with real timing metadata and no old narrative", async () => {
+    const { auth } = await createAccount();
+    const { personID, contextID } = await createPersonContext(auth.accountId);
+    const sensitiveTitle = `SENSITIVE-REVIEW-TITLE-${randomUUID()}`;
+    const sensitiveBlock = `SENSITIVE-REVIEW-BLOCK-${randomUUID()}`;
+    await createSession(auth.accountId, auth.userId, personID, contextID, [
+      "2026-03-02T23:30:00.000Z",
+    ], { title: sensitiveTitle, sensitiveBlock });
+    let captured: unknown;
+    try {
+      const result = await reviewTimeRange(
+        pool!,
+        auth,
+        { scope: { ...scope }, objective: "总结本周工作。" },
+        provider(async (input) => {
+          captured = input;
+          return {
+            kind: "answer",
+            title: "本周回顾",
+            body: "共一条会话活动。",
+            citation_ids: input.allowed_citation_ids,
+            provider_id: "zhipu-chat-completions",
+            model: "glm-test",
+            provider_request_id: null,
+            input_tokens: 1,
+            output_tokens: 1,
+          };
+        }),
+      );
+      expect(result.title).toBe("本周回顾");
+      expect(result.authority).toBe("unconfirmed");
+      expect(result.external_effect).toBe("none");
+      const serialized = JSON.stringify({ captured, result });
+      expect(serialized).not.toContain(sensitiveTitle);
+      expect(serialized).not.toContain(sensitiveBlock);
+      const blocks = (captured as { context_blocks: Array<{ items: string[] }> })
+        .context_blocks;
+      expect(blocks.length).toBeGreaterThan(0);
+      const items = blocks[0]!.items.join("\n");
+      expect(items).toContain("开始:");
+      expect(items).toContain("结束:");
+      expect(items).toContain("时区:");
+      expect(items).toContain("全天:");
+      expect(items).toContain("状态:");
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("rejects a stale result when the Session is withdrawn during the model call", async () => {
+    const { auth } = await createAccount();
+    const { personID, contextID } = await createPersonContext(auth.accountId);
+    const sessionID = await createSession(auth.accountId, auth.userId, personID, contextID, [
+      "2026-03-02T23:30:00.000Z",
+    ]);
+    try {
+      await expect(
+        reviewTimeRange(
+          pool!,
+          auth,
+          { scope: { ...scope }, objective: "总结本周工作。" },
+          provider(async (input) => {
+            await pool!.query(
+              `UPDATE agent_sessions
+               SET deleted_at=statement_timestamp(),payload=NULL
+               WHERE account_id=$1 AND id=$2`,
+              [auth.accountId, sessionID],
+            );
+            return {
+              kind: "answer",
+              title: "本周回顾",
+              body: "共一条会话活动。",
+              citation_ids: input.allowed_citation_ids,
+              provider_id: "zhipu-chat-completions",
+              model: "glm-test",
+              provider_request_id: null,
+              input_tokens: 1,
+              output_tokens: 1,
+            };
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "TIME_REVIEW_SOURCES_CHANGED" });
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("returns no_action for an empty scope and 503 on provider failure", async () => {
+    const { auth } = await createAccount();
+    try {
+      const empty = await reviewTimeRange(
+        pool!,
+        auth,
+        { scope: { ...scope }, objective: "总结本周工作。" },
+        provider(async () => {
+          throw new Error("should not be called");
+        }),
+      );
+      expect(empty.title).toBe("无需操作");
+      expect(empty.sources).toEqual([]);
+
+      await createPersonContext(auth.accountId);
+      await expect(
+        reviewTimeRange(
+          pool!,
+          auth,
+          { scope: { ...scope }, objective: "总结本周工作。" },
+          provider(async () => {
+            throw new Error("upstream down");
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "TIME_REVIEW_UNAVAILABLE" });
+      await expect(
+        reviewTimeRange(
+          pool!,
+          auth,
+          { scope: { ...scope }, objective: "总结本周工作。" },
+          null,
+        ),
+      ).rejects.toMatchObject({ code: "TIME_REVIEW_UNAVAILABLE" });
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+});

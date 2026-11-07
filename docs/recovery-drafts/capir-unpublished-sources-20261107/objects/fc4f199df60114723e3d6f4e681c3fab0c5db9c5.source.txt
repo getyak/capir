@@ -1,0 +1,155 @@
+import { describe, expect, it } from "vitest";
+
+import type { AgentSessionPayload } from "@talent-signal/contracts";
+
+import type { SessionDetail } from "./session-detail-state";
+import {
+  conversationDistanceFromBottom,
+  conversationNearBottom,
+  conversationScrollBehavior,
+  conversationShowsJumpToLatest,
+  sessionBlockTitle,
+  sessionSupportsSend,
+  sessionTurnBlocks,
+} from "./session-presentation";
+
+type SessionTurn = AgentSessionPayload["turns"][number];
+type SessionResponse = SessionTurn["response"];
+
+const sessionId = "10000000-0000-4000-8000-000000000001";
+
+function response(
+  overrides: Partial<SessionResponse> = {},
+): SessionResponse {
+  return {
+    contextManifestID: "context",
+    contractVersion: "1.0.0",
+    createdAt: "2026-09-16T00:00:00.000Z",
+    disposition: "answer",
+    knowledgeSnapshotID: "snapshot",
+    taskID: "task",
+    ...overrides,
+  };
+}
+
+function detail(overrides: Partial<SessionDetail> = {}): SessionDetail {
+  return {
+    composer_draft: null,
+    composer_draft_updated_at: null,
+    context_label: "",
+    deleted_at: null,
+    display_authority: "stale_unconfirmed",
+    expires_at: "2099-01-01T00:00:00.000Z",
+    is_unread: false,
+    person_id: null,
+    person_label: "",
+    relationship_context_id: null,
+    revision: 1,
+    scope_kind: "unresolved_intent",
+    session_id: sessionId,
+    state: "active",
+    title: "对话",
+    turn_count: 0,
+    turns: [],
+    updated_at: "2026-09-16T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function block(id: string, title: string, body = "内容") {
+  return {
+    body,
+    citation_dependency_ids: [],
+    id,
+    kind: "answer",
+    requires_user_decision: false as const,
+    status: "ready",
+    title,
+  };
+}
+
+describe("Session conversation presentation", () => {
+  it("hides generic reply/answer headings without dropping the body", () => {
+    for (const title of ["Reply", "answer", " 回复 ", "回答", "REPLY"]) {
+      expect(sessionBlockTitle(title)).toBeNull();
+    }
+    expect(sessionBlockTitle("下一步跟进")).toBe("下一步跟进");
+    expect(sessionBlockTitle("  Candidate summary  ")).toBe("Candidate summary");
+    // The body is untouched by the label decision.
+    expect(block("b1", "回复", "正文仍在").body).toBe("正文仍在");
+  });
+
+  it("keeps saved and unbound assistant content in persisted order", () => {
+    const turnResponse = response({
+      savedBlocks: [block("saved-1", "结论")],
+      unboundConversationBlocks: [block("unbound-1", "回复")],
+    });
+    expect(sessionTurnBlocks(turnResponse).map((item) => item.id)).toEqual([
+      "saved-1",
+      "unbound-1",
+    ]);
+    expect(sessionTurnBlocks(response())).toEqual([]);
+  });
+
+  it("allows a send control only for an active unbound-intent Session", () => {
+    expect(sessionSupportsSend(detail())).toBe(true);
+    expect(sessionSupportsSend(detail({ scope_kind: "relationship" }))).toBe(
+      false,
+    );
+    expect(sessionSupportsSend(detail({ scope_kind: "identity_review" }))).toBe(
+      false,
+    );
+    expect(sessionSupportsSend(detail({ state: "deleted" }))).toBe(false);
+    expect(sessionSupportsSend(detail({ state: "expired" }))).toBe(false);
+    // A visibly incomplete partial history disables send until its
+    // synchronization transfer verifies the whole declared intent.
+    expect(sessionSupportsSend(detail({ sync_incomplete: true }))).toBe(false);
+    expect(sessionSupportsSend(detail({ sync_incomplete: false }))).toBe(true);
+  });
+
+  it("renders a native reply mirrored across both history fields once", () => {
+    const saved = block("2a205102-9220-43ce-ba04-ffe8f27965dd", "Sync proof", "Synthetic sync reply");
+    const mirrored = { ...saved, citation_dependency_ids: [...saved.citation_dependency_ids] };
+    const original = response({ savedBlocks: [saved], unboundConversationBlocks: [mirrored] });
+    expect(sessionTurnBlocks(original)).toEqual([saved]);
+    expect(original.unboundConversationBlocks).toEqual([mirrored]);
+  });
+
+  it("retains distinct blocks even when their visible text is identical", () => {
+    const first = block("first", "Reply", "Repeated on purpose");
+    const second = block("second", "Reply", "Repeated on purpose");
+    expect(sessionTurnBlocks(response({ savedBlocks: [first], unboundConversationBlocks: [second] })))
+      .toEqual([first, second]);
+  });
+
+  it("keeps the saved representation when a mirrored block differs", () => {
+    const saved = block("same-id", "Saved response", "Canonical snapshot");
+    const older = block("same-id", "Reply", "Older representation");
+    expect(sessionTurnBlocks(response({ savedBlocks: [saved], unboundConversationBlocks: [older] })))
+      .toEqual([saved]);
+  });
+
+  it("follows the latest message only while already near the bottom", () => {
+    const atBottom = { clientHeight: 400, scrollHeight: 1_000, scrollTop: 600 };
+    const away = { clientHeight: 400, scrollHeight: 1_000, scrollTop: 100 };
+    expect(conversationDistanceFromBottom(atBottom)).toBe(0);
+    expect(conversationNearBottom(atBottom)).toBe(true);
+    expect(conversationShowsJumpToLatest(atBottom)).toBe(false);
+    expect(conversationDistanceFromBottom(away)).toBe(500);
+    expect(conversationNearBottom(away)).toBe(false);
+    expect(conversationShowsJumpToLatest(away)).toBe(true);
+    // Overscroll past the bottom is still "near bottom".
+    expect(
+      conversationNearBottom({
+        clientHeight: 400,
+        scrollHeight: 1_000,
+        scrollTop: 900,
+      }),
+    ).toBe(true);
+  });
+
+  it("snaps to latest under reduced motion", () => {
+    expect(conversationScrollBehavior(true)).toBe("auto");
+    expect(conversationScrollBehavior(false)).toBe("smooth");
+  });
+});

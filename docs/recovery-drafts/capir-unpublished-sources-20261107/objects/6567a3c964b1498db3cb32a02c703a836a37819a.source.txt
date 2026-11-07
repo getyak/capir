@@ -1,0 +1,13 @@
+/** Compatibility wrapper for optional direct-model deadlines. */
+import { scheduleDeadline, type DeadlineClock } from "@talent-signal/contracts";
+export type { DeadlineClock } from "@talent-signal/contracts";
+export function modelDeadline(
+  callback: () => void,
+  durationMs: number | undefined,
+  clock?: DeadlineClock,
+): (() => void) | undefined {
+  if (durationMs !== undefined && (!Number.isSafeInteger(durationMs) || durationMs <= 0)) {
+    throw new Error("MODEL_DEADLINE_INVALID");
+  }
+  return scheduleDeadline(callback, durationMs, clock);
+}

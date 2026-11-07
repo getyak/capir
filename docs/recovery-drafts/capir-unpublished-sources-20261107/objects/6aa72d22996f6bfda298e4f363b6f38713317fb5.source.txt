@@ -1,0 +1,92 @@
+import { describe, expect, it } from "vitest";
+import { captureObservationContent, observationID, RuntimeObservationOutbox, type RuntimeObservationPolicy } from "@talent-signal/agent";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { projectProductRun, type ProjectionRun } from "./productRunProjection.js";
+import { runtimeObservationSourcesAvailable, runtimeObservationSourceState } from "./runtimeObservationLifecycle.js";
+
+const policy: RuntimeObservationPolicy = { version: "private_full_content.v1", mode: "private_full_content",
+  endpoint: "http://opik-frontend:5173/api", project: "synthetic-product-runs", workspace: "default",
+  source_workspace_ids: ["10000000-0000-4000-8000-000000000001"], authorization_scopes: ["product_run"], retention_days: 7, max_content_bytes: 2000000 };
+function run(): ProjectionRun {
+  return { id: observationID("product"), account_id: policy.source_workspace_ids[0]!, source_generation: "1", platform: "ios", task_kind: "conversation",
+    status: "completed", created_at: new Date("2026-09-12T01:00:00Z"), updated_at: new Date("2026-09-12T01:01:00Z"),
+    finished_at: new Date("2026-09-12T01:01:00Z"), expires_at: new Date("2026-09-13T01:00:00Z"),
+    input: captureObservationContent({ objective: "synthetic" }, 2000), output: { text: "synthetic result" }, spans: [] };
+}
+describe("captured product run projection", () => {
+  it("preserves historical clocks and missing details without inventing model calls", () => {
+    const row = run(), observation = projectProductRun(row, policy);
+    expect(observation.source_product_run_id).toBe(row.id);
+    expect(observation.created_at).toBe(row.created_at.toISOString());
+    expect(observation.retention_expires_at).toBe(row.expires_at.toISOString());
+    expect(observation.spans).toHaveLength(1);
+    expect(observation.spans[0]!.usage.source).toBe("unavailable");
+    expect(projectProductRun(row, policy)).toEqual(observation);
+  });
+  it("updates a trace with fresh immutable span IDs and preserves observed hierarchy", () => {
+    const row = run();
+    row.spans = [{ id: observationID("span"), parent_id: null, name: "llm", kind: "llm",
+      started_at: row.created_at.toISOString(), finished_at: row.finished_at!.toISOString(), status: "completed",
+      input: row.input, output: captureObservationContent("observed", 2000), metadata: { model: "synthetic" }, error: null }];
+    const before = projectProductRun(row, policy); row.output = { text: "changed" };
+    const after = projectProductRun(row, policy);
+    expect(before.id).toBe(after.id); expect(before.attempt_id).not.toBe(after.attempt_id);
+    expect(before.spans[0]!.id).not.toBe(after.spans[0]!.id);
+    expect(after.spans[1]!.parent_span_id).toBe(after.spans[0]!.id);
+    expect(after.spans[1]!.model).toBe("synthetic");
+  });
+  it("gives a re-admitted source generation a new trace instead of reviving a tombstone", () => {
+    const row = run(), before = projectProductRun(row, policy); row.source_generation = "2";
+    const after = projectProductRun(row, policy);
+    expect(after.id).not.toBe(before.id); expect(after.source_product_run_id).toBe(before.source_product_run_id);
+  });
+  it.each(["current","defer_pending","withdrawn"] as const)("requires this exact run/account and all declared sources: %s",async state=>{
+    const row=run();row.created_at=new Date(Date.now()-2000);row.updated_at=new Date(Date.now()-1000);row.finished_at=row.updated_at;row.expires_at=new Date(Date.now()+60000);
+    const obs=projectProductRun(row,policy);let directChecks=0;
+    const database={query:async(sql:string,args:unknown[])=>{
+      if(sql.includes("legacy_chat_observation_product_run_state")) {
+        expect(args).toEqual([obs.source_product_run_id,obs.source_workspace_id,obs.source_product_run_generation]);return {rows:[{state}]};
+      }
+      if(sql.includes("legacy_chat_observation_task_state")) {
+        expect(args).toEqual([obs.source_workspace_id,obs.run_id]);return {rows:[{state:"current"}]};
+      }
+      expect(sql).toContain("feedback_execution_snapshots");expect(args[0]).toBe(obs.source_workspace_id);expect(args[1]).toBe(obs.run_id);
+      directChecks++;return {rows:[{unavailable:false}]};
+    }};
+    const context={run_id:obs.run_id,workspace_id:obs.source_workspace_id,authorization_scope:obs.authorization_scope,
+      source_product_run_id:obs.source_product_run_id,source_product_run_generation:obs.source_product_run_generation,source_refs:obs.source_refs};
+    expect(await runtimeObservationSourceState(database as any,context)).toBe(state);
+    expect(await runtimeObservationSourcesAvailable(database as any,context)).toBe(state==="current");
+    expect(directChecks).toBe(state==="withdrawn"?0:2);
+  });
+  it("a current ProductRun cannot hide a withdrawn direct source",async()=>{
+    const row=run();row.created_at=new Date(Date.now()-2000);row.updated_at=new Date(Date.now()-1000);row.finished_at=row.updated_at;row.expires_at=new Date(Date.now()+60000);const obs=projectProductRun(row,policy);
+    const database={query:async(sql:string)=>({rows:sql.includes("legacy_chat_observation_product_run_state")||sql.includes("legacy_chat_observation_task_state")?[{state:"current"}]:[{unavailable:true}]})};
+    expect(await runtimeObservationSourceState(database as any,{run_id:obs.run_id,workspace_id:obs.source_workspace_id,authorization_scope:obs.authorization_scope,
+      source_product_run_id:obs.source_product_run_id,source_product_run_generation:obs.source_product_run_generation,source_refs:obs.source_refs})).toBe("withdrawn");
+  });
+  it("retries after restart and deletes retained content when the frozen source generation is revoked", async () => {
+    const root = await mkdtemp(join(tmpdir(), "product-projection-test-"));
+    let online = false, available = true, retained = 0, deleted = 0;
+    const transport = { retain: async () => { if (!online) throw new Error("offline"); retained++; },
+      remove: async () => { deleted++; } };
+    const create = () => {
+      const outbox = new RuntimeObservationOutbox(root, policy, transport);
+      outbox.setSourceValidator(async context => { expect(context.source_product_run_generation).toBe("1"); return available; });
+      return outbox;
+    };
+    try {
+      const row = run(); row.created_at = new Date(Date.now()-2000); row.updated_at = new Date(Date.now()-1000);
+      row.finished_at = row.updated_at; row.expires_at = new Date(Date.now()+60_000);
+      const first = create(); await first.enqueue(projectProductRun(row, policy)); await first.flush().catch(() => {});
+      expect((await first.status()).pending).toBe(1); expect(retained).toBe(0);
+      online = true; const restarted = create(); await restarted.flush();
+      expect((await restarted.status()).retained).toBe(1); expect(retained).toBe(1);
+      expect((await restarted.sourceRuns())[0]!.source_product_run_id).toBe(row.id);
+      available = false; await restarted.flush();
+      expect((await restarted.status()).deleted).toBe(1); expect(deleted).toBe(1);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+});

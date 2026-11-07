@@ -1,0 +1,166 @@
+import { randomBytes } from "node:crypto";
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { TalentSignalClient, TalentSignalHttpError } from "@talent-signal/contracts";
+import { backendSessionIsExpired } from "@/lib/backend-session";
+import { integrationReturnTarget } from "@/lib/integration-onboarding-navigation";
+import { isMailProvider, type MailProvider } from "@/lib/mail-integration";
+import { backendAuthBaseUrl, readBackendSessionClaims, type BackendSessionClaims } from "@/lib/server/backendAuth";
+import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-session";
+import { mailConfig, type MailConfig } from "@/lib/server/mail-integration-config";
+import { exchangeMailCode, mailAuthorizationUrl, MailProviderError, testMailRead } from "@/lib/server/mail-integration-provider";
+import {
+  beginMailAttempt, consumeMailAttempt, disconnectMailGrant, mailGrantActive,
+  openMailPayload, registerMailGrant, sealMailPayload,
+} from "@/lib/server/mail-integration-vault";
+import { readBoundedRequestBody } from "@/lib/server/mcpBoundedBody";
+import { withAuthRequestTimeout } from "@/lib/auth-request-timeout";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+type Context = { params: Promise<{ provider: string; operation: string }> };
+const attemptSchema = z.object({
+  state: z.string().length(43), generation: z.uuid(), verifier: z.string().min(43).max(128),
+  binding: z.string().length(64), provider: z.enum(["gmail", "outlook"]),
+  expiresAt: z.number(), returnTo: z.string().max(2000),
+}).strict();
+const grantSchema = z.object({
+  id: z.uuid(), binding: z.string().length(64), provider: z.enum(["gmail", "outlook"]),
+  accessToken: z.string().min(1).max(2500), expiresAt: z.number(),
+}).strict();
+function cookieName(provider: MailProvider, kind: "attempt" | "grant") { return `talent-signal.mail-${provider}-${kind}`; }
+function cookieOptions(provider: MailProvider, origin: string, maxAge: number) {
+  return { httpOnly: true, secure: origin.startsWith("https:"), sameSite: "lax" as const,
+    path: `/api/integrations/mail/${provider}`, maxAge };
+}
+function json(body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: { "cache-control": "no-store, max-age=0", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" } });
+}
+function landing(config: MailConfig, result: string, returnTo = "/workspace") {
+  const url = new URL("/workspace/connect", config.origin);
+  url.searchParams.set("result", result);
+  url.searchParams.set("returnTo", integrationReturnTarget(returnTo));
+  const response = NextResponse.redirect(url, 303);
+  response.headers.set("cache-control", "no-store, max-age=0");
+  response.headers.set("referrer-policy", "no-referrer");
+  return response;
+}
+async function liveSession(): Promise<BackendSessionClaims | null> {
+  const claims = await readBackendSessionClaims();
+  if (!claims || backendSessionIsExpired(claims.backendExpiresAt)) return null;
+  // Cookie claims alone cannot establish that membership or the session is live.
+  const session = await withAuthRequestTimeout(signal =>
+    new TalentSignalClient(backendAuthBaseUrl(), claims.backendAccessToken).currentSession(signal), { timeoutMs: 5000 });
+  if (session.account.id !== claims.backendAccountId || session.user.id !== claims.backendUserId) return null;
+  return claims;
+}
+function readGrant(request: NextRequest, provider: MailProvider, config: MailConfig, binding: string) {
+  const result = grantSchema.safeParse(openMailPayload(request.cookies.get(cookieName(provider, "grant"))?.value,
+    config.key, cookieName(provider, "grant")));
+  if (!result.success || result.data.binding !== binding || result.data.provider !== provider ||
+      result.data.expiresAt <= Date.now() || !mailGrantActive(binding, provider, result.data.id)) return null;
+  return result.data;
+}
+
+async function callback(request: NextRequest, provider: MailProvider, config: MailConfig) {
+  if (request.nextUrl.origin !== config.origin) return json({ code: "MAIL_ORIGIN", message: "请从已配置的工作区地址重新连接。" }, 403);
+  const decoded = attemptSchema.safeParse(openMailPayload(request.cookies.get(cookieName(provider, "attempt"))?.value,
+    config.key, cookieName(provider, "attempt")));
+  if (!decoded.success) return landing(config, "expired");
+  const attempt = decoded.data;
+  const claims = await liveSession().catch(() => null);
+  if (!claims || contactHandoffSessionVersion(claims) !== attempt.binding || attempt.provider !== provider) return landing(config, "stale");
+  if (attempt.expiresAt <= Date.now() || request.nextUrl.searchParams.get("state") !== attempt.state ||
+      !consumeMailAttempt(attempt.binding, provider, attempt.state, attempt.generation)) return landing(config, "expired", attempt.returnTo);
+  // The server consumes state exactly once. Do not delete this shared cookie
+  // in a delayed callback response: a newer start may already have replaced it.
+  const clearAttempt = (response: NextResponse) => response;
+  if (request.nextUrl.searchParams.has("error")) return clearAttempt(landing(config,
+    request.nextUrl.searchParams.get("error") === "access_denied" ? "cancelled" : "failed", attempt.returnTo));
+  const code = request.nextUrl.searchParams.get("code");
+  if (!code || code.length > 4096) return clearAttempt(landing(config, "failed", attempt.returnTo));
+  try {
+    const token = await exchangeMailCode(provider, config, code, attempt.verifier);
+    // A sign-out/suspension while exchanging the provider code must win.
+    const stillLive = await liveSession();
+    if (!stillLive || contactHandoffSessionVersion(stillLive) !== attempt.binding) return clearAttempt(landing(config, "stale", attempt.returnTo));
+    const expiresAt = Math.min(Date.now() + 3_600_000, Date.now() + token.expiresIn * 1000, Date.parse(claims.backendExpiresAt));
+    const id = registerMailGrant(attempt.binding, provider, attempt.generation, expiresAt);
+    if (!id) return clearAttempt(landing(config, "expired", attempt.returnTo));
+    const response = clearAttempt(landing(config, "authorized", attempt.returnTo));
+    response.cookies.set(cookieName(provider, "grant"), sealMailPayload({ id, binding: attempt.binding, provider,
+      accessToken: token.accessToken, expiresAt }, config.key, cookieName(provider, "grant")),
+      cookieOptions(provider, config.origin, Math.max(0, Math.floor((expiresAt - Date.now()) / 1000))));
+    return response;
+  } catch { return clearAttempt(landing(config, "failed", attempt.returnTo)); }
+}
+
+async function handle(request: NextRequest, context: Context) {
+  const parameters = await context.params;
+  if (!isMailProvider(parameters.provider)) return json({ message: "不支持的邮箱。" }, 404);
+  const provider = parameters.provider;
+  const operation = parameters.operation;
+  if (!((request.method === "GET" && ["status", "callback"].includes(operation)) ||
+    (request.method === "POST" && ["start", "test", "disconnect"].includes(operation)))) return json({ message: "不支持的操作。" }, 404);
+  const config = mailConfig(provider);
+  if (operation === "callback") return config ? callback(request, provider, config) : json({ message: "邮箱连接暂未启用。" }, 503);
+  // Exact origin, not a Host-derived allowlist. Every mutation also requires
+  // the rendered session fingerprint; the proxy enforces the workspace header.
+  if (request.method === "POST") {
+    const origin = request.headers.get("origin");
+    const configuredOrigin = config?.origin;
+    if (!origin || (configuredOrigin ? origin !== configuredOrigin : origin !== request.nextUrl.origin)) return json({ message: "请求来源不受支持。" }, 403);
+  }
+  try {
+    const claims = await liveSession();
+    if (!claims) return json({ code: "backend_session_expired", message: "请重新登录。" }, 401);
+    const binding = contactHandoffSessionVersion(claims);
+    if (request.headers.get("x-workspace-session") !== binding) return json({ code: "session_stale", message: "登录已变化，请重新打开此页。" }, 409);
+    if (operation === "disconnect") {
+      disconnectMailGrant(binding, provider);
+      const response = json({ disconnected: true });
+      const origin = config?.origin ?? request.nextUrl.origin;
+      for (const kind of ["attempt", "grant"] as const) response.cookies.set(cookieName(provider, kind), "", cookieOptions(provider, origin, 0));
+      return response;
+    }
+    if (operation === "status") {
+      const grant = config ? readGrant(request, provider, config, binding) : null;
+      return json({ configured: Boolean(config), connected: Boolean(grant), expiresAt: grant ? new Date(grant.expiresAt).toISOString() : null, connectionVersion: grant?.id ?? null });
+    }
+    if (!config) return json({ code: "MAIL_NOT_CONFIGURED", message: "此邮箱的连接测试尚未启用，可以先使用 MCP 或资料导入。" }, 503);
+    if (operation === "start") {
+      let body: unknown;
+      try { body = JSON.parse((await readBoundedRequestBody(request, 4096)) ?? ""); }
+      catch { return json({ message: "请求未完成或格式无效。" }, 400); }
+      const parsed = z.object({ returnTo: z.string().max(2000).optional() }).strict().safeParse(body);
+      if (!parsed.success) return json({ message: "请求格式无效。" }, 400);
+      const attempt = beginMailAttempt(binding, provider);
+      const verifier = randomBytes(32).toString("base64url");
+      const response = json({ authorizationUrl: mailAuthorizationUrl(provider, config, attempt.state, verifier) });
+      response.cookies.set(cookieName(provider, "grant"), "", cookieOptions(provider, config.origin, 0));
+      response.cookies.set(cookieName(provider, "attempt"), sealMailPayload({ ...attempt, verifier, provider, binding,
+        expiresAt: Date.now() + 300_000, returnTo: integrationReturnTarget(parsed.data.returnTo) }, config.key, cookieName(provider, "attempt")),
+        cookieOptions(provider, config.origin, 300));
+      return response;
+    }
+    const grant = readGrant(request, provider, config, binding);
+    if (!grant) return json({ code: "MAIL_GRANT_EXPIRED", message: "测试授权已过期或失效，请重新连接。" }, 401);
+    const preview = await testMailRead(provider, grant.accessToken, grant.expiresAt);
+    if (!mailGrantActive(binding, provider, grant.id) || grant.expiresAt <= Date.now()) return json({ code: "MAIL_GRANT_EXPIRED", message: "授权已变化，这次结果已丢弃。" }, 409);
+    const stillLive = await liveSession();
+    if (!stillLive || contactHandoffSessionVersion(stillLive) !== binding) return json({ code: "session_stale", message: "登录已变化，这次结果已丢弃。" }, 409);
+    if (!mailGrantActive(binding, provider, grant.id) || grant.expiresAt <= Date.now()) return json({ code: "MAIL_GRANT_EXPIRED", message: "授权已变化，这次结果已丢弃。" }, 409);
+    return json({ ...preview, connectionVersion: grant.id });
+  } catch (error) {
+    if (error instanceof TalentSignalHttpError && error.status === 401) return json({ code: "backend_session_expired", message: "当前登录已失效，请重新登录。" }, 401);
+    if (error instanceof MailProviderError) {
+      const copy = { unauthorized: "邮箱授权已失效，请重新连接。", denied: "邮箱没有允许这次读取，请检查权限或联系管理员。",
+        timeout: "读取超时，尚未验证。可以重试这次只读测试。", unavailable: "邮箱暂时无法读取，可以稍后重试。", invalid: "邮箱返回的内容无法核验，尚未验证。" };
+      return json({ code: `MAIL_${error.kind.toUpperCase()}`, message: copy[error.kind] }, error.kind === "timeout" ? 504 : error.kind === "unauthorized" ? 401 : error.kind === "denied" ? 403 : 502);
+    }
+    // Never echo provider errors, tokens, code, callback URLs or private data.
+    return json({ code: "MAIL_UNAVAILABLE", message: "当前登录或连接服务无法核验，请重新打开此页后重试。" }, 503);
+  }
+}
+export const GET = handle;
+export const POST = handle;

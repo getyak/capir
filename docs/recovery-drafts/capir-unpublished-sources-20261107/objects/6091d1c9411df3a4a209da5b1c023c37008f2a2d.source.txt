@@ -1,0 +1,137 @@
+import "server-only";
+
+import { DESKTOP_AUTH_ATTEMPT_TTL_SECONDS, type DesktopAuthPurpose, type DesktopAuthRole } from "@talent-signal/contracts";
+
+/**
+ * Capable-host response receipt transport (bounded contract, ADR 0020).
+ *
+ * WKNavigationResponse exposes no navigation identity and no response body,
+ * so a capable native host sends one strict opaque request reference (query +
+ * body, one value, exact equality) and the Web layer answers with a minimal
+ * non-secret HTML document plus an allowlisted receipt-header contract. The
+ * headers are emitted ONLY after authoritative backend success and correct
+ * server-side continuation sealing; they are correlation metadata, never
+ * authorization for any backend write. Ordinary consumers keep the existing
+ * redirect/JSON behavior.
+ */
+
+export const DESKTOP_RECEIPT_VERSION = "1";
+export const DESKTOP_TRANSPORT_HEADER = "x-desktop-transport";
+export const DESKTOP_TRANSPORT_MODE = "capable-v2";
+export const DESKTOP_REQUEST_REF_HEADER = "x-request-ref";
+
+export type DesktopReceiptOutcome =
+  | "prepared"
+  | "consumed"
+  | "session-established"
+  | "continue-password"
+  | "continue-target"
+  | "committed"
+  | "acknowledged"
+  | "result-pending"
+  | "result-unknown"
+  | "cancelled";
+
+export type DesktopReceipt = {
+  ref: string;
+  attemptID: string;
+  purpose: DesktopAuthPurpose;
+  role: DesktopAuthRole;
+  outcome: DesktopReceiptOutcome;
+  flowRef?: string | undefined;
+  grantRef?: string | undefined;
+  deadline?: string | undefined;
+};
+
+/** One reference alphabet end to end: strict unambiguous token characters. */
+export const DESKTOP_REF_PATTERN = /^[A-Za-z0-9-]{8,200}$/;
+
+const MINIMAL_DOCUMENT =
+  '<!doctype html><html><head><meta charset="utf-8"><title>继续</title></head><body><p>请回到应用继续。</p></body></html>';
+
+export function isDesktopTransportRequest(request: Request): boolean {
+  return request.headers.get(DESKTOP_TRANSPORT_HEADER) === DESKTOP_TRANSPORT_MODE;
+}
+
+/**
+ * Strict request-reference validation: the reference appears exactly once in
+ * the query AND exactly once in the body, both non-empty and identical, and
+ * the header echoes the same value. It is correlation only, never authority.
+ */
+export async function readDesktopRequestRef(
+  request: Request,
+  body: Record<string, unknown>,
+): Promise<string | null> {
+  const url = new URL(request.url);
+  const queryRefs = url.searchParams.getAll("ref");
+  const headerRefs = request.headers.get(DESKTOP_REQUEST_REF_HEADER);
+  const bodyRef = body.request_ref;
+  if (
+    queryRefs.length !== 1 ||
+    typeof headerRefs !== "string" ||
+    headerRefs !== queryRefs[0] ||
+    typeof bodyRef !== "string" ||
+    bodyRef !== queryRefs[0] ||
+    !DESKTOP_REF_PATTERN.test(bodyRef) ||
+    !DESKTOP_REF_PATTERN.test(queryRefs[0])
+  ) {
+    return null;
+  }
+  return bodyRef;
+}
+
+/**
+ * Strict pre-validation for capable-mode requests: the request reference must
+ * be internally consistent BEFORE any backend transition or cookie mutation.
+ */
+export function requireDesktopRequestRef(
+  request: Request,
+  body: Record<string, unknown>,
+): string | { error: Response } {
+  const url = new URL(request.url);
+  const queryRefs = url.searchParams.getAll("ref");
+  const headerRef = request.headers.get(DESKTOP_REQUEST_REF_HEADER);
+  const bodyRef = body.request_ref;
+  const consistent =
+    queryRefs.length === 1 &&
+    typeof headerRef === "string" &&
+    headerRef === queryRefs[0] &&
+    typeof bodyRef === "string" &&
+    bodyRef === queryRefs[0] &&
+    DESKTOP_REF_PATTERN.test(bodyRef);
+  if (!consistent) {
+    return {
+      error: Response.json(
+        { error: { code: "DESKTOP_AUTH_REQUEST_INVALID", message: "This sign-in request is not valid.", request_id: "desktop-ref" } },
+        { status: 400 },
+      ),
+    };
+  }
+  return bodyRef;
+}
+
+/** The strict allowlisted receipt-header contract for a capable native host. */
+export function desktopReceiptResponse(receipt: DesktopReceipt): Response {
+  const headers: Record<string, string> = {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "private, no-store",
+    "x-desktop-receipt-version": DESKTOP_RECEIPT_VERSION,
+    "x-desktop-request-ref": receipt.ref,
+    "x-desktop-attempt-ref": receipt.attemptID,
+    "x-desktop-purpose": receipt.purpose,
+    "x-desktop-role": receipt.role,
+    "x-desktop-outcome": receipt.outcome,
+  };
+  if (receipt.flowRef) headers["x-desktop-flow-ref"] = receipt.flowRef;
+  if (receipt.grantRef) headers["x-desktop-grant-ref"] = receipt.grantRef;
+  if (receipt.deadline) headers["x-desktop-deadline"] = receipt.deadline;
+  return new Response(MINIMAL_DOCUMENT, { status: 200, headers });
+}
+
+/** The original deadline is never extended by a receipt. */
+export function receiptDeadline(expiresAt: string | undefined): string | undefined {
+  if (!expiresAt) return undefined;
+  const deadline = Date.parse(expiresAt);
+  const ceiling = Date.now() + DESKTOP_AUTH_ATTEMPT_TTL_SECONDS * 1_000;
+  return new Date(Math.min(deadline, ceiling)).toISOString();
+}

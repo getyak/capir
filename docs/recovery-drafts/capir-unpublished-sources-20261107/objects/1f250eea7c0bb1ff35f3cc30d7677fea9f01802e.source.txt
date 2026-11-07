@@ -1,0 +1,889 @@
+import AuthenticationServices
+import CryptoKit
+import Foundation
+import Security
+
+// MARK: - Launch options
+
+/// Per-process launch overrides (ADR 0019 acceptance hook). `--desktop-auth-ephemeral`
+/// switches ASWebAuthenticationSession to its ephemeral cookie session for THIS
+/// process only. It is read from the process arguments domain, never persisted,
+/// never shown in customer UI, and default production behavior is unchanged.
+struct DesktopAuthLaunchOptions: Equatable {
+    /// Prefers an ephemeral system-browser session (isolated cookies).
+    var prefersEphemeralBrowserSession: Bool
+
+    static let ephemeralArgument = "desktop-auth-ephemeral"
+
+    /// Production default: shared system-browser cookies.
+    static let standard = DesktopAuthLaunchOptions(prefersEphemeralBrowserSession: false)
+
+    /// Read the override from a defaults source (the NSArgumentDomain through
+    /// UserDefaults in production; a fixture in tests). No value is written.
+    init(prefersEphemeralBrowserSession: Bool) {
+        self.prefersEphemeralBrowserSession = prefersEphemeralBrowserSession
+    }
+
+    static func from(defaults: UserDefaults = .standard) -> DesktopAuthLaunchOptions {
+        DesktopAuthLaunchOptions(
+            prefersEphemeralBrowserSession: defaults.bool(forKey: ephemeralArgument)
+        )
+    }
+
+    static func from(arguments: [String]) -> DesktopAuthLaunchOptions {
+        let flag = "--\(ephemeralArgument)"
+        return DesktopAuthLaunchOptions(prefersEphemeralBrowserSession: arguments.contains(flag))
+    }
+}
+
+// MARK: - System browser seam
+
+/// Seam over the system authentication browser so the native state machine is
+/// testable without presenting real provider UI. The factory receives the
+/// ephemeral-session preference; production behavior without the override is
+/// unchanged.
+protocol DesktopAuthBrowserSession: AnyObject {
+    func start(callback: @escaping (URL?, Error?) -> Void) -> Bool
+    func cancel()
+}
+
+final class SystemAuthenticationBrowserSession: DesktopAuthBrowserSession {
+    private final class CallbackBox {
+        var handler: ((URL?, Error?) -> Void)?
+    }
+
+    private final class AnchorProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
+        let anchor: () -> ASPresentationAnchor?
+        init(_ anchor: @escaping () -> ASPresentationAnchor?) { self.anchor = anchor }
+        func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+            anchor() ?? ASPresentationAnchor()
+        }
+    }
+
+    private let session: ASWebAuthenticationSession
+    private let anchorProvider: AnchorProvider
+    private let box: CallbackBox
+    private let ephemeral: Bool
+
+    init(url: URL, callbackScheme: String, ephemeral: Bool, anchor: @escaping () -> ASPresentationAnchor?) {
+        let box = CallbackBox()
+        let anchorProvider = AnchorProvider(anchor)
+        self.box = box
+        self.anchorProvider = anchorProvider
+        self.ephemeral = ephemeral
+        self.session = ASWebAuthenticationSession(url: url, callbackURLScheme: callbackScheme) { callbackURL, error in
+            box.handler?(callbackURL, error)
+        }
+    }
+
+    func start(callback: @escaping (URL?, Error?) -> Void) -> Bool {
+        box.handler = callback
+        session.presentationContextProvider = anchorProvider
+        session.prefersEphemeralWebBrowserSession = ephemeral
+        return session.start()
+    }
+
+    func cancel() {
+        session.cancel()
+    }
+}
+
+// MARK: - Protocol constants and strict callback parsing
+
+enum DesktopAuthProtocol {
+    static let authProtocolVersion = 2
+    static let credentialRoundProtocolVersion = 1
+    static let preparePath = "/api/desktop-auth/prepare"
+    static let consumePath = "/api/desktop-auth/consume"
+    static let cancelPath = "/api/desktop-auth/cancel"
+    static let resultPath = "/api/desktop-auth/result"
+    static let ackPath = "/api/desktop-auth/ack"
+    static let requestPath = "/desktop-auth/request"
+    static let pendingPath = "/desktop-auth/pending"
+    static let authorizePath = "/desktop-auth/authorize"
+    static let callbackScheme = "com.talentsignal.macos.auth"
+    static let callbackHost = "complete"
+    static let attemptTTL: TimeInterval = 300
+    static let codeTTL: TimeInterval = 60
+    static let flowTTL: TimeInterval = 600
+    static let clientLabel = "talent-signal-macos"
+}
+
+enum DesktopAuthProvider: String, Equatable {
+    case apple, google
+}
+
+enum DesktopAuthPurpose: String, Equatable {
+    case login, credentialRound = "credential_round"
+}
+
+enum DesktopAuthRole: String, Equatable {
+    case login, current, target
+}
+
+enum DesktopCredentialIntent: String, Equatable {
+    case linkProvider = "link_provider"
+    case unlinkProvider = "unlink_provider"
+    case setPassword = "set_password"
+    case changePassword = "change_password"
+}
+
+/// Immutable handoff request context carried from the intercepted request link.
+struct DesktopAuthRequestContext: Equatable {
+    let provider: DesktopAuthProvider
+    let purpose: DesktopAuthPurpose
+    let role: DesktopAuthRole
+    let intent: DesktopCredentialIntent?
+    let targetProvider: String?
+    let continuationAttemptID: String?
+}
+
+/// One native attempt generation. A newer generation always supersedes older
+/// callbacks; the backend keeps the durable single-use state machine.
+struct DesktopAuthAttempt: Equatable {
+    let generation: UInt64
+    let hostEpoch: UInt64
+    let context: DesktopAuthRequestContext
+    let verifier: String
+    let state: String
+    var attemptID: String?
+}
+
+enum DesktopAuthPhase: Equatable {
+    case idle
+    case preparing
+    case awaitingAuthorization
+    case authenticating
+    case consuming
+    case awaitingAcknowledgment
+    case awaitingTarget
+    case finished
+    case recovering(reason: String, ambiguous: Bool)
+}
+
+/// Strict parse of the fixed native callback (both variants). Rejects
+/// fragments, non-canonical trailing slashes, userinfo, ports, duplicate/empty/
+/// unknown query keys and any spelling that is not exactly the fixed
+/// scheme/host/path.
+enum DesktopAuthCallback: Equatable {
+    case success(attemptID: String, code: String, state: String)
+    case cancelled(attemptID: String, state: String)
+
+    static func parse(_ raw: String) -> DesktopAuthCallback? {
+        guard let url = URL(string: raw),
+              url.scheme == DesktopAuthProtocol.callbackScheme,
+              url.host == DesktopAuthProtocol.callbackHost,
+              url.user == nil, url.password == nil, url.port == nil,
+              url.path.isEmpty,
+              url.fragment == nil,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let items = components.queryItems,
+              raw.hasPrefix("\(DesktopAuthProtocol.callbackScheme)://\(DesktopAuthProtocol.callbackHost)?")
+        else { return nil }
+        let names = items.map(\.name)
+        guard Set(names).count == names.count, items.allSatisfy({ !$0.value.isNilOrEmpty }) else { return nil }
+        func one(_ name: String) -> String? {
+            let values = items.filter { $0.name == name }.compactMap(\.value)
+            return values.count == 1 ? values[0] : nil
+        }
+        guard let attemptID = one("attempt"), let state = one("state"),
+              (8...200).contains(attemptID.count),
+              attemptID.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") })
+        else { return nil }
+        let code = one("code")
+        let outcome = one("outcome")
+        if let code, outcome == nil, Set(names) == Set(["attempt", "code", "state"]) {
+            return .success(attemptID: attemptID, code: code, state: state)
+        }
+        if outcome == "cancelled", code == nil, Set(names) == Set(["attempt", "outcome", "state"]) {
+            return .cancelled(attemptID: attemptID, state: state)
+        }
+        return nil
+    }
+}
+
+private extension Optional where Wrapped == String {
+    var isNilOrEmpty: Bool { self?.isEmpty ?? true }
+}
+
+enum DesktopAuthSecrets {
+    static func random() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        precondition(status == errSecSuccess, "System random source unavailable.")
+        return Data(bytes).base64URLEncoded
+    }
+
+    /// RFC 7636 S256 challenge of the native one-time-code verifier.
+    static func codeChallenge(for verifier: String) -> String {
+        Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncoded
+    }
+}
+
+extension Data {
+    var base64URLEncoded: String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+// MARK: - Fixed request factories
+
+/// Fixed request shapes for one configured origin. Nothing here carries a
+/// token, provider credential or verifier into page DOM or a URL.
+struct DesktopAuthRequests {
+    let origin: WorkspaceOrigin
+
+    private func post(_ path: String, body: [String: String]) -> URLRequest {
+        var request = URLRequest(url: origin.url.appendingPathComponent(path.hasPrefix("/") ? String(path.dropFirst()) : path))
+        request.httpMethod = "POST"
+        request.setValue(origin.url.absoluteString, forHTTPHeaderField: "Origin")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("document", forHTTPHeaderField: "Sec-Fetch-Dest")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    func prepareRequest(attempt: DesktopAuthAttempt) -> URLRequest {
+        var body: [String: String] = [
+            "provider": attempt.context.provider.rawValue,
+            "purpose": attempt.context.purpose.rawValue,
+            "role": attempt.context.role.rawValue,
+            "code_challenge": DesktopAuthSecrets.codeChallenge(for: attempt.verifier),
+            "state": attempt.state,
+            "client_label": DesktopAuthProtocol.clientLabel,
+            "web_origin": origin.url.absoluteString,
+        ]
+        if let intent = attempt.context.intent { body["intent"] = intent.rawValue }
+        if let target = attempt.context.targetProvider { body["target_provider"] = target }
+        if let continuation = attempt.context.continuationAttemptID {
+            body["continuation_attempt_id"] = continuation
+        }
+        return post(DesktopAuthProtocol.preparePath, body: body)
+    }
+
+    func consumeRequest(attemptID: String, code: String, verifier: String) -> URLRequest {
+        post(DesktopAuthProtocol.consumePath, body: [
+            "attempt_id": attemptID,
+            "code": code,
+            "verifier": verifier,
+        ])
+    }
+
+    func resultRequest(attemptID: String, verifier: String) -> URLRequest {
+        post(DesktopAuthProtocol.resultPath, body: [
+            "attempt_id": attemptID,
+            "verifier": verifier,
+        ])
+    }
+
+    func ackRequest(attemptID: String, verifier: String, credentialAttemptID: String) -> URLRequest {
+        var body: [String: String] = [
+            "attempt_id": attemptID,
+            "verifier": verifier,
+        ]
+        // The sealed WK continuation is the authority; the immutable
+        // comparator travels only when the host knows it.
+        if !credentialAttemptID.isEmpty { body["credential_attempt_id"] = credentialAttemptID }
+        return post(DesktopAuthProtocol.ackPath, body: body)
+    }
+
+    /// WK paired cancellation (pairing authority of this WKWebView jar).
+    func cancelRequest(attemptID: String) -> URLRequest {
+        post(DesktopAuthProtocol.cancelPath, body: ["attempt_id": attemptID])
+    }
+
+    func authorizeURL(attemptID: String, state: String) -> URL? {
+        guard var components = URLComponents(url: origin.url.appendingPathComponent(
+            DesktopAuthProtocol.authorizePath.hasPrefix("/")
+                ? String(DesktopAuthProtocol.authorizePath.dropFirst())
+                : DesktopAuthProtocol.authorizePath
+        ), resolvingAgainstBaseURL: false) else { return nil }
+        components.queryItems = [
+            URLQueryItem(name: "attempt", value: attemptID),
+            URLQueryItem(name: "state", value: state),
+        ]
+        return components.url
+    }
+
+    /// Parse the fixed pending path. Native accepts it only for its own active
+    /// generation and state.
+    func pendingAttempt(_ url: URL) -> (attemptID: String, state: String)? {
+        guard origin.contains(url), url.path == DesktopAuthProtocol.pendingPath,
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              items.count == 2,
+              let attemptID = items.first(where: { $0.name == "attempt" })?.value,
+              let state = items.first(where: { $0.name == "state" })?.value,
+              !attemptID.isEmpty, !state.isEmpty else { return nil }
+        return (attemptID, state)
+    }
+
+    /// Fixed login return path (recovery even when cleanup cannot reach the server).
+    var loginReturnURL: URL { origin.url.appendingPathComponent("login") }
+    /// Fixed settings return path for credential rounds.
+    var settingsReturnURL: URL { origin.url.appendingPathComponent("workspace/settings") }
+
+    func returnURL(for purpose: DesktopAuthPurpose) -> URL {
+        purpose == .login ? loginReturnURL : settingsReturnURL
+    }
+
+    /// Only an explicit same-origin MAIN-FRAME click on the exact request path
+    /// starts the handoff. Iframes (including same-origin iframe -> _top),
+    /// cross-origin entries and ordinary external links keep the existing
+    /// behavior (including the open-in-browser confirmation).
+    static func interception(
+        url: URL,
+        source: URL?,
+        sourceIsMainFrame: Bool,
+        targetIsMainFrame: Bool,
+        userActivated: Bool,
+        origin: WorkspaceOrigin
+    ) -> DesktopAuthRequestContext? {
+        guard sourceIsMainFrame, targetIsMainFrame, userActivated,
+              let source, origin.contains(source), origin.contains(url),
+              url.path == DesktopAuthProtocol.requestPath,
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let providerValue = items.first(where: { $0.name == "provider" })?.value,
+              let purposeValue = items.first(where: { $0.name == "purpose" })?.value,
+              let provider = DesktopAuthProvider(rawValue: providerValue),
+              let purpose = DesktopAuthPurpose(rawValue: purposeValue)
+        else { return nil }
+        func value(_ name: String) -> String? {
+            items.first(where: { $0.name == name })?.value
+        }
+        let role: DesktopAuthRole
+        if purpose == .login {
+            guard value("role") == nil || value("role") == "login" else { return nil }
+            role = .login
+        } else {
+            guard let rawRole = value("role"), let parsed = DesktopAuthRole(rawValue: rawRole),
+                  parsed == .current || parsed == .target else { return nil }
+            role = parsed
+        }
+        var intent: DesktopCredentialIntent?
+        if purpose == .credentialRound {
+            guard let rawIntent = value("intent"), let parsed = DesktopCredentialIntent(rawValue: rawIntent) else { return nil }
+            intent = parsed
+        }
+        let extras = Set(items.map(\.name)).subtracting(["provider", "purpose", "role", "intent", "target", "attempt"])
+        guard extras.isEmpty else { return nil }
+        return DesktopAuthRequestContext(
+            provider: provider,
+            purpose: purpose,
+            role: role,
+            intent: intent,
+            targetProvider: value("target"),
+            continuationAttemptID: value("attempt")
+        )
+    }
+}
+
+// MARK: - Pure state machine
+
+/// Pure native state machine. Generation and host-epoch checks make stale
+/// navigation, delayed responses and late callbacks inert; the pair
+/// (host epoch, generation, attempt) is the only authority the host consults.
+struct DesktopAuthHandoffState: Equatable {
+    private(set) var generation: UInt64 = 0
+    private(set) var hostEpoch: UInt64 = 0
+    private(set) var phase: DesktopAuthPhase = .idle
+    private(set) var attempt: DesktopAuthAttempt?
+
+    var isActive: Bool {
+        switch phase {
+        case .preparing, .awaitingAuthorization, .authenticating, .consuming,
+             .awaitingAcknowledgment, .awaitingTarget:
+            return true
+        case .idle, .finished, .recovering:
+            return false
+        }
+    }
+
+    /// The retained round (attempt id/verifier) survives an ambiguous outcome
+    /// until acknowledgment or the original deadline.
+    var retainedAttempt: DesktopAuthAttempt? { attempt }
+
+    /// Begin one attempt. A newer start RETIRES the previous generation before
+    /// anything else, so a delayed callback from the old browser or its
+    /// cancellation can never touch the new attempt.
+    mutating func begin(context: DesktopAuthRequestContext) -> DesktopAuthAttempt {
+        generation &+= 1
+        let newAttempt = DesktopAuthAttempt(
+            generation: generation,
+            hostEpoch: hostEpoch,
+            context: context,
+            verifier: DesktopAuthSecrets.random(),
+            state: DesktopAuthSecrets.random(),
+            attemptID: nil
+        )
+        attempt = newAttempt
+        phase = .preparing
+        return newAttempt
+    }
+
+    /// Accept the fixed pending navigation only for the active generation and
+    /// the exact native state.
+    mutating func acceptPending(attemptID: String, state: String) -> DesktopAuthAttempt? {
+        guard phase == .preparing,
+              var current = attempt,
+              current.state == state, state.count >= 16 else { return nil }
+        current.attemptID = attemptID
+        attempt = current
+        phase = .awaitingAuthorization
+        return current
+    }
+
+    mutating func authenticationStarted() {
+        guard phase == .awaitingAuthorization else { return }
+        phase = .authenticating
+    }
+
+    /// Validate the successful fixed callback before anything is submitted.
+    mutating func acceptCallback(attemptID: String, code: String, state: String) -> DesktopAuthAttempt? {
+        guard let current = attempt,
+              current.attemptID == attemptID,
+              current.state == state,
+              phase == .awaitingAuthorization || phase == .authenticating else { return nil }
+        phase = .consuming
+        return current
+    }
+
+    /// A terminal `outcome=cancelled` callback is accepted only for the owning
+    /// attempt and generation; it ends the operation WITHOUT a success claim.
+    mutating func acceptCancellation(attemptID: String, state: String) -> DesktopAuthAttempt? {
+        guard let current = attempt,
+              current.attemptID == attemptID,
+              current.state == state,
+              phase == .awaitingAuthorization || phase == .authenticating else { return nil }
+        generation &+= 1
+        attempt = nil
+        phase = .idle
+        return current
+    }
+
+    /// Consume dispatch recorded; the deadline is retained until a confirmed
+    /// terminal navigation or acknowledgment.
+    mutating func consumeDispatched() {
+        guard phase == .consuming else { return }
+    }
+
+    /// A confirmed terminal navigation or server acknowledgment clears secrets.
+    mutating func finished() {
+        generation &+= 1
+        attempt = nil
+        phase = .finished
+    }
+
+    /// Terminal for this generation: cancelled, timed out, window closed or
+    /// navigation aborted. Late callbacks for it are ignored.
+    mutating func cancel() -> DesktopAuthAttempt? {
+        let closed = attempt
+        generation &+= 1
+        attempt = nil
+        phase = .idle
+        return closed
+    }
+
+    /// Ambiguous consume outcome: truthful recovery state, never a success or
+    /// cancellation claim and never an automatic replay. The attempt, verifier
+    /// and generation are RETAINED until server acknowledgment or the original
+    /// deadline so the paired result read stays possible.
+    mutating func recovering(reason: String, ambiguous: Bool) {
+        phase = .recovering(reason: reason, ambiguous: ambiguous)
+    }
+
+    /// A host/page lifetime change (navigate away, Back, Retry, page
+    /// replacement, window destruction, origin replacement or a relevant
+    /// same-origin account change) retires the current operation.
+    mutating func retireHostEpoch() {
+        hostEpoch &+= 1
+        generation &+= 1
+        attempt = nil
+        phase = .idle
+    }
+
+    func owns(generation candidate: UInt64, hostEpoch epoch: UInt64) -> Bool {
+        candidate == generation && epoch == hostEpoch && attempt?.generation == candidate
+    }
+}
+
+// MARK: - Host navigation policy
+
+/// The navigation policy shared by WorkspaceBrowser and its tests. Only the
+/// controller's OWN navigation objects are "owned"; everything else follows
+/// the ordinary external-link behavior.
+struct DesktopAuthHostPolicy: Equatable {
+    enum Decision: Equatable {
+        case startHandoff(DesktopAuthRequestContext)
+        case acceptPending(attemptID: String, state: String)
+        case allowOwnedNavigation
+        case ordinary
+    }
+
+    private(set) var ownedNavigations: [ObjectIdentifier: UInt64] = [:]
+    private(set) var state = DesktopAuthHandoffState()
+
+    /// An interception decision for one navigation action.
+    static func decide(
+        url: URL,
+        source: URL?,
+        sourceIsMainFrame: Bool,
+        targetIsMainFrame: Bool,
+        userActivated: Bool,
+        origin: WorkspaceOrigin
+    ) -> Decision {
+        if let context = DesktopAuthRequests.interception(
+            url: url,
+            source: source,
+            sourceIsMainFrame: sourceIsMainFrame,
+            targetIsMainFrame: targetIsMainFrame,
+            userActivated: userActivated,
+            origin: origin
+        ) {
+            return .startHandoff(context)
+        }
+        return .ordinary
+    }
+
+    mutating func begin(context: DesktopAuthRequestContext) -> DesktopAuthAttempt {
+        state.begin(context: context)
+    }
+
+    mutating func registerOwnedNavigation(_ navigation: ObjectIdentifier, generation: UInt64) {
+        ownedNavigations[navigation] = generation
+    }
+
+    /// Only a navigation owned by the CURRENT generation is fenced; a delayed
+    /// completion from an older generation is inert.
+    func ownsNavigation(_ navigation: ObjectIdentifier) -> Bool {
+        guard let generation = ownedNavigations[navigation] else { return false }
+        return generation == state.generation
+    }
+
+    mutating func retireOwnedNavigations() {
+        ownedNavigations.removeAll()
+    }
+}
+
+// MARK: - Controller
+
+/// Thin host around the pure state machine: loads the fixed prepare/consume/
+/// result/ack/cancel requests in the ORIGINAL WKWebView and runs provider
+/// rounds in one ASWebAuthenticationSession per window. No credential bridge
+/// exists: the verifier lives only here and in the consume/result request
+/// bodies. Browser callbacks are bound to their immutable generation and host
+/// epoch BEFORE installation, so a late callback from an older browser or an
+/// older page generation is always inert.
+@MainActor
+final class DesktopAuthenticationSession: ObservableObject {
+    struct BrowserOwnership: Equatable {
+        let generation: UInt64
+        let hostEpoch: UInt64
+    }
+
+    private let requests: DesktopAuthRequests
+    private var state = DesktopAuthHandoffState()
+    private var policy = DesktopAuthHostPolicy()
+    private var authenticationSession: DesktopAuthBrowserSession?
+    private var browserOwnership: BrowserOwnership?
+    private var timeoutTask: Task<Void, Never>?
+    private var deadline: Date?
+    private let loadRequest: (URLRequest) -> AnyObject?
+    private let makeBrowserSession: (URL, String, Bool) -> DesktopAuthBrowserSession
+    private let presentationAnchor: () -> ASPresentationAnchor?
+    private let now: () -> Date
+    private let launchOptions: DesktopAuthLaunchOptions
+
+    @Published private(set) var status: String?
+    @Published private(set) var recovery: Recovery?
+
+    struct Recovery: Equatable {
+        let message: String
+        let returnURL: URL
+        let ambiguous: Bool
+    }
+
+    init(
+        origin: WorkspaceOrigin,
+        launchOptions: DesktopAuthLaunchOptions = .standard,
+        now: @escaping () -> Date = Date.init,
+        loadRequest: @escaping (URLRequest) -> AnyObject?,
+        presentationAnchor: @escaping () -> ASPresentationAnchor?,
+        makeBrowserSession: ((URL, String, Bool) -> DesktopAuthBrowserSession)? = nil
+    ) {
+        self.requests = DesktopAuthRequests(origin: origin)
+        self.launchOptions = launchOptions
+        self.now = now
+        self.loadRequest = loadRequest
+        self.presentationAnchor = presentationAnchor
+        self.makeBrowserSession = makeBrowserSession ?? { url, scheme, ephemeral in
+            SystemAuthenticationBrowserSession(
+                url: url,
+                callbackScheme: scheme,
+                ephemeral: ephemeral,
+                anchor: presentationAnchor
+            )
+        }
+    }
+
+    /// Dispatch one fixed request in the ORIGINAL WKWebView and fence its
+    /// navigation object to the current generation.
+    private func dispatch(_ request: URLRequest) {
+        if let navigation = loadRequest(request) {
+            policy.registerOwnedNavigation(ObjectIdentifier(navigation), generation: state.generation)
+        }
+    }
+
+    static var authProtocolVersion: Int { DesktopAuthProtocol.authProtocolVersion }
+    static var credentialRoundProtocolVersion: Int { DesktopAuthProtocol.credentialRoundProtocolVersion }
+
+    var hasActiveAttempt: Bool { state.isActive }
+    var currentGeneration: UInt64 { state.generation }
+    var currentHostEpoch: UInt64 { state.hostEpoch }
+
+    /// Parse the fixed same-origin pending path (display navigation).
+    func pendingAttempt(_ url: URL) -> (attemptID: String, state: String)? {
+        requests.pendingAttempt(url)
+    }
+
+    /// Intercepted same-origin request link: begin one attempt generation.
+    func start(context: DesktopAuthRequestContext) {
+        // Retire the previous browser BEFORE anything else so its delayed
+        // nil/error callback cannot cancel the new attempt.
+        retireBrowser()
+        recovery = nil
+        let attempt = state.begin(context: context)
+        policy = DesktopAuthHostPolicy()
+        _ = policy.begin(context: context)
+        status = context.purpose == .login ? "正在准备登录…" : "正在准备验证…"
+        dispatch(requests.prepareRequest(attempt: attempt))
+        scheduleTimeout(generation: attempt.generation, hostEpoch: attempt.hostEpoch)
+    }
+
+    /// Pending navigation accepted only for the active generation and state.
+    @discardableResult
+    func acceptPending(attemptID: String, state rawState: String) -> Bool {
+        guard let attempt = state.acceptPending(attemptID: attemptID, state: rawState),
+              let url = requests.authorizeURL(attemptID: attemptID, state: attempt.state) else { return false }
+        state.authenticationStarted()
+        status = "请在系统浏览器中完成验证。"
+        let ownership = BrowserOwnership(generation: attempt.generation, hostEpoch: attempt.hostEpoch)
+        let session = makeBrowserSession(url, DesktopAuthProtocol.callbackScheme, launchOptions.prefersEphemeralBrowserSession)
+        // Ownership is captured BEFORE installing the callback: both the
+        // successful and the nil/error paths are validated against it.
+        browserOwnership = ownership
+        let started = session.start { [weak self] callbackURL, error in
+            Task { @MainActor [weak self] in
+                self?.handleBrowserCompletion(callbackURL: callbackURL, error: error, ownership: ownership)
+            }
+        }
+        guard started else {
+            // A refused start is immediately recoverable; no phantom wait.
+            let closed = state.cancel()
+            browserOwnership = nil
+            timeoutTask?.cancel()
+            timeoutTask = nil
+            status = "无法打开系统验证窗口。"
+            recovery = Recovery(
+                message: "无法打开系统验证窗口，请重试。",
+                returnURL: requests.returnURL(for: closed?.context.purpose ?? .login),
+                ambiguous: false
+            )
+            return false
+        }
+        authenticationSession = session
+        return true
+    }
+
+    /// Both browser completion paths validate the captured ownership.
+    private func handleBrowserCompletion(callbackURL: URL?, error: Error?, ownership: BrowserOwnership) {
+        guard state.owns(generation: ownership.generation, hostEpoch: ownership.hostEpoch) else {
+            // A stale browser's completion (success or cancellation) is inert.
+            return
+        }
+        if let callbackURL {
+            _ = handleCallback(callbackURL, ownership: ownership)
+        } else {
+            cancel(reason: error == nil ? "登录已取消。" : "登录没有完成，请重试。")
+        }
+    }
+
+    /// Fixed callback: validate scheme, host, path, state, attempt and the
+    /// current generation, then redeem the one-use code same-origin. The
+    /// terminal `outcome=cancelled` variant retires the operation without a
+    /// success claim.
+    @discardableResult
+    func handleCallback(_ rawURL: URL, ownership: BrowserOwnership? = nil) -> Bool {
+        if let ownership, !state.owns(generation: ownership.generation, hostEpoch: ownership.hostEpoch) {
+            return false
+        }
+        guard let callback = DesktopAuthCallback.parse(rawURL.absoluteString) else { return false }
+        switch callback {
+        case let .success(attemptID, code, stateValue):
+            guard let attempt = state.acceptCallback(attemptID: attemptID, code: code, state: stateValue) else {
+                if let current = state.attempt, current.attemptID == attemptID {
+                    // Callback tampering against the active attempt fails closed.
+                    cancel(reason: "这次登录没有完成。")
+                }
+                return false
+            }
+            retireBrowser()
+            status = "正在完成登录…"
+            dispatch(requests.consumeRequest(attemptID: attemptID, code: code, verifier: attempt.verifier))
+            return true
+        case let .cancelled(attemptID, stateValue):
+            guard let closed = state.acceptCancellation(attemptID: attemptID, state: stateValue) else { return false }
+            retireBrowser()
+            _ = closed
+            status = "已取消这次操作。"
+            recovery = Recovery(
+                message: "已取消这次操作，可以回到应用重试。",
+                returnURL: requests.returnURL(for: state.attempt?.context.purpose ?? .login),
+                ambiguous: false
+            )
+            return true
+        }
+    }
+
+    /// WK paired cancellation (provider cancellation, timeout, offline failure,
+    /// window destruction): cleanup is best-effort and the fixed return works
+    /// even when the server cannot be reached.
+    func cancel(reason: String) {
+        let closed = state.cancel()
+        retireBrowser()
+        status = reason
+        if let attemptID = closed?.attemptID {
+            dispatch(requests.cancelRequest(attemptID: attemptID))
+        }
+        recovery = Recovery(
+            message: reason,
+            returnURL: requests.returnURL(for: closed?.context.purpose ?? .login),
+            ambiguous: false
+        )
+    }
+
+    /// Confirmed terminal navigation of the fixed return route (or a server
+    /// acknowledgment): clear retained verifier/attempt secrets.
+    func terminalReached() {
+        state.finished()
+        retireBrowser()
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        recovery = nil
+        status = nil
+    }
+
+    /// The consume navigation finished WITHOUT a confirmed terminal: the
+    /// outcome is AMBIGUOUS. Recovery reads the read-only paired result and
+    /// never replays the one-use mutation.
+    func consumeNavigationFailed() {
+        enterRecovery(
+            reason: "无法确认这次更改的结果。请在设置中核对实际状态，不要重复提交。",
+            ambiguous: true,
+            generation: state.generation,
+            hostEpoch: state.hostEpoch
+        )
+    }
+
+    /// Host/page lifetime events retire the outstanding operation.
+    func hostLifetimeChanged(reason: String) {
+        guard state.isActive else { return }
+        retireBrowser()
+        policy.retireOwnedNavigations()
+        state.retireHostEpoch()
+        status = reason
+    }
+
+    func windowWillClose() {
+        cancel(reason: "窗口已关闭，操作未完成。")
+    }
+
+    /// Navigation lifecycle fence: only the controller's OWN navigation for the
+    /// current generation is meaningful.
+    func ownsNavigation(_ navigation: ObjectIdentifier) -> Bool {
+        policy.ownsNavigation(navigation)
+    }
+
+    func registerOwnedNavigation(_ navigation: ObjectIdentifier) {
+        policy.registerOwnedNavigation(navigation, generation: state.generation)
+    }
+
+    /// Paired acknowledgment dispatched by the host once the original WK
+    /// request carries the server-sealed continuation (the consume terminal).
+    /// Native retains the round's verifier/attempt until THIS acknowledgment
+    /// or the original deadline; only then may a target round begin.
+    func acknowledgeContinuation() {
+        guard let attempt = state.retainedAttempt ?? state.attempt, let attemptID = attempt.attemptID else { return }
+        dispatch(requests.ackRequest(attemptID: attemptID, verifier: attempt.verifier, credentialAttemptID: ""))
+    }
+
+    /// The consume terminal landed on the fixed settings return: this is the
+    /// acknowledgment point for password/target continuations. The round's
+    /// verifier/attempt/generation are RETAINED until the server acknowledgment
+    /// actually returns (or the original deadline); a successful WK navigation
+    /// is not an acknowledgment and the current round is not "done" here.
+    func consumeTerminalReached(url: URL?) -> Bool {
+        guard let url, url.path == "/workspace/settings" else { return false }
+        guard state.attempt != nil else { return false }
+        acknowledgeContinuation()
+        status = "等待确认…"
+        return true
+    }
+
+    /// The paired acknowledgment response reached the fixed acknowledged
+    /// route: only now is the round confirmed and its secrets cleared.
+    func acknowledgmentConfirmed(url: URL?) -> Bool {
+        guard let url, url.path == "/workspace/settings",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              items.first(where: { $0.name == "desktop-auth" })?.value == "acknowledged"
+        else { return false }
+        terminalReached()
+        return true
+    }
+
+    /// Result readback after an uncertain consume (paired, verifier-bound).
+    func requestResultRead() {
+        guard let attempt = state.retainedAttempt, let attemptID = attempt.attemptID else { return }
+        dispatch(requests.resultRequest(attemptID: attemptID, verifier: attempt.verifier))
+    }
+
+    private func enterRecovery(reason: String, ambiguous: Bool, generation: UInt64, hostEpoch: UInt64) {
+        guard state.generation == generation, state.hostEpoch == hostEpoch else { return }
+        state.recovering(reason: reason, ambiguous: ambiguous)
+        authenticationSession?.cancel()
+        authenticationSession = nil
+        browserOwnership = nil
+        recovery = Recovery(
+            message: reason,
+            returnURL: requests.settingsReturnURL,
+            ambiguous: ambiguous
+        )
+    }
+
+    /// Deterministic deadline check driven by the injected clock: the deadline
+    /// is retained through consume and only a confirmed terminal clears it.
+    func checkDeadline() {
+        guard let deadline, now() >= deadline else { return }
+        cancel(reason: "操作超时，请重试。")
+    }
+
+    private func retireBrowser() {
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        browserOwnership = nil
+        authenticationSession?.cancel()
+        authenticationSession = nil
+    }
+
+    private func scheduleTimeout(generation: UInt64, hostEpoch: UInt64) {
+        timeoutTask?.cancel()
+        timeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(DesktopAuthProtocol.attemptTTL * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            guard let self, self.state.owns(generation: generation, hostEpoch: hostEpoch) else { return }
+            self.cancel(reason: "操作超时，请重试。")
+        }
+    }
+}

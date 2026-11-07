@@ -1,0 +1,59 @@
+import { createHash } from "node:crypto";
+import type { PublicBrowserObservation } from "./isolatedPublicBrowser.js";
+
+export const BROWSER_EXECUTOR_PATH = "/v1/browse";
+export const BROWSER_EXECUTOR_PORT = 4319;
+export const BROWSER_REQUEST_BYTES = 4_096;
+export const BROWSER_RESPONSE_BYTES = 80_000;
+export interface BrowserExecutorRequest {
+  version: 1;
+  task_id: string;
+  call_id: string;
+  source_id: string;
+  provider_id: string;
+  url: string;
+  deadline: number;
+}
+function object(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("BROWSER_PROTOCOL_INVALID");
+  return value as Record<string, unknown>;
+}
+function exact(value: Record<string, unknown>, keys: string[]) {
+  if (Object.keys(value).length !== keys.length || keys.some(key => !(key in value))) throw new Error("BROWSER_PROTOCOL_INVALID");
+}
+export function parseBrowserRequest(raw: unknown): BrowserExecutorRequest {
+  const value = object(raw);
+  exact(value, ["version", "task_id", "call_id", "source_id", "provider_id", "url", "deadline"]);
+  if (value.version !== 1 || !Number.isSafeInteger(value.deadline)
+    || [value.task_id, value.call_id].some(id => typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/u.test(id))
+    || typeof value.source_id !== "string" || !/^[a-f0-9]{64}$/u.test(value.source_id)
+    || typeof value.provider_id !== "string" || !["exa", "tikhub", "browser"].includes(value.provider_id)
+    || typeof value.url !== "string" || value.url.length > 2_000) throw new Error("BROWSER_PROTOCOL_INVALID");
+  const url = new URL(value.url);
+  if (url.protocol !== "https:" || url.username || url.password || url.port
+    || createHash("sha256").update(`${value.provider_id}:${value.url}`).digest("hex") !== value.source_id) {
+    throw new Error("BROWSER_SOURCE_INVALID");
+  }
+  return { version: 1, task_id: value.task_id as string, call_id: value.call_id as string,
+    source_id: value.source_id, provider_id: value.provider_id, url: value.url, deadline: value.deadline as number };
+}
+export function parseBrowserResponse(raw: unknown, request: BrowserExecutorRequest): PublicBrowserObservation {
+  const value = object(raw);
+  exact(value, ["request", "observation"]);
+  const returned = parseBrowserRequest(value.request);
+  for (const key of Object.keys(request) as (keyof BrowserExecutorRequest)[]) {
+    if (returned[key] !== request[key]) throw new Error("BROWSER_RESPONSE_IDENTITY_MISMATCH");
+  }
+  const page = object(value.observation);
+  exact(page, ["url", "title", "text", "engine", "engineVersion", "requests", "blockedRequests", "httpRequests", "responseBytes"]);
+  if (page.engine !== "chromium" || typeof page.engineVersion !== "string" || !page.engineVersion || page.engineVersion.length > 100
+    || typeof page.url !== "string" || page.url.length > 2_000
+    || typeof page.title !== "string" || page.title.length > 500
+    || typeof page.text !== "string" || !page.text.trim()) throw new Error("BROWSER_RESULT_INVALID");
+  const target = new URL(page.url), initial = new URL(request.url);
+  if (target.origin !== initial.origin || target.username || target.password) throw new Error("BROWSER_RESULT_INVALID");
+  for (const [key, minimum, maximum] of [["requests", 1, 40], ["blockedRequests", 0, 40], ["httpRequests", 1, 80], ["responseBytes", 1, 8_000_000]] as const) {
+    if (!Number.isSafeInteger(page[key]) || Number(page[key]) < minimum || Number(page[key]) > maximum) throw new Error("BROWSER_RESULT_INVALID");
+  }
+  return page as unknown as PublicBrowserObservation;
+}

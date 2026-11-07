@@ -1,0 +1,179 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+  PersonResearchServiceRequestSchema,
+  PersonResearchServiceResponseSchema,
+} from "./personResearchServiceSchemas.js";
+
+const runID = "11111111-1111-4111-8111-111111111111";
+
+describe("person research local service contract", () => {
+  it("accepts one bounded screenshot request without product identity authority", () => {
+    expect(
+      PersonResearchServiceRequestSchema.parse({
+        contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+        run_id: runID,
+        objective: "Find possible public profiles from visible text clues.",
+        authorization: {
+          allowed_platforms: ["tiktok", "douyin"],
+          maximum_provider_calls: 2,
+          maximum_results_per_call: 5,
+        },
+        image: {
+          media_type: "image/png",
+          byte_size: 3,
+          content_hash: "a".repeat(64),
+          data_base64: "AQID",
+        },
+      }),
+    ).toMatchObject({ run_id: runID });
+  });
+
+  it("requires zero external effects and same-run public sources", () => {
+    const biography = "  " + "Public professional observation🙂 ".repeat(700) + " END_OF_PROFILE  ";
+    const parsed = PersonResearchServiceResponseSchema.parse({
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+      run_id: runID,
+      receipt: {
+        run_id: runID,
+        status: "artifact_created",
+        reason_code: "ARTIFACT_CREATED",
+        artifact_id: "22222222-2222-4222-8222-222222222222",
+        no_action_id: null,
+        candidate_fingerprint: "b".repeat(64),
+        external_effects: [],
+        permission_denials: [],
+        provider_session_id: null,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+          total_tokens: 15,
+          estimated_usd: 0.001,
+          turns: 2,
+          tool_calls: 2,
+          duration_ms: 30,
+        },
+        completed_at: "2026-08-31T00:00:00.000Z",
+      },
+      result: {
+        kind: "artifact",
+        identity_status: "possible_match",
+        title: "Possible public profile",
+        summary: "One public profile shares the visible handle.",
+        limitations: "Identity is not confirmed.",
+        observed_clues: [{
+          kind: "handle",
+          value: "@synthetic",
+          source_artifact_id: "fixture",
+          observation_status: "unreviewed_screenshot_observation",
+        }],
+        candidates: [{
+          result_id: "c".repeat(64),
+          match_basis: "The public handle matches the visible screenshot handle.",
+        }],
+        claims: [{
+          statement: "The provider returned a public profile with this handle.",
+          epistemic_status: "provider_observation",
+          source_refs: ["c".repeat(64)],
+        }],
+        sources: [{
+          result_id: "c".repeat(64),
+          platform: "tiktok",
+          profile_url: "https://www.tiktok.com/@synthetic",
+          display_name: "Synthetic Fixture",
+          handle: "synthetic",
+          biography,
+          avatar_url: null,
+          verified: false,
+          content_hash: "d".repeat(64),
+          retrieved_at: "2026-08-31T00:00:00.000Z",
+          provider_id: "tikhub",
+          provider_request_id: "provider-request-1",
+        }],
+      },
+    });
+    expect(parsed.receipt.external_effects).toEqual([]);
+    expect(parsed.result.kind).toBe("artifact");
+    if (parsed.result.kind !== "artifact") throw new Error("Expected artifact");
+    const artifact = parsed.result;
+    expect(artifact.sources[0]?.biography).toBe(biography);
+    expect(() => PersonResearchServiceResponseSchema.parse({
+      ...parsed,
+      result: { ...artifact, sources: [{ ...artifact.sources[0], biography: "   " }] },
+    })).toThrow();
+  });
+
+  it("rejects raw non-base64 input and any claimed external effect", () => {
+    expect(() => PersonResearchServiceRequestSchema.parse({
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+      run_id: runID,
+      objective: "Synthetic fixture",
+      authorization: {
+        allowed_platforms: ["tiktok"],
+        maximum_provider_calls: 1,
+        maximum_results_per_call: 5,
+      },
+      image: {
+        media_type: "image/png",
+        byte_size: 3,
+        content_hash: "a".repeat(64),
+        data_base64: "not base64!",
+      },
+    })).toThrow();
+  });
+
+  it("rejects duplicate platform authority and cross-result source references", () => {
+    expect(() => PersonResearchServiceRequestSchema.parse({
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+      run_id: runID,
+      objective: "Synthetic fixture",
+      authorization: {
+        allowed_platforms: ["tiktok", "tiktok"],
+        maximum_provider_calls: 1,
+        maximum_results_per_call: 5,
+      },
+      image: {
+        media_type: "image/png",
+        byte_size: 3,
+        content_hash: "a".repeat(64),
+        data_base64: "AQID",
+      },
+    })).toThrow(/duplicates/u);
+
+    const base = PersonResearchServiceResponseSchema.parse({
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+      run_id: runID,
+      receipt: {
+        run_id: runID,
+        status: "no_action",
+        reason_code: "NO_VISIBLE_IDENTITY_CLUE",
+        artifact_id: null,
+        no_action_id: "55555555-5555-4555-8555-555555555555",
+        candidate_fingerprint: "e".repeat(64),
+        external_effects: [],
+        permission_denials: [],
+        provider_session_id: null,
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          total_tokens: 2,
+          estimated_usd: 0,
+          turns: 1,
+          tool_calls: 0,
+          duration_ms: 1,
+        },
+        completed_at: "2026-08-31T00:00:00.000Z",
+      },
+      result: {
+        kind: "no_action",
+        reason_code: "NO_VISIBLE_IDENTITY_CLUE",
+        reason: "No visible clue.",
+      },
+    });
+    expect(() => PersonResearchServiceResponseSchema.parse({
+      ...base,
+      run_id: "66666666-6666-4666-8666-666666666666",
+    })).toThrow(/must match/u);
+  });
+});

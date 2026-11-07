@@ -1,0 +1,143 @@
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { Pool } from "pg";
+import type { LabJobRequest } from "@talent-signal/contracts";
+import { buildApp } from "../app.js";
+import type { AuthContext } from "./auth.js";
+import { configuredChatPrompt, type RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { LabExperimentJobService } from "./labExperimentJobs.js";
+import { labJobCases } from "./labJobCases.js";
+
+// Supply a server-owned synthetic bundle, never a public prompt override.
+const promptFixture = vi.hoisted(() => ({ text: "  " + "完整系统指令😀e\u0301\n".repeat(3600) + "完整提示词结尾  " }));
+vi.mock("@talent-signal/agent/prompt-registry", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@talent-signal/agent/prompt-registry")>();
+  const bundledPrompt: typeof original.bundledPrompt = (name) => name === "assistant/relationship"
+    ? Object.freeze({ ...original.bundledPrompt(name), text: promptFixture.text, revision: original.promptRevision(promptFixture.text) })
+    : original.bundledPrompt(name);
+  return { ...original, bundledPrompt, resolveProductPrompt: async (name: Parameters<typeof bundledPrompt>[0]) => bundledPrompt(name) };
+});
+
+const database = process.env.LAB_FULL_ANSWER_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) {
+  throw new Error("Use an owned disposable loopback PostgreSQL database.");
+}
+const pool = database ? new Pool({ connectionString: database, max: 6 }) : null;
+const auth: AuthContext = { accountId: randomUUID(), accountSlug: `lab-answer-${randomUUID()}`,
+  userId: randomUUID(), userEmail: "lab-answer@example.test", userKind: "simulated_human", sessionId: randomUUID() };
+const body = "  " + "完整合成证据😀e\u0301\n".repeat(2600) + "精确完整结尾  ";
+let calls = 0;
+function provider(model: string): RemoteChatAnswerProviding {
+  return { providerId: "zhipu-chat-completions", model, supportsImageInput: false, supportsPromptPresets: true,
+    async answer(input) {
+      calls++;
+      expect(input.prompt_snapshot?.text).toBe(promptFixture.text);
+      return { model, provider_id: "zhipu-chat-completions", kind: "answer", title: "Synthetic answer",
+        body, citation_ids: input.allowed_citation_ids, provider_request_id: `synthetic-${calls}`,
+        input_tokens: 39_509, output_tokens: 8_234, usage_reported: true,
+        prompt_revision: configuredChatPrompt("relationship", input.prompt_preset ?? "baseline", input.prompt_snapshot?.text).revision };
+    } };
+}
+const a = provider("lab-full-a"), b = provider("lab-full-b"), providers = new Map([[a.model, a], [b.model, b]]);
+let app: Awaited<ReturnType<typeof buildApp>>, jobs: LabExperimentJobService;
+let headers: { authorization: string }, otherHeaders: { authorization: string };
+beforeAll(async () => {
+  if (!pool || !database) return;
+  vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", "lab-full-answer-proof");
+  vi.stubEnv("LOG_LEVEL", "silent");
+  vi.stubEnv("TALENT_SIGNAL_OPIK_RUNTIME_POLICY", undefined);
+  await pool.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic Lab answer')", [auth.accountId, auth.accountSlug]);
+  for (const [id, email] of [[auth.userId, auth.userEmail], [randomUUID(), "other-lab@example.test"]]) {
+    await pool.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic Lab answer','simulated_human')",
+      [id, auth.accountId, email]);
+  }
+  jobs = new LabExperimentJobService(pool, providers, "lab-full-answer-proof");
+  app = await buildApp({ pool, config: { databaseUrl: database, host: "127.0.0.1", port: 0,
+    allowedOrigins: [], appleSignInAudiences: [], appleSignInEnabled: false, passwordAuthEnabled: false,
+    passwordRegistrationEnabled: false, simulatedAuthEnabled: true, internalLabEnabled: true,
+    retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3600 }, remoteChatProvider: a, labProviders: providers,
+    labJobWorkerEnabled: false, personResearchProvider: null });
+  for (const email of [auth.userEmail, "other-lab@example.test"]) {
+    const login = await app.inject({ method: "POST", url: "/v1/auth/simulated-login", payload: {
+      account_slug: auth.accountSlug, user_email: email, client_label: "isolated-lab-full-answer-proof" } });
+    expect(login.statusCode, login.body).toBe(200);
+    const value = { authorization: `Bearer ${login.json().access_token}` };
+    if (email === auth.userEmail) headers = value; else otherHeaders = value;
+  }
+}, 30_000);
+afterAll(async () => { await jobs?.close(); await app?.close(); await pool?.end(); vi.unstubAllEnvs(); });
+
+describe.skipIf(!database)("complete Lab answer registered HTTP and PostgreSQL lifecycle", () => {
+  it("retains both experiment answers on persisted GET, replay and review without another model call", async () => {
+    expect(body.length).toBeGreaterThan(16000);
+    expect(promptFixture.text.length).toBeGreaterThan(32000);
+    const beforeCalls = calls;
+    const id = randomUUID(), request = { id, case_id: "conflicting-evidence", models: [a.model, b.model] };
+    const started = await app.inject({ method: "POST", url: "/v1/lab/experiments", headers,
+      payload: { ...request, prompt_snapshot: { text: "Untrusted client prompt must never execute" } } });
+    expect(started.statusCode, started.body).toBe(202);
+    await vi.waitFor(async () => {
+      const saved = await app.inject({ method: "GET", url: `/v1/lab/experiments/${id}`, headers });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(saved.json().experiment.status).toBe("completed");
+      expect(saved.json().experiment.prompt_snapshot.text).toBe(promptFixture.text);
+      expect(saved.json().experiment.results.map((value: { answer: string }) => value.answer)).toEqual([body, body]);
+    }, { timeout: 5000, interval: 20 });
+    const count = calls;
+    expect(count - beforeCalls).toBe(2);
+    const stored = await pool!.query("SELECT record FROM lab_experiments WHERE id=$1", [id]);
+    expect(stored.rows[0].record.results.map((value: { answer: string }) => value.answer)).toEqual([body, body]);
+    expect(stored.rows[0].record.prompt_snapshot.text).toBe(promptFixture.text);
+    const replay = await app.inject({ method: "POST", url: "/v1/lab/experiments", headers, payload: request });
+    expect(replay.statusCode, replay.body).toBe(202);
+    expect(replay.json().experiment.results.map((value: { answer: string }) => value.answer)).toEqual([body, body]);
+    expect(replay.json().experiment.prompt_snapshot.text).toBe(promptFixture.text);
+    const reviewed = await app.inject({ method: "POST", url: `/v1/lab/experiments/${id}/review`, headers, payload: { review: "tie" } });
+    expect(reviewed.statusCode, reviewed.body).toBe(200);
+    expect(reviewed.json().experiment.results.map((value: { answer: string }) => value.answer)).toEqual([body, body]);
+    expect(reviewed.json().experiment.prompt_snapshot.text).toBe(promptFixture.text);
+    expect(reviewed.json().experiment.results.every((value: { input_tokens: number; output_tokens: number }) =>
+      value.input_tokens === 39_509 && value.output_tokens === 8_234)).toBe(true);
+    expect(calls).toBe(count);
+    const foreign = await app.inject({ method: "GET", url: `/v1/lab/experiments/${id}`, headers: otherHeaders });
+    expect(foreign.statusCode).toBe(404);
+    expect(foreign.body).not.toContain("精确完整结尾");
+    expect(foreign.body).not.toContain("完整提示词结尾");
+  });
+
+  it("retains full frozen batch attempt answers through worker persistence, HTTP readback and idempotent replay", async () => {
+    const beforeCalls = calls;
+    const id = randomUUID();
+    const request: LabJobRequest = { id, task: "relationship_text", catalog_revision: jobs.catalogRevision,
+      case_ids: [labJobCases("relationship_text")[0]!.id], configurations: [
+        { model: a.model, prompt_preset: "baseline" }, { model: a.model, prompt_preset: "concise" }],
+      repetitions: 1, call_limit: 2 };
+    const queued = await app.inject({ method: "POST", url: "/v1/lab/experiment-jobs", headers, payload: { ...request,
+      configurations: request.configurations.map(value => ({ ...value, prompt_snapshot: { text: "Untrusted client prompt must never execute" } })) } });
+    expect(queued.statusCode, queued.body).toBe(202);
+    const originalExpiry = queued.json().job.expires_at;
+    await jobs.tick(); await jobs.waitForIdle();
+    const saved = await app.inject({ method: "GET", url: `/v1/lab/experiment-jobs/${id}`, headers });
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect(saved.json().job.status).toBe("completed");
+    expect(saved.json().job.definition.configurations.map((value: { prompt_snapshot: { text: string } }) => value.prompt_snapshot.text))
+      .toEqual([promptFixture.text, promptFixture.text]);
+    expect(saved.json().job.attempts.map((value: { answer: string }) => value.answer)).toEqual([body, body]);
+    expect(saved.json().job.quality).toBe("needs_review");
+    const stored = await pool!.query("SELECT record FROM lab_experiment_attempts WHERE job_id=$1 ORDER BY ordinal", [id]);
+    expect(stored.rows.map((value) => value.record.answer)).toEqual([body, body]);
+    const count = calls;
+    expect(count - beforeCalls).toBe(2);
+    const replay = await app.inject({ method: "POST", url: "/v1/lab/experiment-jobs", headers, payload: request });
+    expect(replay.statusCode, replay.body).toBe(202);
+    expect(replay.json().job.attempts.map((value: { answer: string }) => value.answer)).toEqual([body, body]);
+    expect(replay.json().job.expires_at).toBe(originalExpiry);
+    expect(replay.json().job.definition.configurations.map((value: { prompt_snapshot: { text: string } }) => value.prompt_snapshot.text))
+      .toEqual([promptFixture.text, promptFixture.text]);
+    expect(calls).toBe(count);
+    const foreign = await app.inject({ method: "GET", url: `/v1/lab/experiment-jobs/${id}`, headers: otherHeaders });
+    expect(foreign.statusCode).toBe(404);
+    expect(foreign.body).not.toContain("精确完整结尾");
+    expect(foreign.body).not.toContain("完整提示词结尾");
+  });
+});

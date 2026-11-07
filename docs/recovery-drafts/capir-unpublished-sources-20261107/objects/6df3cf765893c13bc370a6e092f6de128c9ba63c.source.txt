@@ -1,0 +1,143 @@
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { buildApp } from "../app.js";
+import type { BackendConfig } from "../config.js";
+
+// Run only against the disposable database created by the deployment-upgrade proof.
+// Sanitized recovery source: credentials belong only to an explicitly selected
+// disposable fixture. No built-in login or password is retained here.
+function requiredFixtureCredential(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required for the disposable seeded fixture.`);
+  return value;
+}
+
+const database = process.env.CAPIR_DESKTOP_INTEGRATION_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) {
+  throw new Error("capir/desktop coexistence requires a disposable loopback database.");
+}
+const pool = database ? new Pool({ connectionString: database, max: 6 }) : null;
+const webOrigin = "http://127.0.0.1:3000";
+const backendOrigin = "http://127.0.0.1:4317";
+const secret = () => randomBytes(32).toString("base64url");
+let app: Awaited<ReturnType<typeof buildApp>>;
+let modelCalls = 0;
+
+describe.skipIf(!pool)("deployed desktop login and capir on the production router", () => {
+  beforeAll(async () => {
+    const config: BackendConfig = {
+      databaseUrl: database!, host: "127.0.0.1", port: 4317,
+      allowedOrigins: [webOrigin], capirBackendOrigins: [backendOrigin],
+      capirWebHandoffKey: "owned-test-consumer-key-with-32-characters",
+      appleSignInAudiences: [], appleSignInEnabled: false,
+      passwordAuthEnabled: true, passwordRegistrationEnabled: false,
+      simulatedAuthEnabled: true, internalLabEnabled: true,
+      retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3600,
+      chatMediaStorage: { provider: "local", directory: process.env.CAPIR_DESKTOP_MEDIA_DIRECTORY! },
+    };
+    app = await buildApp({
+      config, pool: pool!,
+      remoteChatProvider: {
+        providerId: "zhipu-chat-completions", model: "owned-proof-model", supportsImageInput: false,
+        async answer() { modelCalls += 1; throw new Error("A model must never run in strict replay."); },
+      },
+      privateConversationProvider: null,
+      personResearchProvider: null, screenshotContact: null,
+      conversationQueueWorkerEnabled: false, labJobWorkerEnabled: false,
+    });
+  }, 60_000);
+
+  afterAll(async () => {
+    await app?.close();
+    await pool?.end();
+  });
+
+  it("keeps all three authorities separate and strict replay at zero model calls", async () => {
+    const call = (method: "GET" | "POST", url: string, payload?: object, token?: string) =>
+      app.inject({ method, url, ...(payload ? { payload } : {}),
+        ...(token ? { headers: { authorization: `Bearer ${token}` } } : {}) });
+
+    const login = await call("POST", "/v1/auth/password/login", {
+      identifier: requiredFixtureCredential("CAPIR_PROOF_LOGIN_IDENTIFIER"), password: requiredFixtureCredential("CAPIR_PROOF_LOGIN_PASSWORD"), client_label: "coexistence-browser",
+    });
+    expect(login.statusCode, login.body).toBe(200);
+    const ordinary = login.json().access_token as string;
+    expect((await call("GET", "/v1/auth/session", undefined, ordinary)).statusCode).toBe(200);
+
+    const verifier = secret(), state = secret();
+    const prepared = await call("POST", "/v1/desktop-browser-login/prepare", {
+      protocol_version: 1, purpose: "macos-primary-login", web_origin: webOrigin,
+      challenge: createHash("sha256").update(verifier).digest("base64url"),
+      state, cancel_secret: secret(),
+    });
+    expect(prepared.statusCode, prepared.body).toBe(200);
+    const attemptId = prepared.json().attempt_id as string;
+    const approved = await call("POST", `/v1/desktop-browser-login/${attemptId}/approve`,
+      { state, web_origin: webOrigin }, ordinary);
+    expect(approved.statusCode, approved.body).toBe(200);
+    const consumed = await call("POST", "/v1/desktop-browser-login/consume", {
+      attempt_id: attemptId, code: approved.json().code, verifier, state, web_origin: webOrigin,
+    });
+    expect(consumed.statusCode, consumed.body).toBe(200);
+    const desktop = consumed.json().access_token as string;
+    expect((await call("GET", "/v1/auth/session", undefined, desktop)).statusCode).toBe(200);
+    expect((await call("POST", "/v1/desktop-browser-login/consume", {
+      attempt_id: attemptId, code: approved.json().code, verifier, state, web_origin: webOrigin,
+    })).statusCode).toBe(409);
+
+    const capirVerifier = secret(), capirState = secret();
+    const redirectUri = "http://127.0.0.1:54321/capir/callback";
+    const authorized = await call("POST", "/v1/capir/auth/authorize", {
+      redirect_uri: redirectUri, state: capirState,
+      code_challenge: createHash("sha256").update(capirVerifier).digest("base64url"),
+      code_challenge_method: "S256", web_origin: webOrigin, backend_origin: backendOrigin,
+      consent: true, client_label: "coexistence-cli",
+    }, desktop);
+    expect(authorized.statusCode, authorized.body).toBe(200);
+    const exchanged = await call("POST", "/v1/capir/auth/exchange", {
+      code: authorized.json().code, code_verifier: capirVerifier, state: capirState,
+      redirect_uri: redirectUri, web_origin: webOrigin, backend_origin: backendOrigin,
+    });
+    expect(exchanged.statusCode, exchanged.body).toBe(200);
+    const cli = exchanged.json().access_token as string;
+    expect((await call("GET", "/v1/capir/auth/status", undefined, cli)).statusCode).toBe(200);
+    expect((await call("GET", "/v1/auth/session", undefined, cli)).statusCode).toBe(401);
+    expect((await call("GET", "/v1/capir/auth/status", undefined, desktop)).statusCode).toBe(401);
+    const cliDesktopAttempt = await call("POST", `/v1/desktop-browser-login/${attemptId}/approve`,
+      { state, web_origin: webOrigin }, cli);
+    expect(cliDesktopAttempt.statusCode).toBe(401);
+
+    const capabilities = await call("GET", "/v1/capir/capabilities");
+    expect(capabilities.statusCode, capabilities.body).toBe(200);
+    expect(capabilities.json().model_policy).toBe("strict_replay");
+    const scenario = capabilities.json().scenarios.find((value: { id: string }) => value.id === "empty");
+    const sandboxId = randomUUID();
+    const started = await call("POST", "/v1/capir/sandboxes", {
+      id: sandboxId, scenario_id: "empty", scenario_version: "1", scenario_digest: scenario.digest,
+      duration_hours: 1, member_role: "member", model_policy: "strict_replay",
+    }, cli);
+    expect(started.statusCode, started.body).toBe(200);
+    expect(started.json().sandbox.state).toBe("ready");
+    const handoff = await call("POST", `/v1/capir/sandboxes/${sandboxId}/handoffs`,
+      { id: randomUUID() }, cli);
+    expect(handoff.statusCode, handoff.body).toBe(200);
+    const entered = await app.inject({ method: "POST", url: "/v1/capir/handoffs/exchange",
+      headers: { "x-capir-web-handoff-key": "owned-test-consumer-key-with-32-characters" },
+      payload: { handoff_secret: handoff.json().handoff_secret, web_origin: webOrigin } });
+    expect(entered.statusCode, entered.body).toBe(200);
+    const lab = entered.json().session.access_token as string;
+    expect((await call("GET", "/v1/auth/session", undefined, lab)).statusCode).toBe(200);
+    const replayMiss = await call("GET", `/v1/contact-agent/tasks/${randomUUID()}`, undefined, lab);
+    expect(replayMiss.statusCode).toBe(409);
+    expect(replayMiss.json().error.code).toBe("REPLAY_MISS");
+    expect((await call("GET", "/v1/auth/session", undefined, ordinary)).statusCode).toBe(200);
+    expect((await call("GET", "/v1/auth/session", undefined, desktop)).statusCode).toBe(200);
+    // A synthetic model sentry was configured; the production replay gate
+    // refused the model-backed route before it could invoke that provider.
+    expect(modelCalls).toBe(0);
+    expect(await pool!.query("SELECT count(*)::int AS n FROM capir_sandboxes WHERE id=$1 AND model_policy='strict_replay'", [sandboxId]))
+      .toMatchObject({ rows: [{ n: 1 }] });
+  }, 60_000);
+});

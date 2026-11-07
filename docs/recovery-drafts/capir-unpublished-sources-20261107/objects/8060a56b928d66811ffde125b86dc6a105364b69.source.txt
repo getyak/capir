@@ -1,0 +1,132 @@
+/**
+ * Pure helpers for the default conversation canvas.
+ *
+ * The canvas does not own a second store. An unsent objective becomes a
+ * pending intent inside the existing, partitioned, 24-hour `session-drafts`
+ * record (see `components/session-workbench/session-draft-pending.ts`), so a
+ * reload can repeat the same canonical Session and the same request id instead
+ * of silently starting a new conversation. The server contract owns the
+ * Session identity and transport admission; nothing here
+ * authenticates, scopes a message or outlives the account partition.
+ */
+
+import {
+  createPendingSessionDraft,
+  findPendingSessionDraft,
+  type PendingSessionDraft,
+} from "@/components/session-workbench/session-draft-pending";
+
+
+export type NewConversationIntent = {
+  /** Canonical Session id created through `/api/workspace-sessions`. */
+  sessionId: string;
+  /** Stable task id; reusing it makes a retry the same intent, not a new one. */
+  requestId: string;
+  /** Canonical timestamp used as the Session's client update time. */
+  updatedAt: string;
+};
+
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export function isNewConversationId(value: unknown): value is string {
+  return typeof value === "string" && UUID.test(value);
+}
+
+/** One stable intent per unsent objective; retries must reuse it unchanged. */
+export function createNewConversationIntent(
+  now = Date.now(),
+): NewConversationIntent {
+  return {
+    sessionId: crypto.randomUUID(),
+    requestId: crypto.randomUUID(),
+    updatedAt: new Date(now).toISOString(),
+  };
+}
+
+export function boundedNewConversationObjective(value: string): string {
+  return value;
+}
+
+/** Send is enabled only for a non-empty objective with no run in flight. */
+export function objectiveIsSendable(value: string, busy: boolean): boolean {
+  return !busy && value.trim().length > 0;
+}
+
+/**
+ * A retry may only repeat the exact objective that failed, and only while no
+ * other run is in flight. Anything else would be a new message, not a retry.
+ */
+export function isRetryOf(
+  failedObjective: string | null,
+  candidate: string,
+): boolean {
+  return (
+    failedObjective !== null &&
+    failedObjective.trim().length > 0 &&
+    failedObjective === candidate
+  );
+}
+
+/**
+ * The durable draft/intent record for an unsent objective on a Session that
+ * already exists on the server. `baseRevision` comes from the created Session,
+ * never from a guess.
+ */
+export function newConversationPendingDraft(input: {
+  storageScope: string;
+  intent: NewConversationIntent;
+  objective: string;
+  baseRevision: number;
+  now?: number;
+}): PendingSessionDraft {
+  return { ...createPendingSessionDraft({
+    baseRevision: input.baseRevision,
+    draft: boundedNewConversationObjective(input.objective),
+    idempotencyKey: input.intent.requestId,
+    now: input.now,
+    predecessor: null,
+    sessionId: input.intent.sessionId,
+    storageScope: input.storageScope,
+    updatedAt: input.intent.updatedAt,
+  }), purpose: "conversation-home" } as PendingSessionDraft;
+}
+
+/** Rebuild the exact intent a reloaded canvas must retry, or nothing. */
+export function newConversationIntentFromPending(
+  pending: PendingSessionDraft | null,
+): NewConversationIntent | null {
+  if (!pending) return null;
+  if (
+    !isNewConversationId(pending.sessionId) ||
+    !isNewConversationId(pending.latest.idempotencyKey) ||
+    !pending.latest.draft.trim()
+  ) {
+    return null;
+  }
+  return {
+    sessionId: pending.sessionId,
+    requestId: pending.latest.idempotencyKey,
+    updatedAt: pending.latest.updatedAt,
+  };
+}
+
+/**
+ * Where a screenshot that created a governed relationship review continues:
+ * the living person page, using the identity the server already returned.
+ */
+export function newConversationCaptureHref(
+  subjectId: string,
+  assignmentId: string,
+): string {
+  const search = new URLSearchParams({
+    person: subjectId,
+    context: assignmentId,
+  });
+  return `/workspace?${search.toString()}`;
+}
+
+/** Only the new-message canvas owns these records; never restore another session's editor. */
+export function readHomeConversationDraft(storageScope: string): PendingSessionDraft | null {
+  return findPendingSessionDraft(storageScope, undefined, undefined, "conversation-home");
+}

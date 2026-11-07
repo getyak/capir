@@ -1,0 +1,13 @@
+import {z} from "zod";
+import {ContactResearchChannelSchema, CONTACT_RESEARCH_MAX_CHANNELS, CONTACT_RESEARCH_MAX_RESULTS_PER_CHANNEL} from "./contactResearchSchemas.js";
+
+// SDK schemas stay in the Agent package; the backend independently validates
+// these arguments before dispatching to Agent Host.
+export const WorkspacePublicSubjectSearchSchema=z.strictObject({
+  subject_id:z.string().min(1).max(200),
+  results_per_channel:z.number().int().min(1).max(CONTACT_RESEARCH_MAX_RESULTS_PER_CHANNEL).optional(),
+  channels:z.array(ContactResearchChannelSchema).min(1).max(CONTACT_RESEARCH_MAX_CHANNELS).optional(),
+});
+export const WorkspacePublicSourceFetchSchema=z.strictObject({
+  source_ids:z.array(z.string().regex(/^[a-f0-9]{64}$/u)).min(1).max(5),
+});

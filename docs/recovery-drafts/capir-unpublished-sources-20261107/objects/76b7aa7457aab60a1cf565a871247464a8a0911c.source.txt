@@ -1,0 +1,420 @@
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WorkspaceComposer } from "./workspace-composer";
+
+const { directoryMock } = vi.hoisted(() => ({ directoryMock: vi.fn() }));
+vi.mock("./workspace-search", () => ({ useWorkspaceDirectory: directoryMock }));
+
+let root: Root;
+let stage: HTMLDivElement;
+let anchorTop = 420;
+let anchorBottom = 480;
+let bannerBottom = 185;
+let stageTop = 58;
+let optionTop = 6;
+let fullRowHeight = 60;
+let compactRowHeight = 60;
+const observers: Array<{ callback: () => void; targets: Element[] }> = [];
+function bounds(top: number, bottom: number, left = 18, right = 302): DOMRect {
+  return { top, bottom, left, right, x: left, y: top, width: right - left, height: bottom - top, toJSON: () => ({}) };
+}
+async function open(withBanner = true, value = "/", inCanvas = false) {
+  stage = document.createElement("div");
+  stage.id = "workspace-content";
+  if (withBanner) {
+    const banner = document.createElement("aside");
+    banner.role = "status";
+    stage.append(banner);
+  }
+  const mount = document.createElement("div");
+  if (inCanvas) {
+    const canvas = document.createElement("main");
+    canvas.dataset.conversationCanvas = "";
+    canvas.style.overflowY = "auto";
+    stage.append(canvas); canvas.append(mount);
+  } else stage.append(mount);
+  document.body.append(stage);
+  root = createRoot(mount);
+  const props = {
+    id: "position-composer", label: "Message", value, maxLength: 1000,
+    placeholder: "Message", canSubmit: false, binding: null,
+    onValueChange: vi.fn(), onSubmit: vi.fn(), onNavigate: vi.fn(), onFiles: vi.fn(),
+    layout: "inline" as const, variant: "home" as const,
+  };
+  await act(async () => root.render(createElement(WorkspaceComposer, props)));
+  const input = stage.querySelector("textarea")!;
+  await act(async () => {
+    input.focus();
+    input.setSelectionRange(1, 1);
+    input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "/" }));
+  });
+  return { props, input, popup: document.getElementById(input.getAttribute("aria-controls")!)!.parentElement! };
+}
+beforeEach(() => {
+  anchorTop = 420; anchorBottom = 480; bannerBottom = 185; stageTop = 58;
+  observers.length = 0; optionTop = 6; fullRowHeight = 60; compactRowHeight = 60;
+  directoryMock.mockReturnValue({ data: null, loading: false, failed: false, retry: vi.fn() });
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class {
+    instance: { callback: () => void; targets: Element[] };
+    constructor(callback: () => void) { this.instance = { callback, targets: [] }; observers.push(this.instance); }
+    observe(target: Element) { this.instance.targets.push(target); }
+    unobserve(target: Element) { this.instance.targets = this.instance.targets.filter((entry) => entry !== target); }
+    disconnect() { this.instance.targets = []; }
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this.id === "workspace-content") return bounds(stageTop, 700);
+    if (this.role === "status") return bounds(stageTop, bannerBottom);
+    if (this.querySelector(":scope > textarea")) return bounds(anchorTop, anchorBottom);
+    if (this.role === "option") return bounds(optionTop, optionTop + (this.closest("[data-density]")?.getAttribute("data-density") === "compact" ? compactRowHeight : fullRowHeight));
+    if (this.role === "listbox") return bounds(0, 74);
+    return bounds(0, 0);
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(74);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(60);
+  vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  vi.stubGlobal("innerWidth", 320);
+  vi.stubGlobal("innerHeight", 700);
+});
+afterEach(async () => {
+  if (root) await act(async () => root.unmount());
+  stage?.remove();
+  vi.restoreAllMocks(); vi.unstubAllGlobals();
+});
+describe("visible composer suggestions", () => {
+  it("keeps keyboard choice through passive hover and allows intentional pointer choice", async () => {
+    const { input, props } = await open();
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    const selected = () => input.getAttribute("aria-activedescendant");
+    const keyboardChoice = selected();
+    const options = stage.querySelectorAll<HTMLElement>('[role="option"]');
+    expect(keyboardChoice).toBe(options[1]!.id);
+    await act(async () => options[2]!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
+    expect(selected()).toBe(keyboardChoice);
+    await act(async () => options[2]!.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse", clientX: 100, clientY: 200 })));
+    expect(selected()).toBe(options[2]!.id);
+    await act(async () => options[0]!.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "touch", clientX: 100, clientY: 100 })));
+    expect(selected()).toBe(options[2]!.id);
+    expect(props.onValueChange).not.toHaveBeenCalled();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(props.onNavigate).not.toHaveBeenCalled();
+    expect(props.onFiles).not.toHaveBeenCalled();
+  });
+
+  it("uses the compact inset budget and retains the inline guard below one complete row", async () => {
+    vi.stubGlobal("innerHeight", 400); anchorTop = 259; anchorBottom = 323; bannerBottom = 182;
+    fullRowHeight = 102; compactRowHeight = 60;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(62);
+    const computed = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+      if (element.getAttribute("role") !== "listbox") return computed(element);
+      const inset = element.parentElement?.dataset.density === "compact" ? "3px" : "6px";
+      return { paddingTop: inset, paddingBottom: inset } as CSSStyleDeclaration;
+    });
+    const { popup, input, props } = await open();
+    expect(popup.dataset.density).toBe("compact");
+    expect(popup.dataset.side).toBe("above");
+    expect(popup.style.maxHeight).toBe("69px");
+    const observer = observers.find(({ targets }) => targets.includes(input.parentElement!))!;
+    for (let i = 0; i < 6; i++) await act(async () => observer.callback());
+    expect(popup.dataset.side).toBe("above");
+    bannerBottom = 185;
+    await act(async () => observer.callback());
+    expect(popup.dataset.side).toBe("inline");
+    bannerBottom = 182;
+    await act(async () => observer.callback());
+    expect(popup.dataset.side).toBe("above");
+    vi.stubGlobal("innerHeight", 700); anchorTop = 420; anchorBottom = 480;
+    await act(async () => observer.callback());
+    expect(popup.dataset.density).toBe("full");
+    expect(input.value).toBe("/");
+    expect(props.onValueChange).not.toHaveBeenCalled();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(props.onNavigate).not.toHaveBeenCalled();
+    expect(props.onFiles).not.toHaveBeenCalled();
+  });
+
+  it("enters Slash-only compact density and settles through resize/font/notice changes", async () => {
+    vi.stubGlobal("innerHeight", 400); anchorTop = 258; anchorBottom = 320; bannerBottom = 174;
+    fullRowHeight = 102;
+    const { popup, input } = await open();
+    expect(popup.dataset.density).toBe("compact");
+    expect(popup.dataset.side).toBe("above");
+    const observer = observers.find(({ targets }) => targets.includes(input.parentElement!))!;
+    for (let i = 0; i < 6; i++) await act(async () => observer.callback());
+    expect(popup.dataset.density).toBe("compact");
+    expect(popup.dataset.side).toBe("above");
+    vi.stubGlobal("innerHeight", 700); anchorTop = 420; anchorBottom = 480;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    expect(popup.dataset.density).toBe("full");
+    expect(stage.querySelector('[aria-keyshortcuts="F1"]')).toBeNull();
+    vi.stubGlobal("innerHeight", 400); anchorTop = 258; anchorBottom = 320;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    expect(popup.dataset.density).toBe("compact");
+    fullRowHeight = 60;
+    await act(async () => observer.callback());
+    expect(popup.dataset.density).toBe("full");
+    fullRowHeight = 102;
+    await act(async () => observer.callback());
+    expect(popup.dataset.density).toBe("compact");
+    bannerBottom = 100;
+    await act(async () => observer.callback());
+    expect(popup.dataset.density).toBe("full");
+    expect(input.value).toBe("/");
+    expect(document.activeElement).toBe(input);
+  });
+  it("opens read-only help and restores draft/caret before Slash Escape restores attachment", async () => {
+    vi.stubGlobal("innerHeight", 400); anchorTop = 258; anchorBottom = 320; bannerBottom = 174; fullRowHeight = 102;
+    const { input, props } = await open();
+    const help = stage.querySelector<HTMLButtonElement>('[aria-keyshortcuts="F1"]')!;
+    expect(help.getAttribute("aria-label")).toContain("整理这段对话");
+    await act(async () => help.click());
+    const dialog = stage.querySelector("dialog")!;
+    expect(dialog.open).toBe(true);
+    expect(dialog.querySelector("h2")!.textContent).toBe("整理这段对话");
+    expect(dialog.querySelector("p")!.textContent).toBeTruthy();
+    await act(async () => dialog.close());
+    expect(dialog.open).toBe(false);
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(1);
+    expect(input.selectionEnd).toBe(1);
+    expect(input.value).toBe("/");
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(props.onNavigate).not.toHaveBeenCalled();
+    expect(props.onFiles).not.toHaveBeenCalled();
+    expect(props.onValueChange).not.toHaveBeenCalled();
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(input.getAttribute("aria-controls")).toBeNull();
+    expect(stage.querySelector('[aria-keyshortcuts="F1"]')).toBeNull();
+    expect(stage.querySelector('[aria-label="添加文件、工具与提示，或查找人物"]')).not.toBeNull();
+  });
+  it("supports F1 help without committing or accepting an IME candidate", async () => {
+    vi.stubGlobal("innerHeight", 400); anchorTop = 258; anchorBottom = 320; bannerBottom = 174; fullRowHeight = 102;
+    const { input } = await open(); const dialog = stage.querySelector("dialog")!;
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "F1", bubbles: true, isComposing: true })));
+    expect(dialog.open).toBe(false);
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "F1", bubbles: true })));
+    const openedDialog = stage.querySelector("dialog")!;
+    expect(openedDialog.open).toBe(true);
+    await act(async () => openedDialog.close());
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("/");
+  });
+  it("discards stale help without explicitly focusing the replaced composer", async () => {
+    vi.stubGlobal("innerHeight", 400); anchorTop = 258; anchorBottom = 320; bannerBottom = 174; fullRowHeight = 102;
+    const { props } = await open();
+    await act(async () => stage.querySelector<HTMLButtonElement>('[aria-keyshortcuts="F1"]')!.click());
+    const outside = document.createElement("button"); document.body.append(outside); outside.focus();
+    await act(async () => root.render(createElement(WorkspaceComposer, { ...props, binding: "new-synthetic-binding" })));
+    expect(stage.querySelector("dialog")!.open).toBe(false);
+    expect(document.activeElement).toBe(outside); outside.remove();
+  });
+  it("never condenses mention identity or disclosure when a row cannot fit", async () => {
+    vi.stubGlobal("innerHeight", 400); anchorTop = 258; anchorBottom = 320; bannerBottom = 174; fullRowHeight = 102;
+    directoryMock.mockReturnValue({ data: { people: { people: [{ id: "synthetic-person", display_label: "Synthetic", contexts: [] }] }, sessions: { sessions: [] } }, loading: false, failed: false, retry: vi.fn() });
+    const { popup } = await open(true, "@");
+    expect(popup.dataset.density).toBe("full");
+    expect(popup.dataset.side).toBe("inline");
+    expect(stage.querySelector('[aria-keyshortcuts="F1"]')).toBeNull();
+    expect(stage.textContent).toContain("引用");
+  });
+  it("keeps an above menu below the wrapped workspace banner", async () => {
+    const { popup } = await open();
+    expect(popup.dataset.side).toBe("above");
+    expect(anchorTop - 8 - parseFloat(popup.style.maxHeight)).toBeGreaterThanOrEqual(bannerBottom);
+  });
+  it("repositions after the leading notice grows without changing focus or draft", async () => {
+    const { popup, input } = await open();
+    const observer = observers.find(({ targets }) => targets.includes(stage.querySelector("aside")!))!;
+    expect(observer).toBeDefined();
+    bannerBottom = 300;
+    await act(async () => observer.callback());
+    expect(popup.dataset.side).toBe("below");
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("/");
+  });
+  it("reserves an asynchronous leading notice and restores space after removal", async () => {
+    const { popup, input } = await open(false);
+    const notice = document.createElement("aside");
+    notice.role = "status"; bannerBottom = 300;
+    await act(async () => { stage.prepend(notice); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(popup.dataset.side).toBe("below");
+    expect(observers.some(({ targets }) => targets.includes(notice))).toBe(true);
+    await act(async () => { notice.remove(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(popup.dataset.side).toBe("above");
+    expect(observers.some(({ targets }) => targets.includes(notice))).toBe(false);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("/");
+  });
+  it("opens below when the banner leaves more space beneath the composer", async () => {
+    anchorTop = 260; anchorBottom = 320;
+    const { popup } = await open();
+    expect(popup.dataset.side).toBe("below");
+    expect(parseFloat(popup.style.maxHeight)).toBeLessThanOrEqual(700 - anchorBottom - 92);
+  });
+  it("retains ordinary layout and updates after viewport resize and scroll", async () => {
+    const { popup, input } = await open(false);
+    expect(popup.dataset.side).toBe("above");
+    expect(parseFloat(popup.style.maxHeight)).toBe(348);
+    vi.stubGlobal("innerHeight", 500);
+    anchorTop = 180; anchorBottom = 240;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    expect(popup.dataset.side).toBe("below");
+    anchorTop = 90; anchorBottom = 150;
+    await act(async () => window.dispatchEvent(new Event("scroll")));
+    expect(popup.dataset.side).toBe("below");
+    expect(document.activeElement).toBe(input);
+  });
+  it("fits one complete option above a 400px viewport without expanding the input", async () => {
+    vi.stubGlobal("innerHeight", 400);
+    anchorTop = 258; anchorBottom = 320; bannerBottom = 174;
+    const { popup, input } = await open();
+    expect(popup.dataset.side).toBe("above");
+    expect(parseFloat(popup.style.maxHeight)).toBe(76);
+    expect(anchorTop - 8 - parseFloat(popup.style.maxHeight)).toBe(bannerBottom);
+    expect(document.activeElement).toBe(input);
+  });
+  it("retains the fallback when neither side fits a full option", async () => {
+    vi.stubGlobal("innerHeight", 400);
+    anchorTop = 220; anchorBottom = 282; bannerBottom = 180;
+    const { popup } = await open();
+    expect(popup.dataset.side).toBe("inline");
+  });
+  it("scrolls only the list when keyboard selection is outside its visible area", async () => {
+    const { input } = await open();
+    const list = stage.querySelector<HTMLElement>('[role="listbox"]')!;
+    optionTop = 200;
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
+    expect(list.scrollTop).toBe(186);
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("/");
+  });
+  it("re-budgets an unchanged mention draft when the directory finishes loading", async () => {
+    vi.stubGlobal("innerHeight", 400);
+    anchorTop = 258; anchorBottom = 320; bannerBottom = 174;
+    directoryMock.mockReturnValue({ data: null, loading: true, failed: false, retry: vi.fn() });
+    const { popup, input } = await open(true, "@");
+    expect(popup.dataset.side).toBe("inline");
+    directoryMock.mockReturnValue({
+      data: { people: { people: [{ id: "synthetic-person", display_label: "Synthetic", contexts: [] }] }, sessions: { sessions: [] } },
+      loading: false, failed: false, retry: vi.fn(),
+    });
+    await act(async () => root.render(createElement(WorkspaceComposer, {
+      id: "position-composer", label: "Message", value: "@", maxLength: 1000,
+      placeholder: "Message", variant: "home", canSubmit: false, binding: null,
+      onValueChange: vi.fn(), onSubmit: vi.fn(), onNavigate: vi.fn(),
+    })));
+    expect(popup.dataset.side).toBe("above");
+    expect(parseFloat(popup.style.maxHeight)).toBe(76);
+    expect(observers.at(-1)!.targets).toContain(popup.querySelector('[role="option"]'));
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("@");
+  });
+  it("does not reserve nested conversation status messages", async () => {
+    const { popup } = await open(false);
+    const nested = document.createElement("div");
+    nested.role = "status"; bannerBottom = 410;
+    stage.lastElementChild!.append(nested);
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    expect(popup.dataset.side).toBe("above");
+    expect(parseFloat(popup.style.maxHeight)).toBe(348);
+  });
+});
+
+
+// Use a moving anchor so repeated resize checks measure the result of local
+// scrolling, rather than adding the same mocked delta on every event.
+async function containedComposer() {
+  vi.stubGlobal("innerHeight", 392);
+  anchorTop = 259; anchorBottom = 321; bannerBottom = 174;
+  const opened = await open(true, "/", true);
+  const canvas = opened.input.closest<HTMLElement>("[data-conversation-canvas]")!;
+  Object.defineProperty(canvas, "clientHeight", { configurable: true, value: 140 });
+  Object.defineProperty(canvas, "clientTop", { configurable: true, value: 0 });
+  canvas.getBoundingClientRect = () => bounds(174, 314);
+  opened.input.parentElement!.getBoundingClientRect = () => bounds(259 - canvas.scrollTop, 321 - canvas.scrollTop);
+  return { ...opened, canvas };
+}
+async function settleFocus(input: HTMLTextAreaElement) {
+  await act(async () => {
+    input.blur(); input.focus();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
+}
+describe("focused inline composer containment", () => {
+  it("reveals the whole composer locally and converges without changing the draft", async () => {
+    const { input, canvas, props } = await containedComposer();
+    const documentScroll = document.documentElement.scrollTop;
+    await settleFocus(input);
+    expect(canvas.scrollTop).toBe(9);
+    expect(input.parentElement!.getBoundingClientRect().bottom).toBe(312);
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    expect(canvas.scrollTop).toBe(9);
+    expect(document.documentElement.scrollTop).toBe(documentScroll);
+    expect(input.value).toBe("/");
+    expect(input.selectionStart).toBe(1);
+    for (const callback of [props.onValueChange, props.onSubmit, props.onNavigate, props.onFiles]) expect(callback).not.toHaveBeenCalled();
+  });
+  it("measures responsive parent geometry after the resize event", async () => {
+    const { input, canvas } = await containedComposer();
+    await settleFocus(input);
+    canvas.scrollTop = 0;
+    let bottom = 300;
+    input.parentElement!.getBoundingClientRect = () => bounds(bottom - 62 - canvas.scrollTop, bottom - canvas.scrollTop);
+    await act(async () => {
+      window.dispatchEvent(new Event("resize"));
+      bottom = 321;
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    expect(canvas.scrollTop).toBe(9);
+  });
+  it("recovers when the actual canvas changes size after viewport processing", async () => {
+    const { input, canvas } = await containedComposer();
+    await settleFocus(input);
+    canvas.scrollTop = 0;
+    const observer = observers.find((entry) => entry.targets.includes(canvas));
+    expect(observer).toBeDefined();
+    await act(async () => {
+      observer!.callback();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    expect(canvas.scrollTop).toBe(9);
+  });
+  it("preserves intentional scrolling and unfocused resizing until focus returns", async () => {
+    const { input, canvas } = await containedComposer();
+    await settleFocus(input);
+    canvas.scrollTop = 4;
+    await act(async () => {
+      canvas.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+    expect(canvas.scrollTop).toBe(4);
+    await act(async () => { input.blur(); window.dispatchEvent(new Event("resize")); });
+    expect(canvas.scrollTop).toBe(4);
+    await settleFocus(input);
+    expect(canvas.scrollTop).toBe(9);
+  });
+  it("does not scroll a non-scrollable canvas or promise containment when space is insufficient", async () => {
+    const { input, canvas } = await containedComposer();
+    canvas.style.overflowY = "visible";
+    await settleFocus(input);
+    expect(canvas.scrollTop).toBe(0);
+    canvas.style.overflowY = "auto";
+    Object.defineProperty(canvas, "clientHeight", { configurable: true, value: 48 });
+    await settleFocus(input);
+    expect(canvas.scrollTop).toBe(0);
+  });
+  it("cancels a pending focus correction when the binding changes", async () => {
+    const { input, canvas, props } = await containedComposer();
+    const callbacks = new Map<number, FrameRequestCallback>(); let next = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callbacks.set(++next, callback); return next; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { callbacks.delete(id); });
+    await act(async () => { input.blur(); input.focus(); });
+    await act(async () => root.render(createElement(WorkspaceComposer, { ...props, binding: "another-conversation" })));
+    await act(async () => { for (const callback of callbacks.values()) callback(0); });
+    expect(canvas.scrollTop).toBe(0);
+  });
+});

@@ -1,0 +1,34 @@
+import { CapirCliError } from '../errors.js';
+export function readInput(signal: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    let text = '';
+    const cleanup = () => { process.stdin.off('data', data); process.stdin.off('end', end); process.stdin.off('error', error); signal.removeEventListener('abort', abort); process.stdin.pause(); };
+    const error = (e: unknown) => { cleanup(); reject(e); };
+    const abort = () => { cleanup(); process.stdin.destroy(); reject(signal.reason); };
+    const data = (chunk: Buffer) => { try {
+      text += decoder.decode(chunk, { stream: true });
+    }
+    catch (cause) {
+      error(cause instanceof RangeError ? new CapirCliError('CAPIR_MODEL_INPUT_RESOURCE', 5, 'Input could not be represented; no generation was dispatched.') : Object.assign(new Error('Input must be valid UTF-8.'), { input: true }));
+      process.stdin.destroy();
+    } };
+    const end = () => { try {
+      text += decoder.decode();
+      cleanup();
+      resolve(text);
+    }
+    catch (cause) {
+      error(cause instanceof RangeError ? new CapirCliError('CAPIR_MODEL_INPUT_RESOURCE', 5, 'Input could not be represented; no generation was dispatched.') : Object.assign(new Error('Input must be valid UTF-8.'), { input: true }));
+    } };
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+    process.stdin.on('data', data);
+    process.stdin.once('end', end);
+    process.stdin.once('error', error);
+    process.stdin.resume();
+  });
+}

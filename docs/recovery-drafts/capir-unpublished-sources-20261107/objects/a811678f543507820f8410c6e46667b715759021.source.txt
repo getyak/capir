@@ -1,0 +1,55 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { modelDeadline } from '../dist/model/deadline.js';
+import { parseModelArgs } from '../dist/model/args.js';
+function fakeClock() {
+  let now = 0;
+  let next = 0;
+  const timers = new Map();
+  const delays = [];
+  return {
+    timers, delays,
+    now: () => now,
+    set: (callback, delay) => { delays.push(delay); timers.set(++next, callback); return next; },
+    clear: handle => timers.delete(handle),
+    advance: delta => { now += delta; const pending = [...timers.values()]; timers.clear(); for (const callback of pending) callback(); },
+  };
+}
+test('absent per-call deadline schedules no timer or callback', () => {
+  const clock = fakeClock(); let expired = 0;
+  assert.equal(modelDeadline(() => expired++, undefined, clock), undefined);
+  clock.advance(1_000_000);
+  assert.equal(clock.delays.length, 0); assert.equal(expired, 0);
+});
+test('explicit duration beyond one Node timer interval survives and expires once', () => {
+  const clock = fakeClock(); let expired = 0;
+  const duration = 2_147_483_647 + 25_000;
+  const dispose = modelDeadline(() => expired++, duration, clock);
+  assert.deepEqual(clock.delays, [2_147_483_647]);
+  clock.advance(2_147_483_647);
+  assert.equal(expired, 0); assert.deepEqual(clock.delays, [2_147_483_647, 25_000]);
+  clock.advance(24_000); assert.equal(expired, 0); assert.equal(clock.delays.at(-1), 1000);
+  clock.advance(1000); assert.equal(expired, 1);
+  clock.advance(duration); assert.equal(expired, 1);
+  dispose(); assert.equal(clock.timers.size, 0);
+});
+test('disposing a completed or cancelled owner prevents a previously queued callback', () => {
+  const clock = fakeClock(); let expired = 0;
+  const dispose = modelDeadline(() => expired++, 999_000, clock);
+  const queued = [...clock.timers.values()][0];
+  dispose(); assert.equal(clock.timers.size, 0);
+  clock.advance(999_001); queued(); assert.equal(expired, 0);
+});
+test('explicit timeout accepts more than900seconds and exact representable long durations', () => {
+  for (const seconds of ['901', '86400', String(Math.floor(Number.MAX_SAFE_INTEGER / 1000))]) {
+    assert.equal(parseModelArgs(['ask', 'fixture', '--timeout', seconds]).values.timeout, seconds);
+  }
+});
+test('invalid or unrepresentable durations fail before generation', () => {
+  for (const value of [0, -1, NaN, Infinity, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => modelDeadline(() => {}, value), /MODEL_DEADLINE_INVALID/);
+  }
+  for (const seconds of ['0', '-1', '1.5', 'NaN', 'Infinity', String(Math.floor(Number.MAX_SAFE_INTEGER / 1000) + 1)]) {
+    assert.throws(() => parseModelArgs(['ask', 'fixture', '--timeout', seconds]), /--timeout must be an integer/);
+  }
+});

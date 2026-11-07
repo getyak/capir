@@ -1,0 +1,133 @@
+import { assertAgentBudget } from "./runBudget.js";
+import type { AgentBudget } from "./types.js";
+import type {
+  AgentPersonResearchAuthorization,
+  AgentPersonResearchPlatform,
+} from "./types.js";
+
+export class AgentPersonResearchPolicyError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AgentPersonResearchPolicyError";
+  }
+}
+
+const PLATFORMS = new Set<AgentPersonResearchPlatform>([
+  "douyin",
+  "tiktok",
+  "weibo",
+  "threads",
+]);
+
+const CONTACT_OR_BACKGROUND_CHECK =
+  /\b(?:email|e-mail|phone|mobile|home\s+address|personal\s+address|background\s+check|criminal\s+record)\b|个人邮箱|邮箱地址|手机号|电话号码|家庭住址|家庭地址|背调|犯罪记录/iu;
+const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/iu;
+const PHONE = /(?:\+?\d[\d\s().-]{7,}\d)/u;
+const APPEARANCE_IDENTITY =
+  /\b(?:face\s*(?:match|recognition|search)|facial\s+(?:match|recognition)|identify\s+(?:him|her|them)\s+by\s+(?:face|appearance)|reverse\s+face)\b|人脸识别|人脸搜索|以貌识人|通过长相|反向人脸/iu;
+const PROHIBITED_ASSESSMENT =
+  /\b(?:personality|culture\s+fit|candidate\s+(?:score|rank|quality)|acceptance\s+probability|protected\s+trait|race|ethnicity|religion|disability|sexual\s+orientation|political\s+(?:view|affiliation))\b|性格|文化契合|候选人(?:评分|排名|质量)|接受概率|受保护特征|种族|民族|宗教|残障|性取向|政治(?:观点|倾向)/iu;
+
+export function assertPersonResearchAuthorization(
+  authorization: AgentPersonResearchAuthorization,
+): AgentPersonResearchAuthorization {
+  const allowedPlatforms = [...new Set(authorization.allowedPlatforms)];
+  if (
+    authorization.purpose !== "person_public_profile_research" ||
+    authorization.accessMode !== "visible_screenshot_identity_clues" ||
+    allowedPlatforms.length < 1 ||
+    allowedPlatforms.length > PLATFORMS.size ||
+    allowedPlatforms.some((platform) => !PLATFORMS.has(platform))
+  ) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_AUTHORIZATION_INVALID",
+      "Person research requires an explicit screenshot-clue scope and 1-4 supported public platforms.",
+    );
+  }
+  if (
+    (authorization.maximumProviderCalls !== undefined && (!Number.isSafeInteger(authorization.maximumProviderCalls) || authorization.maximumProviderCalls <= 0)) ||
+    !Number.isInteger(authorization.maximumResultsPerCall) ||
+    authorization.maximumResultsPerCall < 1 ||
+    authorization.maximumResultsPerCall > 10
+  ) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_BUDGET_INVALID",
+      "Explicit provider-call limits must be positive safe integers; each provider page permits 1-10 normalized results.",
+    );
+  }
+  return Object.freeze({ ...authorization, allowedPlatforms });
+}
+
+export function assertPersonResearchQuery(query: string): string {
+  const normalized = query.normalize("NFKC").trim();
+  if (normalized.length < 2) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_QUERY_INVALID",
+      "A public-profile query must contain at least two visible identity-clue characters.",
+    );
+  }
+  if (
+    CONTACT_OR_BACKGROUND_CHECK.test(normalized) ||
+    EMAIL.test(normalized) ||
+    PHONE.test(normalized)
+  ) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_SENSITIVE_QUERY_PROHIBITED",
+      "Person research cannot search for contact details, addresses, or background checks.",
+    );
+  }
+  if (APPEARANCE_IDENTITY.test(normalized)) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_FACE_IDENTIFICATION_PROHIBITED",
+      "Person research cannot identify someone from face or appearance.",
+    );
+  }
+  if (PROHIBITED_ASSESSMENT.test(normalized)) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_ASSESSMENT_PROHIBITED",
+      "Person research cannot score, rank, or infer protected or sensitive traits.",
+    );
+  }
+  return normalized;
+}
+
+export function assertPersonResearchDraftText(text: string): void {
+  const boundaryStatementRemoved = text
+    .replace(
+      /(?:未|没有|不会|不应|禁止|不得)(?:进行|使用)?(?:任何)?(?:人脸识别|人脸搜索|反向人脸)/gu,
+      "",
+    )
+    .replace(
+      /\b(?:no|without|never|do not|does not|did not)\s+(?:use\s+)?(?:face|facial|reverse-face)[\s-]+(?:match|matching|recognition|search|identification)\b/giu,
+      "",
+    );
+  if (
+    CONTACT_OR_BACKGROUND_CHECK.test(boundaryStatementRemoved) ||
+    EMAIL.test(boundaryStatementRemoved) ||
+    PHONE.test(boundaryStatementRemoved) ||
+    APPEARANCE_IDENTITY.test(boundaryStatementRemoved)
+  ) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_PRIVATE_OR_BIOMETRIC_OUTPUT_PROHIBITED",
+      "A person-research draft cannot contain contact-detail, background-check, or biometric-identification output.",
+    );
+  }
+  if (PROHIBITED_ASSESSMENT.test(text)) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_ASSESSMENT_PROHIBITED",
+      "A person-research draft cannot score, rank, or infer protected or sensitive traits.",
+    );
+  }
+}
+
+export function assertPersonResearchBudget(budget: AgentBudget): void {
+  assertAgentBudget(budget, ({ field }) => {
+    throw new AgentPersonResearchPolicyError(
+      "AGENT_BUDGET_INVALID",
+      `${field} must be positive.`,
+    );
+  });
+}

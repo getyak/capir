@@ -1,0 +1,16 @@
+import { expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ search: vi.fn(), list: vi.fn() }));
+vi.mock("@/auth", () => ({ auth: async () => ({ user: { id: "synthetic-owner" } }) }));
+vi.mock("@/lib/server/localBackend", () => ({
+  isIntegrationMode: () => true, searchPeopleDirectory: mocks.search, loadPeopleDirectory: mocks.list,
+}));
+vi.mock("@/components/people-directory-app", () => ({ PeopleDirectoryApp: () => null }));
+import PeoplePage from "./page";
+
+it("passes the complete normalized query including its distinguishing tail to the authorized backend", async () => {
+  mocks.search.mockResolvedValue({ people: [] });
+  const query = `${"名称".repeat(300)}最后的精确条件`;
+  await PeoplePage({ searchParams: Promise.resolve({ query: `  ${query}  ` }) });
+  expect(mocks.search).toHaveBeenCalledExactlyOnceWith(query);
+  expect(mocks.list).not.toHaveBeenCalled();
+});

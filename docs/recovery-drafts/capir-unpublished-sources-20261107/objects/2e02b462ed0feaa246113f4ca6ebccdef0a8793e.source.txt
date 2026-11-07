@@ -1,0 +1,96 @@
+import { describe, expect, it, vi } from "vitest";
+import { executeLabModel, experimentCases, experimentInput, labModelProviders } from "./labExperiments.js";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+
+function provider(overrides = {}): RemoteChatAnswerProviding {
+  return { providerId: "zhipu-chat-completions", model: "glm-test", supportsImageInput: false,
+    answer: vi.fn().mockResolvedValue({ model: "glm-test", kind: "clarification", title: "Clarify",
+      body: "The travel statements conflict.", citation_ids: ["conflict-message-01"],
+      provider_request_id: "provider-test", input_tokens: 0, output_tokens: 0, ...overrides }) };
+}
+
+describe("real Lab experiment boundary", () => {
+  it("uses synthetic cases without providing the expected answer to the model", () => {
+    expect(experimentCases()).toHaveLength(3);
+    const input = experimentInput("conflicting-evidence");
+    expect(input.allowed_citation_ids).toHaveLength(2);
+    expect(input.context_blocks).toHaveLength(2);
+    expect(JSON.stringify(input)).not.toContain(experimentCases()[0]!.expected);
+    expect(() => experimentInput("user-authored-private-evidence")).toThrow();
+  });
+  it("does not grant a revoked source citation authority", () => {
+    const input = experimentInput("source-authorization-revoked");
+    expect(input.allowed_citation_ids).not.toContain("revoked-source-01");
+  });
+  it("records actual execution while keeping unreported usage unknown", async () => {
+    const model = provider();
+    const result = await executeLabModel(model, experimentInput("conflicting-evidence"));
+    expect(model.answer).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ status: "completed", input_tokens: null, output_tokens: null,
+      provider_request_id: "provider-test" });
+  });
+  it("rejects model substitution and invented citations", async () => {
+    for (const overrides of [{ model: "glm-other" }, { citation_ids: ["private-person"] }]) {
+      expect(await executeLabModel(provider(overrides), experimentInput("conflicting-evidence")))
+        .toMatchObject({ status: "failed", answer: null, input_tokens: null });
+    }
+  });
+  it("retains a complete long Unicode answer without treating its size as provider failure", async () => {
+    const body = "  " + "合成证据😀e\u0301\n".repeat(2600) + "完整结尾  ";
+    expect(body.length).toBeGreaterThan(16000);
+    const model = provider({ body, usage_reported: true, input_tokens: 39_509, output_tokens: 8_234 });
+    const result = await executeLabModel(model, experimentInput("conflicting-evidence"));
+    expect(result).toMatchObject({ status: "completed", answer: body, citation_ids: ["conflict-message-01"],
+      input_tokens: 39_509, output_tokens: 8_234, error_code: null });
+    expect(model.answer).toHaveBeenCalledOnce();
+  });
+  it("retains nonempty and title validation for long answers", async () => {
+    for (const overrides of [{ body: " \n\t" }, { body: "合成".repeat(9000), title: "x".repeat(1001) }]) {
+      expect(await executeLabModel(provider(overrides), experimentInput("conflicting-evidence")))
+        .toMatchObject({ status: "failed", answer: null });
+    }
+  });
+  it("does not expose raw provider error content", async () => {
+    const model = provider();
+    model.answer = vi.fn().mockRejectedValue(new Error("secret-and-candidate-content"));
+    const result = await executeLabModel(model, experimentInput("conflicting-evidence"));
+    expect(JSON.stringify(result)).not.toContain("secret-and-candidate-content");
+    expect(result.status).toBe("failed");
+  });
+  it("does not add unapproved alternatives when the internal capability is off", () => {
+    expect([...labModelProviders(provider(), { TALENT_SIGNAL_LAB_CHAT_MODELS: "glm-other" }).keys()])
+      .toEqual(["glm-test"]);
+  });
+  it("admits every explicitly configured model without a raw-entry count quota or provider call", () => {
+    const current = provider(), models = Array.from({ length: 6 }, (_, index) => `glm-synthetic-${index + 1}`);
+    const fetcher = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No remote requests in catalog admission"));
+    try {
+      const catalog = labModelProviders(current, { TALENT_SIGNAL_INTERNAL_LAB_ENABLED: "true",
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true", TALENT_SIGNAL_CHAT_PROVIDER: "zhipu",
+        ZHIPU_API_KEY: "synthetic-only", TALENT_SIGNAL_LAB_CHAT_MODELS: models.join(",") });
+      expect([...catalog.keys()]).toEqual([current.model, ...models]);
+      expect(catalog.get(current.model)).toBe(current);
+      expect(current.answer).not.toHaveBeenCalled();
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally { fetcher.mockRestore(); }
+  });
+  it("deduplicates configured entries and preserves the already selected provider", () => {
+    const current = provider();
+    const catalog = labModelProviders(current, { TALENT_SIGNAL_INTERNAL_LAB_ENABLED: "true",
+      TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true", TALENT_SIGNAL_CHAT_PROVIDER: "zhipu",
+      ZHIPU_API_KEY: "synthetic-only", TALENT_SIGNAL_LAB_CHAT_MODELS:
+        "glm-test, glm-test,glm-synthetic-extra,glm-synthetic-extra,glm-test,glm-synthetic-extra, ," });
+    expect([...catalog.keys()]).toEqual([current.model, "glm-synthetic-extra"]);
+    expect(catalog.get(current.model)).toBe(current);
+    expect(current.answer).not.toHaveBeenCalled();
+  });
+  it("keeps remote-processing and pinned-model admission for expanded catalogs", () => {
+    const current = provider();
+    expect([...labModelProviders(current, { TALENT_SIGNAL_INTERNAL_LAB_ENABLED: "true",
+      TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "false", TALENT_SIGNAL_LAB_CHAT_MODELS: "glm-other" }).keys()])
+      .toEqual([current.model]);
+    expect(() => labModelProviders(current, { TALENT_SIGNAL_INTERNAL_LAB_ENABLED: "true",
+      TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true", TALENT_SIGNAL_CHAT_PROVIDER: "zhipu",
+      ZHIPU_API_KEY: "synthetic-only", TALENT_SIGNAL_LAB_CHAT_MODELS: "glm-auto" })).toThrow("explicitly pinned");
+  });
+});

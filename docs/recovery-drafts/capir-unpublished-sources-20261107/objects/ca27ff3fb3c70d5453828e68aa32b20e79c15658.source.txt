@@ -1,0 +1,1753 @@
+import { captureCurrentReaderAuthority, assertServingAuthority, type ServingAuthorityResolver } from "./legacyChatAuthority.js";
+import {createHarnessRunFiles,listHarnessRunArtifacts} from "./harnessRunFiles.js";
+import { calendarDraftContextForRequest } from "./calendarDraftContext.js";
+import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
+import { createHarnessEvidenceImageReader, loadHarnessEvidenceImageScope } from "./harnessEvidenceImages.js";
+import { loadAgentResponsePreference } from "./agentPreferences.js";
+import { createHarnessContinuationController } from "./harnessSessions.js";
+import { agentMemoryItem, captureProductStep } from "@talent-signal/agent";
+import { measureLabServerStage } from "../lib/labDiagnostics.js";
+import { createHash, randomUUID } from "node:crypto";
+
+import type {
+  ChatCitation,
+  ChatResponseBlock,
+  ChatTaskRequest,
+  ChatTaskReadback,
+  ChatTaskResponse,
+  KnowledgeBlock,
+  LabFeatureAdoptionReceipt,
+} from "@talent-signal/contracts";
+import { CONTRACT_VERSION } from "@talent-signal/contracts";
+import type { Pool } from "pg";
+
+import { inTransaction, type DatabaseClient } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import { appendAudit } from "../lib/audit.js";
+import {
+  claimIdempotency,
+  completeIdempotency,
+} from "../lib/idempotency.js";
+import type { AuthContext } from "./auth.js";
+import type {
+  RemoteChatAnswerProviding,
+  RemoteChatAnswerResult,
+  RemoteChatContextBlock,
+} from "./chatAnswerProvider.js";
+import { selectConversationHistory } from "./chatAnswerProvider.js";
+import { readAgentSessionConversation } from "./agentSessions.js";
+import { firstTurnSessionTitle } from "./sessionTitles.js";
+import { assertSessionChatSourcesAvailable, assertSessionForChat, purgeUnavailableSessionChatSources, recordSessionChatSources, markSessionContextAnswer } from "./agentSessionSources.js";
+import { recordMeetingDraftsForTask } from "./meetingDrafts.js";
+import {
+  bindChatMediaToManifest,
+  getChatMediaContent,
+  listManifestChatMedia,
+} from "./chatMedia.js";
+import type { ChatMediaStorage } from "./chatMediaStorage.js";
+import type { PersonResearchAgentProviding } from "./personResearchAgentClient.js";
+import {
+  personResearchRunID,
+  runPersonResearchChatIngress,
+} from "./personResearchChatIngress.js";
+import {
+  appendTelemetrySpan,
+  assertTelemetryContext,
+  telemetrySpanId,
+} from "./telemetry.js";
+import { loadSnapshot } from "./wiki.js";
+import { recordFeedbackExecution } from "./feedbackExecutions.js";
+import { productObservationContext } from "./runtimeObservationSources.js";
+import { lockChatCompletionSources, lockChatCompletionSourceRows, assertChatManifestSelectionCurrent, sealChatManifestSelection, chatSelectionChanged } from "./chatCompletionSources.js";
+import {
+  recallMemories,
+  stageMemoryProposal,
+  type MemorySourceAuthority,
+} from "./memoryReview.js"; import type { MemoryProposalStageRequest } from "@talent-signal/contracts";
+import { digestValue } from "../lib/hash.js";
+import {
+  admitAuthorityClocks,
+  admitLifecycleTask,
+  assertLegacyTaskReadbackAllowed,
+  assertLifecycleAttemptCurrent,
+  assertOriginalAuthorityCurrent,
+  withOriginalAuthorityFinalization,
+  composeLifecycleSignals,
+  startLifecycleHeartbeat,
+  markLifecycleDispatched,
+  markLifecycleUsageUncertain,
+  registerLifecycleRun,
+  releaseLifecycleRun,
+  finishLifecycleAttempt,
+  lifecycleInProgressError,
+  lifecycleRecoveryRequiredError,
+} from "./legacyChatLifecycle.js";
+import type { LegacyChatRunOptions } from "./unscopedChat.js";
+
+const CHAT_POLICY_VERSION = "chat-context.v3";
+
+export interface ChatTaskMutationResult {
+  labProductOutcome?: "accepted" | "fallback";
+  body: ChatTaskResponse;
+  replayed: boolean;
+  status: number;
+}
+
+export interface ChatActiveAttention {
+  pursuit_id: string;
+  action_id: string;
+  action_title: string;
+  action_status: string;
+  due_at: Date | null;
+  owner_display_name: string;
+  pursuit_title: string;
+  gap_title: string | null;
+  gap_close_condition: string | null;
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function compactUtcTimestamp(value: Date): string {
+  return value
+    .toISOString()
+    .replace("T", " ")
+    .replace(/\.\d{3}Z$/, " UTC");
+}
+
+function citations(blocks: KnowledgeBlock[]): string[] {
+  return unique(
+    blocks.flatMap((item) =>
+      item.dependencies
+        .filter(
+          (itemDependency) =>
+            itemDependency.type === "evidence_fragment",
+        )
+        .map((itemDependency) => itemDependency.id),
+    ),
+  );
+}
+
+function remoteContextBlock(block: KnowledgeBlock): RemoteChatContextBlock {
+  return {
+    block_id: block.id,
+    block_key: block.block_key,
+    type: block.type,
+    status: block.status,
+    headline: block.content.headline,
+    summary: block.content.summary ?? "",
+    items: block.content.items,
+    evidence_fragment_ids: citations([block]),
+  };
+}
+
+function remoteAnswerBlock(answer: RemoteChatAnswerResult): ChatResponseBlock {
+  return {
+    id: randomUUID(),
+    kind: answer.kind,
+    title: answer.title.slice(0, 240),
+    body: answer.body,
+    status:
+      answer.kind === "question_set"
+        ? "proposed"
+        : answer.kind === "clarification"
+          ? "needs_review"
+          : "informational",
+    citation_dependency_ids: answer.citation_ids,
+    requires_user_decision: answer.kind === "clarification" || Boolean(answer.calendarDraft),
+    ...(answer.calendarDraft ? { calendar_draft: answer.calendarDraft, status: "needs_review" as const } : {}),
+  };
+}
+
+function remoteFailureBlock(
+  title: string,
+  body: string,
+): ChatResponseBlock {
+  return {
+    id: randomUUID(),
+    kind: "failure_recovery",
+    title,
+    body,
+    status: "failed",
+    citation_dependency_ids: [],
+    requires_user_decision: false,
+  };
+}
+
+function insertAfterPersonBrief(
+  blocks: ChatResponseBlock[],
+  block: ChatResponseBlock,
+): ChatResponseBlock[] {
+  if (blocks.length >= 20) return blocks;
+  const personBriefIndex = blocks.findIndex((item) => item.kind === "person_brief");
+  const insertionIndex = personBriefIndex < 0 ? 0 : personBriefIndex + 1;
+  return [
+    ...blocks.slice(0, insertionIndex),
+    block,
+    ...blocks.slice(insertionIndex),
+  ];
+}
+
+export interface ChatManifestRow {
+  id: string;
+  task_id: string;
+  subject_id: string;
+  assignment_id: string;
+  knowledge_snapshot_id: string;
+  manifest_status: ChatTaskReadback["manifest_status"];
+  snapshot_status: ChatTaskReadback["snapshot_status"];
+  authorization_scope: string;
+  lab_feature_receipt?: LabFeatureAdoptionReceipt | null;
+  created_at: Date;
+}
+
+export interface ChatCitationRow {
+  id: string;
+  person_id: string | null;
+  relationship_context_id: string | null;
+  inclusion_reason: string;
+  resource_id: string;
+  source_name: string;
+  observed_at: Date;
+  source_timezone: string | null;
+  capture_version: number;
+  fragment_kind: ChatCitation["fragment_kind"];
+  sequence: number;
+  exact_excerpt: string | null;
+  locator: ChatCitation["locator"];
+  attributed_actor: ChatCitation["attribution"]["actor_kind"];
+  attribution_status: ChatCitation["attribution"]["status"];
+  review_status: ChatCitation["review_status"];
+  parser_name: string;
+  parser_version: string;
+  content_hash: string;
+  fragment_created_at: Date;
+  last_review_id: string | null;
+  last_reviewed_at: Date | null;
+  last_reviewed_by: string | null;
+  fragment_status: "active" | "purged" | "deleted";
+  resource_status: string;
+  capture_status: "active" | "deleted";
+  source_access_state: "available" | "purged" | "deleted" | null;
+  authorization_state: "authorized" | "revoked" | "expired" | null;
+  authorization_expires_at: Date | null;
+}
+
+export function citationAvailability(
+  manifest: ChatManifestRow,
+  citation: ChatCitationRow,
+): Pick<ChatCitation, "availability" | "unavailable_reason"> {
+  if (
+    manifest.manifest_status !== "active" ||
+    manifest.snapshot_status !== "published"
+  ) {
+    return {
+      availability: "superseded",
+      unavailable_reason:
+        "The Chat context has been superseded; compile a fresh relationship view before relying on this source.",
+    };
+  }
+  if (
+    citation.person_id !== manifest.subject_id ||
+    citation.relationship_context_id !== manifest.assignment_id
+  ) {
+    return {
+      availability: "unauthorized",
+      unavailable_reason:
+        "The cited source does not belong to this person and relationship context.",
+    };
+  }
+  if (
+    citation.review_status !== "reviewed" ||
+    citation.attribution_status !== "confirmed" ||
+    citation.exact_excerpt === null ||
+    citation.exact_excerpt.trim().length === 0
+  ) {
+    return {
+      availability: "superseded",
+      unavailable_reason:
+        "The cited source is not currently reviewed, attribution-confirmed, and inspectable.",
+    };
+  }
+  if (
+    citation.fragment_status !== "active" ||
+    citation.resource_status === "deleted" ||
+    citation.capture_status !== "active" ||
+    citation.source_access_state === "deleted"
+  ) {
+    return {
+      availability: "deleted",
+      unavailable_reason: "The cited source is no longer available.",
+    };
+  }
+  const authorizationExpired =
+    citation.authorization_expires_at !== null &&
+    citation.authorization_expires_at <= new Date();
+  if (
+    citation.source_access_state === null ||
+    citation.authorization_state !== "authorized" ||
+    authorizationExpired
+  ) {
+    return {
+      availability: "unauthorized",
+      unavailable_reason:
+        "The cited source is outside its current access or authorization scope.",
+    };
+  }
+  return { availability: "available", unavailable_reason: null };
+}
+
+export async function getChatTaskReadback(
+  pool: Pool,
+  auth: AuthContext,
+  taskId: string,
+): Promise<ChatTaskReadback> {
+  await purgeUnavailableSessionChatSources(pool, auth);
+  await assertLegacyTaskReadbackAllowed(pool, auth.accountId, taskId);
+  await assertSessionChatSourcesAvailable(pool, auth, taskId);
+  const manifestResult = await pool.query<ChatManifestRow>(
+    `SELECT
+       manifests.id,
+       manifests.task_id,
+       manifests.subject_id,
+       manifests.assignment_id,
+       manifests.knowledge_snapshot_id,
+       manifests.status AS manifest_status,
+       snapshots.status AS snapshot_status,
+       manifests.authorization_scope,
+       manifests.lab_feature_receipt,
+       manifests.created_at
+     FROM context_manifests manifests
+     JOIN knowledge_snapshots snapshots
+       ON snapshots.account_id = manifests.account_id
+      AND snapshots.id = manifests.knowledge_snapshot_id
+     WHERE manifests.account_id = $1
+       AND manifests.task_id = $2`,
+    [auth.accountId, taskId],
+  );
+  const manifest = manifestResult.rows[0];
+  if (!manifest || !manifest.assignment_id) {
+    throw new ApiError(
+      404,
+      "CHAT_TASK_READBACK_NOT_FOUND",
+      "The account-scoped Chat task context was not found.",
+    );
+  }
+
+  const citationResult = await pool.query<ChatCitationRow>(
+    `SELECT
+       fragments.id,
+       captures.subject_id AS person_id,
+       captures.assignment_id AS relationship_context_id,
+       manifest_evidence.inclusion_reason,
+       resources.id AS resource_id,
+       resources.display_name AS source_name,
+       resources.observed_at,
+       resources.source_timezone,
+       captures.version AS capture_version,
+       fragments.fragment_kind,
+       fragments.sequence,
+       fragments.text_content AS exact_excerpt,
+       fragments.locator,
+       fragments.attributed_actor,
+       fragments.attribution_status,
+       fragments.review_status,
+       fragments.parser_name,
+       fragments.parser_version,
+       fragments.content_hash,
+       fragments.created_at AS fragment_created_at,
+       latest_review.review_id AS last_review_id,
+       latest_review.decided_at AS last_reviewed_at,
+       latest_review.display_name AS last_reviewed_by,
+       fragments.status AS fragment_status,
+       resources.processing_state AS resource_status,
+       captures.status AS capture_status,
+       retention.source_access_state,
+       CASE
+         WHEN retention.authorization_state = 'authorized'
+          AND retention.authorization_expires_at IS NOT NULL
+          AND retention.authorization_expires_at <= now()
+         THEN 'expired'
+         ELSE retention.authorization_state
+       END AS authorization_state,
+       retention.authorization_expires_at
+     FROM context_manifest_evidence manifest_evidence
+     JOIN evidence_fragments fragments
+       ON fragments.account_id = manifest_evidence.account_id
+      AND fragments.id = manifest_evidence.evidence_fragment_id
+     JOIN source_resources resources
+       ON resources.account_id = fragments.account_id
+      AND resources.id = fragments.resource_id
+     JOIN captures
+       ON captures.account_id = resources.account_id
+      AND captures.id = resources.capture_id
+     LEFT JOIN source_retention_receipts retention
+       ON retention.account_id = captures.account_id
+      AND retention.capture_id = captures.id
+     LEFT JOIN LATERAL (
+       SELECT reviews.id AS review_id, reviews.decided_at, users.display_name
+       FROM evidence_fragment_reviews reviews
+       JOIN users
+         ON users.account_id = reviews.account_id
+        AND users.id = reviews.decided_by_user_id
+       WHERE reviews.account_id = fragments.account_id
+         AND reviews.fragment_id = fragments.id
+       ORDER BY reviews.review_revision DESC
+       LIMIT 1
+     ) latest_review ON true
+     WHERE manifest_evidence.account_id = $1
+       AND manifest_evidence.manifest_id = $2
+     ORDER BY resources.observed_at DESC, fragments.sequence, fragments.id`,
+    [auth.accountId, manifest.id],
+  );
+
+  const readbackCitations: ChatCitation[] = citationResult.rows.map(
+    (citation) => {
+      const availability = citationAvailability(manifest, citation);
+      const canExposeSource = availability.availability === "available";
+      return {
+        id: citation.id,
+        dependency_type: "evidence_fragment",
+        person_id: citation.person_id,
+        relationship_context_id: citation.relationship_context_id,
+        inclusion_reason: citation.inclusion_reason,
+        authorization_scope:
+          citation.person_id && citation.relationship_context_id
+            ? `person:${citation.person_id}:relationship-context:${citation.relationship_context_id}`
+            : "unresolved-source-scope",
+        ...availability,
+        resource_id: citation.resource_id,
+        source_name: citation.source_name,
+        observed_at: citation.observed_at.toISOString(),
+        source_timezone: citation.source_timezone,
+        capture_version: citation.capture_version,
+        fragment_kind: citation.fragment_kind,
+        sequence: citation.sequence,
+        exact_excerpt: canExposeSource ? citation.exact_excerpt : null,
+        locator: canExposeSource ? citation.locator : null,
+        attribution: {
+          actor_kind: citation.attributed_actor,
+          status: citation.attribution_status,
+        },
+        review_status: citation.review_status,
+        parser: {
+          name: citation.parser_name,
+          version: citation.parser_version,
+        },
+        content_hash: citation.content_hash,
+        fragment_created_at: citation.fragment_created_at.toISOString(),
+        last_review_id: citation.last_review_id,
+        last_reviewed_at:
+          citation.last_reviewed_at?.toISOString() ?? null,
+        last_reviewed_by: citation.last_reviewed_by,
+      };
+    },
+  );
+  if (
+    readbackCitations.some(
+      (citation) => citation.availability !== "available",
+    )
+  ) {
+    throw new ApiError(
+      409,
+      "CHAT_CITED_EVIDENCE_UNAVAILABLE",
+      "The Chat readback stopped because one governed source is no longer reviewed, scope-bound, inspectable, or authorized.",
+    );
+  }
+
+  return {
+    contract_version: CONTRACT_VERSION,
+    account_id: auth.accountId,
+    task_id: manifest.task_id,
+    context_manifest_id: manifest.id,
+    knowledge_snapshot_id: manifest.knowledge_snapshot_id,
+    person_id: manifest.subject_id,
+    relationship_context_id: manifest.assignment_id,
+    manifest_status: manifest.manifest_status,
+    snapshot_status: manifest.snapshot_status,
+    authorization_scope: manifest.authorization_scope,
+    citations: readbackCitations,
+    ...(manifest.lab_feature_receipt
+      ? { lab_feature_receipt: manifest.lab_feature_receipt }
+      : {}),
+    media: await listManifestChatMedia(pool, auth.accountId, manifest.id),
+    created_at: manifest.created_at.toISOString(),
+  };
+}
+
+function boundedBody(lines: string[]): string {
+  return lines.filter(Boolean).join("\n");
+}
+
+const RELATIVE_TIME_PATTERN =
+  /\b(today|tomorrow|yesterday|tonight|next|this|last)\s+(morning|afternoon|evening|night|week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)?\b/i;
+
+function hasUnresolvedRelativeTime(block: KnowledgeBlock): boolean {
+  return block.block_key.startsWith("fact.") &&
+    block.status === "confirmed" &&
+    RELATIVE_TIME_PATTERN.test(block.content.headline);
+}
+
+function briefBody(blocks: KnowledgeBlock[]): string {
+  return boundedBody(
+    blocks
+      .filter(
+        (item) =>
+          item.block_key.startsWith("fact.") &&
+          item.status === "confirmed" &&
+          !hasUnresolvedRelativeTime(item),
+      )
+      .map((item) => item.content.headline),
+  );
+}
+
+export function responseBlocks(
+  blocks: KnowledgeBlock[],
+  activeAttention: ChatActiveAttention | null = null,
+): ChatResponseBlock[] {
+  const identity = blocks.find((item) => item.type === "identity_context");
+  if (!identity) {
+    throw new ApiError(
+      409,
+      "CHAT_CONTEXT_IDENTITY_MISSING",
+      "The active Wiki does not contain one identity-context block.",
+    );
+  }
+  const contextBlocks = blocks.filter(
+    (item) =>
+      !["identity_context", "next_action", "no_action"].includes(item.type),
+  );
+  const currentFactBlocks = contextBlocks.filter(
+    (item) =>
+      item.block_key.startsWith("fact.") &&
+      item.status === "confirmed" &&
+      !hasUnresolvedRelativeTime(item),
+  );
+  const relativeTimeFacts = contextBlocks.filter(hasUnresolvedRelativeTime);
+  const answer: ChatResponseBlock[] = [
+    {
+      id: randomUUID(),
+      kind: "person_brief",
+      title: identity.content.headline,
+      body:
+        briefBody(blocks) ||
+        "No additional reviewed relationship state is ready for this task.",
+      // This block contains only confirmed, non-relative facts. Review state
+      // for other context belongs on its own visible block; otherwise one
+      // unrelated proposal makes a confirmed claim look uncertain.
+      status: "confirmed",
+      citation_dependency_ids: citations([
+        identity,
+        ...currentFactBlocks,
+      ]),
+      requires_user_decision: false,
+    },
+  ];
+
+  const conflicts = blocks.filter((item) => item.type === "conflict");
+  if (conflicts.length > 0) {
+    answer.push({
+      id: randomUUID(),
+      kind: "conflict_review",
+      title: "Resolve before relying on this point",
+      body: conflicts.map((item) => item.content.headline).join("\n"),
+      status: "needs_review",
+      citation_dependency_ids: citations(conflicts),
+      requires_user_decision: true,
+    });
+  }
+
+  const factReview = contextBlocks.filter(
+    (item) =>
+      (
+        item.type === "open_question" &&
+        !item.block_key.startsWith("research.stale.")
+      ) ||
+      item.block_key.startsWith("resource.resume.") ||
+      item.block_key.startsWith("resource.document.") ||
+      item.block_key.startsWith("resource.contact-record."),
+  );
+  if (factReview.length > 0) {
+    answer.push({
+      id: randomUUID(),
+      kind: "fact_review",
+      title: "Review proposed facts before relying on them",
+      body: boundedBody(
+        factReview.map((item) => item.content.headline),
+      ),
+      status: "needs_review",
+      citation_dependency_ids: citations(factReview),
+      requires_user_decision: true,
+    });
+  }
+
+  if (relativeTimeFacts.length > 0) {
+    answer.push({
+      id: randomUUID(),
+      kind: "fact_review",
+      title: "Clarify relative timing before relying on it",
+      body: boundedBody([
+        ...relativeTimeFacts.map((item) => item.content.headline),
+        "Confirm one explicit calendar date and timezone.",
+      ]),
+      status: "needs_review",
+      citation_dependency_ids: citations(relativeTimeFacts),
+      requires_user_decision: true,
+    });
+  }
+
+  const researchSeeds = contextBlocks.filter((item) =>
+    item.block_key.startsWith("resource.public-url."),
+  );
+  const sourcedResearch = contextBlocks.filter(
+    (item) => item.type === "sourced_research",
+  );
+  const staleResearch = contextBlocks.filter((item) =>
+    item.block_key.startsWith("research.stale."),
+  );
+  if (sourcedResearch.length > 0) {
+    answer.push({
+      id: randomUUID(),
+      kind: "research_status",
+      title: "Public research is ready for evidence review",
+      body: boundedBody(
+        sourcedResearch.map((item) => item.content.headline),
+      ),
+      status: "needs_review",
+      citation_dependency_ids: citations(sourcedResearch),
+      requires_user_decision: true,
+    });
+  } else if (staleResearch.length > 0) {
+    answer.push({
+      id: randomUUID(),
+      kind: "research_status",
+      title: "Public research is stale and needs refresh",
+      body: boundedBody(
+        staleResearch.map((item) => item.content.headline),
+      ),
+      status: "needs_review",
+      citation_dependency_ids: citations(staleResearch),
+      requires_user_decision: true,
+    });
+  } else if (researchSeeds.length > 0) {
+    answer.push({
+      id: randomUUID(),
+      kind: "research_status",
+      title: "Research seed saved; no research has run",
+      body: boundedBody(
+        researchSeeds.map((item) => item.content.headline),
+      ),
+      status: "proposed",
+      citation_dependency_ids: citations(researchSeeds),
+      requires_user_decision: true,
+    });
+  }
+
+  const sourceReceipts = contextBlocks.filter(
+    (item) =>
+      item.block_key.startsWith("resource.personal-note.") ||
+      item.block_key.startsWith("resource.conversation."),
+  );
+  const alreadyAttachedCitationIDs = new Set(
+    answer.flatMap((item) => item.citation_dependency_ids),
+  );
+  const unattachedSourceReceipts = sourceReceipts.filter((item) => {
+    const dependencyIDs = citations([item]);
+    return dependencyIDs.length === 0 || dependencyIDs.some(
+      (id) => !alreadyAttachedCitationIDs.has(id),
+    );
+  });
+  if (unattachedSourceReceipts.length > 0) {
+    answer.push({
+      id: randomUUID(),
+      kind: "source_receipt",
+      title: "Governed source material is attached",
+      body: boundedBody(
+        unattachedSourceReceipts.map((item) => item.content.headline),
+      ),
+      status: unattachedSourceReceipts.some((item) => item.status === "proposed")
+        ? "needs_review"
+        : "confirmed",
+      citation_dependency_ids: citations(unattachedSourceReceipts),
+      requires_user_decision: unattachedSourceReceipts.some(
+        (item) => item.status === "proposed",
+      ),
+    });
+  }
+
+  const nextAction = blocks.find((item) => item.type === "next_action");
+  const noAction = blocks.find((item) => item.type === "no_action");
+  if (activeAttention) {
+    answer.push({
+      id: randomUUID(),
+      kind: "active_action",
+      title: "Existing owned next move",
+      body: boundedBody([
+        activeAttention.action_title,
+        `Owner: ${activeAttention.owner_display_name}`,
+        activeAttention.due_at
+          ? `Due: ${compactUtcTimestamp(activeAttention.due_at)}`
+          : "Due: not set",
+        activeAttention.gap_title
+          ? `Open gap: ${activeAttention.gap_title}`
+          : "",
+        activeAttention.gap_close_condition
+          ? `Close when: ${activeAttention.gap_close_condition}`
+          : "",
+        "Existing work only · no new action or external effect.",
+      ]),
+      status: "confirmed",
+      citation_dependency_ids: [],
+      requires_user_decision: false,
+      target_ref: {
+        type: "pursuit_action",
+        pursuit_id: activeAttention.pursuit_id,
+        action_id: activeAttention.action_id,
+      },
+    });
+  } else if (nextAction) {
+    answer.push({
+      id: randomUUID(),
+      kind: "action_proposal",
+      title: "Proposed next move",
+      body: [
+        nextAction.content.headline,
+        nextAction.content.summary,
+        ...nextAction.content.items,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      status: "proposed",
+      citation_dependency_ids: citations([nextAction]),
+      requires_user_decision: true,
+    });
+  } else if (noAction) {
+    answer.push({
+      id: randomUUID(),
+      kind: "no_action",
+      title: "No action",
+      body: [
+        noAction.content.headline,
+        noAction.content.summary,
+        ...noAction.content.items,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      status: "confirmed",
+      citation_dependency_ids: citations([noAction]),
+      requires_user_decision: false,
+    });
+  } else {
+    throw new ApiError(
+      409,
+      "CHAT_ATTENTION_DECISION_MISSING",
+      "The active Wiki has neither one next action nor one no-action result.",
+    );
+  }
+  return answer;
+}
+
+async function loadActiveAttention(
+  client: Pick<Pool, "query">,
+  accountId: string,
+  personId: string,
+  relationshipContextId: string,
+): Promise<ChatActiveAttention | null> {
+  const result = await client.query<ChatActiveAttention>(
+    `SELECT
+       pursuits.id AS pursuit_id,
+       actions.id AS action_id,
+       actions.title AS action_title,
+       actions.status AS action_status,
+       actions.due_at,
+       owners.display_name AS owner_display_name,
+       pursuits.title AS pursuit_title,
+       open_gap.title AS gap_title,
+       open_gap.close_condition AS gap_close_condition
+     FROM pursuit_roles roles
+     JOIN pursuits
+       ON pursuits.account_id = roles.account_id
+      AND pursuits.id = roles.pursuit_id
+     JOIN pursuit_actions actions
+       ON actions.account_id = pursuits.account_id
+      AND actions.pursuit_id = pursuits.id
+     JOIN users owners
+       ON owners.account_id = actions.account_id
+      AND owners.id = actions.owner_user_id
+     LEFT JOIN LATERAL (
+       SELECT gaps.title, gaps.close_condition
+       FROM pursuit_gaps gaps
+       WHERE gaps.account_id = pursuits.account_id
+         AND gaps.pursuit_id = pursuits.id
+         AND gaps.status = 'open'
+       ORDER BY gaps.display_order, gaps.created_at, gaps.id
+       LIMIT 1
+     ) open_gap ON true
+     WHERE roles.account_id = $1
+       AND roles.person_id = $2
+       AND roles.status <> 'removed'
+       AND pursuits.status IN ('draft', 'active', 'paused')
+       AND actions.status NOT IN ('completed', 'cancelled')
+       AND EXISTS (
+         SELECT 1
+         FROM pursuit_role_evidence role_evidence
+         JOIN evidence_fragments fragments
+           ON fragments.account_id = role_evidence.account_id
+          AND fragments.id = role_evidence.evidence_fragment_id
+         JOIN source_resources resources
+           ON resources.account_id = fragments.account_id
+          AND resources.id = fragments.resource_id
+         JOIN captures
+           ON captures.account_id = resources.account_id
+          AND captures.id = resources.capture_id
+         WHERE role_evidence.account_id = roles.account_id
+           AND role_evidence.role_id = roles.id
+           AND captures.subject_id = $2
+           AND captures.assignment_id = $3
+       )
+     ORDER BY actions.due_at ASC NULLS LAST, actions.created_at, actions.id
+     LIMIT 1`,
+    [accountId, personId, relationshipContextId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function createChatTask(
+  pool: Pool,
+  auth: AuthContext,
+  request: ChatTaskRequest,
+  remoteChatProvider: RemoteChatAnswerProviding | null = null,
+  chatMediaStorage: ChatMediaStorage | null = null,
+  personResearchProvider: PersonResearchAgentProviding | null = null,
+  selectRemoteProvider?: (client: DatabaseClient) => Promise<RemoteChatAnswerProviding | null>,
+  resolveLabFeatureReceipt?: (client: DatabaseClient) => Promise<LabFeatureAdoptionReceipt | null>,
+  options: LegacyChatRunOptions = {},
+): Promise<ChatTaskMutationResult> {
+  const chatStartedAt = new Date().toISOString();
+  let servingSnapshot = await inTransaction(pool, client => captureCurrentReaderAuthority(client, auth, options.servingAuthority));
+  const assertServingCurrent = () => assertServingAuthority(servingSnapshot, options.servingAuthority);
+  if (request.session_id) await purgeUnavailableSessionChatSources(pool, auth);
+  // Shared execution context: guards, history and source assertions are all
+  // short reads/statements and never retain a checked-out client.
+    let sourceObservation: import("@talent-signal/agent").RuntimeObservationContext | undefined;
+    let previousRunID: string | undefined;
+    let previousRunExpiresAt: Date | undefined;
+    const assertHarnessCurrent = remoteChatProvider?.providerId === "claude-agent-sdk"
+      ? await createHarnessSourceGuard(pool, auth, request.session_id, () => {
+        const refs = sourceObservation?.source_refs;
+        return refs?.kind === "product" ? { expiresAt: new Date(refs.expires_at), personIDs: refs.person_ids } : undefined;
+      }, pool) : undefined;
+    const assertPreviousCurrent = async (supplied?: unknown) => {
+      if (!previousRunID) return;
+      if (!previousRunExpiresAt || previousRunExpiresAt.valueOf() <= Date.now())
+        throw new ApiError(409,"PREVIOUS_ANSWER_UNAVAILABLE","The previous answer is no longer available in this relationship.");
+      // Await the statement on the caller's client; no abandoned race can
+      // retain a final transaction or complete against a released client.
+      const current = await ((supplied as DatabaseClient | undefined) ?? pool).query<{available:boolean}>(
+        "SELECT product_run_source_available(id) AS available FROM product_runs WHERE id=$1 AND account_id=$2 AND user_id=$3",
+        [previousRunID,auth.accountId,auth.userId]);
+      if (current.rows[0]?.available !== true) throw new ApiError(409,"PREVIOUS_ANSWER_UNAVAILABLE","The previous answer is no longer available in this relationship.");
+    };
+    let assertExecutionCurrent: ((supplied?: unknown) => Promise<void>) | undefined;
+    let currentnessFailure: { error: unknown } | undefined;
+    // Read through a closure after awaits: other in-flight probes can set it.
+    const readCurrentnessFailure = (): { error: unknown } | undefined => currentnessFailure;
+    const preserveCurrentnessFailure = async (probe: () => Promise<void>) => {
+      // A producer may catch a tool error internally. Once a real authority or
+      // source probe fails, no later probe or producer can turn it into success.
+      if (currentnessFailure) throw currentnessFailure.error;
+      try {
+        await probe();
+        const failed = readCurrentnessFailure();
+        if (failed) throw failed.error;
+      } catch (error) {
+        currentnessFailure ??= { error };
+        throw currentnessFailure.error;
+      }
+    };
+    const assertSourceCurrent = async (supplied?: unknown) => {
+      await assertHarnessCurrent?.(supplied as DatabaseClient | undefined);
+      await assertPreviousCurrent(supplied);
+      for (const guard of imageGuards.values()) await guard();
+    };
+    const assertBaseCurrent = async (supplied?: unknown) => preserveCurrentnessFailure(async () => {
+      await assertExecutionCurrent?.(supplied);
+      await assertHarnessCurrent?.(supplied as DatabaseClient | undefined);
+      await assertPreviousCurrent(supplied);
+      await assertExecutionCurrent?.(supplied);
+      assertServingCurrent();
+    });
+    const imageGuards = new Map<string, () => Promise<void>>();
+    const assertCurrent = async (supplied?: unknown) => preserveCurrentnessFailure(async () => {
+      await assertBaseCurrent(supplied);
+      for (const guard of imageGuards.values()) await guard();
+      await assertExecutionCurrent?.(supplied);
+      assertServingCurrent();
+    });
+    const responsePreference = assertHarnessCurrent ? await loadAgentResponsePreference(pool, auth) : undefined;
+    const sessionConversation = request.session_id
+      ? await readAgentSessionConversation(pool, auth, request.session_id, {
+          personId: request.person_id,
+          relationshipContextId: request.relationship_context_id,
+        })
+      : { hasRecordedTurns: false, messages: [] };
+    const conversationHistory = selectConversationHistory(sessionConversation.messages, request.message_id);
+    const sessionTitleRequested = !request.previous_task_id
+      && !sessionConversation.hasRecordedTurns
+      && !sessionConversation.sources?.length;
+    if (request.previous_task_id && !request.session_id) {
+      const prior = (await pool.query<{ id:string; expires_at:Date; objective:string; output:{blocks:Array<{body:string}>} }>(
+        `SELECT id,expires_at,objective,output FROM product_runs WHERE account_id=$1 AND user_id=$2 AND task_id=$3
+         AND input->'value'->>'person_id'=$4 AND input->'value'->>'relationship_context_id'=$5
+         AND product_run_source_available(id) ORDER BY created_at LIMIT 1 FOR SHARE`,
+        [auth.accountId,auth.userId,request.previous_task_id,request.person_id,request.relationship_context_id])).rows[0];
+      if (!prior?.output?.blocks) throw new ApiError(409,"PREVIOUS_ANSWER_UNAVAILABLE","The previous answer is no longer available in this relationship.");
+      previousRunID=prior.id; previousRunExpiresAt=prior.expires_at;
+      await assertPreviousCurrent();
+      conversationHistory.push(...selectConversationHistory([
+        {message_id:`${request.previous_task_id}:question`,role:"user",text:prior.objective},
+        {message_id:request.previous_task_id,role:"assistant",text:prior.output.blocks.map(block=>block.body).join("\n\n")},
+      ]));
+    }
+    if (sessionConversation.unavailableScreenshotContext && !sessionConversation.sources?.length)
+      throw new ApiError(409, "AGENT_SESSION_CONTEXT_UNAVAILABLE", "The screenshot summary is not currently available. Review its current task before continuing from it.");
+
+  // ---- Phase 1: one short admission transaction. Durable metadata intent,
+  // the pending manifest and the product task/attempt identity are committed
+  // before any provider sees content; the connection is released before the
+  // execution phase below.
+  const manifestId = randomUUID();
+  let identity: import("./legacyChatLifecycle.js").LifecycleIdentity;
+  const memoryCandidates: Array<{ stageRequest: MemoryProposalStageRequest; authority: MemorySourceAuthority }> = [];
+  let harnessController: import("./harnessSessions.js").HarnessContinuationController | undefined;
+  const phaseA = await inTransaction(pool, async (client) => {
+    await captureCurrentReaderAuthority(client, auth, options.servingAuthority);
+    if (request.session_id) await assertSessionForChat(client, auth, request.session_id);
+    const admitted = await admitLifecycleTask(client, {
+      clocks: async () => {
+        const clocks = await admitAuthorityClocks(client, auth, {
+        sessionID: request.session_id ?? null,
+        personID: request.person_id,
+        contextID: request.relationship_context_id,
+        captureClockScope: "selected_relationship",
+        screenshotTaskIDs: sessionConversation.sources?.map(source => source.taskID) ?? [],
+        mediaIDs: request.media_ids ?? [],
+        previousRunID: previousRunID ?? null,
+        }, options.servingAuthority);
+        if (clocks.originalAuthority) servingSnapshot = clocks.originalAuthority;
+        return clocks;
+      },
+      auth,
+      operation: "create_chat_task",
+      observationParentRunID: previousRunID ?? null,
+      request,
+      idempotencyKey: request.idempotency_key,
+      // The pending manifest row is inserted below in this same transaction and
+      // linked onto the intent afterwards; the FK must not precede its row.
+      manifestID: null,
+      authSessionID: auth.sessionId,
+      replayCheck: async (replay) => {
+        const prior = replay.body as ChatTaskResponse;
+        if (request.session_id) await assertSessionForChat(client, auth, request.session_id, true);
+        if (request.previous_task_id && !(await client.query(`SELECT 1 FROM product_runs WHERE account_id=$1 AND user_id=$2
+          AND task_id=$3 AND product_run_source_available(id)`, [auth.accountId, auth.userId, request.previous_task_id])).rowCount)
+          throw new ApiError(409, "PREVIOUS_ANSWER_UNAVAILABLE", "The previous answer is no longer available.");
+        if (prior?.task_id) await assertSessionChatSourcesAvailable(client, auth, prior.task_id);
+        if (!prior || typeof prior !== "object" || !("context_manifest_id" in prior)) {
+          throw new ApiError(409, "IDEMPOTENCY_STATE_UNAVAILABLE", "The prior Chat task could not be resolved.");
+        }
+        if (prior.artifacts?.length) {
+          const current = await listHarnessRunArtifacts(client, auth, prior.task_id);
+          if (prior.artifacts.some((file: { id: string }) => !current.some((receipt) => receipt.id === file.id)))
+            throw new ApiError(410, "RUN_ARTIFACT_UNAVAILABLE", "This reply's file source is no longer available. Start a new request using current evidence.");
+          prior.artifacts = current as typeof prior.artifacts;
+        }
+      },
+    });
+    await captureCurrentReaderAuthority(client, auth, options.servingAuthority);
+    if (admitted.replay || admitted.kind === "in_progress" || admitted.kind === "recovery_required") return { admitted } as const;
+    if (selectRemoteProvider) remoteChatProvider = await selectRemoteProvider(client);
+    const labFeatureReceipt = resolveLabFeatureReceipt
+      ? await resolveLabFeatureReceipt(client)
+      : null;
+    if (request.telemetry) {
+      await assertTelemetryContext(client, auth, request.telemetry);
+    }
+    const snapshot = await measureLabServerStage("context", () => loadSnapshot(
+      client,
+      auth.accountId,
+      request.person_id,
+      request.relationship_context_id,
+    ));
+    if (snapshot.status !== "published" || snapshot.quality.verdict !== "gold") {
+      throw new ApiError(
+        409,
+        "CHAT_WIKI_NOT_READY",
+        "Chat can only assemble task context from an active gold Wiki snapshot.",
+      );
+    }
+    const prioritizedBlocks = [
+      ...snapshot.blocks.filter(
+        (item) => item.type === "identity_context",
+      ),
+      ...snapshot.blocks.filter(
+        (item) =>
+          item.type === "next_action" ||
+          item.type === "no_action" ||
+          item.type === "current_dependency",
+      ),
+      ...snapshot.blocks.filter((item) => item.type === "conflict"),
+      ...snapshot.blocks,
+    ];
+    let selectedBlocks = prioritizedBlocks
+      .filter(
+        (item, index, items) =>
+          items.findIndex((candidate) => candidate.id === item.id) ===
+          index,
+      );
+    {
+      // Every relationship manifest contains only evidence the final
+      // availability guard can still admit. A Person can have proposed source
+      // fragments even without Session screenshot context; including fragments
+      // that are unreviewed, unattributed, empty, out of the manifest's scope,
+      // deleted, or whose source authorization is revoked or already expired
+      // would both expose them as reviewed context and spend provider work only
+      // to fail the final availability guard despite no concurrent source
+      // change. The fragment predicate therefore mirrors the evidence clause
+      // of agent_session_task_available (051_agent_sessions.sql, canonicalized
+      // by 054_agent_session_identifier_canonicalization.sql); the final
+      // locked guard still revalidates any change during execution. Screenshot
+      // dialogue remains in its separate, explicitly unconfirmed Session
+      // context.
+      const fragmentIDs = unique(selectedBlocks.flatMap((item) => item.dependencies.filter((dependency) => dependency.type === "evidence_fragment").map((dependency) => dependency.id)));
+      const admitted = new Set((await client.query<{ id: string }>(
+        `SELECT f.id FROM evidence_fragments f
+         WHERE f.account_id=$1 AND f.id=ANY($2::uuid[])
+           AND NOT EXISTS (
+             SELECT 1 FROM evidence_fragments x
+             LEFT JOIN source_resources r ON r.account_id=x.account_id AND r.id=x.resource_id
+             LEFT JOIN captures c ON c.account_id=r.account_id AND c.id=r.capture_id
+             LEFT JOIN source_retention_receipts sr ON sr.account_id=c.account_id AND sr.capture_id=c.id
+             WHERE x.account_id=f.account_id AND x.id=f.id
+               AND (x.status IS DISTINCT FROM 'active' OR x.review_status IS DISTINCT FROM 'reviewed'
+                 OR x.attribution_status IS DISTINCT FROM 'confirmed' OR x.text_content IS NULL OR length(trim(x.text_content))=0
+                 OR c.subject_id IS DISTINCT FROM $3::uuid OR c.assignment_id IS DISTINCT FROM $4::uuid
+                 OR r.processing_state IS NOT DISTINCT FROM 'deleted' OR c.status IS DISTINCT FROM 'active'
+                 OR sr.source_access_state IS NULL OR sr.source_access_state='deleted'
+                 OR sr.authorization_state IS DISTINCT FROM 'authorized'
+                 OR sr.authorization_expires_at<=statement_timestamp())
+           )`,
+        [auth.accountId, fragmentIDs, request.person_id, request.relationship_context_id],
+      )).rows.map((item) => item.id));
+      selectedBlocks = selectedBlocks.filter((item) => item.dependencies.every((dependency) => dependency.type !== "evidence_fragment" || admitted.has(dependency.id)));
+    }
+    const taskId = admitted.identity.taskID;
+    const authorizationScope =
+      `person:${request.person_id}:relationship-context:${request.relationship_context_id}`;
+    const evidenceFragmentIds = unique(
+      selectedBlocks.flatMap((item) =>
+        item.dependencies
+          .filter(
+            (itemDependency) =>
+              itemDependency.type === "evidence_fragment",
+          )
+          .map((itemDependency) => itemDependency.id),
+      ),
+    );
+    const createdAt = new Date();
+    const calendarContext = calendarDraftContextForRequest(taskId, request.time_zone, createdAt);
+    const mediaIds = request.media_ids ?? [];
+
+    await client.query(
+      `INSERT INTO context_manifests(
+         id, account_id, task_id, subject_id, assignment_id,
+         knowledge_snapshot_id, objective, authorization_scope, policy_version,
+         lab_feature_receipt, lifecycle_intent_id,lifecycle_attempt_id,lifecycle_actor_user_id,lifecycle_fencing_generation,status
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,$11,$12,$13,$14, 'pending')`,
+      [
+        manifestId,
+        auth.accountId,
+        taskId,
+        request.person_id,
+        request.relationship_context_id,
+        snapshot.id,
+        request.objective,
+        authorizationScope,
+        CHAT_POLICY_VERSION,
+        labFeatureReceipt ? JSON.stringify(labFeatureReceipt) : null,
+        admitted.identity.intentID, admitted.identity.attemptID, auth.userId, admitted.identity.fencingGeneration,
+      ],
+    );
+    await client.query("UPDATE legacy_chat_task_intents SET manifest_id=$2 WHERE id=$1", [admitted.identity.intentID, manifestId]);
+    for (const item of selectedBlocks) {
+      await client.query(
+        `INSERT INTO context_manifest_blocks(
+           account_id, manifest_id, block_id, inclusion_reason
+         )
+         VALUES ($1, $2, $3, $4)`,
+        [
+          auth.accountId,
+          manifestId,
+          item.id,
+          `Included ${item.type} for the user-stated task objective.`,
+        ],
+      );
+    }
+    for (const evidenceFragmentId of evidenceFragmentIds) {
+      await client.query(
+        `INSERT INTO context_manifest_evidence(
+           account_id, manifest_id, evidence_fragment_id, inclusion_reason
+         )
+         VALUES ($1, $2, $3, $4)`,
+        [
+          auth.accountId,
+          manifestId,
+          evidenceFragmentId,
+          "Included because a selected Wiki block depends on this governed fragment; any pending review remains visible in the block status.",
+        ],
+      );
+    }
+    const media = await bindChatMediaToManifest(
+      client,
+      auth.accountId,
+      request.person_id,
+      request.relationship_context_id,
+      manifestId,
+      mediaIds,
+    );
+
+    // Capture source locks before accepting the copied snapshot. Re-read under
+    // those locks: sealing newer DB metadata cannot validate older copied text.
+    if (!await lockChatCompletionSourceRows(client, auth, { task_id:taskId,manifest_id:manifestId,
+      person_id:request.person_id,relationship_context_id:request.relationship_context_id,session_id:request.session_id,capture:true }))
+      throw chatSelectionChanged();
+    const lockedSnapshot = await loadSnapshot(client, auth.accountId, request.person_id, request.relationship_context_id, snapshot.id);
+    const lockedBlocks = lockedSnapshot.blocks.filter(block => selectedBlocks.some(selected => selected.id === block.id));
+    if (digestValue(lockedBlocks) !== digestValue(snapshot.blocks.filter(block => selectedBlocks.some(selected => selected.id === block.id)))
+      || digestValue({...lockedSnapshot,blocks:[]}) !== digestValue({...snapshot,blocks:[]})) throw chatSelectionChanged();
+    const selectedSourceExpiresAt = await sealChatManifestSelection(client, auth.accountId, manifestId,
+      selectedBlocks.map(block => ({id:block.id,hash:digestValue(block)})),digestValue({...snapshot,blocks:[]}),mediaIds);
+    await assertChatManifestSelectionCurrent(client, auth, manifestId, admitted.identity);
+
+    if (options.observation) await options.observation.bindTask(client, admitted.identity.taskID, admitted.identity.attemptID);
+    return { admitted, taskId, snapshot, selectedBlocks, evidenceFragmentIds, media, createdAt, calendarContext, mediaIds, selectedSourceExpiresAt } as const;
+  });
+  assertServingCurrent();
+  if (phaseA.admitted.kind === "in_progress") throw lifecycleInProgressError(phaseA.admitted.identity);
+  if (phaseA.admitted.kind === "recovery_required") {
+    throw lifecycleRecoveryRequiredError(phaseA.admitted.identity, phaseA.admitted.reason ?? "execution_unknown");
+  }
+  if (phaseA.admitted.replay) {
+    return { body: phaseA.admitted.replay.body as ChatTaskResponse, replayed: true, status: phaseA.admitted.replay.status };
+  }
+  identity = (phaseA.admitted as { identity: import("./legacyChatLifecycle.js").LifecycleIdentity }).identity;
+  const runController = new AbortController();
+  // The settled promise resolves ONLY after the awaited final COMMIT or the
+  // completed failure-settlement boundary below; cancellation alone never
+  // declares physical settlement.
+  let ownerSettled!: () => void;
+  const ownerSettlement = new Promise<void>((resolve) => { ownerSettled = resolve; });
+  let authorityFailure: ApiError | undefined;
+  let firstAbort: { kind: "failure"; error: ApiError } | { kind: "cancel" } | undefined;
+  registerLifecycleRun(identity, runController, ownerSettlement, servingSnapshot?.kind === "ordinary" ? {
+    accountID: auth.accountId, actorUserID: auth.userId, operationScope: "create_chat_task",
+    onFailure: error => { authorityFailure = error; },
+  } : undefined);
+  let cancelling: Promise<void> | null = null;
+  const markCancelling = () => {
+    cancelling ??= inTransaction(pool, async (client) => {
+      await client.query(`UPDATE legacy_chat_task_attempts SET state='cancelling'
+        WHERE account_id=$1 AND id=$2 AND fencing_generation=$3 AND state IN ('admitted','running')`,
+        [auth.accountId, identity.attemptID, identity.fencingGeneration]);
+      await client.query(`UPDATE legacy_chat_task_intents SET state='cancelling',revision=revision+1,updated_at=now()
+        WHERE id=$1 AND current_attempt_id=$2 AND fencing_generation=$3 AND state IN ('admitted','running')`,
+        [identity.intentID, identity.attemptID, identity.fencingGeneration]);
+    }).catch(() => undefined);
+    return cancelling;
+  };
+  // Both slots precede composition: an already-aborted input notifies inline.
+  const composed = composeLifecycleSignals([options.signal, runController.signal], (_reason, error) => {
+    firstAbort ??= error === authorityFailure && authorityFailure
+      ? { kind: "failure", error: authorityFailure } : { kind: "cancel" };
+    void markCancelling();
+  });
+  const assertFirstAbort = () => {
+    if (firstAbort?.kind === "failure") throw firstAbort.error;
+    if (firstAbort || options.signal?.aborted || runController.signal.aborted) {
+      throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+    }
+  };
+  assertExecutionCurrent = async (supplied?: unknown) => {
+    assertFirstAbort();
+    const check = async (client: DatabaseClient) => {
+      await assertOriginalAuthorityCurrent(client, auth, identity, options.servingAuthority);
+      await assertChatManifestSelectionCurrent(client, auth, manifestId, identity);
+      // Source validation is another await; original authority follows it again.
+      await assertOriginalAuthorityCurrent(client, auth, identity, options.servingAuthority);
+    };
+    if (supplied !== undefined) await check(supplied as DatabaseClient);
+    else await inTransaction(pool, check);
+    assertServingCurrent();
+    assertFirstAbort();
+  };
+  const cancelledOutcome = () => firstAbort?.kind === "cancel";
+  const failureReason = (fallback: string) => {
+    if (firstAbort?.kind !== "failure") return fallback;
+    switch (firstAbort.error.code) {
+      case "CHAT_COMPLETION_SOURCE_CHANGED": return "selected_source_changed";
+      case "LEGACY_CHAT_AUTHORITY_BUSY": return "authority_busy";
+      case "LEGACY_CHAT_AUTHORITY_EXPIRED": return "authority_expired";
+      default: return "authority_lost";
+    }
+  };
+  const stopHeartbeat = startLifecycleHeartbeat(pool, auth, identity, runController, undefined, options.servingAuthority,
+    servingSnapshot?.kind === "ordinary" ? {
+      manifestID: manifestId,
+      expiresAt: (phaseA as Extract<typeof phaseA, { taskId: unknown }>).selectedSourceExpiresAt,
+      assertCurrent: async client => {
+        if (!await lockChatCompletionSourceRows(client, auth, {task_id:identity.taskID,manifest_id:manifestId,
+          person_id:request.person_id,relationship_context_id:request.relationship_context_id,session_id:request.session_id})) {
+          throw new ApiError(409, "LEGACY_CHAT_AUTHORITY_BUSY", "The selected source is being changed. Reload after that change settles.");
+        }
+        await assertChatManifestSelectionCurrent(client, auth, manifestId, identity);
+      },
+      onFailure: error => { authorityFailure = error; },
+    } : undefined);
+  let ownerFinished = false;
+  // Single settlement boundary: heartbeat stop, exact attempt release, signal
+  // listener disposal and the settled resolution happen ONCE, only after the
+  // actual final COMMIT or completed failure settlement.
+  const finishOwner = () => {
+    if (ownerFinished) return;
+    ownerFinished = true;
+    stopHeartbeat();
+    releaseLifecycleRun(identity.attemptID);
+    composed.dispose();
+    ownerSettled();
+  };
+  let producerUncertain = false;
+  let runSettled = false;
+  // One reliable settlement boundary: preparation, provider, Person ingress,
+  // media loads, cancellation and finalization all settle here on failure. The
+  // durable dispatch evidence decides usage uncertainty; the original error is
+  // rethrown unchanged and no fake terminal receipt is produced.
+  const settleRun = async (state: "cancelled" | "failed_retryable", reason: string) => {
+    if (runSettled) return;
+    runSettled = true;
+    // Preparation/producer awaits have returned. Drain maintenance outside TX
+    // before our own terminal writes could look like lost heartbeat authority.
+    await stopHeartbeat.drain();
+    await markCancelling().catch(() => undefined);
+    await inTransaction(pool, async (client) => {
+      await finishLifecycleAttempt(client, {
+        accountID: auth.accountId, identity, state, terminalReason: reason,
+      });
+      if (harnessController) await harnessController.finalize(client, false);
+    }).catch(() => undefined);
+    finishOwner();
+  };
+  try {
+  const { taskId, snapshot, selectedBlocks, evidenceFragmentIds, media, createdAt, calendarContext, mediaIds, selectedSourceExpiresAt } =
+    phaseA as Extract<typeof phaseA, { taskId: unknown }>;
+  // ---- Phase 2: execution with no transaction client. Provider, Person
+  // ingress, tool, image and file work never hold a database connection.
+    await assertCurrent();
+    const activeAttention = await loadActiveAttention(
+      pool,
+      auth.accountId,
+      request.person_id,
+      request.relationship_context_id,
+    );
+    let blocks = responseBlocks(selectedBlocks, activeAttention);
+    let remoteChatStatus:
+      | "disabled"
+      | "completed"
+      | "fallback"
+      | "media_not_sent" = "disabled";
+    let remoteChatResult: RemoteChatAnswerResult | null = null;
+    let feedbackInput: Parameters<typeof recordFeedbackExecution>[2]["input"] | null = null;
+    let remoteStartedAt: string | null = null;
+    let remoteEndedAt: string | null = null;
+    let remoteFailed = false;
+    let remoteDispatchFailed = false;
+    let continuationSavepoint = false;
+    let runFiles:Awaited<ReturnType<typeof createHarnessRunFiles>>;
+    if (
+      remoteChatProvider &&
+      (mediaIds.length === 0 ||
+        (remoteChatProvider.supportsImageInput && chatMediaStorage))
+    ) {
+      try {
+        remoteStartedAt = new Date().toISOString();
+        const images = mediaIds.length === 0 || !chatMediaStorage
+          ? []
+          : await Promise.all(media.map(async (item) => {
+              const stored = await getChatMediaContent(
+                pool,
+                auth,
+                chatMediaStorage,
+                item.id,
+              );
+              return {
+                file_name: item.file_name,
+                media_type: item.media_type,
+                data: stored.body,
+              };
+            }));
+        // Preparation is an actual await. Recheck the original execution owner
+        // before observation construction can classify its expired canonical
+        // clock as source withdrawal, and before any provider exposure.
+        await assertCurrent();
+        const sourceImages = assertHarnessCurrent && chatMediaStorage && remoteChatProvider.supportsImageInput
+          ? await loadHarnessEvidenceImageScope(pool,auth,request.person_id,request.relationship_context_id,evidenceFragmentIds) : null;
+        await assertCurrent();
+        feedbackInput = {
+          ...(responsePreference ? { responsePreference } : {}),
+          assertCurrent,
+          objective: request.objective,
+          session_title_requested: sessionTitleRequested,
+          reference_time: createdAt.toISOString(),
+          ...(calendarContext ? { calendarContext } : {}),
+          ...(conversationHistory.length > 0 ? { conversation_history: conversationHistory } : {}),
+          ...(sessionConversation.sources?.length ? { permits_unconfirmed_session_context_answer: true } : {}),
+          context_blocks: selectedBlocks.map(remoteContextBlock),
+          allowed_citation_ids: evidenceFragmentIds,
+          images,
+          memoryReview: {
+            recall: async (page) => {
+              await assertCurrent?.();
+              const recalled = await recallMemories(pool, auth, {
+                surface: "relationship",
+                person_id: request.person_id,
+                relationship_context_id: request.relationship_context_id,
+                scope: page?.scope,
+                cursor: page?.cursor,
+                limit: 20,
+              });
+              await assertCurrent?.();
+              return {
+                items: recalled.items.map(agentMemoryItem),
+                has_more: recalled.has_more,
+                next_cursor: recalled.next_cursor,
+              };
+            },
+            stage: async ({ items }) => {
+              await assertCurrent();
+              const nonSelf = items.filter((item) => item.scope !== "self");
+              if (nonSelf.length === 0) return { status: "no_material_change" };
+              const imageArtifacts = media.map((item, index) => ({
+                artifactId: `image-${index}`,
+                sourceArtifactId: item.id,
+                kind: "image" as const,
+                sessionId: request.session_id ?? null,
+                messageId: request.message_id ?? null,
+                captureId: null,
+                sourceResourceId: null,
+                evidenceFragmentId: null,
+                contentHash: null,
+                captureVersion: null,
+              }));
+              const authority: MemorySourceAuthority = {
+                text: request.objective,
+                artifacts: [
+                  ...imageArtifacts,
+                  {
+                    artifactId: `${request.session_id ?? "relationship"}:message:${request.message_id ?? ""}`,
+                    kind: "text" as const,
+                    sessionId: request.session_id ?? null,
+                    messageId: request.message_id ?? null,
+                    captureId: null,
+                    sourceResourceId: null,
+                    evidenceFragmentId: null,
+                    contentHash: null,
+                    captureVersion: null,
+                  },
+                ],
+                sessionId: request.session_id ?? null,
+                messageId: request.message_id ?? null,
+                sourceTaskId: taskId,
+                captureIds: [],
+                messageTextHash: createHash("sha256")
+                  .update(request.objective)
+                  .digest("hex"),
+                imageManifest: [],
+                captureVersion: null,
+                captureSubjectId: null,
+                captureContextId: null,
+              };
+              const stageRequest: MemoryProposalStageRequest = {
+                idempotency_key: randomUUID(),
+                surface: "relationship",
+                session_id: request.session_id ?? null,
+                source_task_id: taskId,
+                source_message_id: request.message_id ?? null,
+                person_id: request.person_id,
+                relationship_context_id: request.relationship_context_id,
+                contact_decision: "existing",
+                identity_authority: "human_selection",
+                proposer: {
+                  kind: "agent",
+                  name: "relationship-ask",
+                  version: "1",
+                },
+                items: nonSelf as MemoryProposalStageRequest["items"],
+              };
+              // Collect-only truthful pending acknowledgement. No durable
+              // proposal and no official id exists yet; the final fenced
+              // transaction stages the canonical proposal and attaches its
+              // real reference to the answer.
+              memoryCandidates.push({ stageRequest, authority });
+              return {
+                status: "pending_ephemeral",
+                candidate_fingerprint: digestValue(stageRequest),
+                item_count: nonSelf.length,
+              };
+            },
+          },
+          observation: await productObservationContext(pool, auth, taskId,
+            mediaIds.length ? "relationship_image" : "relationship_text", {
+              sessionID: request.session_id, personID: request.person_id, contextID: request.relationship_context_id,
+              fragmentIDs: evidenceFragmentIds, mediaIDs: mediaIds,
+              screenshotTaskIDs: [...new Set([...(sessionConversation.sources?.map((source) => source.taskID) ?? []), ...(sourceImages?.taskIDs ?? [])])],
+            }),
+        };
+        sourceObservation = feedbackInput.observation;
+        if (sourceImages?.expiresAt && sourceObservation?.source_refs?.kind === "product") {
+          sourceObservation.source_refs.expires_at = new Date(Math.min(sourceImages.expiresAt.valueOf(),Date.parse(sourceObservation.source_refs.expires_at))).toISOString();
+        }
+        if (assertHarnessCurrent && chatMediaStorage && sourceImages?.taskIDs.length) {
+          feedbackInput.readEvidenceImage = createHarnessEvidenceImageReader(pool, auth, request.person_id,
+            request.relationship_context_id, evidenceFragmentIds, chatMediaStorage, assertBaseCurrent, (id,guard)=>imageGuards.set(id,guard));
+        }
+        runFiles=assertHarnessCurrent ? await createHarnessRunFiles(pool,auth,feedbackInput,manifestId,request.session_id,
+          [...new Set([...(sourceImages?.taskIDs??[]),...(sessionConversation.sources?.map(source=>source.taskID)??[])])],
+          previousRunID&&previousRunExpiresAt?{id:previousRunID,expiresAt:previousRunExpiresAt}:undefined,
+          assertSourceCurrent) : undefined;
+        if(runFiles)feedbackInput.runFiles=runFiles.admission;
+        await assertCurrent?.();
+        if (remoteChatProvider.providerId === "claude-agent-sdk" && request.session_id && !images.length && !feedbackInput.readEvidenceImage
+          && feedbackInput.observation?.source_refs?.kind === "product") {
+          harnessController = createHarnessContinuationController(pool, auth, request.session_id,
+            { kind: "relationship", personID: request.person_id, contextID: request.relationship_context_id },
+            () => { const refs = feedbackInput!.observation!.source_refs!; return { expiresAt: new Date(refs.kind === "product" ? refs.expires_at : 0), personIDs: refs.kind === "product" ? refs.person_ids : [] }; },
+            { attemptID: identity.attemptID, taskID: identity.taskID });
+          feedbackInput.continuation = harnessController.factory;
+        }
+        // Durable exact dispatch evidence before the paid provider entry.
+        if (remoteChatProvider) {
+          try {
+            await inTransaction(pool, async (client) => {
+              await assertExecutionCurrent!(client);
+              await markLifecycleDispatched(client, auth.accountId, identity);
+            });
+          } catch (error) { remoteDispatchFailed = true; throw error; }
+        }
+        await assertCurrent();
+        feedbackInput!.signal = composed.signal;
+        remoteChatResult = await measureLabServerStage("model_adapter", () => captureProductStep("relationship.answer", "context", feedbackInput!, () => remoteChatProvider!.answer(feedbackInput!)));
+        await assertCurrent();
+        remoteEndedAt = new Date().toISOString();
+        const nextBlocks = insertAfterPersonBrief(
+          blocks,
+          sessionConversation.sources?.length ? markSessionContextAnswer(remoteAnswerBlock(remoteChatResult), request.objective) : remoteAnswerBlock(remoteChatResult),
+        );
+        remoteChatStatus = nextBlocks === blocks ? "fallback" : "completed";
+        blocks = nextBlocks;
+      } catch (error) {
+        // Typed authority/source/cancellation failures cannot become a
+        // successful fallback or a second Person provider entry.
+        if (currentnessFailure || remoteDispatchFailed || error instanceof ApiError || composed.signal.aborted) throw currentnessFailure ? currentnessFailure.error : error;
+        // An entered producer failed without a usable receipt: the request
+        // carries source-free uncertainty into the real final transaction.
+        producerUncertain = true;
+        remoteEndedAt = new Date().toISOString();
+        remoteFailed = true;
+        remoteChatStatus = "fallback";
+        blocks = insertAfterPersonBrief(
+          blocks,
+          remoteFailureBlock(
+            "AI answer unavailable",
+            "The AI service did not complete this turn. The governed relationship summary remains available below; ask again to retry. No action was taken.",
+          ),
+        );
+      }
+    } else if (remoteChatProvider && mediaIds.length > 0) {
+      remoteChatStatus = "media_not_sent";
+      blocks = insertAfterPersonBrief(
+        blocks,
+        remoteFailureBlock(
+          "Attachments were not sent to remote AI",
+          "This turn uses the governed relationship summary only. capri did not send the attached images to the AI service, and no action was taken.",
+        ),
+      );
+    }
+    let personDispatched = false;
+    const personResearch = await runPersonResearchChatIngress({
+      ...(personResearchProvider ? { onDispatch: async () => {
+        await inTransaction(pool, async (client) => {
+          await assertExecutionCurrent!(client);
+          await markLifecycleDispatched(client, auth.accountId, identity);
+        });
+        personDispatched = true;
+      } } : {}),
+      provider: personResearchProvider,
+      assertCurrent,
+      media,
+      loadMedia: async (mediaID) => {
+        if (!chatMediaStorage) {
+          throw new Error("Chat media storage is unavailable.");
+        }
+        return (await getChatMediaContent(
+          pool,
+          auth,
+          chatMediaStorage,
+          mediaID,
+        )).body;
+      },
+      runID: personResearchRunID(auth.accountId, request.idempotency_key),
+      objective: request.objective,
+      signal: composed.signal,
+    });
+    // Person-only failure after actual research entry keeps truthful usage
+    // uncertainty even when the canonical local fallback completes.
+    if (personDispatched && personResearch.status !== "completed" && personResearch.status !== "no_action") {
+      producerUncertain = true;
+    }
+    const personResearchStatus = personResearch.status;
+    if (personResearch.block) {
+      blocks = insertAfterPersonBrief(blocks, personResearch.block);
+    }
+    const action = blocks.find((item) => item.kind === "action_proposal");
+    const noAction = blocks.find((item) => item.kind === "no_action");
+    const clarification = blocks.find((item) => item.kind === "clarification");
+    const sessionTitle = sessionTitleRequested
+      ? firstTurnSessionTitle(request.objective, remoteChatResult?.session_title)
+      : null;
+  // No maintenance tick may probe this owner's final manifest lock. The
+  // producer and Person/tool awaits have actually returned at this boundary.
+  await stopHeartbeat.drain();
+  assertFirstAbort();
+  // ---- Phase 3: one short fenced final transaction. Canonical result,
+  // Memory staging, harness resume commit, pending-manifest promotion, product
+  // observation and the terminal lifecycle state commit atomically.
+  const finalizeTransaction = () => inTransaction(pool, async (client) => withOriginalAuthorityFinalization(client, auth, identity, async () => {
+    // The wrapper validates original authority before pending promotion; final
+    // source assertions and the terminal CAS remain in this transaction.
+    await assertLifecycleAttemptCurrent(client, auth.accountId, identity);
+    // Source-first NOWAIT precedes manifest/terminal/business writes. The
+    // source mutator owns source -> loss-latch order; never wait in reverse.
+    if (!await lockChatCompletionSourceRows(client, auth, {task_id:taskId,manifest_id:manifestId,
+      person_id:request.person_id,relationship_context_id:request.relationship_context_id,session_id:request.session_id}))
+      throw chatSelectionChanged();
+    await assertChatManifestSelectionCurrent(client, auth, manifestId, identity);
+    await client.query("UPDATE context_manifests SET status='active' WHERE account_id=$1 AND id=$2 AND status='pending'", [auth.accountId, manifestId]);
+    // A winning-owner disconnect observed before this commit can never publish
+    // late canonical results.
+    assertFirstAbort();
+    const finished = await finishLifecycleAttempt(client, {
+      accountID: auth.accountId,
+      identity,
+      state: "completed",
+    });
+    if (!finished) throw new ApiError(409, "LEGACY_CHAT_ATTEMPT_FENCED", "A newer attempt owns this work. Reload its current state.");
+    const response: ChatTaskResponse = {
+      contract_version: CONTRACT_VERSION,
+      task_id: taskId,
+      context_manifest_id: manifestId,
+      knowledge_snapshot_id: snapshot.id,
+      disposition: action
+        ? "propose_action"
+        : clarification
+          ? "clarify"
+        : noAction
+          ? "no_action"
+          : "answer",
+      blocks,
+      ...(remoteChatStatus==="completed" && runFiles?.receipts().length ? {artifacts:runFiles.receipts()} : {}),
+      media,
+      ...(remoteChatResult?.memoryProposal
+        ? {
+            memory_proposal: {
+              proposal_id: remoteChatResult.memoryProposal.proposal_id,
+              revision: remoteChatResult.memoryProposal.proposal_revision,
+            },
+          }
+        : {}),
+      ...(request.telemetry ? { telemetry: request.telemetry } : {}),
+      ...(sessionTitle ? { session_title: sessionTitle } : {}),
+      created_at: createdAt.toISOString(),
+    };
+    if (request.telemetry) {
+      const taskSpanID = telemetrySpanId(
+        request.telemetry.trace_id,
+        `chat-task:${taskId}`,
+      );
+      await appendTelemetrySpan(client, auth, request.telemetry, {
+        key: `chat-task:${taskId}`,
+        name: "chat.task assemble_relationship_brief",
+        kind: "internal",
+        status: "ok",
+        startedAt: chatStartedAt,
+        endedAt: new Date().toISOString(),
+        attributes: {
+          "ts.chat.task_id": taskId,
+          "ts.chat.manifest_id": manifestId,
+          "ts.chat.disposition": response.disposition,
+          "ts.chat.evidence_count": evidenceFragmentIds.length,
+          "ts.chat.media_count": media.length,
+          "ts.chat.remote_status": remoteChatStatus,
+          "ts.chat.person_research_status": personResearchStatus,
+        },
+      });
+      if (remoteStartedAt && remoteEndedAt && remoteChatProvider) {
+        await appendTelemetrySpan(client, auth, request.telemetry, {
+          key: `chat-model:${taskId}`,
+          parentSpanID: taskSpanID,
+          name: `model.chat ${remoteChatResult?.model ?? "configured-provider"}`,
+          kind: "client",
+          status: remoteFailed ? "error" : "ok",
+          startedAt: remoteStartedAt,
+          endedAt: remoteEndedAt,
+          attributes: {
+            "gen_ai.provider.name":
+              remoteChatResult?.provider_id ?? "configured-provider",
+            "gen_ai.request.model": remoteChatResult?.model ?? "unknown",
+            "gen_ai.usage.input_tokens": remoteChatResult?.usage_reported === false ? null : remoteChatResult?.input_tokens ?? null,
+            "gen_ai.usage.output_tokens": remoteChatResult?.usage_reported === false ? null : remoteChatResult?.output_tokens ?? null,
+            "ts.reasoning.capture_status": "unavailable",
+            ...(remoteFailed ? { "error.type": "provider_failure" } : {}),
+          },
+        });
+      }
+    }
+    await appendAudit(
+      client,
+      { accountId: auth.accountId, actorUserId: auth.userId },
+      "chat_task.assembled",
+      "context_manifest",
+      manifestId,
+      {
+        task_id: taskId,
+        person_id: request.person_id,
+        relationship_context_id: request.relationship_context_id,
+        knowledge_snapshot_id: snapshot.id,
+        included_block_count: selectedBlocks.length,
+        included_evidence_count: evidenceFragmentIds.length,
+        included_media_count: media.length,
+        conversation_session_id: request.session_id ?? null,
+        conversation_message_ids: conversationHistory.map((message) => message.message_id),
+        current_message_id: request.message_id ?? null,
+        disposition: response.disposition,
+        remote_chat_status: remoteChatStatus,
+        remote_chat_provider_id: remoteChatResult?.provider_id ?? null,
+        remote_chat_model: remoteChatResult?.model ?? null,
+        remote_chat_prompt_revision: remoteChatResult?.prompt_revision ?? null,
+        remote_chat_prompt_version_id: remoteChatResult?.prompt_snapshot?.versionId ?? null,
+        remote_chat_prompt_source: remoteChatResult?.prompt_snapshot?.source ?? null,
+        remote_chat_provider_request_id:
+          remoteChatResult?.provider_request_id ?? null,
+        remote_chat_input_tokens: remoteChatResult?.usage_reported === false ? null : remoteChatResult?.input_tokens ?? null,
+        remote_chat_output_tokens: remoteChatResult?.usage_reported === false ? null : remoteChatResult?.output_tokens ?? null,
+      },
+    );
+    await recordSessionChatSources(client, auth, request.session_id, taskId, sessionConversation.sources ?? [], conversationHistory.filter((message) => message.role === "assistant").map((message) => message.message_id));
+    if (request.session_id) {
+      await recordMeetingDraftsForTask(client, auth, {
+        blocks: response.blocks,
+        ...(request.message_id ? { messageID: request.message_id } : {}),
+        sessionID: request.session_id,
+        taskID: taskId,
+      });
+    }
+    if (!await lockChatCompletionSources(client, auth, { task_id: taskId, session_id: request.session_id, manifest_id: manifestId,
+      person_id: request.person_id, relationship_context_id: request.relationship_context_id }))
+      throw new ApiError(409, "CHAT_COMPLETION_SOURCE_CHANGED", "The source changed while this answer was being prepared. Reload its current state before trying again.");
+    if (remoteChatStatus === "completed" && feedbackInput && remoteChatResult && remoteStartedAt && remoteEndedAt) {
+      await recordFeedbackExecution(client, auth, {
+        task_id: taskId, ...(request.session_id ? { session_id: request.session_id } : {}), manifest_id: manifestId,
+        person_id: request.person_id, relationship_context_id: request.relationship_context_id,
+        input: feedbackInput, result: remoteChatResult, started_at: remoteStartedAt, finished_at: remoteEndedAt,
+        reference_time: createdAt.toISOString(), policy_version: CHAT_POLICY_VERSION,
+      });
+    }
+    // The early base guard owns original session/account locks through this
+    // final transaction. Terminal state is already staged here; late source
+    // checks must not turn completed into permission for new execution.
+    if (assertHarnessCurrent) await client.query("SELECT account_id FROM harness_source_generations WHERE account_id=$1 FOR SHARE NOWAIT",[auth.accountId]);
+    await assertSourceCurrent(client);
+    if (previousRunID) await assertPreviousCurrent(client);
+    if (producerUncertain) await markLifecycleUsageUncertain(client, auth.accountId, identity);
+      // Every collected candidate keeps its complete ephemeral intent; each is
+      // staged once here and only a real receipt is attached. A failed stage
+      // rolls back alone and the answer reports no saved proposal.
+      for (const candidate of memoryCandidates) {
+        await client.query("SAVEPOINT memory_review_stage");
+        try {
+          const staged = await stageMemoryProposal(client, auth, candidate.stageRequest, candidate.authority);
+          await client.query("RELEASE SAVEPOINT memory_review_stage");
+          if (staged) response.memory_proposal = { proposal_id: staged.proposal.proposal_id, revision: staged.proposal.revision };
+        } catch {
+          await client.query("ROLLBACK TO SAVEPOINT memory_review_stage");
+        }
+      }
+      if (remoteChatStatus === "completed" && runFiles) {
+        await runFiles.persist(client);
+        // Persisted receipts may have a stricter database retention bound than
+        // the provisional tool receipt. Replay and observation use actual rows.
+        const artifacts = runFiles.receipts();
+        if (artifacts.length) response.artifacts = artifacts;
+      }
+      if (harnessController) await harnessController.finalize(client, remoteChatStatus === "completed");
+      const observation = options.observation;
+      if (observation) await observation.finalize(client, {
+        taskID: taskId,
+        status: remoteChatStatus === "completed" ? "completed" : "fallback",
+        output: response as unknown as Record<string, unknown>,
+      });
+      await completeIdempotency(client, { id: phaseA.admitted.idempotencyRecordID, replay: null }, 201, response);
+      assertFirstAbort();
+      await assertChatManifestSelectionCurrent(client, auth, manifestId, identity);
+      return {
+        body: response,
+        replayed: false,
+        status: 201,
+        labProductOutcome: remoteChatStatus === "completed" ? "accepted" : "fallback",
+      } as ChatTaskMutationResult;
+  }, () => {
+    assertFirstAbort();
+  }, options.servingAuthority, selectedSourceExpiresAt ? [selectedSourceExpiresAt.valueOf()] : []));
+  try {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const outcome = await finalizeTransaction();
+        options.observation?.markCommitted?.();
+        finishOwner();
+        return outcome;
+      } catch (error) {
+        lastError = error;
+        const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+        if (code !== "40001" && code !== "40P01") break;
+      }
+    }
+    await settleRun(cancelledOutcome() ? "cancelled" : "failed_retryable",
+      cancelledOutcome() ? "request_cancelled" : failureReason("finalization_failed"));
+    throw lastError;
+  } catch (error) {
+    throw error;
+  }
+  } catch (error) {
+    // Any preparation, media, provider, Person-ingress or cancellation throw
+    // settles the exact owner before it escapes: abort, fenced source-free
+    // failed/cancelled settlement on the actual DB outcome, single cleanup.
+    // The classification is captured BEFORE the bookkeeping abort so a
+    // non-cancellation failure is never relabelled as cancelled.
+    const cancelled = cancelledOutcome();
+    const reason = cancelled ? "request_cancelled" : failureReason("execution_failed");
+    if (!runController.signal.aborted) runController.abort(new Error("LEGACY_CHAT_EXECUTION_FAILED"));
+    await settleRun(cancelled ? "cancelled" : "failed_retryable", reason);
+    throw error;
+  }
+}

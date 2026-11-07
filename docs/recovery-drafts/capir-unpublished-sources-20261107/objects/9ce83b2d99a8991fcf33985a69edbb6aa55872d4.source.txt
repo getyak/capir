@@ -1,0 +1,404 @@
+import { describe, expect, it } from "vitest";
+
+import { fingerprint } from "./fingerprint.js";
+import {
+  AgentPublicResearchPolicyError,
+  assertPublicResearchAuthorization,
+  assertPublicResearchQuery,
+} from "./publicResearchPolicy.js";
+import { runPublicResearchAgent } from "./publicResearchRunner.js";
+import { DEFAULT_AGENT_BUDGET } from "./runner.js";
+import { ScriptedAgentProvider } from "./scriptedProvider.js";
+import type {
+  AgentJournalEvent,
+  AgentJournalOutput,
+  AgentPublicResearchNoActionCandidate,
+  AgentPublicResearchCheckpoint,
+  AgentPublicResearchGateway,
+  AgentPublicResearchJournal,
+  AgentPublicResearchScope,
+  AgentPublicResearchTerminalReceipt,
+  AgentResearchArtifactCandidate,
+} from "./types.js";
+
+const scope: AgentPublicResearchScope = {
+  runID: "33333333-3333-4333-8333-333333333333",
+  objective: "Research Example Company's public market update.",
+  providerID: "synthetic-search",
+  authorization: {
+    purpose: "company_market_research",
+    subjectKind: "company",
+    accessMode: "domain_allowlist",
+    allowedDomains: ["example.com"],
+    queryAnchors: ["Example Company"],
+    maximumSearchCount: 2,
+    maximumFetchCount: 2,
+  },
+};
+
+class MemoryResearchHost
+  implements AgentPublicResearchGateway, AgentPublicResearchJournal
+{
+  checkpoint: AgentPublicResearchCheckpoint | null = null;
+  readonly events: AgentJournalEvent[] = [];
+  readonly outputs: AgentJournalOutput[] = [];
+  readonly artifacts: AgentResearchArtifactCandidate[] = [];
+  terminal: AgentPublicResearchTerminalReceipt | null = null;
+
+  async start() {}
+
+  async loadCheckpoint() {
+    return this.checkpoint;
+  }
+
+  async saveCheckpoint(_runID: string, value: AgentPublicResearchCheckpoint) {
+    this.checkpoint = structuredClone(value);
+  }
+
+  async append(event: AgentJournalEvent) {
+    this.events.push(event);
+  }
+
+  async recordOutput(output: AgentJournalOutput) {
+    this.outputs.push(output);
+  }
+
+  async complete(receipt: AgentPublicResearchTerminalReceipt) {
+    this.terminal = receipt;
+    return receipt;
+  }
+
+  async searchWeb() {
+    return [
+      {
+        url: "https://example.com/market-update",
+        title: "Market update",
+        snippet: "A public company update.",
+        publishedAt: "2026-08-29T00:00:00.000Z",
+        providerID: "synthetic-search",
+      },
+    ];
+  }
+
+  async fetchWeb(
+    _runScope: AgentPublicResearchScope,
+    result: { url: string; title: string; providerID: string },
+  ) {
+    return {
+      canonicalUrl: result.url,
+      title: result.title,
+      text: "The company published a public market update.",
+      contentHash: "a".repeat(64),
+      retrievedAt: "2026-08-30T00:00:00.000Z",
+      providerID: result.providerID,
+    };
+  }
+
+  async commitResearchArtifact(
+    _runScope: AgentPublicResearchScope,
+    candidate: AgentResearchArtifactCandidate,
+  ) {
+    this.artifacts.push(candidate);
+    return {
+      artifactID: "44444444-4444-4444-8444-444444444444",
+      status: "draft" as const,
+      replayed: false,
+    };
+  }
+
+  async commitNoAction(
+    _runScope: AgentPublicResearchScope,
+    _candidate: AgentPublicResearchNoActionCandidate,
+  ) {
+    return {
+      noActionID: "55555555-5555-4555-8555-555555555555",
+      replayed: false,
+    };
+  }
+}
+
+describe("local public-research Agent", () => {
+  it.each(["provider_output_incomplete", "provider_response_rejected", "provider_usage_unavailable"])("quarantines %s and retains actual usage without saving a draft", async terminalReason => {
+    const host = new MemoryResearchHost();
+    const provider = new ScriptedAgentProvider([], {});
+    provider.run = async () => ({ structuredOutput: { outcome: "no_action", reason: "Invalid complete-looking result." },
+      inputTokens: 39_509, outputTokens: 3_001, estimatedUsd: 0.2, turns: 1, permissionDenials: [], terminalReason });
+    const receipt = await runPublicResearchAgent({ scope, budget: {}, provider, gateway: host, journal: host });
+    expect(receipt.status).toBe("quarantined");
+    expect(receipt.reasonCode).toBe(terminalReason === "provider_output_incomplete" ? "PROVIDER_OUTPUT_INCOMPLETE" : terminalReason === "provider_usage_unavailable" ? "PROVIDER_USAGE_UNAVAILABLE" : "PROVIDER_RESPONSE_REJECTED");
+    expect(receipt.usage).toMatchObject({ inputTokens: 39_509, outputTokens: 3_001, estimatedUsd: 0.2 });
+    expect(host.artifacts).toEqual([]);
+  });
+
+  it("keeps unreported provider usage unknown after a transport failure", async () => {
+    const host = new MemoryResearchHost();
+    const provider = new ScriptedAgentProvider([], {});
+    provider.run = async () => { throw new Error("Synthetic transport interruption"); };
+    const receipt = await runPublicResearchAgent({scope,budget:{...DEFAULT_AGENT_BUDGET},provider,gateway:host,journal:host});
+    expect(receipt.usage).toMatchObject({inputTokens:null,outputTokens:null,totalTokens:null,estimatedUsd:null,turns:null});
+    expect(host.artifacts).toEqual([]);
+  });
+  it("searches, fetches, checkpoints, and creates a cited local draft", async () => {
+    const host = new MemoryResearchHost();
+    const resultID = fingerprint({
+      runID: scope.runID,
+      providerID: scope.providerID,
+      url: "https://example.com/market-update",
+    });
+    const provider = new ScriptedAgentProvider(
+      [
+        {
+          tool: "search_web",
+          input: {
+            query: "Example Company public market update",
+            maximum_results: 5,
+            recency_days: 30,
+          },
+        },
+        { tool: "fetch_web", input: { result_id: resultID } },
+        {
+          tool: "create_research_artifact",
+          input: {
+            title: "Market update",
+            summary: "The public source reports a market update.",
+            limitations: "One source was available.",
+            claims: [
+              {
+                statement: "The public source reports a market update.",
+                source_refs: [resultID],
+              },
+            ],
+          },
+        },
+      ],
+      (results) => ({
+        outcome: "artifact",
+        candidate_fingerprint: results.at(-1)?.candidateFingerprint,
+      }),
+    );
+
+    const receipt = await runPublicResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+    });
+
+    expect(receipt.status).toBe("artifact_created");
+    expect(receipt.artifactID).toBe("44444444-4444-4444-8444-444444444444");
+    expect(host.checkpoint).toMatchObject({ searchCalls: 1, fetchCalls: 1 });
+    expect(host.artifacts[0]?.sources[0]).toMatchObject({
+      resultID,
+      url: "https://example.com/market-update",
+      contentHash: "a".repeat(64),
+    });
+    expect(host.artifacts[0]?.claims[0]).toEqual({
+      statement: "The public source reports a market update.",
+      sourceRefs: [resultID],
+    });
+  });
+  it("completes research beyond the former search count with no selected run limit", async () => {
+    const host = new MemoryResearchHost();
+    const resultID = fingerprint({
+      runID: scope.runID,
+      providerID: scope.providerID,
+      url: "https://example.com/market-update",
+    });
+    const provider = new ScriptedAgentProvider(
+      [
+        ...Array.from({ length: 6 }, () => ({ tool: "search_web" as const, input: { query: "Example Company public market update", maximum_results: 5, recency_days: 30 } })),
+        {
+          tool: "search_web",
+          input: {
+            query: "Example Company public market update",
+            maximum_results: 5,
+            recency_days: 30,
+          },
+        },
+        { tool: "fetch_web", input: { result_id: resultID } },
+        {
+          tool: "create_research_artifact",
+          input: {
+            title: "Market update",
+            summary: "The public source reports a market update.",
+            limitations: "One source was available.",
+            claims: [
+              {
+                statement: "The public source reports a market update.",
+                source_refs: [resultID],
+              },
+            ],
+          },
+        },
+      ],
+      (results) => ({
+        outcome: "artifact",
+        candidate_fingerprint: results.at(-1)?.candidateFingerprint,
+      }),
+    );
+
+    const receipt = await runPublicResearchAgent({
+      scope: { ...scope, authorization: { ...scope.authorization, maximumSearchCount: undefined, maximumFetchCount: undefined } },
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+    });
+
+    expect(receipt.status).toBe("artifact_created");
+    expect(receipt.artifactID).toBe("44444444-4444-4444-8444-444444444444");
+    expect(host.checkpoint).toMatchObject({ searchCalls: 7, fetchCalls: 1 });
+    expect(host.artifacts[0]?.sources[0]).toMatchObject({
+      resultID,
+      url: "https://example.com/market-update",
+      contentHash: "a".repeat(64),
+    });
+    expect(host.artifacts[0]?.claims[0]).toEqual({
+      statement: "The public source reports a market update.",
+      sourceRefs: [resultID],
+    });
+  });
+
+  it("restores same-run observations before accepting a fetch", async () => {
+    const host = new MemoryResearchHost();
+    const resultID = "b".repeat(64);
+    host.checkpoint = {
+      searchResults: [
+        {
+          resultID,
+          url: "https://example.com/recovered",
+          title: "Recovered result",
+          snippet: "Recovered after a host restart.",
+          publishedAt: null,
+          providerID: scope.providerID,
+        },
+      ],
+      fetchedPages: [],
+      searchCalls: 1,
+      fetchCalls: 0,
+      toolCalls: 1,
+      sequence: 1,
+    };
+    const provider = new ScriptedAgentProvider(
+      [{ tool: "fetch_web", input: { result_id: resultID } }],
+      {
+        outcome: "no_action",
+        reason_code: "NO_MATERIAL_CHANGE",
+        reason: "The recovered page does not support a useful draft.",
+        missing_evidence_refs: [],
+      },
+    );
+
+    const receipt = await runPublicResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+    });
+
+    expect(receipt.status).toBe("no_action");
+    expect(host.checkpoint?.fetchCalls).toBe(1);
+    expect(host.checkpoint?.fetchedPages[0]?.resultID).toBe(resultID);
+  });
+
+  it("fails closed for a result absent from the restored local run", async () => {
+    const host = new MemoryResearchHost();
+    const provider = new ScriptedAgentProvider(
+      [{ tool: "fetch_web", input: { result_id: "b".repeat(64) } }],
+      {
+        outcome: "no_action",
+        reason_code: "PUBLIC_RESEARCH_UNAVAILABLE",
+        reason: "The source was not discovered in this run.",
+        missing_evidence_refs: [],
+      },
+    );
+    const receipt = await runPublicResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+    });
+
+    expect(receipt.status).toBe("quarantined");
+    expect(receipt.reasonCode).toBe("WEB_RESULT_OUT_OF_SCOPE");
+  });
+
+  it("quarantines a claim that cites a page not fetched in this run", async () => {
+    const host = new MemoryResearchHost();
+    const provider = new ScriptedAgentProvider(
+      [
+        {
+          tool: "create_research_artifact",
+          input: {
+            title: "Unsupported draft",
+            summary: "A claim lacks a fetched source.",
+            limitations: "",
+            claims: [
+              {
+                statement: "An unsupported claim.",
+                source_refs: ["c".repeat(64)],
+              },
+            ],
+          },
+        },
+      ],
+      { outcome: "artifact", candidate_fingerprint: "d".repeat(64) },
+    );
+
+    const receipt = await runPublicResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+    });
+
+    expect(receipt.status).toBe("quarantined");
+    expect(receipt.reasonCode).toBe("ARTIFACT_SOURCE_NOT_FETCHED");
+    expect(host.artifacts).toHaveLength(0);
+  });
+
+  it("rejects a Pursuit-only no_action reason in a research run", async () => {
+    const host = new MemoryResearchHost();
+    const provider = new ScriptedAgentProvider([], {
+      outcome: "no_action",
+      reason_code: "AMBIGUOUS_TIME",
+      reason: "A relationship date was ambiguous.",
+      missing_evidence_refs: [],
+    });
+    const receipt = await runPublicResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+    });
+
+    expect(receipt.status).toBe("quarantined");
+    expect(receipt.reasonCode).toBe("STRUCTURED_OUTPUT_INVALID");
+  });
+
+  it("rejects person/contact queries and implicit unrestricted access", () => {
+    expect(() => assertPublicResearchQuery("candidate alice@example.com"))
+      .toThrow(AgentPublicResearchPolicyError);
+    expect(() =>
+      assertPublicResearchQuery("Unrelated Company market update", scope.authorization),
+    ).toThrow("explicitly authorized company or market anchor");
+    expect(() =>
+      assertPublicResearchAuthorization({
+        ...scope.authorization,
+        allowedDomains: [],
+      }),
+    ).toThrow("requires at least one explicit public domain");
+    expect(() =>
+      assertPublicResearchAuthorization({
+        ...scope.authorization,
+        accessMode: "open_web",
+        allowedDomains: [],
+      }),
+    ).not.toThrow();
+  });
+});

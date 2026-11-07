@@ -1,0 +1,132 @@
+import { Type } from "@sinclair/typebox";
+import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
+import type { Pool } from "pg";
+
+import { ApiError } from "../lib/apiError.js";
+import {
+  approveLifecycleRecovery,
+  composeLifecycleSignals,
+  readLifecycleStatus,
+  requestLifecycleCancel,
+} from "./legacyChatLifecycle.js";
+
+/**
+ * Real request-owned cancellation for the legacy create paths. Only the POST
+ * that wins execution dispatch owns disconnect cancellation: an abort is the
+ * request being aborted or the response closing before the wire answer was
+ * written. A normal completed request stream is never cancellation.
+ */
+export function requestOwnedSignal(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  extra?: readonly (AbortSignal | undefined)[],
+): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const cleanups: Array<() => void> = [];
+  const abort = (reason: string) => {
+    if (!controller.signal.aborted) controller.abort(new Error(reason));
+  };
+  const raw = request.raw;
+  const onAborted = () => {
+    cleanups.forEach((remove) => remove());
+    abort("LEGACY_CHAT_REQUEST_ABORTED");
+  };
+  const onClose = () => {
+    // A finished wire answer closing later is not cancellation.
+    if (!reply.raw.writableFinished) {
+      cleanups.forEach((remove) => remove());
+      abort("LEGACY_CHAT_RESPONSE_CLOSED");
+    }
+  };
+  if (raw.aborted) onAborted();
+  else {
+    raw.on("aborted", onAborted);
+    cleanups.push(() => raw.off("aborted", onAborted));
+  }
+  reply.raw.on("close", onClose);
+  cleanups.push(() => reply.raw.off("close", onClose));
+  const composed = composeLifecycleSignals([controller.signal, ...(extra ?? [])]);
+  return {
+    signal: composed.signal,
+    dispose: () => {
+      composed.dispose();
+      for (const remove of cleanups) remove();
+    },
+  };
+}
+
+const TaskParams = Type.Object({ id: Type.String({ format: "uuid" }) }, { additionalProperties: false });
+const LifecycleStatusSchema = Type.Object({
+  intent_id: Type.String(),
+  task_id: Type.String(),
+  attempt_id: Type.String(),
+  run_id: Type.String(),
+  operation_scope: Type.String(),
+  state: Type.String(),
+  revision: Type.Integer(),
+  dispatch_state: Type.String(),
+  usage_uncertain: Type.Boolean(),
+  terminal_reason: Type.Union([Type.String(), Type.Null()]),
+  execution_authority_expires_at: Type.Union([Type.String(), Type.Null()]),
+  canonical_retention_expires_at: Type.Union([Type.String(), Type.Null()]),
+  created_at: Type.String(),
+  updated_at: Type.String(),
+}, { additionalProperties: false });
+
+/**
+ * Metadata-only authenticated status plus the explicit cancel/recovery
+ * commands. Nothing here reexecutes a provider: recovery only retires the
+ * uncertain attempt so the caller may resubmit its original content.
+ */
+export function registerLegacyChatLifecycleRoutes(
+  app: FastifyInstance,
+  pool: Pool,
+  authenticate: preHandlerHookHandler,
+  errorResponse: unknown,
+): void {
+  const preHandler = [authenticate, async (_request: FastifyRequest, reply: FastifyReply) => { reply.header("cache-control", "no-store"); }];
+  app.get<{ Params: { id: string } }>("/v1/chat/tasks/:id/status", {
+    preHandler,
+    schema: { tags: ["chat"], params: TaskParams, response: { 200: LifecycleStatusSchema, "4xx": errorResponse } },
+  }, async (request) => {
+    const status = await readLifecycleStatus(pool, request.auth, request.params.id);
+    if (!status) throw new ApiError(404, "LEGACY_CHAT_TASK_NOT_FOUND", "The task is not available in this account.");
+    return status;
+  });
+  app.post<{ Params: { id: string }; Body: { attempt_id: string; expected_revision: number } }>(
+    "/v1/chat/tasks/:id/cancel",
+    {
+      preHandler: authenticate,
+      schema: {
+        tags: ["chat"], params: TaskParams,
+        body: Type.Object({
+          attempt_id: Type.String({ format: "uuid" }),
+          expected_revision: Type.Integer({ minimum: 1 }),
+        }, { additionalProperties: false }),
+        response: { 200: LifecycleStatusSchema, "4xx": errorResponse },
+      },
+    },
+    async (request) => requestLifecycleCancel(pool, request.auth, request.params.id, {
+      attemptID: request.body.attempt_id,
+      revision: request.body.expected_revision,
+    }),
+  );
+  app.post<{ Params: { id: string }; Body: { attempt_id: string; expected_revision: number } }>(
+    "/v1/chat/tasks/:id/recover",
+    {
+      preHandler: authenticate,
+      schema: {
+        tags: ["chat"], params: TaskParams,
+        body: Type.Object({
+          attempt_id: Type.String({ format: "uuid" }),
+          expected_revision: Type.Integer({ minimum: 1 }),
+        }, { additionalProperties: false }),
+        response: { 200: LifecycleStatusSchema, "4xx": errorResponse },
+      },
+    },
+    async (request) => approveLifecycleRecovery(pool, request.auth, request.params.id, {
+      attemptID: request.body.attempt_id,
+      revision: request.body.expected_revision,
+    }),
+  );
+}

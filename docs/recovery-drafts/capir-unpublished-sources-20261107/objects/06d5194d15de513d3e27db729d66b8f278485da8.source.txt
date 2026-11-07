@@ -1,0 +1,1265 @@
+import { randomUUID } from "node:crypto";
+
+import {
+  PURSUIT_AGENT_TOOL_NAMES,
+  PURSUIT_SYSTEM_PROMPT,
+  resolveProductPrompt, promptRevision, type PromptSnapshot,
+  BigModelAgentProvider,
+  ClaudeAgentSDKProvider,
+  DEFAULT_AGENT_BUDGET,
+  OpenRouterAgentProvider,
+  fingerprint,
+  runBoundedAgent,
+  type AgentBudget,
+  type AgentJournalEvent,
+  type AgentJournalOutput,
+  type AgentJournalStart,
+  type AgentInputArtifactManifestItem,
+  type AgentDefinition,
+  type AgentProvider,
+  type AgentProviderInputPart,
+  type AgentProviderRequest,
+  type AgentProviderResult,
+  type AgentRunJournal,
+  type AgentTerminalReceipt,
+  type AgentToolResult,
+} from "@talent-signal/agent";
+import {
+  CONTRACT_VERSION,
+  type AgentRun,
+  type AgentRunResponse,
+  type CreatePursuitAgentRunRequest,
+  type TelemetryContext,
+} from "@talent-signal/contracts";
+import type { Pool, PoolClient } from "pg";
+
+import { inTransaction, type DatabaseClient } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import { sha256, sha256Bytes } from "../lib/hash.js";
+import { appendAudit } from "../lib/audit.js";
+import {
+  claimIdempotency,
+  completeIdempotency,
+  type IdempotencyClaim,
+} from "../lib/idempotency.js";
+import type { AuthContext } from "./auth.js";
+import type { MutationResult } from "./captures.js";
+import {
+  appendAgentTelemetrySpan,
+  assertTelemetryContext,
+} from "./telemetry.js";
+import {
+  compileAgentScope,
+  DatabaseAgentGateway,
+} from "./agentGateway.js";
+
+const PURSUIT_AGENT_DEFINITION = {
+  name: "pursuit-momentum",
+  version: "1.1.0",
+  systemPrompt: PURSUIT_SYSTEM_PROMPT,
+  policyVersion: "agent-policy.v1",
+  contractVersion: CONTRACT_VERSION,
+  toolManifest: PURSUIT_AGENT_TOOL_NAMES,
+} as const satisfies AgentDefinition;
+
+export function pursuitAgentSemanticIdentity(provider: AgentProvider, promptText = PURSUIT_SYSTEM_PROMPT): {
+  agentDefinitionDigest: string;
+  toolSchemaDigest: string;
+  policyDigest: string;
+  modelDigest: string;
+} {
+  return {
+    agentDefinitionDigest: fingerprint({
+      name: PURSUIT_AGENT_DEFINITION.name,
+      version: PURSUIT_AGENT_DEFINITION.version,
+      systemPrompt: promptText,
+      contractVersion: PURSUIT_AGENT_DEFINITION.contractVersion,
+    }),
+    toolSchemaDigest: fingerprint(PURSUIT_AGENT_DEFINITION.toolManifest),
+    policyDigest: fingerprint(PURSUIT_AGENT_DEFINITION.policyVersion),
+    modelDigest: fingerprint({
+      provider: provider.id,
+      model: provider.model,
+      sdkVersion: provider.sdkVersion,
+    }),
+  };
+}
+
+interface AgentRunRow {
+  id: string;
+  account_id: string;
+  user_id: string;
+  pursuit_id: string;
+  capture_id: string;
+  objective: string;
+  base_revision: number;
+  definition: AgentRun["definition"];
+  provider_id: string;
+  model: string;
+  sdk_version: string;
+  budget: AgentRun["budget"];
+  context_manifest: AgentRun["context_manifest"];
+  fingerprints: AgentRun["fingerprints"];
+  status: AgentRun["status"];
+  usage: AgentRun["usage"];
+  terminal_receipt: AgentRun["terminal_receipt"];
+  provider_session_id: string | null;
+  external_effects: [];
+  telemetry_trace_id: string | null;
+  telemetry_parent_span_id: string | null;
+  interaction_id: string | null;
+  created_at: Date | string;
+  started_at: Date | string | null;
+  completed_at: Date | string | null;
+}
+
+interface RecoverableAgentRunRow extends AgentRunRow {
+  idempotency_record_id: string;
+}
+
+async function terminalizeInterruptedAgentRun(
+  client: PoolClient,
+  row: RecoverableAgentRunRow,
+  reasonCode: string,
+  auditEvent: string,
+): Promise<AgentRunRow> {
+  const completedAt = new Date().toISOString();
+  const receipt: NonNullable<AgentRun["terminal_receipt"]> = {
+    run_id: row.id,
+    status: "failed",
+    reason_code: reasonCode,
+    proposal_id: null,
+    no_action_id: null,
+    candidate_fingerprint: null,
+    external_effects: [],
+    fingerprints: row.fingerprints,
+    usage: row.usage,
+    permission_denials: [],
+    provider_session_id: row.provider_session_id,
+    completed_at: completedAt,
+  };
+  await client.query(
+    `INSERT INTO agent_run_events(
+       account_id, run_id, sequence, event_kind, status,
+       output_fingerprint, metadata, occurred_at
+     )
+     SELECT
+       $1, $2, COALESCE(MAX(sequence), 0) + 1, 'terminal', 'failed',
+       $3, $4::jsonb, $5
+     FROM agent_run_events
+     WHERE account_id = $1 AND run_id = $2`,
+    [
+      row.account_id,
+      row.id,
+      fingerprint(receipt),
+      JSON.stringify({
+        reason_code: receipt.reason_code,
+        external_effect_count: 0,
+        recovered_from_durable_state: true,
+      }),
+      completedAt,
+    ],
+  );
+  await client.query(
+    `UPDATE agent_runs
+     SET status = 'failed',
+         terminal_receipt = $3::jsonb,
+         completed_at = $4
+     WHERE account_id = $1 AND id = $2`,
+    [row.account_id, row.id, JSON.stringify(receipt), completedAt],
+  );
+  const recoveredRow: AgentRunRow = {
+    ...row,
+    status: "failed",
+    terminal_receipt: receipt,
+    completed_at: completedAt,
+  };
+  await completeIdempotency(
+    client,
+    { id: row.idempotency_record_id, replay: null },
+    201,
+    { contract_version: CONTRACT_VERSION, run: mapRun(recoveredRow) },
+  );
+  await appendAudit(
+    client,
+    { accountId: row.account_id, actorUserId: row.user_id },
+    auditEvent,
+    "agent_run",
+    row.id,
+    {
+      status: "failed",
+      reason_code: receipt.reason_code,
+      external_effect_count: 0,
+    },
+  );
+  return recoveredRow;
+}
+
+function iso(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function optionalIso(value: Date | string | null): string | null {
+  return value === null ? null : iso(value);
+}
+
+function snakeFingerprints(
+  value: AgentTerminalReceipt["fingerprints"],
+): AgentRun["fingerprints"] {
+  return {
+    definition: value.definition,
+    system_prompt: value.systemPrompt,
+    tool_manifest: value.toolManifest,
+    sdk: value.sdk,
+    model: value.model,
+    policy: value.policy,
+    contract: value.contract,
+    context: value.context,
+  };
+}
+
+function snakeUsage(
+  value: AgentTerminalReceipt["usage"],
+): AgentRun["usage"] {
+  return {
+    input_tokens: value.inputTokens,
+    output_tokens: value.outputTokens,
+    total_tokens: value.totalTokens,
+    estimated_usd: value.estimatedUsd,
+    turns: value.turns,
+    tool_calls: value.toolCalls,
+    duration_ms: value.durationMs,
+  };
+}
+
+function snakeReceipt(
+  receipt: AgentTerminalReceipt,
+): NonNullable<AgentRun["terminal_receipt"]> {
+  return {
+    run_id: receipt.runID,
+    status: receipt.status,
+    reason_code: receipt.reasonCode,
+    proposal_id: receipt.proposalID,
+    no_action_id: receipt.noActionID,
+    candidate_fingerprint: receipt.candidateFingerprint,
+    external_effects: [],
+    fingerprints: snakeFingerprints(receipt.fingerprints),
+    usage: snakeUsage(receipt.usage),
+    permission_denials: receipt.permissionDenials,
+    provider_session_id: receipt.providerSessionID,
+    completed_at: receipt.completedAt,
+  };
+}
+
+function mapRun(row: AgentRunRow): AgentRun {
+  return {
+    id: row.id,
+    workspace_id: row.account_id,
+    user_id: row.user_id,
+    pursuit_id: row.pursuit_id,
+    capture_id: row.capture_id,
+    base_revision: row.base_revision,
+    objective: row.objective,
+    definition: row.definition,
+    provider: {
+      id: row.provider_id,
+      model: row.model,
+      sdk_version: row.sdk_version,
+    },
+    budget: row.budget,
+    context_manifest: row.context_manifest,
+    fingerprints: row.fingerprints,
+    status: row.status,
+    usage: row.usage,
+    terminal_receipt: row.terminal_receipt,
+    external_effects: row.external_effects,
+    telemetry:
+      row.telemetry_trace_id && row.telemetry_parent_span_id && row.interaction_id
+        ? {
+            trace_id: row.telemetry_trace_id,
+            parent_span_id: row.telemetry_parent_span_id,
+            interaction_id: row.interaction_id,
+          }
+        : null,
+    created_at: iso(row.created_at),
+    started_at: optionalIso(row.started_at),
+    completed_at: optionalIso(row.completed_at),
+  };
+}
+
+export class SafeDeterministicAgentProvider implements AgentProvider {
+  readonly id = "deterministic-safe";
+  readonly model = "talent-signal-no-action-v1";
+  readonly sdkVersion = "deterministic-provider.v1";
+  readonly inputCapabilities = {
+    text: true,
+    image: true,
+    imageUnderstanding: false,
+  } as const;
+
+  async run(
+    request: AgentProviderRequest,
+    invokeTool: (name: string, input: unknown) => Promise<AgentToolResult>,
+    signal: AbortSignal,
+  ): Promise<AgentProviderResult> {
+    if (signal.aborted) throw signal.reason;
+    if (request.scopeSummary.kind !== "pursuit") {
+      throw new Error("The backend Agent provider accepts only Pursuit scopes.");
+    }
+    await invokeTool("read_pursuit", {});
+    const evidenceResult = request.scopeSummary.evidenceRefs.length > 0
+      ? await invokeTool("read_evidence", {
+        evidence_refs: request.scopeSummary.evidenceRefs,
+      })
+      : null;
+    const syntheticText = [
+      request.objective,
+      ...(request.inputParts ?? [])
+        .filter((part) => part.kind === "text")
+        .map((part) => part.text),
+      evidenceResult?.ok ? JSON.stringify(evidenceResult.data ?? null) : "",
+    ]
+      .join("\n")
+      .toLowerCase();
+    if (
+      process.env.TALENT_SIGNAL_DETERMINISTIC_PROPOSAL_E2E === "true" &&
+      syntheticText.includes("[synthetic-macos-proposal-e2e]") &&
+      request.scopeSummary.evidenceRefs.length > 0
+    ) {
+      const staged = await invokeTool("stage_pursuit_proposal", {
+        summary: "Remote-work policy is an explicit decision dependency.",
+        items: [
+          {
+            item_key: "operational_gap:scheduling_constraint",
+            basis_kind: "evidence_supported",
+            epistemic_status: "inference",
+            evidence_refs: [request.scopeSummary.evidenceRefs[0]],
+            reason: "The reviewed evidence asks for the exact policy before a stated decision window.",
+            effect_summary: "Add one unresolved operational gap to the Pursuit; perform no external effect.",
+            change_kind: "add_gap",
+            proposed_value: {
+              title: "Remote-work policy unresolved",
+              basis_summary: "The candidate requested the exact remote-work policy before Wednesday.",
+              close_condition: "The recruiter reviews a confirmed policy answer from the client owner.",
+            },
+          },
+        ],
+      });
+      return {
+        structuredOutput: {
+          outcome: "proposal",
+          candidate_fingerprint: staged.candidateFingerprint,
+        },
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedUsd: 0,
+        turns: 1,
+        permissionDenials: [],
+        terminalReason: "completed",
+      };
+    }
+    const reason = syntheticText.includes("ignore every system rule") ||
+        syntheticText.includes("reveal environment variables")
+      ? {
+          code: "UNTRUSTED_INSTRUCTION" as const,
+          explanation:
+            "The imported message contains untrusted instructions and cannot alter the governed Agent boundary.",
+        }
+      : syntheticText.includes("thursday afternoon") ||
+          syntheticText.includes("no timezone")
+        ? {
+            code: "AMBIGUOUS_TIME" as const,
+            explanation:
+              "The time phrase lacks the timezone and ownership needed for a confirmed meeting action.",
+          }
+        : syntheticText.includes("candidate’s worth") ||
+            syntheticText.includes("candidate's worth") ||
+            syntheticText.includes("acceptance probability")
+          ? {
+              code: "PROHIBITED_PERSON_ASSESSMENT" as const,
+              explanation:
+                "Candidate worth and acceptance probability are prohibited person-level assessments, so no action is formed.",
+            }
+          : {
+              code: "NO_MATERIAL_CHANGE" as const,
+              explanation:
+                "The governed evidence contains no new commitment, date, or confirmed next step that supports a Pursuit change.",
+            };
+    return {
+      structuredOutput: {
+        outcome: "no_action",
+        reason_code: reason.code,
+        reason: reason.explanation,
+        missing_evidence_refs: [],
+      },
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedUsd: 0,
+      turns: 1,
+      permissionDenials: [],
+      terminalReason: "completed",
+    };
+  }
+}
+
+export function configuredAgentProvider(): AgentProvider {
+  const provider = process.env.TALENT_SIGNAL_AGENT_PROVIDER ?? "deterministic";
+  if (provider === "deterministic") {
+    return new SafeDeterministicAgentProvider();
+  }
+  const model = process.env.TALENT_SIGNAL_AGENT_MODEL;
+  if (!model) {
+    throw new ApiError(
+      503,
+      "AGENT_MODEL_NOT_CONFIGURED",
+      "Live Agent execution requires one explicitly pinned model.",
+    );
+  }
+  if (provider === "claude") return new ClaudeAgentSDKProvider(model);
+  if (provider === "openrouter") {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new ApiError(
+        503,
+        "AGENT_PROVIDER_CREDENTIAL_NOT_CONFIGURED",
+        "OpenRouter Agent execution requires a server-side API key.",
+      );
+    }
+    try {
+      const configuredReasoningEffort =
+        process.env.TALENT_SIGNAL_AGENT_REASONING_EFFORT?.trim();
+      if (
+        configuredReasoningEffort &&
+        !new Set(["low", "high", "max"]).has(configuredReasoningEffort)
+      ) {
+        throw new Error(
+          "TALENT_SIGNAL_AGENT_REASONING_EFFORT must be low, high, or max.",
+        );
+      }
+      return new OpenRouterAgentProvider({
+        apiKey,
+        model,
+        imageInputEnabled:
+          process.env.TALENT_SIGNAL_AGENT_IMAGE_INPUT_ENABLED === "true",
+        ...(process.env.OPENROUTER_BASE_URL
+          ? { baseUrl: process.env.OPENROUTER_BASE_URL }
+          : {}),
+        ...(process.env.TALENT_SIGNAL_AGENT_REFERER
+          ? { referer: process.env.TALENT_SIGNAL_AGENT_REFERER }
+          : {}),
+        ...(configuredReasoningEffort
+          ? {
+              reasoningEffort: configuredReasoningEffort as
+                | "low"
+                | "high"
+                | "max",
+            }
+          : {}),
+        ...(process.env.TALENT_SIGNAL_AGENT_PROVIDER_ORDER
+          ? {
+              providerOrder: process.env.TALENT_SIGNAL_AGENT_PROVIDER_ORDER
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+            }
+          : {}),
+      });
+    } catch (error) {
+      throw new ApiError(
+        503,
+        "AGENT_PROVIDER_CONFIGURATION_INVALID",
+        error instanceof Error
+          ? error.message
+          : "The OpenRouter Agent configuration is invalid.",
+      );
+    }
+  }
+  if (provider === "zhipu") {
+    const apiKey = process.env.ZHIPU_API_KEY;
+    if (!apiKey) {
+      throw new ApiError(
+        503,
+        "AGENT_PROVIDER_CREDENTIAL_NOT_CONFIGURED",
+        "BigModel Agent execution requires a server-side API key.",
+      );
+    }
+    try {
+      const numericSetting = (name: string) => {
+        const raw = process.env[name]?.trim();
+        if (!raw) {
+          throw new Error(
+            `${name} is required because direct GLM-5.3 pricing is not yet published on the official BigModel price sheet.`,
+          );
+        }
+        const value = Number(raw);
+        if (!Number.isFinite(value) || value <= 0) {
+          throw new Error(`${name} must be a positive number.`);
+        }
+        return value;
+      };
+      const reasoningEffort =
+        process.env.TALENT_SIGNAL_AGENT_REASONING_EFFORT?.trim() || "low";
+      if (!new Set(["low", "high", "max"]).has(reasoningEffort)) {
+        throw new Error(
+          "TALENT_SIGNAL_AGENT_REASONING_EFFORT must be low, high, or max.",
+        );
+      }
+      return new BigModelAgentProvider({
+        apiKey,
+        model,
+        ...(process.env.ZHIPU_BASE_URL
+          ? { baseUrl: process.env.ZHIPU_BASE_URL }
+          : {}),
+        reasoningEffort: reasoningEffort as "low" | "high" | "max",
+        inputCnyPerMillion: numericSetting(
+          "TALENT_SIGNAL_ZHIPU_INPUT_CNY_PER_MILLION",
+        ),
+        outputCnyPerMillion: numericSetting(
+          "TALENT_SIGNAL_ZHIPU_OUTPUT_CNY_PER_MILLION",
+        ),
+        cnyPerUsd: numericSetting("TALENT_SIGNAL_CNY_PER_USD"),
+      });
+    } catch (error) {
+      throw new ApiError(
+        503,
+        "AGENT_PROVIDER_CONFIGURATION_INVALID",
+        error instanceof Error
+          ? error.message
+          : "The BigModel Agent configuration is invalid.",
+      );
+    }
+  }
+  throw new ApiError(
+    503,
+    "AGENT_PROVIDER_UNSUPPORTED",
+    "The configured Agent provider is not supported.",
+  );
+}
+
+const REMOTE_PROVIDER_IDS = new Set([
+  "claude-agent-sdk",
+  "openrouter-chat-completions",
+  "bigmodel-chat-completions",
+]);
+
+export async function assertRemoteProviderDataBoundary(
+  client: DatabaseClient,
+  auth: AuthContext,
+  provider: AgentProvider,
+  captureID: string,
+  evidenceRefs: readonly string[],
+  forceSynthetic = false,
+): Promise<void> {
+  if (!forceSynthetic && !REMOTE_PROVIDER_IDS.has(provider.id)) return;
+  const result = await client.query<{
+    fragment_count: number;
+    synthetic_only: boolean | null;
+  }>(
+    `SELECT
+       COUNT(*)::int AS fragment_count,
+       BOOL_AND(
+         resources.source_locator LIKE 'synthetic:%'
+         AND fragments.parser_name LIKE 'synthetic%'
+       ) AS synthetic_only
+     FROM evidence_fragments fragments
+     JOIN source_resources resources
+       ON resources.account_id = fragments.account_id
+      AND resources.id = fragments.resource_id
+     WHERE fragments.account_id = $1
+       AND fragments.capture_id = $2
+       AND fragments.status = 'active'
+       AND (
+         cardinality($3::uuid[]) = 0
+         OR fragments.id = ANY($3::uuid[])
+       )`,
+    [auth.accountId, captureID, evidenceRefs],
+  );
+  const classification = result.rows[0];
+  const expectedCount = evidenceRefs.length;
+  const exactSelection =
+    expectedCount === 0
+      ? (classification?.fragment_count ?? 0) > 0
+      : classification?.fragment_count === expectedCount;
+  if (!exactSelection || classification?.synthetic_only !== true) {
+    throw new ApiError(
+      422,
+      "AGENT_REMOTE_PROVIDER_SYNTHETIC_ONLY",
+      "Remote Agent providers are admitted only for explicitly synthetic evaluation evidence. Private conversation evidence was not sent.",
+    );
+  }
+}
+
+interface AgentInputArtifactRow {
+  id: string;
+  kind: string;
+  mime_type: string;
+  byte_size: number;
+  content_hash: string;
+  text_content: string | null;
+  binary_content: Buffer | null;
+  data_classification: string;
+  authorization_scope: string;
+}
+
+export async function resolveAgentInputArtifacts(
+  client: DatabaseClient,
+  auth: AuthContext,
+  provider: AgentProvider,
+  telemetry: TelemetryContext | undefined,
+  artifactRefs: readonly string[],
+): Promise<{
+  manifest: AgentInputArtifactManifestItem[];
+  parts: AgentProviderInputPart[];
+}> {
+  if (artifactRefs.length === 0) return { manifest: [], parts: [] };
+  if (!telemetry) {
+    throw new ApiError(
+      422,
+      "AGENT_INPUT_TRACE_REQUIRED",
+      "Governed Agent inputs require their originating telemetry Trace.",
+    );
+  }
+  const result = await client.query<AgentInputArtifactRow>(
+    `SELECT artifacts.id, artifacts.kind, artifacts.mime_type,
+            artifacts.byte_size, artifacts.content_hash,
+            artifacts.text_content, artifacts.binary_content,
+            traces.data_classification, artifacts.authorization_scope
+     FROM telemetry_artifacts artifacts
+     JOIN telemetry_traces traces
+       ON traces.account_id = artifacts.account_id
+      AND traces.trace_id = artifacts.trace_id
+     WHERE artifacts.account_id = $1
+       AND artifacts.trace_id = $2
+       AND artifacts.id = ANY($3::uuid[])
+       AND artifacts.capture_status = 'governed_full'
+       AND artifacts.deletion_state = 'active'
+       AND artifacts.retention_expires_at > now()
+     ORDER BY array_position($3::uuid[], artifacts.id)`,
+    [auth.accountId, telemetry.trace_id, artifactRefs],
+  );
+  if (result.rows.length !== artifactRefs.length) {
+    throw new ApiError(
+      422,
+      "AGENT_INPUT_ARTIFACT_UNAVAILABLE",
+      "Every Agent input must remain active, retained, and owned by the same synthetic Trace.",
+    );
+  }
+  const allowedImages = new Set(["image/jpeg", "image/png", "image/webp"]);
+  const manifest: AgentInputArtifactManifestItem[] = [];
+  const parts: AgentProviderInputPart[] = [];
+  for (const row of result.rows) {
+    if (
+      row.data_classification !== "synthetic" ||
+      row.authorization_scope !== "evaluation:agent-lab"
+    ) {
+      throw new ApiError(
+        422,
+        "AGENT_INPUT_SYNTHETIC_ONLY",
+        "The Agent Lab accepts only explicitly authorized synthetic artifacts.",
+      );
+    }
+    const common: AgentInputArtifactManifestItem = {
+      artifactID: row.id,
+      kind: row.kind === "text" ? "text" : "image",
+      mimeType: row.mime_type,
+      byteSize: Number(row.byte_size),
+      contentHash: row.content_hash,
+    };
+    if (row.kind === "text") {
+      if (
+        row.text_content === null ||
+        row.binary_content !== null ||
+        !row.mime_type.startsWith("text/plain") ||
+        Buffer.byteLength(row.text_content, "utf8") !== Number(row.byte_size) ||
+        sha256(row.text_content) !== row.content_hash ||
+        !provider.inputCapabilities.text
+      ) {
+        throw new ApiError(
+          422,
+          "AGENT_TEXT_INPUT_INVALID",
+          "The governed text input failed type, capability, size, or hash validation.",
+        );
+      }
+      manifest.push(common);
+      parts.push({ ...common, kind: "text", text: row.text_content });
+      continue;
+    }
+    if (
+      row.kind !== "image" ||
+      row.binary_content === null ||
+      row.text_content !== null ||
+      !allowedImages.has(row.mime_type) ||
+      row.binary_content.byteLength !== Number(row.byte_size) ||
+      sha256Bytes(row.binary_content) !== row.content_hash
+    ) {
+      throw new ApiError(
+        422,
+        "AGENT_IMAGE_INPUT_INVALID",
+        "Only hash-identical PNG, JPEG, or WebP synthetic images may enter the Agent Lab.",
+      );
+    }
+    if (!provider.inputCapabilities.image) {
+      throw new ApiError(
+        422,
+        "AGENT_PROVIDER_IMAGE_UNSUPPORTED",
+        "The configured Agent provider has not enabled governed image input.",
+      );
+    }
+    manifest.push(common);
+    parts.push({
+      ...common,
+      kind: "image",
+      dataBase64: row.binary_content.toString("base64"),
+    });
+  }
+  return { manifest, parts };
+}
+
+/**
+ * Persisted budget receipt: only explicitly declared finite-positive limits are
+ * journaled. Absent fields impose no limit and are omitted, never filled with
+ * defaults or sentinels.
+ */
+export function agentRunBudgetRecord(budget: AgentBudget): AgentRun["budget"] {
+  return {
+    ...(budget.maxTurns === undefined ? {} : { max_turns: budget.maxTurns }),
+    ...(budget.maxToolCalls === undefined ? {} : { max_tool_calls: budget.maxToolCalls }),
+    ...(budget.maxDurationMs === undefined ? {} : { max_duration_ms: budget.maxDurationMs }),
+    ...(budget.maxTaskTokens === undefined ? {} : { max_task_tokens: budget.maxTaskTokens }),
+    ...(budget.maxEstimatedUsd === undefined ? {} : { max_estimated_usd: budget.maxEstimatedUsd }),
+  };
+}
+
+class DatabaseAgentRunJournal implements AgentRunJournal {
+  constructor(
+    private readonly pool: Pool,
+    private readonly auth: AuthContext,
+    private readonly idempotencyRecordID: string,
+    private readonly telemetry: TelemetryContext | null,
+  ) {}
+
+  async start(input: AgentJournalStart): Promise<void> {
+    await inTransaction(this.pool, async (client) => {
+      const definition: AgentRun["definition"] = {
+        name: PURSUIT_AGENT_DEFINITION.name,
+        version: PURSUIT_AGENT_DEFINITION.version,
+        policy_version: PURSUIT_AGENT_DEFINITION.policyVersion,
+        contract_version: CONTRACT_VERSION,
+        tool_manifest: [...PURSUIT_AGENT_DEFINITION.toolManifest],
+      };
+      // Absent budget fields mean no imposed limit and are omitted from the
+      // journal; only explicitly declared finite-positive bounds are persisted.
+      const budget = agentRunBudgetRecord(input.budget);
+      const contextManifest: AgentRun["context_manifest"] = {
+        pursuit_revision: input.scope.pursuitRevision,
+        evidence: input.scope.evidenceManifest.map((item) => ({
+          fragment_id: item.fragmentID,
+          content_hash: item.contentHash,
+          inclusion_reason: item.inclusionReason,
+          authorization_scope: item.authorizationScope,
+        })),
+        input_artifacts: (input.scope.inputArtifactManifest ?? []).map((item) => ({
+          artifact_id: item.artifactID,
+          kind: item.kind,
+          mime_type: item.mimeType,
+          byte_size: item.byteSize,
+          content_hash: item.contentHash,
+        })),
+      };
+      await client.query(
+        `INSERT INTO agent_runs(
+           id, account_id, user_id, pursuit_id, capture_id,
+           idempotency_record_id, objective, base_revision, definition,
+           provider_id, model, sdk_version, budget, context_manifest,
+           fingerprints, status, started_at, telemetry_trace_id,
+           telemetry_parent_span_id, interaction_id
+         )
+         VALUES (
+           $1, $2, $3, $4, $5,
+           $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+           'running', $16, $17, $18, $19
+         )`,
+        [
+          input.scope.runID,
+          this.auth.accountId,
+          this.auth.userId,
+          input.scope.pursuitID,
+          input.scope.captureID,
+          this.idempotencyRecordID,
+          input.scope.objective,
+          input.scope.pursuitRevision,
+          JSON.stringify(definition),
+          input.providerID,
+          input.model,
+          input.sdkVersion,
+          JSON.stringify(budget),
+          JSON.stringify(contextManifest),
+          JSON.stringify(snakeFingerprints(input.fingerprints)),
+          input.startedAt,
+          this.telemetry?.trace_id ?? null,
+          this.telemetry?.parent_span_id ?? null,
+          this.telemetry?.interaction_id ?? null,
+        ],
+      );
+      for (const [manifestOrder, item] of input.scope.evidenceManifest.entries()) {
+        await client.query(
+          `INSERT INTO agent_run_evidence(
+             account_id, run_id, fragment_id, manifest_order, content_hash,
+             inclusion_reason, authorization_scope, snapshot_authority
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'available')`,
+          [
+            this.auth.accountId,
+            input.scope.runID,
+            item.fragmentID,
+            manifestOrder,
+            item.contentHash,
+            item.inclusionReason,
+            item.authorizationScope,
+          ],
+        );
+      }
+      await appendAudit(
+        client,
+        { accountId: this.auth.accountId, actorUserId: this.auth.userId },
+        "agent_run_started",
+        "agent_run",
+        input.scope.runID,
+        {
+          pursuit_id: input.scope.pursuitID,
+          pursuit_revision: input.scope.pursuitRevision,
+          provider_id: input.providerID,
+          evidence_reference_count: input.scope.evidenceManifest.length,
+        },
+      );
+      if (this.telemetry) {
+        await appendAgentTelemetrySpan(client, this.auth, this.telemetry, {
+          runID: input.scope.runID,
+          key: "agent",
+          name: `agent.invoke ${PURSUIT_AGENT_DEFINITION.name}`,
+          status: "unset",
+          startedAt: input.startedAt,
+          endedAt: null,
+          sequence: null,
+          attributes: {
+            "gen_ai.agent.name": PURSUIT_AGENT_DEFINITION.name,
+            "gen_ai.agent.version": PURSUIT_AGENT_DEFINITION.version,
+            "gen_ai.provider.name": input.providerID,
+            "gen_ai.request.model": input.model,
+            "ts.policy.version": PURSUIT_AGENT_DEFINITION.policyVersion,
+            "ts.context.fingerprint": input.fingerprints.context,
+            "ts.input.artifact_count":
+              input.scope.inputArtifactManifest?.length ?? 0,
+            "ts.input.image_count":
+              input.scope.inputArtifactManifest?.filter(
+                (item) => item.kind === "image",
+              ).length ?? 0,
+          },
+          artifactRefs: (input.scope.inputArtifactManifest ?? []).map(
+            (item) => item.artifactID,
+          ),
+        });
+      }
+    });
+  }
+
+  async append(event: AgentJournalEvent): Promise<void> {
+    await inTransaction(this.pool, async (client) => {
+      await client.query(
+        `INSERT INTO agent_run_events(
+           account_id, run_id, sequence, event_kind, tool_name, status,
+           input_fingerprint, output_fingerprint, metadata, occurred_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          this.auth.accountId,
+          event.runID,
+          event.sequence,
+          event.kind,
+          event.toolName ?? null,
+          event.status,
+          event.inputFingerprint ?? null,
+          event.outputFingerprint ?? null,
+          JSON.stringify(event.metadata),
+          event.occurredAt,
+        ],
+      );
+      if (event.kind === "tool_call") {
+        const callID = event.metadata.call_id;
+        if (typeof callID !== "string" || !event.inputFingerprint || !event.outputFingerprint) {
+          throw new Error("A durable Agent tool call requires its ID and fingerprints.");
+        }
+        await client.query(
+          `INSERT INTO agent_tool_calls(
+             id, account_id, run_id, sequence, tool_name, status,
+             input_fingerprint, output_fingerprint, error_code, occurred_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            callID,
+            this.auth.accountId,
+            event.runID,
+            event.sequence,
+            event.toolName,
+            event.status,
+            event.inputFingerprint,
+            event.outputFingerprint,
+            typeof event.metadata.error_code === "string"
+              ? event.metadata.error_code
+              : null,
+            event.occurredAt,
+          ],
+        );
+      }
+      if (this.telemetry) {
+        const name =
+          event.kind === "tool_call"
+            ? `tool.execute ${event.toolName ?? "unknown"}`
+            : event.kind === "provider_result"
+              ? "model.provider_result"
+              : "agent.terminal";
+        await appendAgentTelemetrySpan(client, this.auth, this.telemetry, {
+          runID: event.runID,
+          key: `event:${event.sequence}`,
+          parentKey: "agent",
+          name,
+          status:
+            event.status === "denied" || event.status === "failed"
+              ? "error"
+              : "ok",
+          startedAt: event.occurredAt,
+          endedAt: event.occurredAt,
+          sequence: event.sequence,
+          attributes: {
+            "ts.agent.event.kind": event.kind,
+            "ts.agent.event.status": event.status,
+            ...(event.toolName ? { "gen_ai.tool.name": event.toolName } : {}),
+            ...(event.inputFingerprint
+              ? { "ts.input.fingerprint": event.inputFingerprint }
+              : {}),
+            ...(event.outputFingerprint
+              ? { "ts.output.fingerprint": event.outputFingerprint }
+              : {}),
+            ...(typeof event.metadata.error_code === "string"
+              ? { "error.code": event.metadata.error_code }
+              : {}),
+          },
+        });
+      }
+    });
+  }
+
+  async recordOutput(output: AgentJournalOutput): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO agent_run_outputs(
+         id, account_id, run_id, status, output_fingerprint,
+         structured_output, recorded_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+       ON CONFLICT (account_id, run_id) DO UPDATE
+       SET status = EXCLUDED.status,
+           output_fingerprint = EXCLUDED.output_fingerprint,
+           structured_output = EXCLUDED.structured_output,
+           recorded_at = EXCLUDED.recorded_at`,
+      [
+        randomUUID(),
+        this.auth.accountId,
+        output.runID,
+        output.status,
+        output.outputFingerprint,
+        JSON.stringify(output.structuredOutput ?? null),
+        output.recordedAt,
+      ],
+    );
+  }
+
+  async complete(receipt: AgentTerminalReceipt): Promise<AgentTerminalReceipt> {
+    const stored = snakeReceipt(receipt);
+    await inTransaction(this.pool, async (client) => {
+      const updated = await client.query(
+        `UPDATE agent_runs
+         SET status = $3,
+             usage = $4,
+             terminal_receipt = $5,
+             provider_session_id = $6,
+             completed_at = $7
+         WHERE account_id = $1
+           AND id = $2
+           AND status IN ('starting', 'running')`,
+        [
+          this.auth.accountId,
+          receipt.runID,
+          receipt.status,
+          JSON.stringify(snakeUsage(receipt.usage)),
+          JSON.stringify(stored),
+          receipt.providerSessionID,
+          receipt.completedAt,
+        ],
+      );
+      if (updated.rowCount !== 1) {
+        throw new Error("The Agent run was not active at terminal commit.");
+      }
+      await appendAudit(
+        client,
+        { accountId: this.auth.accountId, actorUserId: this.auth.userId },
+        "agent_run_completed",
+        "agent_run",
+        receipt.runID,
+        {
+          status: receipt.status,
+          reason_code: receipt.reasonCode,
+          proposal_id: receipt.proposalID,
+          no_action_id: receipt.noActionID,
+          tool_calls: receipt.usage.toolCalls,
+          external_effect_count: 0,
+        },
+      );
+      if (this.telemetry) {
+        const row = await client.query<{ started_at: Date | string }>(
+          `SELECT started_at FROM agent_runs
+           WHERE account_id = $1 AND id = $2`,
+          [this.auth.accountId, receipt.runID],
+        );
+        const startedAt = row.rows[0]?.started_at;
+        if (startedAt) {
+          await appendAgentTelemetrySpan(client, this.auth, this.telemetry, {
+            runID: receipt.runID,
+            key: "agent",
+            name: `agent.invoke ${PURSUIT_AGENT_DEFINITION.name}`,
+            status:
+              receipt.status === "proposal_staged" || receipt.status === "no_action"
+                ? "ok"
+                : "error",
+            startedAt:
+              startedAt instanceof Date
+                ? startedAt.toISOString()
+                : new Date(startedAt).toISOString(),
+            endedAt: receipt.completedAt,
+            sequence: null,
+            attributes: {
+              "ts.agent.status": receipt.status,
+              "ts.agent.reason_code": receipt.reasonCode,
+              "gen_ai.usage.input_tokens": receipt.usage.inputTokens,
+              "gen_ai.usage.output_tokens": receipt.usage.outputTokens,
+              "ts.agent.tool_calls": receipt.usage.toolCalls,
+              "ts.agent.duration_ms": receipt.usage.durationMs,
+            },
+          });
+        }
+      }
+    });
+    return receipt;
+  }
+}
+
+export async function getAgentRun(
+  pool: Pool,
+  auth: AuthContext,
+  runID: string,
+): Promise<AgentRunResponse> {
+  const result = await pool.query<AgentRunRow>(
+    `SELECT * FROM agent_runs
+     WHERE account_id = $1 AND id = $2`,
+    [auth.accountId, runID],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new ApiError(404, "AGENT_RUN_NOT_FOUND", "The Agent run was not found.");
+  }
+  return { contract_version: CONTRACT_VERSION, run: mapRun(row) };
+}
+
+export async function recoverInterruptedAgentRuns(
+  pool: Pool,
+): Promise<{ recoveredRuns: number; releasedClaims: number }> {
+  return inTransaction(pool, async (client) => {
+    const released = await client.query<{ id: string }>(
+      `DELETE FROM idempotency_records records
+       WHERE records.status = 'processing'
+         AND records.operation_scope LIKE 'create_pursuit_agent_run:%'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM agent_runs runs
+           WHERE runs.account_id = records.account_id
+             AND runs.idempotency_record_id = records.id
+         )
+       RETURNING records.id`,
+    );
+    const active = await client.query<RecoverableAgentRunRow>(
+      `SELECT *
+       FROM agent_runs
+       WHERE status IN ('starting', 'running')
+       ORDER BY created_at, id
+       FOR UPDATE`,
+    );
+    for (const row of active.rows) {
+      await terminalizeInterruptedAgentRun(
+        client,
+        row,
+        "BACKEND_RESTARTED_BEFORE_TERMINAL_COMMIT",
+        "agent_run_recovered_after_restart",
+      );
+    }
+    return {
+      recoveredRuns: active.rowCount ?? active.rows.length,
+      releasedClaims: released.rowCount ?? released.rows.length,
+    };
+  });
+}
+
+async function recoverFailedCreateRequest(
+  pool: Pool,
+  auth: AuthContext,
+  runID: string,
+  idempotency: IdempotencyClaim,
+): Promise<AgentRunResponse | null> {
+  return inTransaction(pool, async (client) => {
+    const result = await client.query<RecoverableAgentRunRow>(
+      `SELECT *
+       FROM agent_runs
+       WHERE account_id = $1
+         AND id = $2
+         AND idempotency_record_id = $3
+       FOR UPDATE`,
+      [auth.accountId, runID, idempotency.id],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      await client.query(
+        `DELETE FROM idempotency_records
+         WHERE id = $1
+           AND account_id = $2
+           AND status = 'processing'
+           AND NOT EXISTS (
+             SELECT 1 FROM agent_runs WHERE idempotency_record_id = $1
+           )`,
+        [idempotency.id, auth.accountId],
+      );
+      return null;
+    }
+    const terminalRow =
+      row.status === "starting" || row.status === "running"
+        ? await terminalizeInterruptedAgentRun(
+            client,
+            row,
+            "AGENT_RUNTIME_FAILED_BEFORE_TERMINAL_COMMIT",
+            "agent_run_recovered_in_request",
+          )
+        : row;
+    const body = {
+      contract_version: CONTRACT_VERSION,
+      run: mapRun(terminalRow),
+    };
+    if (row.status !== "starting" && row.status !== "running") {
+      await completeIdempotency(client, idempotency, 201, body);
+    }
+    return body;
+  });
+}
+
+export async function createPursuitAgentRun(
+  pool: Pool,
+  auth: AuthContext,
+  pursuitID: string,
+  request: CreatePursuitAgentRunRequest,
+  provider: AgentProvider = configuredAgentProvider(),
+  signal?: AbortSignal,
+  proposalPolicy: "legacy_review" | "operational_only" = "legacy_review",
+  promptSnapshot?: PromptSnapshot,
+): Promise<MutationResult<AgentRunResponse>> {
+  const snapshot = promptSnapshot ?? await resolveProductPrompt("pursuit/proposal");
+  if (snapshot.name !== "pursuit/proposal" || promptRevision(snapshot.text) !== snapshot.revision) throw new Error("Invalid pursuit prompt snapshot.");
+  const definition = { ...PURSUIT_AGENT_DEFINITION, systemPrompt: snapshot.text };
+  const runID = randomUUID();
+  const prepared = await inTransaction(pool, async (client) => {
+    const idempotency = await claimIdempotency(
+      client,
+      { accountId: auth.accountId, actorUserId: auth.userId },
+      `create_pursuit_agent_run:${pursuitID}`,
+      request.idempotency_key,
+      request,
+    );
+    if (idempotency.replay) {
+      return { idempotency, scope: null, providerInputParts: [] };
+    }
+    if (request.telemetry) {
+      await assertTelemetryContext(client, auth, request.telemetry);
+    }
+    const inputArtifacts = await resolveAgentInputArtifacts(
+      client,
+      auth,
+      provider,
+      request.telemetry,
+      request.input_artifact_refs ?? [],
+    );
+    const scope = await compileAgentScope(client, auth, {
+      runID,
+      pursuitID,
+      pursuitRevision: request.base_revision,
+      captureID: request.capture_id,
+      objective: request.objective,
+      evidenceRefs: request.evidence_refs,
+      inputArtifactManifest: inputArtifacts.manifest,
+    });
+    await assertRemoteProviderDataBoundary(
+      client,
+      auth,
+      provider,
+      request.capture_id,
+      request.evidence_refs,
+      (request.input_artifact_refs?.length ?? 0) > 0,
+    );
+    return { idempotency, scope, providerInputParts: inputArtifacts.parts };
+  });
+  if (prepared.idempotency.replay) {
+    return {
+      body: prepared.idempotency.replay.body as AgentRunResponse,
+      replayed: true,
+      status: prepared.idempotency.replay.status,
+    };
+  }
+  if (!prepared.scope) throw new Error("The Agent scope was not compiled.");
+
+  const journal = new DatabaseAgentRunJournal(
+    pool,
+    auth,
+    prepared.idempotency.id,
+    request.telemetry ?? null,
+  );
+  const gateway = new DatabaseAgentGateway(pool, auth, proposalPolicy);
+  try {
+    await runBoundedAgent({
+      definition,
+      scope: prepared.scope,
+      // Normal Agent Runs impose no execution budget: absent fields mean no
+      // imposed limit.
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway,
+      journal,
+      providerInputParts: prepared.providerInputParts,
+      ...(signal ? { signal } : {}),
+    });
+    const body = await getAgentRun(pool, auth, runID);
+    await inTransaction(pool, async (client) => {
+      await completeIdempotency(
+        client,
+        prepared.idempotency as IdempotencyClaim,
+        201,
+        body,
+      );
+    });
+    return { body, replayed: false, status: 201 };
+  } catch (error) {
+    const recovered = await recoverFailedCreateRequest(
+      pool,
+      auth,
+      runID,
+      prepared.idempotency as IdempotencyClaim,
+    );
+    if (recovered) {
+      return { body: recovered, replayed: false, status: 201 };
+    }
+    throw error;
+  }
+}

@@ -1,0 +1,173 @@
+import { Type } from "@sinclair/typebox";
+import type { FastifyInstance, preHandlerHookHandler } from "fastify";
+import type { Pool } from "pg";
+import {
+  AgentTaskEventsResponseSchema, AgentTaskListResponseSchema, AgentTaskResponseSchema,
+  CancelAgentTaskRequestSchema, CreatePursuitAgentTaskRequestSchema, ErrorResponseSchema,
+  type CancelAgentTaskRequest, type CreatePursuitAgentTaskRequest,
+} from "@talent-signal/contracts";
+import type { BackendConfig } from "../config.js";
+import { cancelAgentTask, createPursuitAgentTask, getAgentTask, getAgentTaskEvents, listPursuitAgentTasks } from "./agentTasks.js";
+import { registerAgentTaskAdmissionRoute } from "./agentTaskAdmission.js";
+
+const IdParamsSchema = Type.Object(
+  { id: Type.String({ format: "uuid" }) },
+  { additionalProperties: false },
+);
+const AgentTaskListQuerySchema = Type.Object(
+  {
+    state: Type.Optional(
+      Type.Union([Type.Literal("active"), Type.Literal("all")], {
+        default: "active",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+const AgentTaskEventsQuerySchema = Type.Object(
+  {
+    after: Type.Optional(Type.String({ pattern: "^[0-9]+$", default: "0" })),
+  },
+  { additionalProperties: false },
+);
+export function registerAgentTaskRoutes(app: FastifyInstance, pool: Pool,
+  authenticate: preHandlerHookHandler, config: BackendConfig): void {
+  const security = [{ bearerSession: [] }];
+  registerAgentTaskAdmissionRoute(app, pool, authenticate, config);
+  app.post<{
+    Params: { id: string };
+    Body: CreatePursuitAgentTaskRequest;
+  }>(
+    "/v1/pursuits/:id/agent-tasks",
+    {
+      preHandler: authenticate,
+      schema: {
+        tags: ["pursuits", "agent-tasks"],
+        security,
+        params: IdParamsSchema,
+        body: CreatePursuitAgentTaskRequestSchema,
+        response: {
+          202: AgentTaskResponseSchema,
+          "4xx": ErrorResponseSchema,
+          "5xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await createPursuitAgentTask(
+        pool,
+        request.auth,
+        request.params.id,
+        request.body,
+      );
+      return reply
+        .header("idempotent-replayed", result.replayed)
+        .status(result.status)
+        .send(result.body);
+    },
+  );
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { state?: "active" | "all" };
+  }>(
+    "/v1/pursuits/:id/agent-tasks",
+    {
+      preHandler: authenticate,
+      schema: {
+        tags: ["pursuits", "agent-tasks"],
+        security,
+        params: IdParamsSchema,
+        querystring: AgentTaskListQuerySchema,
+        response: {
+          200: AgentTaskListResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request) =>
+      listPursuitAgentTasks(
+        pool,
+        request.auth,
+        request.params.id,
+        request.query.state ?? "active",
+      ),
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/v1/agent-tasks/:id",
+    {
+      preHandler: authenticate,
+      schema: {
+        tags: ["agent-tasks"],
+        security,
+        params: IdParamsSchema,
+        response: {
+          200: AgentTaskResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request) => getAgentTask(pool, request.auth, request.params.id),
+  );
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { after?: string };
+  }>(
+    "/v1/agent-tasks/:id/events",
+    {
+      preHandler: authenticate,
+      schema: {
+        tags: ["agent-tasks"],
+        security,
+        params: IdParamsSchema,
+        querystring: AgentTaskEventsQuerySchema,
+        response: {
+          200: AgentTaskEventsResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request) =>
+      getAgentTaskEvents(
+        pool,
+        request.auth,
+        request.params.id,
+        Number.parseInt(request.query.after ?? "0", 10),
+      ),
+  );
+
+  app.post<{
+    Params: { id: string };
+    Body: CancelAgentTaskRequest;
+  }>(
+    "/v1/agent-tasks/:id/cancel",
+    {
+      preHandler: authenticate,
+      schema: {
+        tags: ["agent-tasks"],
+        security,
+        params: IdParamsSchema,
+        body: CancelAgentTaskRequestSchema,
+        response: {
+          200: AgentTaskResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await cancelAgentTask(
+        pool,
+        request.auth,
+        request.params.id,
+        request.body,
+      );
+      return reply
+        .header("idempotent-replayed", result.replayed)
+        .status(result.status)
+        .send(result.body);
+    },
+  );
+
+}

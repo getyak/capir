@@ -1,0 +1,223 @@
+"use client";
+
+import { ArrowRight, ArrowUpRight, CheckCircle, EnvelopeSimple, LinkSimple, Plugs, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { MAIL_LABEL, MAIL_PERMISSIONS_URL, MAIL_PROVIDERS, MAIL_RESULT_COPY, type MailConnectionStatus, type MailPreview, type MailProvider } from "@/lib/mail-integration";
+import { workspaceSessionFetch, WORKSPACE_SESSION_EXPIRED_EVENT } from "./workspace-session-request";
+import styles from "./integration-onboarding.module.css";
+
+type Statuses = Record<MailProvider, MailConnectionStatus>;
+type Props = {
+  configured: Record<MailProvider, boolean>;
+  sessionVersion: string;
+  returnTo: string;
+  result?: string;
+};
+
+function time(value: string | null) {
+  if (!value || !Number.isFinite(Date.parse(value))) return "时间未返回";
+  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+export function IntegrationOnboarding({ configured, sessionVersion, returnTo, result }: Props) {
+  const [selected, setSelected] = useState<MailProvider | null>(null);
+  const [statuses, setStatuses] = useState<Statuses>(() => ({
+    gmail: { configured: configured.gmail, connected: false, expiresAt: null },
+    outlook: { configured: configured.outlook, connected: false, expiresAt: null },
+  }));
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<"start" | "test" | "disconnect" | null>(null);
+  const [preview, setPreview] = useState<MailPreview | null>(null);
+  const [notice, setNotice] = useState(result && result !== "authorized" ? MAIL_RESULT_COPY[result] ?? "" : "");
+  const [failure, setFailure] = useState("");
+  const [stale, setStale] = useState(false);
+  const serial = useRef(0);
+  const active = useRef(true);
+  const locked = useRef(false);
+  const resultRef = useRef<HTMLElement>(null);
+  const channel = useRef<BroadcastChannel | null>(null);
+  const latestPreview = useRef<MailPreview | null>(preview);
+  const busyRef = useRef(false);
+  useEffect(() => { latestPreview.current = preview; }, [preview]);
+
+  async function request(provider: MailProvider, operation: string, method: "GET" | "POST", generation: number, body?: unknown) {
+    const response = await workspaceSessionFetch(`/api/integrations/mail/${provider}/${operation}`, {
+      method, headers: { "x-workspace-session": sessionVersion, ...(body ? { "content-type": "application/json" } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(25_000), cache: "no-store",
+    });
+    const payload = await response.json().catch(() => null);
+    // Error-side state updates obey the same generation guard as successes.
+    if (!active.current || generation !== serial.current) throw new Error("请求结果已失效。");
+    if (!response.ok) {
+      if (payload?.code === "session_stale" || payload?.code === "backend_session_expired") {
+        locked.current = true; setStale(true); setPreview(null);
+      }
+      if (["MAIL_GRANT_EXPIRED", "MAIL_UNAUTHORIZED"].includes(payload?.code)) {
+        setStatuses(current => ({ ...current, [provider]: { ...current[provider], connected: false, expiresAt: null } }));
+      }
+      throw new Error(payload?.message ?? "连接状态暂时无法读取。请重试。");
+    }
+    return payload;
+  }
+
+  useEffect(() => {
+    active.current = true;
+    ++serial.current;
+    let cancelled = false;
+    async function load(initial = false) {
+      const generation = serial.current;
+      const results = await Promise.allSettled(MAIL_PROVIDERS.map(async provider => {
+        const response = await workspaceSessionFetch(`/api/integrations/mail/${provider}/status`, {
+          headers: { "x-workspace-session": sessionVersion }, cache: "no-store", signal: AbortSignal.timeout(12_000),
+        });
+        const status = await response.json();
+        if (!response.ok) throw new Error("无法核验当前账号的连接状态，请刷新后重试。");
+        return { provider, status: status as MailConnectionStatus };
+      }));
+      if (cancelled || generation !== serial.current) return;
+      let returned: MailProvider | null = null;
+      let changed = false;
+      for (const item of results) {
+        if (item.status === "fulfilled") {
+          setStatuses(current => ({ ...current, [item.value.provider]: item.value.status }));
+          if (item.value.status.connected) returned = item.value.provider;
+          const prior = latestPreview.current;
+          if (prior && item.value.provider === prior.provider && (!item.value.status.connected ||
+            item.value.status.connectionVersion !== prior.connectionVersion)) changed = true;
+        } else { changed = true; setFailure("无法核验连接状态，请刷新后重试。尚未执行邮件读取。"); }
+      }
+      if (changed) { setPreview(null); setNotice("连接授权已变化或无法核验，旧预览已清除。请重新测试。"); }
+      if (initial && returned) setSelected(returned);
+      if (initial && result === "authorized") setNotice(returned ? MAIL_RESULT_COPY.authorized : "授权状态尚未核验，请重新连接。");
+      setLoading(false);
+    }
+    const invalidate = () => {
+      locked.current = true; serial.current += 1; setPreview(null); setStale(true); setBusy(null);
+    };
+    window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, invalidate);
+    const onFocus = () => { if (!locked.current && !busyRef.current) void load(); };
+    const onVisible = () => { if (document.visibilityState === "visible") onFocus(); };
+    const onGrantChange = () => { serial.current += 1; busyRef.current = false; setBusy(null); setPreview(null);
+      setNotice("其他页面已更新测试授权，旧预览已清除。请重新测试。"); if (!locked.current) void load(); };
+    if (typeof BroadcastChannel !== "undefined") {
+      channel.current = new BroadcastChannel(`talent-signal.mail-grant:${sessionVersion}`);
+      channel.current.addEventListener("message", onGrantChange);
+    }
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    void load(true);
+    if (result === "authorized") channel.current?.postMessage("changed");
+    return () => { cancelled = true; active.current = false; serial.current += 1;
+      channel.current?.close(); channel.current = null;
+      window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, invalidate);
+      window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisible); };
+  }, [sessionVersion, result]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const timer = window.setTimeout(() => {
+      setPreview(null); setNotice("这次测试授权已到期，请重新连接后测试。");
+      setStatuses(current => ({ ...current, [preview.provider]: { ...current[preview.provider], connected: false, expiresAt: null } }));
+    }, Math.max(0, Date.parse(preview.expiresAt) - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [preview]);
+
+  function choose(provider: MailProvider) {
+    if (busy || stale) return;
+    serial.current += 1; setSelected(provider); setPreview(null); setFailure(""); setNotice("");
+  }
+  async function operate(operation: "start" | "test" | "disconnect") {
+    if (!selected || busy || locked.current) return;
+    const provider = selected;
+    const generation = ++serial.current;
+    busyRef.current = true;
+    setBusy(operation); setFailure(""); setPreview(null); setNotice("");
+    try {
+      const payload = await request(provider, operation, "POST", generation, operation === "start" ? { returnTo } : undefined);
+      if (!active.current || generation !== serial.current || locked.current) return;
+      if (operation === "start") {
+        channel.current?.postMessage("changed");
+        const url = new URL(payload.authorizationUrl);
+        const expected = provider === "gmail" ? "accounts.google.com" : "login.microsoftonline.com";
+        if (url.protocol !== "https:" || url.hostname !== expected || url.username || url.password) throw new Error("授权地址无法核验。请重新打开此页。");
+        window.location.assign(url.toString());
+      } else if (operation === "disconnect") {
+        channel.current?.postMessage("changed");
+        setStatuses(current => ({ ...current, [provider]: { ...current[provider], connected: false, expiresAt: null } }));
+        setNotice("已清除本次测试授权和页面预览。服务商权限可在账号设置中单独撤销。");
+      } else {
+        if (payload.provider !== provider || payload.scope !== "inbox_metadata_sample" ||
+            !["verified", "empty"].includes(payload.status) || !Array.isArray(payload.items) || payload.items.length > 3 ||
+            typeof payload.connectionVersion !== "string" || !Number.isFinite(Date.parse(payload.expiresAt)) || Date.parse(payload.expiresAt) <= Date.now()) throw new Error("读取结果无法核验，请重新连接。");
+        setPreview(payload as MailPreview);
+        requestAnimationFrame(() => resultRef.current?.focus());
+      }
+    } catch (error) {
+      if (!active.current || generation !== serial.current) return;
+      setFailure(error instanceof Error && error.name !== "TimeoutError" ? error.message : "请求超时，尚未验证。可以重试。");
+    } finally { if (active.current && generation === serial.current) { busyRef.current = false; setBusy(null); } }
+  }
+
+  const status = selected ? statuses[selected] : null;
+  const step = preview ? 3 : selected ? 2 : 1;
+  return <main id="main-content" tabIndex={-1} className={styles.page}>
+    <div className={styles.topline}><span>TALENT SIGNAL / 开始连接</span><Link href={returnTo}>稍后再连接 <ArrowRight size={15} aria-hidden="true" /></Link></div>
+    <header className={styles.heading}>
+      <p className={styles.eyebrow}>从一段真实联系开始</p>
+      <h1>让已有的联系，<br />在这里接上。</h1>
+      <p>连接一个常用工具，试读一次真实互动。<br className={styles.desktopBreak} />先看见它能帮你什么，再决定下一步。</p>
+    </header>
+    <ol aria-label="连接步骤" className={styles.steps}>
+      {["选择工具", "授权与测试", "查看真实结果"].map((label, index) => <li aria-current={step === index + 1 ? "step" : undefined} data-active={step >= index + 1} key={label}><span>{index + 1}</span>{label}</li>)}
+    </ol>
+
+    {stale ? <p className={styles.error} role="alert">登录或工作区已变化，预览已清除。<a href="/workspace/connect">重新打开此页</a></p> : null}
+    {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
+    {failure ? <p className={styles.error} role="alert"><WarningCircle size={18} aria-hidden="true" />{failure}<button type="button" onClick={() => window.location.reload()}>刷新状态</button></p> : null}
+
+    <section aria-labelledby="choose-tool-title" className={styles.choiceSection}>
+      <div className={styles.sectionHeader}><h2 id="choose-tool-title">你平时在哪里联系别人？</h2><span>先选一个就好</span></div>
+      <div className={styles.providers}>
+        {MAIL_PROVIDERS.map(provider => <button type="button" key={provider} className={styles.provider} data-selected={selected === provider}
+          aria-pressed={selected === provider} onClick={() => choose(provider)} disabled={Boolean(busy) || stale || loading}>
+          <span className={styles.providerIcon} data-provider={provider} aria-hidden="true"><EnvelopeSimple size={25} weight="duotone" /></span>
+          <span className={styles.providerBody}><strong>{MAIL_LABEL[provider]}</strong><span>{provider === "gmail" ? "个人邮箱 · Google Workspace" : "个人邮箱 · Microsoft 365"}</span>
+            <small>{loading ? "正在核验状态…" : statuses[provider].connected ? "已授权 · 等待读取测试" : statuses[provider].configured ? "可测试 · 只读邮件元数据" : "尚未启用 · 可查看连接范围"}</small></span>
+          <ArrowRight size={18} aria-hidden="true" />
+        </button>)}
+      </div>
+    </section>
+
+    {selected && status ? <section className={styles.scope} aria-labelledby="mail-scope-title">
+      <div className={styles.sectionHeader}><h2 id="mail-scope-title">{MAIL_LABEL[selected]} · 本次连接范围</h2><span>会话内测试</span></div>
+      <p>试读最多 3 封收件箱邮件的<strong>标题、参与者和时间</strong>，确认授权账号能被正确读取。</p>
+      <ul><li>不读取正文和附件，不向模型发送邮件。</li><li>不会发送邮件、批量导入联系人或后台同步。</li><li>预览只留在当前页面；测试授权最多有效 1 小时，可随时清除。</li></ul>
+      {!status.configured ? <p className={styles.setup}>此部署尚未启用 {MAIL_LABEL[selected]} 账号连接。你可以先导入资料，或连接已有的 MCP 服务。</p> : null}
+      <div className={styles.actions}>
+        <button className={styles.primary} type="button" onClick={() => void operate(status.connected ? "test" : "start")}
+          disabled={!status.configured || Boolean(busy) || stale}>
+          {busy ? <SpinnerGap size={17} className={styles.spin} aria-hidden="true" /> : <ArrowRight size={17} aria-hidden="true" />}
+          {busy === "test" ? "正在测试真实读取…" : busy === "start" ? "正在准备授权…" : busy === "disconnect" ? "正在清除…" : status.connected ? "测试读取，查看结果" : `前往 ${MAIL_LABEL[selected]} 授权`}
+        </button>
+        {status.connected ? <button type="button" className={styles.quiet} disabled={Boolean(busy) || stale} onClick={() => void operate("disconnect")}>清除测试授权</button> : null}
+      </div>
+      <details className={styles.details}><summary>权限、到期与撤销</summary><p>这是一次只读连接测试。授权成功后仍需验证读取；后续资料保存和关系核对分别由你决定。测试会在服务重启或会话变化时失效。</p>
+        <a href={MAIL_PERMISSIONS_URL[selected]} target="_blank" rel="noopener noreferrer">在服务商账号中管理授权 <ArrowUpRight size={14} aria-hidden="true" /></a>
+        {selected === "outlook" ? <p>企业账号也可能需要在组织的 Microsoft「我的应用」中撤销权限，或联系管理员。</p> : null}
+      </details>
+    </section> : null}
+
+    {preview ? <section className={styles.result} ref={resultRef} tabIndex={-1} aria-labelledby="mail-result-title">
+      <div className={styles.resultHeading}><CheckCircle size={22} aria-hidden="true" /><div><h2 id="mail-result-title">{preview.status === "empty" ? "读取已验证，收件箱没有返回邮件" : "读取已验证，这是你的真实互动"}</h2><p>{preview.account} · {MAIL_LABEL[preview.provider]} · 测试于 {time(preview.checkedAt)}</p></div></div>
+      {preview.items.length ? <ol className={styles.interactions}>{preview.items.map(item => <li key={item.id}><div><h3>{item.subject}</h3><p>{item.participants || "参与者未返回"}</p><time dateTime={item.occurredAt ?? undefined}>{time(item.occurredAt)}</time></div>{item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`在 ${MAIL_LABEL[preview.provider]} 查看原邮件：${item.subject}`}>原邮件 <ArrowUpRight size={14} aria-hidden="true" /></a> : <span>来源链接未返回</span>}</li>)}</ol> : <p className={styles.empty}>授权账号可以读取。这次没有互动可预览，你可以试试另一个来源。</p>}
+      <p className={styles.resultNote}>这是收件箱元数据样本，尚未保存到关系记录。邮件标题不能证明关系状态或承诺。</p>
+      <div className={styles.actions}><Link className={styles.primary} href={returnTo}>进入工作区 <ArrowRight size={17} aria-hidden="true" /></Link><button type="button" className={styles.quiet} onClick={() => void operate("test")} disabled={Boolean(busy) || stale}>重新测试</button></div>
+    </section> : null}
+
+    <section className={styles.other} aria-label="其他连接方式">
+      <Link href="/workspace/extensions" className={styles.secondaryEntry}><Plugs size={21} aria-hidden="true" /><span><strong>连接已有的 MCP 服务</strong><small>添加服务地址，真实核验连接与工具目录</small></span><ArrowUpRight size={17} aria-hidden="true" /></Link>
+      <Link href="/workspace/captures" className={styles.secondaryEntry}><LinkSimple size={21} aria-hidden="true" /><span><strong>先从一份资料开始</strong><small>导入截图或文档，再核对关系上下文</small></span><ArrowRight size={17} aria-hidden="true" /></Link>
+    </section>
+    <details className={styles.roadmap}><summary>日历、Apple Mail 和更多工具</summary><p>Apple Mail 请连接背后的 Gmail 或 Outlook 邮箱。iCloud 邮箱、Google / Outlook 日历、Notion、Drive、Slack / Teams 与现有 CRM 属于后续集成，目前不提供账号连接。</p><p>MCP 握手成功只证明服务与工具目录可读取，不代表邮件已读取，也不会自动执行工具。</p></details>
+  </main>;
+}

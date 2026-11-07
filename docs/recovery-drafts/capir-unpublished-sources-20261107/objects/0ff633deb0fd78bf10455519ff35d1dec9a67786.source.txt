@@ -1,0 +1,158 @@
+import { redirect } from "next/navigation";
+import { headers } from "next/headers";
+import type { Metadata } from "next";
+
+import { auth } from "@/auth";
+import { parseConsentQuery, sealConsent } from "@/lib/capirAuthorize";
+import { safeRedirectTarget } from "@/lib/auth-config";
+import {
+  authSecret,
+  readPrimaryBackendSessionClaims,
+} from "@/lib/server/backendAuth";
+import { loadAccountSettings } from "@/lib/server/accountBackend";
+import { submitCapirConsent } from "./actions";
+import styles from "./consent.module.css";
+
+export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "CLI 授权确认",
+  robots: { follow: false, index: false },
+};
+
+const consentErrors: Record<string, string> = {
+  stale: "这次授权请求已过期或被改动，请在 CLI 重新发起。",
+  auth: "请先用你的正常账号登录后再授权。",
+  authorization_denied: "后端拒绝了这次授权；没有创建任何 CLI 凭据。",
+  backend_unavailable: "后端暂时不可用；没有创建任何 CLI 凭据。",
+};
+
+type Search = Record<string, string | string[] | undefined>;
+
+function first(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export default async function CapirAuthorizePage({
+  searchParams,
+}: {
+  searchParams: Promise<Search>;
+}) {
+  const query = await searchParams;
+  const single: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(query)) single[key] = first(value);
+  // Capabilities and credentials bind to the exact configured origin: the
+  // requested web_origin must match this site.
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("host");
+  const proto =
+    requestHeaders.get("x-forwarded-proto") ??
+    (process.env.NODE_ENV === "production" ? "https" : "http");
+  const parsed = parseConsentQuery(
+    single,
+    host ? { expectedWebOrigin: `${proto}://${host}` } : {},
+  );
+  if (!parsed.ok) {
+    return (
+      <main className={styles.panel}>
+        <h1>授权请求无效</h1>
+        <p data-capir-consent-state="invalid">{parsed.reason}</p>
+        <p>请检查发起请求的 CLI；本页面不会索取密码。</p>
+      </main>
+    );
+  }
+  const request = parsed.request;
+
+  // The consent page uses the user's normal existing login and never reads
+  // passwords for the CLI. The return path stays a same-origin relative URL.
+  const session = await auth();
+  if (!session?.user) {
+    const returnPath = safeRedirectTarget(
+      `/capir/authorize?${new URLSearchParams(single as Record<string, string>).toString()}`,
+    );
+    redirect(`/login?callbackUrl=${encodeURIComponent(returnPath)}`);
+  }
+
+  const claims = await readPrimaryBackendSessionClaims();
+  if (!claims) {
+    return (
+      <main className={styles.panel}>
+        <h1>需要完整账号登录</h1>
+        <p data-capir-consent-state="auth">
+          CLI 授权需要一个已连接后端的账号会话；请先登录你的正常账号。
+        </p>
+      </main>
+    );
+  }
+  if (claims.backendAccountSlug.startsWith("lab-")) {
+    return (
+      <main className={styles.panel}>
+        <h1>演示会话不能授权 CLI</h1>
+        <p data-capir-consent-state="lab-session">
+          当前是合成演示会话。请返回你的正常账号后再授权 CLI。
+        </p>
+      </main>
+    );
+  }
+
+  // Establish the actual authenticated identity through backend readback
+  // before any consent form renders.
+  let identityLabel = claims.backendAccountName;
+  try {
+    const profile = await loadAccountSettings();
+    identityLabel = profile.workspace.name;
+  } catch {
+    return (
+      <main className={styles.panel}>
+        <h1>无法验证当前账号</h1>
+        <p data-capir-consent-state="identity-unverified">
+          后端无法确认当前登录身份；没有创建任何 CLI 凭据。
+        </p>
+      </main>
+    );
+  }
+
+  const note = single.consent_error ? consentErrors[single.consent_error] : undefined;
+  const sealed = sealConsent(authSecret(), request, Date.now());
+
+  return (
+    <main className={styles.panel}>
+      <h1>授权 CLI 访问测试沙盒</h1>
+      <p data-capir-consent-state="pending">
+        账号 <strong>{identityLabel}</strong> 正在被请求授予一次受限授权。
+      </p>
+      {note ? (
+        <p className={styles.error} data-capir-consent-error={single.consent_error}>
+          {note}
+        </p>
+      ) : null}
+      <section className={styles.scope}>
+        <h2>授权范围</h2>
+        <ul>
+          <li>创建、查看、停止测试沙盒（strict replay，不调用真实模型）</li>
+          <li>为隔离浏览器会话签发一次性进入凭据</li>
+          <li>仅限当前测试环境：{request.backend_origin}</li>
+        </ul>
+        <h2>不会授权</h2>
+        <ul>
+          <li>你的普通生产联系人、账号、媒体或会话数据</li>
+          <li>任何密码读取、真实数据导入或外部消息发送</li>
+        </ul>
+        <p>
+          客户端标识：<code>{request.client_label}</code>
+          <br />
+          回调地址（本机回环）：<code>{request.redirect_uri}</code>
+        </p>
+      </section>
+      <form action={submitCapirConsent} className={styles.decision}>
+        <input type="hidden" name="sealed" value={sealed} />
+        <button type="submit" name="decision" value="allow" data-capir-consent-allow>
+          允许（Allow）
+        </button>
+        <button type="submit" name="decision" value="deny" data-capir-consent-deny>
+          拒绝（Deny）
+        </button>
+      </form>
+    </main>
+  );
+}

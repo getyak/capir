@@ -1,0 +1,75 @@
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterAll, describe, expect, it } from "vitest";
+import { inTransaction } from "../database/pool.js";
+import { Pool, type PoolClient } from "pg";
+import { LabWorkspaceService } from "./labWorkspaces.js";
+import { LocalChatMediaStorage } from "./chatMediaStorage.js";
+import { mutateAgentSession } from "./agentSessions.js";
+import { createHarnessContinuationController } from "./harnessSessions.js";
+import type { AuthContext } from "./auth.js";
+
+const database=process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+if(database&&!['localhost','127.0.0.1'].includes(new URL(database).hostname))throw new Error('Use an owned disposable database.');
+const pool=database?new Pool({connectionString:database,max:6,statement_timeout:10_000}):null;
+afterAll(async()=>{await pool?.end();});
+describe.skipIf(!pool)('Harness Lab stop authority',()=>{
+  it('aborts a retained SDK transaction while real stop waits, then removes all owned derivatives',async()=>{
+    const owner:AuthContext={accountId:randomUUID(),accountSlug:`harness-lab-${randomUUID()}`,userId:randomUUID(),
+      userEmail:'owner@synthetic.invalid',userKind:'simulated_human',sessionId:randomUUID()};
+    const id=randomUUID();let target:AuthContext|undefined,run:PoolClient|undefined,stopPID:number|undefined;
+    let stopping:ReturnType<LabWorkspaceService['stop']>|undefined;
+    const stopPool={query:pool!.query.bind(pool),connect:async()=>{const client=await pool!.connect();
+      stopPID=(await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;return client;}} as Pool;
+    const service=new LabWorkspaceService(stopPool,new LocalChatMediaStorage(`/tmp/get9-lab-test-${id}`),3600);
+    try {
+      await pool!.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic Lab owner')",[owner.accountId,owner.accountSlug]);
+      await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic','simulated_human')",[owner.userId,owner.accountId,owner.userEmail]);
+      await pool!.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'Synthetic',now()+interval '1 hour')",[owner.sessionId,owner.accountId,owner.userId,randomUUID()]);
+      const created=await service.create(owner,{id,duration_hours:1});
+      expect(created.state).toBe('active');expect(created.empty_verified_at).not.toBeNull();expect(created.data_rows).toBe(0);
+      target={...owner,accountId:created.account_id,userId:created.user_id,userKind:'lab_human'};
+      await pool!.query("INSERT INTO agent_user_preferences(account_id,user_id,response_style,revision) VALUES($1,$2,'conclusion_first',1)",[target.accountId,target.userId]);
+      const sessionID=randomUUID();
+      await mutateAgentSession(pool!,target,sessionID,{expected_revision:0,idempotency_key:randomUUID(),payload:{id:sessionID,
+        scopeKind:'unresolved_intent',personDisplayLabel:'New session',contextDisplayLabel:'Conversation',title:'Synthetic Lab stop',
+        updatedAt:new Date().toISOString(),isUnread:false,turns:[]}});
+      run=await pool!.connect();
+      let last:ReturnType<typeof createHarnessContinuationController>|undefined;
+      const bind=()=>{const controller=createHarnessContinuationController(pool!,target!,sessionID,{kind:'workspace_conversation'},
+        ()=>({expiresAt:new Date(Date.now()+300_000),personIDs:[]}),{attemptID:randomUUID(),taskID:randomUUID()});
+        last=controller;return controller.factory('b'.repeat(64));};
+      const append=async(binding:Awaited<ReturnType<typeof bind>>)=>{
+        for(const subpath of [undefined,'subagents/synthetic'])await binding.store.append({projectKey:'synthetic',sessionId:binding.sessionID,...(subpath?{subpath}:{})},
+          [{type:'user',uuid:randomUUID(),message:{role:'user',content:'Synthetic retained context'}}]);
+      };
+      const seed=await bind();await append(seed);await seed.finish(true);
+      await inTransaction(pool!,async client=>{await last!.finalize(client,true);});
+      expect((await pool!.query('SELECT 1 FROM harness_session_entries WHERE account_id=$1',[target.accountId])).rowCount).toBe(2);
+      const binding=await bind();await append(binding);
+      stopping=service.stop(owner,id,randomUUID());void stopping.catch(()=>{});
+      // Checkpoint callbacks own short transactions: the real stop is never
+      // blocked by a retained product transaction, and the fenced writer can
+      // no longer publish after cleanup retires its owned work.
+      await stopping;
+      await expect(binding.assertCurrent()).rejects.toMatchObject({code:'HARNESS_SOURCE_CHANGED'});
+      await expect(binding.store.append({projectKey:'synthetic',sessionId:binding.sessionID},
+        [{type:'user',uuid:randomUUID(),message:{role:'user',content:'late stale write'}}])).rejects.toMatchObject({code:'HARNESS_SESSION_LEASE_FENCED'});
+      await binding.finish(false);run.release();run=undefined;
+      const stopped=await stopping;
+      expect(stopped).toMatchObject({state:'deleted',cleanup_error:null,data_rows:0,active_sessions:0});
+      expect((await service.stop(owner,id,randomUUID())).state).toBe('deleted');
+      expect((await pool!.query('SELECT 1 FROM harness_session_entries WHERE account_id=$1',[target.accountId])).rowCount).toBe(0);
+    } finally {
+      if(run){await run.query('ROLLBACK');run.release();}
+      await stopping?.catch(()=>{});
+      if(target){await service.stop(owner,id,randomUUID());await pool!.query('DELETE FROM lab_test_workspaces WHERE id=$1',[id]);}
+      for(const account of [target?.accountId,owner.accountId].filter((value):value is string=>Boolean(value))){
+        await pool!.query('DELETE FROM sessions WHERE account_id=$1',[account]);
+        await pool!.query('DELETE FROM harness_source_generations WHERE account_id=$1',[account]);
+        await pool!.query('DELETE FROM users WHERE account_id=$1',[account]);
+        await pool!.query('DELETE FROM accounts WHERE id=$1',[account]);
+      }
+    }
+  },30_000);
+});

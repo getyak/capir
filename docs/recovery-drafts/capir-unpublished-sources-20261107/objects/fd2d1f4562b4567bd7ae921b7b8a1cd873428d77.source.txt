@@ -1,0 +1,201 @@
+/**
+ * Pure state reducer for the Session detail workbench.
+ *
+ * Kept separate from the React component so the consequential paths — debounced
+ * draft persistence, revision conflict, tombstone deletion, and explicit
+ * deleted/expired/unavailable states — are directly testable.
+ */
+
+import {
+  boundedDraft,
+  draftStatusAfterSave,
+  isSessionId,
+  type SessionDraftStatus,
+  type SessionState,
+} from "./session-view";
+import type { AgentSessionPayload } from "@talent-signal/contracts";
+
+export type SessionDetail = {
+  session_id: string;
+  revision: number;
+  updated_at: string;
+  expires_at: string;
+  state: SessionState;
+  title: string;
+  turn_count: number;
+  is_unread: boolean;
+  scope_kind: "unresolved_intent" | "relationship" | "identity_review";
+  person_id: string | null;
+  relationship_context_id: string | null;
+  person_label: string;
+  context_label: string;
+  deleted_at: string | null;
+  display_authority: "stale_unconfirmed";
+  composer_draft: string | null;
+  composer_draft_updated_at: string | null;
+  turns: AgentSessionPayload["turns"];
+  /** Durable partial synchronization status from the server record. A
+   * partially synchronized history is visibly incomplete and cannot accept a
+   * send until the transfer finalizes. */
+  sync_incomplete?: boolean;
+};
+
+export type DetailState = {
+  detail: SessionDetail;
+  draft: string;
+  lastSavedDraft: string;
+  status: SessionDraftStatus;
+  conflict: boolean;
+  error: string;
+};
+
+export function initialDetailState(detail: SessionDetail): DetailState {
+  const draft = detail.composer_draft ?? "";
+  return {
+    conflict: false,
+    detail,
+    draft,
+    error: "",
+    lastSavedDraft: draft,
+    status: "idle",
+  };
+}
+
+/** Local typing never touches the network and never blocks input. */
+export function applyDraftInput(
+  state: DetailState,
+  value: string,
+): DetailState {
+  const draft = boundedDraft(value);
+  return {
+    ...state,
+    draft,
+    status: state.conflict
+      ? "conflict"
+      : draft === state.lastSavedDraft
+        ? "saved"
+        : "pending",
+  };
+}
+
+export function markSaving(state: DetailState): DetailState {
+  return { ...state, error: "", status: "saving" };
+}
+
+export function markSaved(
+  state: DetailState,
+  detail: SessionDetail,
+  sent: string,
+): DetailState {
+  return {
+    conflict: false,
+    detail,
+    draft: boundedDraft(state.draft),
+    error: "",
+    lastSavedDraft: boundedDraft(sent),
+    status: draftStatusAfterSave(boundedDraft(state.draft), boundedDraft(sent)),
+  };
+}
+
+/**
+ * A failed save keeps the local draft and exposes a retry. Nothing about the
+ * editor state is discarded.
+ */
+export function markSaveError(state: DetailState, message: string): DetailState {
+  return { ...state, error: message, status: "error" };
+}
+
+/** 409: keep the draft, refuse to overwrite, require an explicit reload. */
+export function markConflict(state: DetailState): DetailState {
+  return { ...state, conflict: true, error: "", status: "conflict" };
+}
+
+/** Reload-latest replaces canonical state and leaves the local draft for copy. */
+export function applyReload(
+  state: DetailState,
+  detail: SessionDetail,
+): DetailState {
+  const matches = boundedDraft(state.draft) === (detail.composer_draft ?? "");
+  return {
+    ...state,
+    conflict: !matches,
+    detail,
+    error: "",
+    lastSavedDraft: detail.composer_draft ?? "",
+    status: matches ? "saved" : "conflict",
+  };
+}
+
+export function markDeleted(state: DetailState, detail: SessionDetail): DetailState {
+  return {
+    ...state,
+    conflict: false,
+    detail,
+    draft: "",
+    error: "",
+    lastSavedDraft: "",
+    status: "idle",
+  };
+}
+
+export type SaveRequestBody = {
+  expected_revision: number;
+  idempotency_key: string;
+  composer_draft: string;
+  composer_draft_updated_at: string;
+};
+
+/**
+ * A save is only sent for an active Session with a real change. The idempotency
+ * key is reused across retries of the same draft so a retry cannot append a
+ * second mutation.
+ */
+export function buildSaveRequest(
+  state: DetailState,
+  idempotencyKey: string,
+  updatedAt: string,
+): SaveRequestBody | null {
+  if (state.detail.state !== "active" || state.conflict) return null;
+  if (boundedDraft(state.draft) === state.lastSavedDraft) return null;
+  if (!isSessionId(idempotencyKey)) return null;
+  const parsedUpdatedAt = Date.parse(updatedAt);
+  if (
+    !Number.isFinite(parsedUpdatedAt) ||
+    new Date(parsedUpdatedAt).toISOString() !== updatedAt
+  ) {
+    return null;
+  }
+  return {
+    composer_draft: boundedDraft(state.draft),
+    composer_draft_updated_at: updatedAt,
+    expected_revision: state.detail.revision,
+    idempotency_key: idempotencyKey,
+  };
+}
+
+export function isDetailConflictResponse(status: number): boolean {
+  return status === 409;
+}
+
+export function shouldRetainDraftAfterConflict(
+  status: number,
+  code: unknown,
+): boolean {
+  return status === 409 && (
+    code === "AGENT_SESSION_REVISION_CONFLICT" ||
+    code === "AGENT_SESSION_SOURCE_BUSY"
+  );
+}
+
+export function isDetailGoneResponse(status: number): boolean {
+  return status === 410;
+}
+
+/** Deletion is offered only for an active Session the user still owns. */
+export function canDeleteSession(state: DetailState): boolean {
+  return state.detail.state === "active" && !state.conflict;
+}
+
+export function deletedNotice(): string {
+  return "对话已删除。服务端已记录删除状态，历史内容不会在本机恢复。";
+}

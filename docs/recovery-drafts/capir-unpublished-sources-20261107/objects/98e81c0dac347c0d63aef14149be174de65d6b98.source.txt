@@ -1,0 +1,985 @@
+import type {
+  AgentSessionDeltaOperation,
+  AgentSessionDeltaFrameRequest,
+} from "./agentSessionDeltaSchemas.js";
+import {
+  sessionIntentDigest,
+} from "./agentSessionDeltaFraming.js";
+
+/**
+ * Shared delta semantics for incremental Session synchronization.
+ *
+ * The same restricted JSON-pointer rules run on every intermediate frame on
+ * the server and in the clients that plan frames, so a frame is always a
+ * canonical mutation of the stored canonical record — never raw staging.
+ * `planAgentSessionDeltaFrames` emits only changed fields, new turns and new
+ * metadata-array elements, with pending execution metadata ordered last.
+ */
+
+export class AgentSessionDeltaOperationError extends Error {
+  readonly code: string;
+  readonly path: string | null;
+  constructor(code: string, message: string, path: string | null = null) {
+    super(message);
+    this.name = "AgentSessionDeltaOperationError";
+    this.code = code;
+    this.path = path;
+  }
+}
+
+const FORBIDDEN_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** Server-owned execution provenance; never fabricable through a delta. */
+const SERVER_OWNED_TURN_FIELDS = [
+  "steeredMessages",
+  "execution",
+  "mcpInteraction",
+  "hostResult",
+] as const;
+const SERVER_OWNED_RESPONSE_FIELDS = [
+  "execution",
+  "mcpInteraction",
+  "hostResult",
+] as const;
+
+/** Fields whose values clients may set or change through a delta frame. */
+/** Pending execution metadata; always emitted last so a partial transfer can
+ * never let restored pending work run early. */
+export const PENDING_EXECUTION_FIELDS = [
+  "pendingUnscopedChatIdempotencyKey",
+  "pendingPersonResearchIdempotencyKey",
+  "pendingPersonResearchRequestIdentity",
+  "pendingScopedAskIdempotencyKey",
+  "pendingScopedAskRequestIdentity",
+  // Screenshot admission is validated as one identity; these four stay
+  // adjacent so a frame boundary can never split them.
+  "pendingObjective",
+  "pendingScreenshotIdempotencyKey",
+  "pendingScreenshotRequestIdentity",
+  "pendingScreenshotCapturedAt",
+] as const;
+const SETTABLE_FIELDS = new Set<string>([
+  "personDisplayLabel",
+  "contextDisplayLabel",
+  "title",
+  "contextWasTrimmed",
+  "isUnread",
+  "updatedAt",
+  "composerDraft",
+  "composerDraftUpdatedAt",
+  "contactProposal",
+  ...PENDING_EXECUTION_FIELDS,
+]);
+const REMOVABLE_FIELDS = new Set<string>([
+  "composerDraft",
+  "composerDraftUpdatedAt",
+  "contactProposal",
+  "contextWasTrimmed",
+  ...PENDING_EXECUTION_FIELDS,
+]);
+const APPEND_ARRAY_FIELDS = new Set([
+  "contactReceipts",
+  "screenshotTaskIDs",
+  "inheritedScreenshotTaskIDs",
+]);
+
+function invalid(path: string | null, message: string): never {
+  throw new AgentSessionDeltaOperationError("DELTA_OPERATION_INVALID", message, path);
+}
+
+export function decodeJsonPointer(path: string): string[] {
+  if (!path.startsWith("/") || path.length > 512) {
+    invalid(path, "A delta operation path must be a bounded JSON pointer.");
+  }
+  return path
+    .slice(1)
+    .split("/")
+    .map((segment) => {
+      if (/~(?:[^01]|$)/.test(segment)) {
+        invalid(path, "A JSON pointer segment has an invalid escape.");
+      }
+      return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+    });
+}
+
+function assertSafeValue(value: unknown, path: string, depth = 0): void {
+  if (depth > 32) invalid(path, "A delta operation value nests too deeply.");
+  if (value === null) return;
+  if (typeof value === "string") return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) invalid(path, "A delta value must be finite JSON.");
+    return;
+  }
+  if (typeof value === "boolean") return;
+  if (Array.isArray(value)) {
+    for (const item of value) assertSafeValue(item, path, depth + 1);
+    return;
+  }
+  if (typeof value === "object") {
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (FORBIDDEN_SEGMENTS.has(key)) {
+        invalid(path, "A delta operation value cannot carry prototype keys.");
+      }
+      assertSafeValue(item, path, depth + 1);
+    }
+    return;
+  }
+  invalid(path, "A delta operation value must be plain JSON.");
+}
+
+function isUUID(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  );
+}
+
+export interface AgentSessionDeltaApplyOptions {
+  /** Current canonical origin prefix. The server resolves this from owned
+   * storage under its source lock; no request field can grant this authority. */
+  canonicalOriginTurns?: readonly unknown[];
+}
+
+function sameOriginTurn(value: unknown, original: unknown): boolean {
+  if (!original || typeof original !== "object") return false;
+  const clean = (turn: unknown) => {
+    const payload = canonicalSessionIntent({ turns: [turn] });
+    const normalized = payload.turns[0] as Record<string, unknown>;
+    delete normalized.feedback;
+    delete normalized.feedbackUpdatedAt;
+    return normalized;
+  };
+  try {
+    return sessionIntentDigest(clean(value)) === sessionIntentDigest(clean(original));
+  } catch {
+    // Malformed caller JSON is not origin authority. Let the ordinary
+    // structural guard return its typed invalid-operation response.
+    return false;
+  }
+}
+
+function assertTurnValue(value: unknown, path: string, original?: unknown): void {
+  assertSafeValue(value, path);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    invalid(path, "A new turn must be a canonical turn object.");
+  }
+  const turn = value as Record<string, unknown>;
+  if (!isUUID(turn.id) || typeof turn.objective !== "string") {
+    invalid(path, "A new turn needs its immutable message identity.");
+  }
+  // Exact immutable origin content may be carried to a governed fork. New
+  // turns still cannot invent server provenance or action authority.
+  if (sameOriginTurn(value, original)) return;
+  for (const field of SERVER_OWNED_TURN_FIELDS) {
+    if (turn[field] !== undefined) {
+      invalid(
+        path,
+        "Only the owned queue can create execution provenance; a delta cannot forge it.",
+      );
+    }
+  }
+  const response = turn.response as Record<string, unknown> | undefined;
+  if (typeof response !== "object" || response === null) {
+    invalid(path, "A new turn needs its canonical response.");
+  }
+  for (const field of SERVER_OWNED_RESPONSE_FIELDS) {
+    if (response![field] !== undefined) {
+      invalid(
+        path,
+        "Only the owned queue can create execution provenance; a delta cannot forge it.",
+      );
+    }
+  }
+  if (response!.requires_user_decision !== undefined) {
+    invalid(path, "A delta turn cannot claim a pending user decision.");
+  }
+  for (const blockCollection of [
+    "savedBlocks",
+    "unboundPersonResearchBlocks",
+    "unboundConversationBlocks",
+  ]) {
+    const blocks = response![blockCollection];
+    if (blocks === undefined) continue;
+    if (!Array.isArray(blocks)) invalid(path, "Display blocks must be an array.");
+    for (const block of blocks as Array<Record<string, unknown>>) {
+      if (block?.requires_user_decision !== false) {
+        invalid(path, "A delta block cannot carry executable authority.");
+      }
+      if (
+        Array.isArray(block?.citation_dependency_ids) &&
+        block.citation_dependency_ids.length > 0
+      ) {
+        invalid(path, "A delta block cannot carry unresolved citations.");
+      }
+      if (block?.target_ref != null) {
+        invalid(path, "A delta block cannot carry an action target.");
+      }
+    }
+  }
+}
+
+function parentOf(root: unknown, segments: string[], path: string): unknown {
+  let current: unknown = root;
+  for (const segment of segments) {
+    if (current === null || typeof current !== "object") {
+      invalid(path, "A delta operation references an absent parent.");
+    }
+    if (Array.isArray(current)) {
+      const index = segment === "-" ? current.length : Number(segment);
+      if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+        invalid(path, "A delta operation references an invalid index.");
+      }
+      current = current[index];
+    } else {
+      const record = current as Record<string, unknown>;
+      if (FORBIDDEN_SEGMENTS.has(segment)) {
+        invalid(path, "A delta operation cannot address prototype keys.");
+      }
+      if (!(segment in record)) {
+        invalid(path, "A delta operation references an absent parent.");
+      }
+      current = record[segment];
+    }
+  }
+  return current;
+}
+
+/**
+ * Validate and apply one restricted operation to a canonical payload clone.
+ * Only the mutable surface is reachable: new turns and metadata elements,
+ * drafts, feedback and pending execution metadata. Identity, provenance and
+ * server-owned execution fields are unreachable here and stay governed by
+ * their own flows.
+ */
+function applyOperation(
+  state: Record<string, unknown>,
+  operation: AgentSessionDeltaOperation,
+  options: AgentSessionDeltaApplyOptions,
+): void {
+  const path = operation.path;
+  const segments = decodeJsonPointer(path);
+  const root = segments[0]!;
+  if (FORBIDDEN_SEGMENTS.has(root)) {
+    invalid(path, "A delta operation cannot address prototype keys.");
+  }
+  if (root === "turns") {
+    const turns = state.turns;
+    if (!Array.isArray(turns)) invalid(path, "The turn list is missing.");
+    const indexSegment = segments[1];
+    if (indexSegment === undefined) {
+      invalid(path, "A delta operation must address one turn.");
+    }
+    const index = Number(indexSegment);
+    if (!Number.isInteger(index) || index < 0) {
+      invalid(path, "A delta operation references an invalid index.");
+    }
+    const field = segments[2];
+    if (field === undefined) {
+      if (operation.op === "add") {
+        if (index !== turns.length) {
+          invalid(
+            path,
+            "New turns append in order; a delta cannot reorder history.",
+          );
+        }
+        assertTurnValue((operation as { value: unknown }).value, path, options.canonicalOriginTurns?.[index]);
+        turns.push(structuredClone((operation as { value: unknown }).value));
+        return;
+      }
+      invalid(
+        path,
+        "An existing turn can only change its feedback fields; rewrite history through its governed flow.",
+      );
+    }
+    if (segments.length !== 3 || !["feedback", "feedbackUpdatedAt"].includes(field)) {
+      invalid(path, "Only turn feedback fields are mutable in place.");
+    }
+    const turn = parentOf(state, ["turns", indexSegment], path) as Record<string, unknown>;
+    if (operation.op === "remove") {
+      if (!Object.hasOwn(turn, field)) {
+        invalid(path, "A delta remove needs an existing member.");
+      }
+      delete turn[field];
+      return;
+    }
+    if (operation.op !== "add" && operation.op !== "replace") {
+      invalid(path, "Unsupported delta operation.");
+    }
+    if (operation.op === "replace" && !Object.hasOwn(turn, field)) {
+      invalid(path, "A delta replace needs an existing member.");
+    }
+    assertSafeValue((operation as { value: unknown }).value, path);
+    turn[field] = structuredClone((operation as { value: unknown }).value);
+    return;
+  }
+  if (APPEND_ARRAY_FIELDS.has(root)) {
+    const existingList = state[root];
+    if (existingList === undefined) state[root] = [];
+    else if (!Array.isArray(existingList)) {
+      invalid(path, "The metadata list is missing.");
+    }
+    const list = state[root] as unknown[];
+    if (operation.op !== "add") {
+      invalid(
+        path,
+        "Metadata arrays only append; retained references cannot be rewritten or dropped.",
+      );
+    }
+    const index = Number(segments[1]);
+    if (segments.length !== 2 || !Number.isInteger(index) || index !== list.length) {
+      invalid(path, "Metadata elements append in accepted order.");
+    }
+    const value = (operation as { value: unknown }).value;
+    assertSafeValue(value, path);
+    if (root !== "contactReceipts") {
+      if (typeof value !== "string" || value.length === 0 || value.length > 200) {
+        invalid(path, "A retained task reference must be its stable identifier.");
+      }
+    } else if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      invalid(path, "A contact receipt must be its canonical object.");
+    }
+    list.push(structuredClone(value));
+    return;
+  }
+  if (root === "contactProposal") {
+    if (segments.length !== 1) invalid(path, "A proposal changes as one unit.");
+    if (operation.op === "remove") {
+      if (!Object.hasOwn(state, "contactProposal")) {
+        invalid(path, "A delta remove needs an existing member.");
+      }
+      delete state.contactProposal;
+      return;
+    }
+    const value = (operation as { value: unknown }).value;
+    assertSafeValue(value, path);
+    if (operation.op === "replace" && !Object.hasOwn(state, "contactProposal")) {
+      invalid(path, "A delta replace needs an existing member.");
+    }
+    state.contactProposal = structuredClone(value);
+    return;
+  }
+  if (SETTABLE_FIELDS.has(root)) {
+    if (segments.length !== 1) invalid(path, "A scalar Session field changes as one unit.");
+    if (operation.op === "remove") {
+      if (!REMOVABLE_FIELDS.has(root) || !Object.hasOwn(state, root)) {
+        invalid(path, "This Session field cannot be removed.");
+      }
+      delete state[root];
+      return;
+    }
+    const value = (operation as { value: unknown }).value;
+    assertSafeValue(value, path);
+    if (operation.op === "replace" && !Object.hasOwn(state, root)) {
+      invalid(path, "A delta replace needs an existing member.");
+    }
+    if (operation.op !== "add" && operation.op !== "replace") {
+      invalid(path, "Unsupported delta operation.");
+    }
+    state[root] = structuredClone(value);
+    return;
+  }
+  invalid(
+    path,
+    "This field is not part of the mutable Session surface; identity, provenance and scope stay governed.",
+  );
+}
+
+export function applyAgentSessionDeltaOperations(
+  base: unknown,
+  operations: readonly AgentSessionDeltaOperation[],
+  options: AgentSessionDeltaApplyOptions = {},
+): unknown {
+  if (typeof base !== "object" || base === null || Array.isArray(base)) {
+    invalid(null, "A delta applies to a canonical Session payload.");
+  }
+  const state = structuredClone(base) as Record<string, unknown>;
+  if ([...FORBIDDEN_SEGMENTS].some((key) => Object.hasOwn(state, key))) {
+    invalid(null, "A canonical Session payload cannot carry prototype keys.");
+  }
+  for (const operation of operations) {
+    if (
+      typeof operation !== "object" ||
+      operation === null ||
+      !["add", "remove", "replace"].includes(operation.op)
+    ) {
+      invalid(null, "Unsupported delta operation.");
+    }
+    applyOperation(state, operation, options);
+  }
+  return state;
+}
+
+const UUID_FIELDS = [
+  "id",
+  "personID",
+  "relationshipContextID",
+  "identityResolutionCaseID",
+  "originSessionID",
+  "originTurnID",
+] as const;
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function canonicalIdentifier(value: string): string {
+  return UUID_PATTERN.test(value) ? value.toLowerCase() : value;
+}
+
+/**
+ * Identifier-canonical declared intent: the digest domain lowercases UUIDs
+ * exactly like the server's stored canonical form, so both sides frame the
+ * same bytes without trusting caller-controlled checksums.
+ */
+export function canonicalSessionIntent<T>(value: T): T {
+  const clone = structuredClone(value) as Record<string, unknown> | null;
+  if (!clone || typeof clone !== "object" || Array.isArray(clone)) return value;
+  for (const key of UUID_FIELDS) {
+    const current = clone[key];
+    if (typeof current === "string") clone[key] = canonicalIdentifier(current);
+  }
+  for (const key of ["screenshotTaskIDs", "inheritedScreenshotTaskIDs"]) {
+    const list = clone[key];
+    if (Array.isArray(list)) {
+      clone[key] = list.map((item) =>
+        typeof item === "string" ? canonicalIdentifier(item) : item,
+      );
+    }
+  }
+  if (Array.isArray(clone.turns)) {
+    for (const turn of clone.turns as Array<Record<string, unknown>>) {
+      if (!turn || typeof turn !== "object") continue;
+      if (typeof turn.id === "string") turn.id = canonicalIdentifier(turn.id);
+      const response = turn.response as Record<string, unknown> | undefined;
+      if (response && typeof response === "object") {
+        for (const key of ["taskID", "contextManifestID", "knowledgeSnapshotID"]) {
+          const current = response[key];
+          if (typeof current === "string") response[key] = canonicalIdentifier(current);
+        }
+        for (const key of ["media"]) {
+          const list = response[key];
+          if (Array.isArray(list)) {
+            for (const item of list as Array<Record<string, unknown>>) {
+              if (item && typeof item.id === "string") item.id = canonicalIdentifier(item.id);
+            }
+          }
+        }
+      }
+      for (const message of (turn.steeredMessages ?? []) as Array<Record<string, unknown>>) {
+        if (message && typeof message.id === "string") message.id = canonicalIdentifier(message.id);
+      }
+    }
+  }
+  for (const receipt of (clone.contactReceipts ?? []) as Array<Record<string, unknown>>) {
+    if (!receipt || typeof receipt !== "object") continue;
+    for (const key of [
+      "id",
+      "captureID",
+      "resourceID",
+      "duplicateOfResourceID",
+      "personID",
+      "relationshipContextID",
+      "resolutionCaseID",
+    ]) {
+      const current = receipt[key];
+      if (typeof current === "string") receipt[key] = canonicalIdentifier(current);
+    }
+  }
+  const proposal = clone.contactProposal as Record<string, unknown> | undefined;
+  if (proposal && typeof proposal === "object") {
+    for (const key of ["sessionID", "sourceMessageID"] as const) {
+      const current = proposal[key];
+      if (typeof current === "string") proposal[key] = canonicalIdentifier(current);
+    }
+  }
+  return clone as T;
+}
+
+/** The exact whole-intent digest both sides compute for a transfer target. */
+export function agentSessionIntentDigest(payload: unknown): string {
+  return sessionIntentDigest(canonicalSessionIntent(payload));
+}
+
+function changed(before: unknown, after: unknown): boolean {
+  try {
+    return sessionIntentDigest(before ?? null) !== sessionIntentDigest(after ?? null);
+  } catch {
+    return true;
+  }
+}
+
+function setOrRemove(
+  operations: AgentSessionDeltaOperation[],
+  field: string,
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): void {
+  if (!changed(before[field], after[field])) return;
+  const hasBefore = field in before && before[field] !== undefined;
+  const hasAfter = field in after && after[field] !== undefined;
+  if (hasAfter) {
+    operations.push({
+      op: hasBefore ? "replace" : "add",
+      path: `/${field}`,
+      value: after[field],
+    });
+  } else if (hasBefore) {
+    operations.push({ op: "remove", path: `/${field}` });
+  }
+}
+
+/**
+ * Source-associated screenshot metadata keeps its authorization invariants at
+ * every intermediate frame: inherited references never leave the retained
+ * set, every inherited ref is a retained task reference, and the frame that
+ * first introduces inherited refs already covers every previously accepted
+ * task reference. The emission walks the inherited growth in its own append
+ * order and emits each new live reference immediately before its inherited
+ * twin, so any frame boundary keeps those invariants true.
+ */
+function appendScreenshotMetadata(
+  operations: AgentSessionDeltaOperation[],
+  base: Record<string, unknown>,
+  target: Record<string, unknown>,
+): void {
+  const liveBefore = (base.screenshotTaskIDs ?? []) as string[];
+  const liveAfter = (target.screenshotTaskIDs ?? []) as string[];
+  const inheritedBefore = (base.inheritedScreenshotTaskIDs ?? []) as string[];
+  const inheritedAfter = (target.inheritedScreenshotTaskIDs ?? []) as string[];
+  const liveGrowth = liveAfter.slice(liveBefore.length);
+  const inheritedGrowth = inheritedAfter.slice(inheritedBefore.length);
+  if (
+    inheritedBefore.length === 0 &&
+    inheritedAfter.length > 0 &&
+    liveBefore.some((task) => !inheritedAfter.includes(task))
+  ) {
+    throw new AgentSessionDeltaOperationError(
+      "DELTA_UNEXPRESSIBLE_CHANGE",
+      "Marking inherited screenshot references must cover every previously accepted task reference.",
+      "/inheritedScreenshotTaskIDs",
+    );
+  }
+  const emittedLive = new Set<string>();
+  let liveIndex = 0;
+  const emitLiveUpTo = (value: string) => {
+    while (liveIndex < liveGrowth.length && liveGrowth[liveIndex] !== value) {
+      const ref = liveGrowth[liveIndex]!;
+      operations.push({
+        op: "add",
+        path: `/screenshotTaskIDs/${liveBefore.length + liveIndex}`,
+        value: ref,
+      });
+      emittedLive.add(ref);
+      liveIndex += 1;
+    }
+    if (liveIndex < liveGrowth.length) {
+      const ref = liveGrowth[liveIndex]!;
+      operations.push({
+        op: "add",
+        path: `/screenshotTaskIDs/${liveBefore.length + liveIndex}`,
+        value: ref,
+      });
+      emittedLive.add(ref);
+      liveIndex += 1;
+    }
+  };
+  for (let index = 0; index < inheritedGrowth.length; index += 1) {
+    const value = inheritedGrowth[index]!;
+    const livePosition = liveGrowth.indexOf(value);
+    if (livePosition >= 0) emitLiveUpTo(value);
+    operations.push({
+      op: "add",
+      path: `/inheritedScreenshotTaskIDs/${inheritedBefore.length + index}`,
+      value,
+    });
+  }
+  while (liveIndex < liveGrowth.length) {
+    const ref = liveGrowth[liveIndex]!;
+    operations.push({
+      op: "add",
+      path: `/screenshotTaskIDs/${liveBefore.length + liveIndex}`,
+      value: ref,
+    });
+    emittedLive.add(ref);
+    liveIndex += 1;
+  }
+}
+
+/** The exact screenshot inheritance rules every intermediate frame must keep. */
+export function verifyScreenshotInheritanceStep(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): boolean {
+  const liveAfter = (after.screenshotTaskIDs ?? []) as string[];
+  const inheritedBefore = (before.inheritedScreenshotTaskIDs ?? []) as string[];
+  const inheritedAfter = (after.inheritedScreenshotTaskIDs ?? []) as string[];
+  if (inheritedAfter.some((task) => !liveAfter.includes(task))) return false;
+  if (new Set(inheritedAfter).size !== inheritedAfter.length) return false;
+  if (inheritedBefore.length > 0) {
+    // Controlled growth during one immutable transfer may add retained
+    // references, but nothing already inherited can ever be promoted away.
+    if (!inheritedBefore.every((task) => inheritedAfter.includes(task))) {
+      return false;
+    }
+    return true;
+  }
+  if (inheritedAfter.length > 0) {
+    const liveBefore = (before.screenshotTaskIDs ?? []) as string[];
+    return liveBefore.every((task) => inheritedAfter.includes(task));
+  }
+  return true;
+}
+
+function assertImmutable(before: Record<string, unknown>, after: Record<string, unknown>): void {
+  for (const key of [
+    "id",
+    "scopeKind",
+    "personID",
+    "relationshipContextID",
+    "identityResolutionCaseID",
+    "originKind",
+    "originSessionID",
+    "originTurnID",
+    "createdAt",
+  ]) {
+    if (changed(before[key], after[key])) {
+      throw new AgentSessionDeltaOperationError(
+        "DELTA_UNEXPRESSIBLE_CHANGE",
+        "Session identity and fork provenance are immutable; start a governed fork instead.",
+        `/${key}`,
+      );
+    }
+  }
+}
+
+/**
+ * Plan the minimal ordered operations between two canonical payloads.
+ * Only changed fields, new turns and new metadata-array elements are emitted;
+ * no full turn-order rewrite and no final full aggregate metadata. Pending
+ * execution metadata is ordered last.
+ */
+export function planAgentSessionDelta(
+  before: unknown,
+  after: unknown,
+): AgentSessionDeltaOperation[] {
+  if (
+    typeof before !== "object" || before === null || Array.isArray(before) ||
+    typeof after !== "object" || after === null || Array.isArray(after)
+  ) {
+    throw new AgentSessionDeltaOperationError(
+      "DELTA_UNEXPRESSIBLE_CHANGE",
+      "A delta plans between two canonical Session payloads.",
+    );
+  }
+  const base = before as Record<string, unknown>;
+  const target = after as Record<string, unknown>;
+  assertImmutable(base, target);
+
+  const operations: AgentSessionDeltaOperation[] = [];
+  // Canonical emission order keeps every intermediate frame fully valid:
+  // scalar fields first, then retained metadata references, then turns (whose
+  // screenshot/source units are already present), then the source-linked
+  // proposal, and finally pending execution metadata last so a partial
+  // transfer can never restore pending work early.
+  for (const field of SETTABLE_FIELDS) {
+    if (PENDING_EXECUTION_FIELDS.includes(field as never)) continue;
+    if (field === "contactProposal") continue;
+    setOrRemove(operations, field, base, target);
+  }
+
+
+  for (const field of APPEND_ARRAY_FIELDS) {
+    const beforeList = (base[field] ?? []) as unknown[];
+    const afterList = (target[field] ?? []) as unknown[];
+    if (afterList.length < beforeList.length) {
+      throw new AgentSessionDeltaOperationError(
+        "DELTA_UNEXPRESSIBLE_CHANGE",
+        "Retained metadata references only grow through a delta.",
+        `/${field}`,
+      );
+    }
+    for (let index = 0; index < beforeList.length; index += 1) {
+      if (changed(beforeList[index], afterList[index])) {
+        throw new AgentSessionDeltaOperationError(
+          "DELTA_UNEXPRESSIBLE_CHANGE",
+          "An accepted metadata element is immutable.",
+          `/${field}/${index}`,
+        );
+      }
+    }
+    if (field === "contactReceipts") {
+      for (let index = beforeList.length; index < afterList.length; index += 1) {
+        operations.push({ op: "add", path: `/${field}/${index}`, value: afterList[index] });
+      }
+    }
+  }
+  appendScreenshotMetadata(operations, base, target);
+
+  const beforeTurns = (base.turns ?? []) as Array<Record<string, unknown>>;
+  const afterTurns = (target.turns ?? []) as Array<Record<string, unknown>>;
+  if (afterTurns.length < beforeTurns.length) {
+    throw new AgentSessionDeltaOperationError(
+      "DELTA_UNEXPRESSIBLE_CHANGE",
+      "A delta never removes accepted history.",
+      "/turns",
+    );
+  }
+  for (let index = 0; index < beforeTurns.length; index += 1) {
+    const existing = beforeTurns[index]!;
+    const incoming = afterTurns[index]!;
+    for (const key of ["id", "objective", "createdAt"]) {
+      if (changed(existing[key], incoming[key])) {
+        throw new AgentSessionDeltaOperationError(
+          "DELTA_UNEXPRESSIBLE_CHANGE",
+          "Existing message identity and order must be preserved.",
+          `/turns/${index}/${key}`,
+        );
+      }
+    }
+    if (changed(existing.response, incoming.response)) {
+      throw new AgentSessionDeltaOperationError(
+        "DELTA_UNEXPRESSIBLE_CHANGE",
+        "An existing turn's canonical answer is immutable.",
+        `/turns/${index}/response`,
+      );
+    }
+    if (changed(existing.images, incoming.images)) {
+      throw new AgentSessionDeltaOperationError(
+        "DELTA_UNEXPRESSIBLE_CHANGE",
+        "A stored turn's image manifest cannot change.",
+        `/turns/${index}/images`,
+      );
+    }
+    for (const field of ["feedback", "feedbackUpdatedAt"] as const) {
+      if (!changed(existing[field], incoming[field])) continue;
+      const hasBefore = existing[field] !== undefined;
+      const hasAfter = incoming[field] !== undefined;
+      if (hasAfter) {
+        operations.push({
+          op: hasBefore ? "replace" : "add",
+          path: `/turns/${index}/${field}`,
+          value: incoming[field],
+        });
+      } else if (hasBefore) {
+        operations.push({ op: "remove", path: `/turns/${index}/${field}` });
+      }
+    }
+    if (changed(existing.steeredMessages, incoming.steeredMessages)) {
+      throw new AgentSessionDeltaOperationError(
+        "DELTA_UNEXPRESSIBLE_CHANGE",
+        "Folded steering provenance is queue-owned.",
+        `/turns/${index}/steeredMessages`,
+      );
+    }
+    for (const field of SERVER_OWNED_RESPONSE_FIELDS) {
+      if (changed(
+        (existing.response as Record<string, unknown> | undefined)?.[field],
+        (incoming.response as Record<string, unknown> | undefined)?.[field],
+      )) {
+        throw new AgentSessionDeltaOperationError(
+          "DELTA_UNEXPRESSIBLE_CHANGE",
+          "Execution provenance is queue-owned.",
+          `/turns/${index}/response/${field}`,
+        );
+      }
+    }
+  }
+  for (let index = beforeTurns.length; index < afterTurns.length; index += 1) {
+    operations.push({ op: "add", path: `/turns/${index}`, value: afterTurns[index] });
+  }
+
+  setOrRemove(operations, "contactProposal", base, target);
+  for (const field of PENDING_EXECUTION_FIELDS) {
+    setOrRemove(operations, field, base, target);
+  }
+  return operations;
+}
+
+export interface AgentSessionDeltaFramePlan {
+  transfer_id: string;
+  target_payload_digest: string;
+  frames: AgentSessionDeltaOperation[][];
+}
+
+export interface AgentSessionDeltaFramePlanOptions {
+  transferId: string;
+  maxOperationsPerFrame?: number;
+  /** Actual UTF-8 byte budget of the COMPLETE serialized frame request
+   * (transfer/idempotency/target metadata, operations and the first frame's
+   * skeleton), bounded by the real HTTP request guard. */
+  maxFrameBytes?: number;
+  /** The first frame's skeleton travels with the request and counts against
+   * its byte budget. */
+  skeleton?: unknown;
+  /** Canonical origin readback for local planning; the server independently
+   * resolves current owned origin before applying the request. */
+  canonicalOriginTurns?: readonly unknown[];
+}
+
+const PLACEHOLDER_OPERATION_KEY = "00000000-0000-4000-8000-000000000000";
+
+/** The screenshot admission fields are validated as one identity, so a frame
+ * boundary may never split them. */
+export const SCREENSHOT_ADMISSION_PATHS = new Set([
+  "/pendingScreenshotIdempotencyKey",
+  "/pendingScreenshotRequestIdentity",
+  "/pendingScreenshotCapturedAt",
+  "/pendingObjective",
+]);
+
+function gluesToPrevious(
+  previous: AgentSessionDeltaOperation | undefined,
+  operation: AgentSessionDeltaOperation,
+): boolean {
+  if (!previous) return false;
+  if (operation.path.startsWith("/inheritedScreenshotTaskIDs/")) return true;
+  return (
+    SCREENSHOT_ADMISSION_PATHS.has(operation.path) &&
+    SCREENSHOT_ADMISSION_PATHS.has(previous.path)
+  );
+}
+
+/** Exact UTF-8 size of one complete frame request as it will hit the wire. */
+export function agentSessionDeltaFrameRequestBytes(
+  input: {
+    transferId: string;
+    targetPayloadDigest: string;
+    operations: AgentSessionDeltaOperation[];
+    skeleton?: unknown;
+  },
+): number {
+  const request: Record<string, unknown> = {
+    transfer_id: input.transferId,
+    expected_revision: 2147483647,
+    idempotency_key: PLACEHOLDER_OPERATION_KEY,
+    target_payload_digest: input.targetPayloadDigest,
+    operations: input.operations,
+    final: true,
+  };
+  if (input.skeleton !== undefined) request.skeleton = input.skeleton;
+  return new TextEncoder().encode(JSON.stringify(request)).length;
+}
+
+/**
+ * Split one planned delta into sequential frames of actual serialized request
+ * bytes. Ordering is preserved, so pending execution metadata always lands in
+ * the final frames and a partial transfer can never restore pending work
+ * early. Source-associated metadata stays paired across frame boundaries and
+ * every frame boundary keeps the screenshot inheritance invariants, so each
+ * intermediate frame is canonical and fully valid.
+ */
+export function planAgentSessionDeltaFrames(
+  before: unknown,
+  after: unknown,
+  options: AgentSessionDeltaFramePlanOptions,
+): AgentSessionDeltaFramePlan {
+  const operations = planAgentSessionDelta(before, after);
+  const maxOperations = Math.max(1, options.maxOperationsPerFrame ?? 256);
+  const maxBytes = Math.max(2048, options.maxFrameBytes ?? 250 * 1024);
+  const frameBytes = (chunk: AgentSessionDeltaOperation[], first: boolean) =>
+    agentSessionDeltaFrameRequestBytes({
+      transferId: options.transferId,
+      targetPayloadDigest: "0".repeat(64),
+      operations: chunk,
+      ...(first && options.skeleton !== undefined
+        ? { skeleton: options.skeleton }
+        : {}),
+    });
+  // Source-associated units and screenshot admission identities are atomic:
+  // an inherited reference never separates from its live twin or coverage run
+  // and the admission identity stays whole. The contract's 256-operation
+  // bound is hard; nothing is ever silently clipped.
+  const units: AgentSessionDeltaOperation[][] = [];
+  for (const operation of operations) {
+    const previous = units.at(-1)?.at(-1);
+    if (units.length > 0 && gluesToPrevious(previous, operation)) {
+      units[units.length - 1]!.push(operation);
+    } else {
+      units.push([operation]);
+    }
+  }
+  const frames: AgentSessionDeltaOperation[][] = [];
+  let current: AgentSessionDeltaOperation[] = [];
+  for (const unit of units) {
+    if (unit.length > 256) {
+      throw new AgentSessionDeltaOperationError(
+        "DELTA_FRAME_UNPACKABLE",
+        "One source-associated unit does not fit a single request frame; keep it local or split its source units.",
+        unit[0]!.path,
+      );
+    }
+    const first = frames.length === 0;
+    if (current.length === 0) {
+      if (frameBytes(unit, first) > maxBytes) {
+        throw new AgentSessionDeltaOperationError(
+          "DELTA_FRAME_UNPACKABLE",
+          "One declared change does not fit a single request frame; keep it local or split its source units.",
+          unit[0]!.path,
+        );
+      }
+      current = unit.slice();
+      continue;
+    }
+    const overCount = current.length + unit.length > maxOperations;
+    const overBytes = frameBytes([...current, ...unit], first) > maxBytes;
+    if (overCount || overBytes) {
+      frames.push(current);
+      if (frameBytes(unit, false) > maxBytes) {
+        throw new AgentSessionDeltaOperationError(
+          "DELTA_FRAME_UNPACKABLE",
+          "One declared change does not fit a single request frame; keep it local or split its source units.",
+          unit[0]!.path,
+        );
+      }
+      current = unit.slice();
+    } else {
+      current.push(...unit);
+    }
+  }
+  if (current.length > 0) frames.push(current);
+
+  // Every intermediate state must keep the screenshot inheritance
+  // authorization invariants; a plan that cannot is refused up front instead
+  // of failing halfway through a transfer.
+  let cursor = before as Record<string, unknown>;
+  for (const frame of frames) {
+    const next = applyAgentSessionDeltaOperations(cursor, frame, options) as Record<
+      string,
+      unknown
+    >;
+    if (!verifyScreenshotInheritanceStep(cursor, next)) {
+      throw new AgentSessionDeltaOperationError(
+        "DELTA_UNEXPRESSIBLE_CHANGE",
+        "Source-associated metadata must arrive paired so every frame keeps its inheritance authorization.",
+        "/inheritedScreenshotTaskIDs",
+      );
+    }
+    cursor = next;
+  }
+  return {
+    transfer_id: options.transferId,
+    target_payload_digest: agentSessionIntentDigest(after),
+    frames,
+  };
+}
+
+export function agentSessionDeltaFrameRequest(input: {
+  transferId: string;
+  expectedRevision: number;
+  idempotencyKey: string;
+  targetPayloadDigest: string;
+  operations: AgentSessionDeltaOperation[];
+  final: boolean;
+  skeleton?: unknown;
+}): AgentSessionDeltaFrameRequest {
+  return {
+    transfer_id: input.transferId,
+    expected_revision: input.expectedRevision,
+    idempotency_key: input.idempotencyKey,
+    target_payload_digest: input.targetPayloadDigest,
+    operations: input.operations,
+    final: input.final,
+    ...(input.skeleton !== undefined
+      ? { skeleton: input.skeleton as never }
+      : {}),
+  };
+}

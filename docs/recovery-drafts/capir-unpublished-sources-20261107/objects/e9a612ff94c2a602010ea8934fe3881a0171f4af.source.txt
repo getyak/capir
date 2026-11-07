@@ -1,0 +1,70 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+import {
+  CapirDemoBanner,
+  CapirSessionRevokedBanner,
+  capirSessionRenderState,
+  formatDemoExpiry,
+} from "@/lib/capirSandboxBanner";
+
+let root: Root;
+let host: HTMLDivElement;
+
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+});
+
+afterEach(async () => {
+  await act(() => root.unmount());
+  host.remove();
+  vi.unstubAllGlobals();
+});
+
+it("renders a truthful demo banner with the real sandbox expiry", async () => {
+  await act(() =>
+    root.render(
+      <CapirDemoBanner
+        sandboxId="22222222-2222-4222-8222-222222222222"
+        sandboxExpiresAt="2026-10-01T12:00:00.000Z"
+        sessionExpiresAt="2026-10-01T11:00:00.000Z"
+      />,
+    ),
+  );
+  const banner = host.querySelector<HTMLElement>("[data-capir-session-state]")!;
+  expect(banner.getAttribute("data-capir-session-state")).toBe("active");
+  expect(banner.getAttribute("data-capir-sandbox-id")).toBe(
+    "22222222-2222-4222-8222-222222222222",
+  );
+  // Demo/synthetic scope is explicit: never dressed up as a real workspace.
+  expect(banner.textContent).toContain("合成演示空间");
+  expect(banner.textContent).toContain("仅含合成测试数据");
+  const expiry = host.querySelector<HTMLElement>("[data-capir-demo-expiry]")!;
+  expect(expiry.getAttribute("data-capir-demo-expiry")).toBe(
+    "2026-10-01T12:00:00.000Z",
+  );
+  expect(expiry.textContent).toContain(formatDemoExpiry("2026-10-01T12:00:00.000Z"));
+  expect(banner.textContent).toContain("浏览器会话有效期至");
+  expect(banner.textContent).toContain(formatDemoExpiry("2026-10-01T11:00:00.000Z"));
+  // No parent-session wording: a CLI demo session has no parent credentials.
+  expect(banner.textContent).not.toContain("返回我的空间");
+});
+
+it("renders the revoked state once the grant is revoked or expired", async () => {
+  await act(() => root.render(<CapirSessionRevokedBanner />));
+  const banner = host.querySelector<HTMLElement>("[data-capir-session-state]")!;
+  expect(banner.getAttribute("data-capir-session-state")).toBe("revoked");
+  expect(banner.textContent).toContain("已失效");
+});
+
+it("decides demo vs revoked strictly from backend confirmation", () => {
+  expect(capirSessionRenderState(null, true)).toBeNull();
+  expect(capirSessionRenderState(null, false)).toBeNull();
+  expect(capirSessionRenderState({ sandboxId: "x" }, true)).toBe("active");
+  expect(capirSessionRenderState({ sandboxId: "x" }, false)).toBe("revoked");
+});

@@ -1,0 +1,201 @@
+import type { DatabaseClient } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import type { AuthContext } from "./auth.js";
+
+/**
+ * One accepted Saved Memory statement (identity + exact version) that a task
+ * read. Durable lineage only: never raw source content, never display text.
+ */
+export interface SavedMemoryDependency {
+  memoryItemID: string;
+  version: number;
+}
+
+/**
+ * Registration and final-write transactions take this account fence before
+ * their queue/Session locks and hold it through commit; every source
+ * invalidation takes it inside its retraction. A concurrent source writer then
+ * either invalidates before final admission or retracts the committed result
+ * afterward, with MVCC currentness checks closing the read/persist race.
+ *
+ * `fence: false` is only for registration that runs inside a caller-owned
+ * transaction which may span a model call: the account fence must never be
+ * held across model calls, and the fenced completion boundary revalidates the
+ * same rows before any derived text is admitted.
+ */
+export interface SavedMemoryLineageWrite {
+  fence?: boolean;
+}
+
+/** Transaction-scoped: held until the caller's transaction commits. */
+export async function lockSavedMemoryLineage(
+  client: DatabaseClient,
+  accountId: string,
+): Promise<void> {
+  await client.query("SELECT lock_saved_memory_lineage($1)", [accountId]);
+}
+
+function sourceNotCurrent(): never {
+  throw new ApiError(
+    409,
+    "MEMORY_SEARCH_SOURCE_NOT_CURRENT",
+    "Saved Memory changed while it was being read. Search again before using it.",
+  );
+}
+
+interface DependencyRow {
+  memory_item_id: string;
+  memory_item_version: number;
+  owner_user_id: string;
+}
+
+async function loadTaskDependencyRows(
+  client: DatabaseClient,
+  accountId: string,
+  taskID: string,
+): Promise<DependencyRow[]> {
+  return (
+    await client.query<DependencyRow>(
+      `SELECT memory_item_id, memory_item_version, owner_user_id
+       FROM agent_task_memory_dependencies
+       WHERE account_id=$1 AND task_id=canonical_agent_session_id($2)`,
+      [accountId, taskID],
+    )
+  ).rows;
+}
+
+/**
+ * Durable admission check for a stored derived body: every recorded dependency
+ * must still be current at its exact version and owned by the task's user.
+ * Absent rows mean a legacy or never-memory task and stay admissible; a body
+ * whose lineage is missing, foreign or stale is never admitted again.
+ */
+export async function savedMemoryDependenciesAdmissible(
+  client: DatabaseClient,
+  accountId: string,
+  ownerUserID: string,
+  taskID: string | null | undefined,
+): Promise<boolean> {
+  if (!taskID) return true;
+  const rows = await loadTaskDependencyRows(client, accountId, taskID);
+  if (!rows.length) return true;
+  if (rows.some((row) => row.owner_user_id !== ownerUserID)) return false;
+  const current = await client.query<{ current: boolean }>(
+    `SELECT saved_memory_item_current(account_id, owner_user_id, memory_item_id, memory_item_version) AS current
+     FROM agent_task_memory_dependencies
+     WHERE account_id=$1 AND task_id=canonical_agent_session_id($2)`,
+    [accountId, taskID],
+  );
+  return current.rows.every((row) => row.current);
+}
+
+/**
+ * Persist the host-owned Memory dependencies of one task before any discovered
+ * text escapes to the model.
+ *
+ * The recorded rows are the durable replacement for the former process-local
+ * version map: a queue replay or a later canonical write revalidates them from
+ * the database, so a crash between result storage and persistence can never
+ * resurrect a withdrawn answer.
+ */
+export async function recordSavedMemoryDependencies(
+  client: DatabaseClient,
+  auth: AuthContext,
+  taskID: string | null | undefined,
+  dependencies: readonly SavedMemoryDependency[],
+  options: SavedMemoryLineageWrite = {},
+): Promise<void> {
+  if (!taskID || !dependencies.length) return;
+  if (options.fence !== false) await lockSavedMemoryLineage(client, auth.accountId);
+  for (const dependency of new Map(
+    dependencies.map((dependency) => [dependency.memoryItemID, dependency]),
+  ).values()) {
+    await client.query(
+      `INSERT INTO agent_task_memory_dependencies(
+         account_id, task_id, memory_item_id, memory_item_version, owner_user_id
+       ) VALUES($1, canonical_agent_session_id($2), $3, $4, $5)
+       ON CONFLICT (account_id, task_id, memory_item_id) DO NOTHING`,
+      [
+        auth.accountId,
+        taskID,
+        dependency.memoryItemID,
+        dependency.version,
+        auth.userId,
+      ],
+    );
+  }
+  const recorded = await loadTaskDependencyRows(client, auth.accountId, taskID);
+  const versions = new Map(
+    recorded.map((row) => [row.memory_item_id, row.memory_item_version]),
+  );
+  // A different version already recorded for this task means the statement was
+  // revised mid-run; fail closed exactly like a withdrawn source.
+  if (dependencies.some((dependency) => versions.get(dependency.memoryItemID) !== dependency.version))
+    sourceNotCurrent();
+  await assertSavedMemoryDependenciesCurrent(client, auth, taskID);
+}
+
+/**
+ * Conservative inherited/fork lineage: a follow-up answer that reused earlier
+ * derived answers from Session history inherits their Memory dependencies
+ * (including stale ones, which then fail the assertion below) BEFORE that
+ * history text is delivered to the provider. Forked turns keep their task
+ * identity, so their dependency rows travel with them.
+ */
+export async function inheritSavedMemoryDependencies(
+  client: DatabaseClient,
+  auth: AuthContext,
+  taskID: string | null | undefined,
+  previousTaskIDs: readonly string[],
+  options: SavedMemoryLineageWrite = {},
+): Promise<void> {
+  if (!taskID) return;
+  if (options.fence !== false) await lockSavedMemoryLineage(client, auth.accountId);
+  if (previousTaskIDs.length) {
+    await client.query(
+      `INSERT INTO agent_task_memory_dependencies(
+         account_id, task_id, memory_item_id, memory_item_version, owner_user_id
+       )
+       SELECT account_id, canonical_agent_session_id($2), memory_item_id, memory_item_version, owner_user_id
+       FROM agent_task_memory_dependencies
+       WHERE account_id=$1
+         AND task_id=ANY(SELECT canonical_agent_session_id(value) FROM unnest($3::text[]) AS value)
+         AND task_id<>canonical_agent_session_id($2)
+       ON CONFLICT (account_id, task_id, memory_item_id) DO NOTHING`,
+      [auth.accountId, taskID, [...new Set(previousTaskIDs)]],
+    );
+  }
+  await assertSavedMemoryDependenciesCurrent(client, auth, taskID);
+}
+
+/**
+ * Fail closed before a final canonical write or replay when any recorded
+ * dependency lost its exact source/version authority, and deny same-account
+ * users who do not own the task's derived text.
+ */
+export async function assertSavedMemoryDependenciesCurrent(
+  client: DatabaseClient,
+  auth: AuthContext,
+  taskID: string | null | undefined,
+): Promise<void> {
+  if (!taskID) return;
+  const rows = await client.query<{ owner_user_id: string; current: boolean }>(
+    `SELECT owner_user_id,
+       saved_memory_item_current(account_id, owner_user_id, memory_item_id, memory_item_version) AS current
+     FROM agent_task_memory_dependencies
+     WHERE account_id=$1 AND task_id=canonical_agent_session_id($2)`,
+    [auth.accountId, taskID],
+  );
+  if (rows.rows.some((row) => row.owner_user_id !== auth.userId))
+    throw new ApiError(
+      404,
+      "AGENT_SESSION_NOT_FOUND",
+      "The reply is not available in this account and user scope.",
+    );
+  if (rows.rows.some((row) => !row.current))
+    throw new ApiError(
+      410,
+      "AGENT_SESSION_CONTEXT_UNAVAILABLE",
+      "The saved context for this reply was changed, withdrawn, or expired.",
+    );
+}

@@ -1,0 +1,55 @@
+import { createHash, randomUUID } from "node:crypto";
+import { describe, it, expect, vi } from "vitest";
+import { CONTACT_RESEARCH_CONTRACT, type AgentProvider, type ScreenshotContactTaskResponse, type ContactResearchToolRequest } from "@talent-signal/agent";
+import { executeWorkspaceConversationAgentCore } from "./workspaceConversationAgent.js";
+import type { ContactResearchClient } from "./contactResearchClient.js";
+
+const messageID=randomUUID();const data=Buffer.from("synthetic authored post");
+const image={kind:"image" as const,artifactID:`conversation-image-${messageID}-0-source`,mimeType:"image/png",byteSize:data.length,
+  contentHash:createHash("sha256").update(data).digest("hex"),dataBase64:data.toString("base64")};
+const extraction={artifact_id:image.artifactID,author_label:"julian!",platform:"Social feed",blocks:[{text:"I quoted a conversation about a poet.",time_text:"27 minutes ago"}],identity_clues:[]};
+const reply={structuredOutput:{outcome:"reply",title:"发布内容",body:"已保存作者及正文，公开页面仍需核对身份。"},inputTokens:1,outputTokens:1,estimatedUsd:0,turns:1,permissionDenials:[]};
+function receipt():ScreenshotContactTaskResponse{return {task_id:randomUUID(),revision:1,status:"completed",contact:{person_id:randomUUID(),relationship_context_id:randomUUID(),display_name:"julian!",disposition:"created"},capture_id:randomUUID(),source_resource_id:randomUUID(),message_count:1,
+ extraction:{platform:"Social feed",conversation_kind:"authored_content",contact_name:"julian!",identity_clues:[],messages:[{message_id:"m1",sequence:0,text:extraction.blocks[0]!.text,speaker_side:"unknown",speaker_label:"julian!",time_text:"27 minutes ago"}],uncertainties:[]},summary:"Saved source",findings:[],profile_fields:[],public_sources:[],question:null,candidates:[],limitations:[],events:[],external_effects:[],created_at:new Date().toISOString(),updated_at:new Date().toISOString()};}
+function provider(run:AgentProvider["run"]):AgentProvider{return {id:"claude-agent-sdk",model:"synthetic",sdkVersion:"fixture",inputCapabilities:{text:true,image:true,imageUnderstanding:true},run};}
+
+describe("direct SDK authored image filing",()=>{
+ it("hands original pixels to the SDK, files the author, and researches only its returned identity label",async()=>{
+  const save=vi.fn(async()=>receipt());const inspect=vi.fn();const search=vi.fn();
+  const execute=vi.fn(async(request:ContactResearchToolRequest)=>({contract_version:CONTACT_RESEARCH_CONTRACT,task_id:request.task_id,call_id:request.call_id,sources:[],
+    channels:[{channel:"web",provider:"exa",status:"ok",result_count:0,truncated:false,error_code:null}],fetch_outcomes:[],external_effects:[]}));
+  const result=await executeWorkspaceConversationAgentCore({workspaceID:randomUUID(),messageID,objective:"",sourceText:"",inputParts:[image],imageIsCurrent:async()=>true,
+    contacts:{search,read:vi.fn()},imageInspector:{inspect},fileImageAuthor:save,researchClient:{execute} as ContactResearchClient,
+    provider:provider(async request=>{
+      expect(request.inputParts).toEqual([image]);expect(inspect).not.toHaveBeenCalled();
+      const tools=request.supplementalTools!;const file=tools.find(tool=>tool.name==="file_current_image_author")!;
+      const saved=await file.execute(extraction,new AbortController().signal);expect(saved.isError).toBe(false);
+      const payload=JSON.parse((saved.content[0] as {text:string}).text);expect(payload.capture_id).toBeTruthy();expect(payload.source_content[0].time_text).toBe("27 minutes ago");
+      await tools.find(tool=>tool.name==="search_public_subject")!.execute({subject_id:payload.public_subjects[0].id},new AbortController().signal);
+      return reply;
+    })});
+  expect(save).toHaveBeenCalledOnce();expect(search).not.toHaveBeenCalled();expect(inspect).not.toHaveBeenCalled();
+  expect(execute.mock.calls[0]![0]).toMatchObject({anchors:["julian!"],input:{query:"julian! biography official website"}});
+  expect(JSON.stringify(execute.mock.calls)).not.toContain(extraction.blocks[0]!.text);expect(result.block.body).toContain("正文");
+ });
+ it.each(["revoked","foreign","previous_message","declined"])("denies %s sources before filing",async variant=>{
+  const save=vi.fn();const altered=variant==="previous_message"?{...image,artifactID:`conversation-image-${randomUUID()}-0-source`}:image;
+  await executeWorkspaceConversationAgentCore({workspaceID:randomUUID(),messageID,objective:variant==="declined"?"不要保存这个作者":"",inputParts:[altered],
+    imageIsCurrent:async()=>variant!=="revoked",contacts:{search:vi.fn(),read:vi.fn()},fileImageAuthor:save,
+    provider:provider(async request=>{
+      const tool=request.supplementalTools!.find(tool=>tool.name==="file_current_image_author")!;
+      const output=await tool.execute({...extraction,artifact_id:variant==="foreign"?"foreign":altered.artifactID},new AbortController().signal);
+      expect(output.isError).toBe(true);return reply;
+    })});expect(save).not.toHaveBeenCalled();
+ });
+ it("does not advertise research subjects after failed or ambiguous filing",async()=>{
+  for(const status of ["failed","waiting_for_user"] as const){
+    await executeWorkspaceConversationAgentCore({workspaceID:randomUUID(),messageID,objective:"",inputParts:[image],imageIsCurrent:async()=>true,
+      contacts:{search:vi.fn(),read:vi.fn()},fileImageAuthor:async()=>({...receipt(),status,contact:null,capture_id:null}),
+      provider:provider(async request=>{
+        const output=await request.supplementalTools!.find(tool=>tool.name==="file_current_image_author")!.execute(extraction,new AbortController().signal);
+        expect(JSON.parse((output.content[0] as {text:string}).text)).toMatchObject({status,capture_id:null,public_subjects:[]});return reply;
+      })});
+  }
+ });
+});

@@ -1,0 +1,163 @@
+import { createHash, randomUUID } from "node:crypto";
+
+import type { ChatResponseBlock } from "@talent-signal/contracts";
+import { ApiError } from "../lib/apiError.js";
+
+import type { PersonResearchAgentProviding } from "./personResearchAgentClient.js";
+import { personResearchChatBlock } from "./personResearchChat.js";
+
+const SUPPORTED_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
+
+export type PersonResearchChatStatus =
+  | "disabled"
+  | "completed"
+  | "no_action"
+  | "unavailable"
+  | "unsupported_media"
+  | "failed";
+
+export interface PersonResearchChatMedia {
+  id: string;
+  media_type: string;
+}
+
+export function personResearchRunID(
+  accountID: string,
+  idempotencyKey: string,
+): string {
+  const bytes = createHash("sha256")
+    .update("talent-signal.person-research.v1\0")
+    .update(accountID)
+    .update("\0")
+    .update(idempotencyKey)
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * New-attempt Person v2 run identity: namespaced by account, actor, stable
+ * intent and attempt. Existing completed v1 receipts keep replaying unchanged.
+ */
+export function personResearchRunIDV2(
+  accountID: string,
+  actorUserID: string,
+  intentID: string,
+  attemptID: string,
+): string {
+  const bytes = createHash("sha256")
+    .update("talent-signal.person-research.v2\0")
+    .update(accountID).update("\0")
+    .update(actorUserID).update("\0")
+    .update(intentID).update("\0")
+    .update(attemptID)
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function failureBlock(title: string, body: string): ChatResponseBlock {
+  return {
+    id: randomUUID(),
+    kind: "failure_recovery",
+    title,
+    body,
+    status: "failed",
+    citation_dependency_ids: [],
+    requires_user_decision: false,
+  };
+}
+
+export async function runPersonResearchChatIngress(input: {
+  provider: PersonResearchAgentProviding | null;
+  media: readonly PersonResearchChatMedia[];
+  loadMedia: (mediaID: string) => Promise<Uint8Array>;
+  runID: string;
+  objective: string;
+  /** Real request-owned cancellation propagated to the provider socket. */
+  signal?: AbortSignal;
+  /** Durable dispatch evidence recorded at the actual provider entry only. */
+  onDispatch?: () => Promise<void>;
+  /** Original execution/source authority; independent of provider selection. */
+  assertCurrent?: () => Promise<void>;
+}): Promise<{
+  status: PersonResearchChatStatus;
+  block: ChatResponseBlock | null;
+}> {
+  if (!input.provider || input.media.length === 0) {
+    return { status: "disabled", block: null };
+  }
+  const media = input.media[0];
+  if (
+    input.media.length !== 1 ||
+    !media ||
+    !SUPPORTED_IMAGE_TYPES.has(media.media_type)
+  ) {
+    return {
+      status: "unsupported_media",
+      block: failureBlock(
+        "Public profile research needs one supported screenshot",
+        "Send one PNG, JPEG, or WebP screenshot in a turn. No identity was researched or confirmed, and no external action occurred.",
+      ),
+    };
+  }
+  let bookkeepingFailed = false;
+  let currentnessFailed = false;
+  const assertCurrent = async () => {
+    try { await input.assertCurrent?.(); }
+    catch (error) { currentnessFailed = true; throw error; }
+  };
+  try {
+    await assertCurrent();
+    // Awaited storage loading happens OUTSIDE any transaction and BEFORE the
+    // durable dispatch marker: a configured-but-unloaded request never records
+    // dispatch. The exact current boundary is rechecked, then the marker fires
+    // immediately before the actual research with its prepared bytes.
+    const data = await input.loadMedia(media.id);
+    if (input.signal?.aborted) throw new Error("PERSON_RESEARCH_CANCELLED");
+    await assertCurrent();
+    if (input.onDispatch) {
+      try { await input.onDispatch(); }
+      catch (error) { bookkeepingFailed = true; throw error; }
+    }
+    await assertCurrent();
+    if (input.signal?.aborted) throw new Error("PERSON_RESEARCH_CANCELLED");
+    const research = await input.provider.research({
+      runID: input.runID,
+      objective: input.objective,
+      image: {
+        mediaType: media.media_type as "image/png" | "image/jpeg" | "image/webp",
+        data,
+      },
+    }, input.signal);
+    await assertCurrent();
+    return {
+      status: research.result.kind === "artifact"
+        ? "completed"
+        : research.result.kind,
+      block: personResearchChatBlock(research),
+    };
+  } catch (error) {
+    // Real cancellation and source authority failures must never be consumed
+    // as a fallback 201; they propagate to the lifecycle's fenced writer.
+    if (currentnessFailed || bookkeepingFailed || error instanceof ApiError || input.signal?.aborted
+      || (error instanceof Error && ["PERSON_RESEARCH_CANCELLED"].includes(error.message))) throw error;
+    return {
+      status: "failed",
+      block: failureBlock(
+        "Public profile research unavailable",
+        "The local Agent did not complete this screenshot Run. The relationship summary remains available; no identity was confirmed and no external action occurred.",
+      ),
+    };
+  }
+}

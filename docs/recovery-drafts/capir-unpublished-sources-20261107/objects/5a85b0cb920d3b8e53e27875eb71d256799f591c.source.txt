@@ -1,0 +1,1265 @@
+import { randomUUID } from "node:crypto";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import rateLimit from "@fastify/rate-limit";
+import Fastify, { type FastifyInstance } from "fastify";
+import { Pool } from "pg";
+import {
+  CONTRACT_VERSION,
+  agentSessionIntentDigest,
+  planAgentSessionDeltaFrames,
+  type AgentSessionDeltaFrameRequest,
+  type AgentSessionPayload,
+  type AgentSessionResponse,
+  type AgentSessionDeltaResponse,
+} from "@talent-signal/contracts";
+import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
+import { LabWorkspaceService } from "./labWorkspaces.js";
+import { LocalChatMediaStorage } from "./chatMediaStorage.js";
+import { mutateAgentSessionDelta } from "./agentSessionDelta.js";
+import { getAgentSession, mutateAgentSession } from "./agentSessions.js";
+import {
+  claimNextConversationQueueEntry,
+  listRunnableConversationQueueSessions,
+  mutateConversationQueueEntry,
+} from "./conversationQueue.js";
+import { admitConversationQueueEntry as admitQueueInTransaction, mutateConversationQueueEntry as mutateQueueInTransaction } from "./conversationQueueAdmission.js";
+import { ApiError } from "../lib/apiError.js";
+import type { AuthContext } from "./auth.js";
+
+/**
+ * Synthetic HTTP + PostgreSQL proof for incremental Session synchronization.
+ * All resources serialize (single pool, single worker). Nothing here reaches a
+ * real account, a model, or evaluation material.
+ */
+const database = process.env.AGENT_SESSION_TEST_DATABASE_URL;
+const pool = database ? new Pool({ connectionString: database, max: 4 }) : null;
+const auth: AuthContext = {
+  accountId: randomUUID(),
+  accountSlug: `session-delta-${randomUUID()}`,
+  userId: randomUUID(),
+  userEmail: "session-delta@example.test",
+  userKind: "simulated_human",
+  sessionId: randomUUID(),
+};
+const past = () => new Date(Date.now() - 3_600_000).toISOString();
+const FRAME_GUARD = 250 * 1024;
+
+let app: FastifyInstance;
+
+function block(body: string) {
+  return {
+    id: randomUUID(),
+    kind: "answer",
+    title: "Answer",
+    body,
+    status: "informational",
+    citation_dependency_ids: [],
+    requires_user_decision: false as const,
+    allows_static_share: true,
+  };
+}
+
+type SessionTurn = AgentSessionPayload["turns"][number];
+
+function turn(objective: string, bodyBytes: number, taskID: string = randomUUID()): SessionTurn {
+  return {
+    id: randomUUID(),
+    objective,
+    createdAt: past(),
+    response: {
+      contractVersion: CONTRACT_VERSION,
+      taskID,
+      contextManifestID: "none-unbound-conversation",
+      knowledgeSnapshotID: "none-unbound-conversation",
+      disposition: "answered",
+      createdAt: past(),
+      savedBlocks: [block("x".repeat(bodyBytes))],
+    },
+  };
+}
+
+function skeleton(id: string = randomUUID()): AgentSessionPayload {
+  return {
+    id,
+    scopeKind: "unresolved_intent",
+    personDisplayLabel: "New session",
+    contextDisplayLabel: "Conversation",
+    title: "Synthetic delta conversation",
+    turns: [],
+    updatedAt: past(),
+    isUnread: false,
+  };
+}
+
+function withTurns(
+  base: AgentSessionPayload,
+  turns: number,
+  bodyBytes = 2048,
+): AgentSessionPayload {
+  const value = structuredClone(base);
+  for (let index = 0; index < turns; index += 1) {
+    value.turns.push(turn(`message ${index}`, bodyBytes));
+  }
+  return value;
+}
+
+type TransferRun = {
+  id: string;
+  desired: AgentSessionPayload;
+  responses: AgentSessionDeltaResponse[];
+  frameBodies: number[];
+};
+
+async function sendFrame(id: string, body: AgentSessionDeltaFrameRequest) {
+  return app.inject({
+    method: "PATCH",
+    url: `/v1/agent-sessions/${id}/delta`,
+    payload: body,
+  });
+}
+
+async function runTransfer(
+  id: string,
+  base: AgentSessionPayload,
+  desired: AgentSessionPayload,
+  options: { withSkeleton?: boolean; canonicalOriginTurns?: readonly unknown[] } = {},
+): Promise<TransferRun> {
+  const plan = planAgentSessionDeltaFrames(base, desired, {
+    transferId: randomUUID(),
+    maxOperationsPerFrame: 64,
+    maxFrameBytes: 160 * 1024,
+    ...(options.canonicalOriginTurns ? { canonicalOriginTurns: options.canonicalOriginTurns } : {}),
+  });
+  const current = await getAgentSession(pool!, auth, id).catch(() => null);
+  let revision = current?.revision ?? 0;
+  const responses: AgentSessionDeltaResponse[] = [];
+  const frameBodies: number[] = [];
+  for (const [index, operations] of plan.frames.entries()) {
+    const body: AgentSessionDeltaFrameRequest = {
+      transfer_id: plan.transfer_id,
+      expected_revision: revision,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(operations) as never,
+      final: index === plan.frames.length - 1,
+      ...(index === 0 && options.withSkeleton
+        ? { skeleton: structuredClone(base) as never }
+        : {}),
+    };
+    const request = await sendFrame(id, body);
+    frameBodies.push(Buffer.byteLength(JSON.stringify(body), "utf8"));
+    expect(request.statusCode, request.body).toBe(200);
+    const parsed = request.json() as AgentSessionDeltaResponse;
+    responses.push(parsed);
+    revision = parsed.session.revision;
+  }
+  return { id, desired, responses, frameBodies };
+}
+
+beforeAll(async () => {
+  if (!pool) return;
+  await pool.query(
+    "INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic Session delta proof')",
+    [auth.accountId, auth.accountSlug],
+  );
+  await pool.query(
+    "INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic user','simulated_human')",
+    [auth.userId, auth.accountId, auth.userEmail],
+  );
+  app = Fastify();
+  await app.register(rateLimit, { global: false });
+  app.decorateRequest("auth", null as unknown as AuthContext);
+  registerAgentSessionRoutes(app, pool, async (req) => {
+    req.auth = auth;
+  });
+  app.setErrorHandler((error, _req, reply) => {
+    const e = error as ApiError;
+    reply.code(e.statusCode ?? 500).send({
+      error: {
+        code: e.code ?? "INVALID",
+        message: e.message,
+        request_id: "fixture",
+      },
+    });
+  });
+  await app.ready();
+});
+
+afterAll(async () => {
+  await app?.close();
+  await pool?.end();
+});
+
+describe.skipIf(!pool)("incremental Session synchronization", () => {
+  it("synchronizes a first offline history far beyond the 250KiB request guard", async () => {
+    const id = randomUUID();
+    const base = skeleton(id);
+    const desired = withTurns(base, 150, 2400);
+    const desiredBytes = JSON.stringify(desired).length;
+    expect(desiredBytes).toBeGreaterThan(250 * 1024);
+
+    const run = await runTransfer(id, base, desired, { withSkeleton: true });
+    expect(run.frameBodies.length).toBeGreaterThan(1);
+    for (const size of run.frameBodies) expect(size).toBeLessThanOrEqual(FRAME_GUARD);
+    for (const response of run.responses.slice(0, -1)) {
+      expect(response.session.sync?.state).toBe("incomplete");
+      expect(response.transfer.complete).toBe(false);
+    }
+    const final = run.responses.at(-1)!;
+    expect(final.transfer.complete).toBe(true);
+    expect(final.session.sync?.state).toBe("complete");
+    expect(final.session.payload!.turns).toHaveLength(150);
+    expect(JSON.stringify(final.session.payload).length).toBeGreaterThan(250 * 1024);
+    expect(agentSessionIntentDigest(final.session.payload)).toBe(
+      agentSessionIntentDigest(desired),
+    );
+  }, 120_000);
+
+  it("keeps synchronizing an existing long history and local/remote forks without a cumulative cap", async () => {
+    const id = randomUUID();
+    const firstBase = skeleton(id);
+    const first = withTurns(firstBase, 220, 1400);
+    await runTransfer(id, firstBase, first, { withSkeleton: true });
+
+    // Existing long history: a further incremental delta on top of >250KiB.
+    const extended = structuredClone(first);
+    for (let index = 0; index < 20; index += 1) {
+      extended.turns.push(turn(`follow-up ${index}`, 3000));
+    }
+    const grow = await runTransfer(id, first, extended);
+    expect(grow.responses.at(-1)!.transfer.complete).toBe(true);
+    expect(grow.responses.at(-1)!.session.payload!.turns).toHaveLength(240);
+
+    // Local fork: new message identities, read-only provenance preserved and
+    // explicit origin association; never identical IDs.
+    const localForkID = randomUUID();
+    // The fork skeleton carries its explicit origin association; message
+    // identities differ from the source and stay read-only provenance.
+    const localForkBase = skeleton(localForkID);
+    localForkBase.originKind = "local";
+    localForkBase.originSessionID = id;
+    localForkBase.originTurnID = first.turns[0]!.id;
+    localForkBase.title = "Local fork";
+    const localFork = structuredClone(localForkBase);
+    for (const source of first.turns.slice(0, 170)) {
+      localFork.turns.push({
+        ...structuredClone(source),
+        id: randomUUID(),
+        createdAt: past(),
+      });
+    }
+    expect(JSON.stringify(localFork).length).toBeGreaterThan(250 * 1024);
+    const local = await runTransfer(localForkID, localForkBase, localFork, {
+      withSkeleton: true,
+    });
+    expect(local.responses.at(-1)!.transfer.complete).toBe(true);
+    const localRecord = local.responses.at(-1)!.session;
+    expect(localRecord.payload!.originSessionID?.toLowerCase()).toBe(
+      id.toLowerCase(),
+    );
+    expect(
+      localRecord.payload!.turns.every(
+        (candidate) => !first.turns.some((source) => source.id === candidate.id),
+      ),
+    ).toBe(true);
+
+    // Remote fork: the origin lives only remotely; the fork preserves the
+    // referenced origin identity and still synchronizes as its own history.
+    const remoteForkID = randomUUID();
+    const remoteForkBase = skeleton(remoteForkID);
+    remoteForkBase.originKind = "local";
+    remoteForkBase.originSessionID = randomUUID();
+    remoteForkBase.originTurnID = randomUUID();
+    remoteForkBase.title = "Remote fork";
+    const remoteFork = structuredClone(remoteForkBase);
+    for (let index = 0; index < 120; index += 1) {
+      remoteFork.turns.push(turn(`fork message ${index}`, 2400));
+    }
+    const remote = await runTransfer(remoteForkID, remoteForkBase, remoteFork, {
+      withSkeleton: true,
+    });
+    expect(remote.responses.at(-1)!.transfer.complete).toBe(true);
+    expect(remote.responses.at(-1)!.session.payload!.turns).toHaveLength(120);
+    // The long fork histories stay individually synchronized after the first
+    // long create; none of these writes hit any cumulative length or count cap.
+    expect(grow.responses.at(-1)!.session.sync?.state).toBe("complete");
+    expect(remote.responses.at(-1)!.session.sync?.state).toBe("complete");
+  }, 240_000);
+
+  it("imports an owned canonical origin receipt in later frames without permitting receipt forgery", async () => {
+    const source = withTurns(skeleton(), 8, 40_000);
+    await mutateAgentSession(pool!, auth, source.id, {
+      expected_revision: 0, idempotency_key: randomUUID(), payload: source,
+    });
+    const messageID = randomUUID();
+    await admitQueueInTransaction(pool!, auth, {
+      idempotency_key: randomUUID(), session_id: source.id, message_id: messageID,
+      objective: "Synthetic execution receipt",
+    });
+    const fence = await claimNextConversationQueueEntry(pool!, {
+      accountId: auth.accountId, sessionId: source.id, workerId: "canonical-origin-proof",
+    });
+    expect(fence).not.toBeNull();
+    const live = await getAgentSession(pool!, auth, source.id);
+    const completed = structuredClone(live.payload!);
+    const executed = turn("Synthetic execution receipt", 1000);
+    executed.id = messageID;
+    executed.response.execution = { started_at: past(), completed_at: past(),
+      tools: [{ name: "synthetic_read", completed_at: past() }] };
+    completed.turns.push(executed);
+    const saved = await mutateAgentSession(pool!, auth, source.id, {
+      expected_revision: live.revision, idempotency_key: randomUUID(), payload: completed,
+    }, false, { fence: fence!, messageId: messageID, allowCancelRequested: false });
+    const origin = saved.payload!;
+    const base = skeleton();
+    base.originSessionID = source.id;
+    base.originTurnID = executed.id;
+    const desired = { ...structuredClone(base), turns: structuredClone(origin.turns) };
+    const result = await runTransfer(base.id, base, desired, {
+      withSkeleton: true, canonicalOriginTurns: origin.turns,
+    });
+    expect(result.responses.length).toBeGreaterThan(1);
+    expect(result.responses[0]!.session.payload!.turns.length).toBeLessThan(origin.turns.length);
+    expect(result.responses.at(-1)!.session.payload!.turns.at(-1)!.response.execution)
+      .toEqual(executed.response.execution);
+    expect(result.responses.at(-1)!.transfer.complete).toBe(true);
+
+    // A real different-user origin in the same account remains inaccessible.
+    const foreignAuth = { ...auth, userId: randomUUID(), userEmail: "foreign-origin@example.test" };
+    await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Foreign synthetic user','simulated_human')",
+      [foreignAuth.userId, auth.accountId, foreignAuth.userEmail]);
+    const foreignSource = withTurns(skeleton(), 1, 1000);
+    await mutateAgentSession(pool!, foreignAuth, foreignSource.id, {
+      expected_revision: 0, idempotency_key: randomUUID(), payload: foreignSource,
+    });
+    // Knowing an owned receipt cannot authorize changing its answer or tools.
+    for (const mutation of ["receipt", "answer", "outside-prefix", "foreign-origin", "malformed-origin"] as const) {
+      const attackBase = skeleton();
+      attackBase.originSessionID = mutation === "foreign-origin" ? foreignSource.id : source.id;
+      attackBase.originTurnID = mutation === "foreign-origin" ? foreignSource.turns[0]!.id
+        : mutation === "outside-prefix" ? origin.turns[0]!.id : executed.id;
+      const attackTarget = { ...structuredClone(attackBase), turns: structuredClone(origin.turns) };
+      const attackPlan = planAgentSessionDeltaFrames(attackBase, attackTarget, {
+        transferId: randomUUID(), maxFrameBytes: 160 * 1024, canonicalOriginTurns: origin.turns,
+      });
+      let revision = 0, rejected = false;
+      for (const [index, operations] of attackPlan.frames.entries()) {
+        const altered = structuredClone(operations);
+        for (const operation of altered) {
+          if (operation.op !== "add" || operation.path !== "/turns/8") continue;
+          const stolen = operation.value as SessionTurn;
+          if (mutation === "receipt") stolen.response.execution!.tools[0]!.name = "forged_tool";
+          if (mutation === "answer") stolen.response.savedBlocks![0]!.body = "forged answer";
+          if (mutation === "malformed-origin") stolen.steeredMessages = {} as never;
+        }
+        const response = await sendFrame(attackBase.id, {
+          transfer_id: attackPlan.transfer_id, expected_revision: revision, idempotency_key: randomUUID(),
+          target_payload_digest: attackPlan.target_payload_digest, final: false,
+          ...(index === 0 ? { skeleton: attackBase } : {}), operations: altered,
+        });
+        if (response.statusCode >= 400) {
+          expect(response.statusCode).toBeLessThan(500);
+          if (mutation === "malformed-origin") expect(response.statusCode).toBe(400);
+          rejected = true; break;
+        }
+        revision = (response.json() as AgentSessionDeltaResponse).session.revision;
+      }
+      expect(rejected).toBe(true);
+      const retained = await getAgentSession(pool!, auth, attackBase.id).catch(() => null);
+      expect(retained?.payload?.turns.some((turn) => turn.response.execution)).not.toBe(true);
+      expect(retained?.sync?.state).not.toBe("complete");
+    }
+  }, 60_000);
+
+  it("rejects an expired original turn arriving after a recent metadata-only prefix", async () => {
+    const id = randomUUID(), base = skeleton(id), desired = structuredClone(base);
+    const old = turn("Expired original history", 2000);
+    old.createdAt = new Date(Date.now() - 31 * 86400000).toISOString();
+    desired.turns.push(old);
+    const transfer = randomUUID(), digest = agentSessionIntentDigest(desired);
+    const first = await sendFrame(id, { transfer_id: transfer, expected_revision: 0,
+      idempotency_key: randomUUID(), target_payload_digest: digest,
+      operations: [], final: false, skeleton: base });
+    expect(first.statusCode, first.body).toBe(200);
+    const second = await sendFrame(id, { transfer_id: transfer,
+      expected_revision: first.json().session.revision, idempotency_key: randomUUID(),
+      target_payload_digest: digest, operations: [{ op: "add", path: "/turns/0", value: old }], final: true });
+    expect(second.statusCode, second.body).toBe(410);
+    expect(second.json().error.code).toBe("AGENT_SESSION_EXPIRED");
+    const stored = await getAgentSession(pool!, auth, id);
+    expect(stored.payload!.turns).toHaveLength(0);
+    expect(stored.sync?.state).toBe("incomplete");
+  });
+
+  it("only shortens the original lifetime when later frames reveal older lawful turns", async () => {
+    const id = randomUUID(), base = skeleton(id), desired = structuredClone(base);
+    const older = turn("Original twenty-day-old source", 2000);
+    older.createdAt = new Date(Date.now() - 20 * 86400000).toISOString();
+    desired.turns.push(older);
+    const transfer = randomUUID(), digest = agentSessionIntentDigest(desired);
+    const first = await sendFrame(id, { transfer_id: transfer, expected_revision: 0,
+      idempotency_key: randomUUID(), target_payload_digest: digest,
+      operations: [], final: false, skeleton: base });
+    expect(first.statusCode, first.body).toBe(200);
+    const second = await sendFrame(id, { transfer_id: transfer,
+      expected_revision: first.json().session.revision, idempotency_key: randomUUID(),
+      target_payload_digest: digest, operations: [{ op: "add", path: "/turns/0", value: older }], final: true });
+    expect(second.statusCode, second.body).toBe(200);
+    expect(Date.parse(second.json().session.expires_at)).toBe(Date.parse(older.createdAt) + 30 * 86400000);
+    expect(Date.parse(second.json().session.expires_at)).toBeLessThan(Date.parse(first.json().session.expires_at));
+    const later = structuredClone(desired); later.turns.push(turn("Recent follow-up", 1000));
+    const next = await runTransfer(id, desired, later);
+    expect(next.responses.at(-1)!.session.expires_at).toBe(second.json().session.expires_at);
+  });
+
+  it("registers replay metadata in real Lab create, stop and verified-empty cleanup", async () => {
+    await pool!.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'Synthetic',now()+interval '1 hour')",
+      [auth.sessionId, auth.accountId, auth.userId, randomUUID()]);
+    const workspaceID = randomUUID();
+    const service = new LabWorkspaceService(pool!, new LocalChatMediaStorage(`/app/lab-session-delta-${workspaceID}`), 3600);
+    expect(await service.tables()).toContain("agent_session_delta_frames");
+    const created = await service.create(auth, { id: workspaceID, duration_hours: 1 });
+    expect(created).toMatchObject({ state: "active", data_rows: 0, cleanup_error: null });
+    const target: AuthContext = { ...auth, accountId: created.account_id, userId: created.user_id, userKind: "lab_human" };
+    const id = randomUUID(), base = skeleton(id);
+    const request: AgentSessionDeltaFrameRequest = { transfer_id: randomUUID(), expected_revision: 0,
+      idempotency_key: randomUUID(), target_payload_digest: agentSessionIntentDigest(base),
+      operations: [], final: true, skeleton: base };
+    await mutateAgentSessionDelta(pool!, target, id, request);
+    expect((await pool!.query("SELECT 1 FROM agent_session_delta_frames WHERE account_id=$1", [target.accountId])).rowCount).toBe(1);
+    const stopped = await service.stop(auth, workspaceID, randomUUID());
+    expect(stopped).toMatchObject({ state: "deleted", data_rows: 0, cleanup_error: null, active_sessions: 0 });
+    expect((await pool!.query("SELECT 1 FROM agent_session_delta_frames WHERE account_id=$1", [target.accountId])).rowCount).toBe(0);
+    expect((await service.stop(auth, workspaceID, randomUUID())).state).toBe("deleted");
+  });
+
+  it.each(["deleted", "expired"] as const)("denies the next frame and replay when the acknowledged origin becomes %s", async state => {
+    const originID = randomUUID(), originBase = skeleton(originID), origin = withTurns(originBase, 1);
+    await runTransfer(originID, originBase, origin, { withSkeleton: true });
+    const id = randomUUID(), base = skeleton(id);
+    base.originKind = "local"; base.originSessionID = originID; base.originTurnID = origin.turns[0]!.id;
+    const desired = structuredClone(base); desired.turns.push(turn("Read-only inherited source", 2000));
+    const transfer = randomUUID(), digest = agentSessionIntentDigest(desired);
+    const prefix: AgentSessionDeltaFrameRequest = { transfer_id: transfer, expected_revision: 0,
+      idempotency_key: randomUUID(), target_payload_digest: digest, operations: [], final: false, skeleton: base };
+    const first = await sendFrame(id, prefix); expect(first.statusCode, first.body).toBe(200);
+    if (state === "deleted") {
+      await mutateAgentSession(pool!, auth, originID, { expected_revision: 1, idempotency_key: randomUUID() }, true);
+    } else {
+      await pool!.query("UPDATE agent_sessions SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2", [auth.accountId, originID]);
+    }
+    const next = await sendFrame(id, { transfer_id: transfer, expected_revision: first.json().session.revision,
+      idempotency_key: randomUUID(), target_payload_digest: digest,
+      operations: [{ op: "add", path: "/turns/0", value: desired.turns[0]! }], final: true });
+    expect(next.statusCode).toBeGreaterThanOrEqual(400);
+    expect(next.statusCode).toBeLessThan(500);
+    const replay = await sendFrame(id, prefix);
+    expect(replay.statusCode).toBeGreaterThanOrEqual(400);
+    expect(replay.statusCode).toBeLessThan(500);
+    expect((await getAgentSession(pool!, auth, id)).payload!.turns).toHaveLength(0);
+  });
+
+  it("fences real admission and same-state continue inside their own locked transaction", async () => {
+    const id = randomUUID(), base = skeleton(id);
+    const first = await sendFrame(id, { transfer_id: randomUUID(), expected_revision: 0,
+      idempotency_key: randomUUID(), target_payload_digest: agentSessionIntentDigest(base),
+      operations: [], final: false, skeleton: base });
+    expect(first.statusCode, first.body).toBe(200);
+    await expect(admitQueueInTransaction(pool!, auth, { session_id: id, message_id: randomUUID(),
+      idempotency_key: randomUUID(), objective: "No partial history execution", time_zone: "UTC" }))
+      .rejects.toMatchObject({ statusCode: 409, code: "CONVERSATION_QUEUE_SYNC_INCOMPLETE" });
+    await expect(mutateQueueInTransaction(pool!, auth, id, { kind: "continue",
+      expected_revision: 0, idempotency_key: randomUUID() }))
+      .rejects.toMatchObject({ statusCode: 409, code: "CONVERSATION_QUEUE_SYNC_INCOMPLETE" });
+    expect((await pool!.query("SELECT 1 FROM conversation_queue_entries WHERE account_id=$1 AND session_id=$2", [auth.accountId, id])).rowCount).toBe(0);
+  });
+
+  it("replays a lost response exactly and reconciles by message identity after a restart", async () => {
+    const id = randomUUID();
+    const base = skeleton(id);
+    const desired = withTurns(base, 40, 3000);
+    const plan = planAgentSessionDeltaFrames(base, desired, {
+      transferId: randomUUID(),
+      maxOperationsPerFrame: 10,
+      maxFrameBytes: 160 * 1024,
+    });
+    expect(plan.frames.length).toBeGreaterThan(2);
+
+    const firstBody: AgentSessionDeltaFrameRequest = {
+      transfer_id: plan.transfer_id,
+      expected_revision: 0,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames[0]!) as never,
+      final: false,
+      skeleton: structuredClone(base) as never,
+    };
+    const first = await sendFrame(id, firstBody);
+    expect(first.statusCode, first.body).toBe(200);
+    const firstParsed = first.json() as AgentSessionDeltaResponse;
+    const revision = firstParsed.session.revision;
+
+    // Frame two commits, but its response is lost on the wire.
+    const secondKey = randomUUID();
+    const secondBody: AgentSessionDeltaFrameRequest = {
+      transfer_id: plan.transfer_id,
+      expected_revision: revision,
+      idempotency_key: secondKey,
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames[1]!) as never,
+      final: false,
+    };
+    const second = await sendFrame(id, secondBody);
+    expect(second.statusCode, second.body).toBe(200);
+    const secondRevision = (second.json() as AgentSessionDeltaResponse).session.revision;
+
+    // Process restart: read the current canonical record and reconcile by
+    // message identity, then send only the remaining frames.
+    const raw = await app.inject({
+      method: "GET",
+      url: `/v1/agent-sessions/${id}`,
+    });
+    const current = (raw.json() as AgentSessionResponse).session;
+    expect(current.sync?.state).toBe("incomplete");
+    const known = new Set(current.payload!.turns.map((candidate) => candidate.id));
+    const remaining = desired.turns.filter((candidate) => !known.has(candidate.id));
+    expect(remaining.length).toBeGreaterThan(0);
+    const arrived = plan.frames
+      .slice(0, 2)
+      .flat()
+      .filter((operation) => operation.path.startsWith("/turns")).length;
+    expect(current.payload!.turns).toHaveLength(arrived);
+
+    // The exact frame intent is retained: replaying the lost key returns the
+    // CURRENT record and never applies the frame twice.
+    const replay = await sendFrame(id, secondBody);
+    expect(replay.statusCode, replay.body).toBe(200);
+    const replayed = replay.json() as AgentSessionDeltaResponse;
+    expect(replayed.transfer.replayed).toBe(true);
+    expect(replayed.transfer.frame_index).toBe(2);
+    expect(replayed.session.revision).toBe(secondRevision);
+
+    let expectedRevision = secondRevision;
+    for (const [index, operations] of plan.frames.slice(2).entries()) {
+      const body: AgentSessionDeltaFrameRequest = {
+        transfer_id: plan.transfer_id,
+        expected_revision: expectedRevision,
+        idempotency_key: randomUUID(),
+        target_payload_digest: plan.target_payload_digest,
+        operations: structuredClone(operations) as never,
+        final: index === plan.frames.length - 3,
+      };
+      const response = await sendFrame(id, body);
+      expect(response.statusCode, response.body).toBe(200);
+      const parsed = response.json() as AgentSessionDeltaResponse;
+      expect(parsed.transfer.replayed).toBe(false);
+      expectedRevision = parsed.session.revision;
+    }
+    const done = await getAgentSession(pool!, auth, id);
+    expect(done.sync?.state).toBe("complete");
+    const ids = done.payload!.turns.map((candidate) => candidate.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(desired.turns.length);
+    expect(agentSessionIntentDigest(done.payload)).toBe(
+      agentSessionIntentDigest(desired),
+    );
+  }, 120_000);
+
+  it("fails safely when a source withdraws between frames and retracts after acknowledgement", async () => {
+    const taskID = randomUUID();
+    await pool!.query(
+      `INSERT INTO screenshot_contact_tasks(id,account_id,created_by_user_id,idempotency_key,request_hash,input_manifest,state,status)
+       VALUES($1::uuid,$2,$3,$1::text,$4,'{}','{}','completed')`,
+      [taskID, auth.accountId, auth.userId, "b".repeat(64)],
+    );
+    const id = randomUUID();
+    const base = skeleton(id);
+    const desired = withTurns(base, 6, 2000);
+    desired.screenshotTaskIDs = [taskID];
+    const screenshotTurn = turn("screenshot question", 2000, taskID);
+    screenshotTurn.response.contextManifestID = "none-screenshot";
+    screenshotTurn.response.knowledgeSnapshotID = "none-screenshot";
+    screenshotTurn.response.disposition = "screenshot_processing";
+    desired.turns.unshift(screenshotTurn);
+
+    const plan = planAgentSessionDeltaFrames(base, desired, {
+      transferId: randomUUID(),
+      maxOperationsPerFrame: 1,
+      maxFrameBytes: 160 * 1024,
+    });
+    // The retained screenshot reference arrives before its turn so every
+    // intermediate frame is canonical and fully valid.
+    const firstBody: AgentSessionDeltaFrameRequest = {
+      transfer_id: plan.transfer_id,
+      expected_revision: 0,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames[0]!) as never,
+      final: false,
+      skeleton: structuredClone(base) as never,
+    };
+    const first = await sendFrame(id, firstBody);
+    expect(first.statusCode, first.body).toBe(200);
+    const firstParsed = first.json() as AgentSessionDeltaResponse;
+    const secondBody: AgentSessionDeltaFrameRequest = {
+      transfer_id: plan.transfer_id,
+      expected_revision: firstParsed.session.revision,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames[1]!) as never,
+      final: false,
+    };
+    const second = await sendFrame(id, secondBody);
+    expect(second.statusCode, second.body).toBe(200);
+    const secondParsed = second.json() as AgentSessionDeltaResponse;
+    expect(secondParsed.session.payload!.turns[0]!.response.savedBlocks).toBeTruthy();
+
+    // The source withdraws between frames. The acknowledged prefix keeps its
+    // canonical row, but the derived display text is retracted and the final
+    // declared intent can never be certified from retracted content.
+    await pool!.query(
+      "UPDATE screenshot_contact_tasks SET status='deleted' WHERE account_id=$1 AND id=$2",
+      [auth.accountId, taskID],
+    );
+    // Reconcile against the current canonical record first: the retention
+    // sweep retracts the withdrawn source and records its own revision, and a
+    // client always continues from the reconciled revision.
+    const partial = (await getAgentSession(pool!, auth, id));
+    expect(partial.payload!.turns[0]!.response.savedBlocks ?? []).toHaveLength(0);
+    const finalBody: AgentSessionDeltaFrameRequest = {
+      transfer_id: plan.transfer_id,
+      expected_revision: partial.revision,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames.slice(2).flat()) as never,
+      final: true,
+    };
+    const failed = await sendFrame(id, finalBody);
+    expect(failed.statusCode, failed.body).toBe(409);
+    expect(failed.json().error.code).toBe("AGENT_SESSION_DELTA_DIGEST_MISMATCH");
+    expect(partial.sync?.state).toBe("incomplete");
+
+    // After acknowledgement (a completed small transfer) a later withdrawal
+    // retracts derived text but never resurrects or removes the record.
+    await pool!.query(
+      "UPDATE screenshot_contact_tasks SET status='completed' WHERE account_id=$1 AND id=$2",
+      [auth.accountId, taskID],
+    );
+    const ackID = randomUUID();
+    const ackBase = skeleton(ackID);
+    const ackDesired = structuredClone(ackBase);
+    const ackTurn = turn("acknowledged screenshot", 800, taskID);
+    ackTurn.response.contextManifestID = "none-screenshot";
+    ackTurn.response.knowledgeSnapshotID = "none-screenshot";
+    ackTurn.response.disposition = "screenshot_processing";
+    ackDesired.turns.push(ackTurn);
+    ackDesired.screenshotTaskIDs = [taskID];
+    const ack = await runTransfer(ackID, ackBase, ackDesired, {
+      withSkeleton: true,
+    });
+    expect(ack.responses.at(-1)!.transfer.complete).toBe(true);
+    await pool!.query(
+      "UPDATE screenshot_contact_tasks SET status='deleted' WHERE account_id=$1 AND id=$2",
+      [auth.accountId, taskID],
+    );
+    const after = await getAgentSession(pool!, auth, ackID);
+    expect(after.payload).not.toBeNull();
+    expect(after.payload!.turns[0]!.response.savedBlocks ?? []).toHaveLength(0);
+    expect(after.sync?.state).toBe("complete");
+  }, 120_000);
+
+  it("rejects concurrent device writes and immutable-transfer violations safely", async () => {
+    const id = randomUUID();
+    const base = skeleton(id);
+    const desired = withTurns(base, 3, 1500);
+    const plan = planAgentSessionDeltaFrames(base, desired, {
+      transferId: randomUUID(),
+      maxOperationsPerFrame: 1,
+      maxFrameBytes: 160 * 1024,
+    });
+    const body: AgentSessionDeltaFrameRequest = {
+      transfer_id: plan.transfer_id,
+      expected_revision: 0,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames[0]!) as never,
+      final: false,
+      skeleton: structuredClone(base) as never,
+    };
+    const started = await sendFrame(id, body);
+    expect(started.statusCode, started.body).toBe(200);
+    const revision = (started.json() as AgentSessionDeltaResponse).session.revision;
+
+    // Another device with the stale revision never overwrites.
+    const stale = await sendFrame(id, {
+      ...body,
+      idempotency_key: randomUUID(),
+      operations: structuredClone(plan.frames[1]!) as never,
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().error.code).toBe("AGENT_SESSION_REVISION_CONFLICT");
+
+    // The active transfer identity and its target digest are immutable.
+    const foreign = await sendFrame(id, {
+      ...body,
+      expected_revision: revision,
+      transfer_id: randomUUID(),
+      idempotency_key: randomUUID(),
+      operations: structuredClone(plan.frames[1]!) as never,
+    });
+    expect(foreign.statusCode).toBe(409);
+    expect(foreign.json().error.code).toBe("AGENT_SESSION_DELTA_TRANSFER_MISMATCH");
+    const retargeted = await sendFrame(id, {
+      ...body,
+      expected_revision: revision,
+      target_payload_digest: "c".repeat(64),
+      idempotency_key: randomUUID(),
+      operations: structuredClone(plan.frames[1]!) as never,
+    });
+    expect(retargeted.statusCode).toBe(409);
+    expect(retargeted.json().error.code).toBe("AGENT_SESSION_DELTA_TRANSFER_MISMATCH");
+
+    // No early completion: a final frame that only carries a prefix never
+    // certifies the declared intent.
+    const early = await sendFrame(id, {
+      ...body,
+      expected_revision: revision,
+      idempotency_key: randomUUID(),
+      operations: structuredClone(plan.frames[1]!) as never,
+      final: true,
+    });
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error.code).toBe("AGENT_SESSION_DELTA_DIGEST_MISMATCH");
+    const record = await getAgentSession(pool!, auth, id);
+    expect(record.sync?.state).toBe("incomplete");
+    expect(record.payload!.turns).toHaveLength(1);
+  }, 60_000);
+
+  it("keeps an explicitly abandoned transfer visibly incomplete and allows a rebase", async () => {
+    const id = randomUUID();
+    const base = skeleton(id);
+    const desired = withTurns(base, 3, 1500);
+    const plan = planAgentSessionDeltaFrames(base, desired, {
+      transferId: randomUUID(),
+      maxOperationsPerFrame: 1,
+      maxFrameBytes: 160 * 1024,
+    });
+    const body: AgentSessionDeltaFrameRequest = {
+      transfer_id: plan.transfer_id,
+      expected_revision: 0,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames[0]!) as never,
+      final: false,
+      skeleton: structuredClone(base) as never,
+    };
+    const started = await sendFrame(id, body);
+    expect(started.statusCode, started.body).toBe(200);
+    const revision = (started.json() as AgentSessionDeltaResponse).session.revision;
+
+    const abandoned = await app.inject({
+      method: "POST",
+      url: `/v1/agent-sessions/${id}/delta/abandon`,
+      payload: {
+        transfer_id: plan.transfer_id,
+        expected_revision: revision,
+        idempotency_key: randomUUID(),
+        reason: "rebase",
+      },
+    });
+    expect(abandoned.statusCode, abandoned.body).toBe(200);
+    const abandonedRecord = (abandoned.json() as AgentSessionDeltaResponse).session;
+    // Abandoning never certifies the acknowledged prefix complete.
+    expect(abandonedRecord.sync?.state).toBe("incomplete");
+    expect(abandonedRecord.sync?.transfer_id).toBeNull();
+    expect(abandonedRecord.payload!.turns).toHaveLength(1);
+
+    // A stale frame from the abandoned transfer cannot continue it silently.
+    const staleFrame = await sendFrame(id, {
+      ...body,
+      expected_revision: revision,
+      idempotency_key: randomUUID(),
+      operations: structuredClone(plan.frames[1]!) as never,
+    });
+    expect(staleFrame.statusCode).toBe(409);
+
+    // Rebase: a new transfer with a fresh declared target can finish the job.
+    const rebound = planAgentSessionDeltaFrames(
+      abandonedRecord.payload,
+      desired,
+      { transferId: randomUUID(), maxOperationsPerFrame: 8 },
+    );
+    let expectedRevision = abandonedRecord.revision;
+    for (const [index, operations] of rebound.frames.entries()) {
+      const response = await sendFrame(id, {
+        transfer_id: rebound.transfer_id,
+        expected_revision: expectedRevision,
+        idempotency_key: randomUUID(),
+        target_payload_digest: rebound.target_payload_digest,
+        operations: structuredClone(operations) as never,
+        final: index === rebound.frames.length - 1,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expectedRevision = (response.json() as AgentSessionDeltaResponse).session.revision;
+    }
+    const done = await getAgentSession(pool!, auth, id);
+    expect(done.sync?.state).toBe("complete");
+    expect(agentSessionIntentDigest(done.payload)).toBe(
+      agentSessionIntentDigest(desired),
+    );
+  }, 60_000);
+
+  it("fences claim, continue and retry while incomplete and keeps delete usable", async () => {
+    const id = randomUUID();
+    const base = skeleton(id);
+    const created = withTurns(base, 1, 1200);
+    const first = await runTransfer(id, base, created, { withSkeleton: true });
+    expect(first.responses.at(-1)!.transfer.complete).toBe(true);
+
+    // Accepted work queues while the record is complete, then pauses safely
+    // when the transfer marks it visibly incomplete.
+    await pool!.query(
+      `INSERT INTO conversation_queue_state(account_id,session_id,revision,paused,next_sequence)
+       VALUES($1,$2,1,true,2)`,
+      [auth.accountId, id],
+    );
+    const entryID = randomUUID();
+    const messageID = randomUUID();
+    await pool!.query(
+      `INSERT INTO conversation_queue_entries(account_id,session_id,id,message_id,created_by_user_id,idempotency_key,sequence,status,objective,expires_at)
+       VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$3::text,1,'queued','restored pending work',now()+interval '30 days')`,
+      [auth.accountId, id, entryID, messageID, auth.userId],
+    );
+
+    const desired = structuredClone(created);
+    desired.turns.push(turn("second", 1200));
+    const plan = planAgentSessionDeltaFrames(created, desired, {
+      transferId: randomUUID(),
+      maxOperationsPerFrame: 1,
+    });
+    const started = await sendFrame(id, {
+      transfer_id: plan.transfer_id,
+      expected_revision: first.responses.at(-1)!.session.revision,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames[0]!) as never,
+      final: false,
+    });
+    expect(started.statusCode, started.body).toBe(200);
+
+    expect(
+      await claimNextConversationQueueEntry(pool!, {
+        accountId: auth.accountId,
+        sessionId: id,
+        workerId: "synthetic-worker",
+      }),
+    ).toBeNull();
+    expect(
+      (await listRunnableConversationQueueSessions(pool!)).some(
+        (candidate) => candidate.sessionId === id,
+      ),
+    ).toBe(false);
+    for (const kind of ["continue", "retry", "prioritize"] as const) {
+      const failure = await mutateConversationQueueEntry(pool!, auth, id, {
+        kind,
+        queue_entry_id: entryID,
+        idempotency_key: randomUUID(),
+        expected_revision: 0,
+      } as never).catch((error: unknown) => error as ApiError);
+      expect(failure).toBeInstanceOf(ApiError);
+      expect((failure as ApiError).code).toBe("CONVERSATION_QUEUE_SYNC_INCOMPLETE");
+    }
+
+    // The write-transaction fence is authoritative: even a direct row write
+    // that bypasses the client mutators cannot admit or re-queue work for an
+    // incomplete Session (no check-then-act window remains).
+    await expect(
+      pool!.query(
+        `INSERT INTO conversation_queue_entries(account_id,session_id,id,message_id,created_by_user_id,idempotency_key,sequence,status,objective,expires_at)
+         VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$3::text,2,'queued','bypass attempt',now()+interval '30 days')`,
+        [auth.accountId, id, randomUUID(), randomUUID(), auth.userId],
+      ),
+    ).rejects.toThrow(/SYNC_INCOMPLETE/);
+    // A retry-shaped re-queue (failed -> queued) is refused at the row write
+    // even when it bypasses the client mutators entirely.
+    await pool!.query(
+      `UPDATE conversation_queue_entries SET status='failed', failure_code='synthetic', lease_owner=NULL, revision=revision+1
+       WHERE account_id=$1 AND id=$2`,
+      [auth.accountId, entryID],
+    );
+    await expect(
+      pool!.query(
+        `UPDATE conversation_queue_entries SET status='queued', failure_code=NULL, revision=revision+1
+         WHERE account_id=$1 AND id=$2`,
+        [auth.accountId, entryID],
+      ),
+    ).rejects.toThrow(/SYNC_INCOMPLETE/);
+
+    // Withdrawal and deletion stay usable while the record is incomplete.
+    const queueStateRevision = (
+      await pool!.query<{ revision: number }>(
+        "SELECT revision FROM conversation_queue_state WHERE account_id=$1 AND session_id=$2",
+        [auth.accountId, id],
+      )
+    ).rows[0]!.revision;
+    const withdrawn = await mutateConversationQueueEntry(pool!, auth, id, {
+      kind: "withdraw",
+      queue_entry_id: entryID,
+      idempotency_key: randomUUID(),
+      expected_revision: queueStateRevision,
+    } as never);
+    expect(withdrawn.applied.kind).toBe("withdraw");
+
+    const current = await getAgentSession(pool!, auth, id);
+    expect(current.sync?.state).toBe("incomplete");
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/v1/agent-sessions/${id}`,
+      payload: { expected_revision: current.revision, idempotency_key: randomUUID() },
+    });
+    expect(deleted.statusCode, deleted.body).toBe(200);
+    expect((deleted.json() as AgentSessionResponse).session.deleted_at).not.toBeNull();
+    // A deleted Session cannot be resurrected by replaying its retained frames.
+    const replay = await sendFrame(id, {
+      transfer_id: plan.transfer_id,
+      expected_revision: 0,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames[0]!) as never,
+      final: true,
+    });
+    expect(replay.statusCode).toBe(410);
+  }, 60_000);
+
+  it("preserves legacy small PUT, DELETE and idempotent replay compatibility", async () => {
+    const value = withTurns(skeleton(), 1, 200);
+    const key = randomUUID();
+    const create = await app.inject({
+      method: "PUT",
+      url: `/v1/agent-sessions/${value.id}`,
+      payload: { expected_revision: 0, idempotency_key: key, payload: value },
+    });
+    expect(create.statusCode, create.body).toBe(200);
+    const created = (create.json() as AgentSessionResponse).session;
+    expect(created.sync?.state).toBe("complete");
+    // The same key replays the same write without a new revision.
+    const replay = await app.inject({
+      method: "PUT",
+      url: `/v1/agent-sessions/${value.id}`,
+      payload: { expected_revision: 0, idempotency_key: key, payload: value },
+    });
+    expect(replay.statusCode, replay.body).toBe(200);
+    const replayed = (replay.json() as AgentSessionResponse).session;
+    expect(replayed.revision).toBe(created.revision);
+
+    const deleteKey = randomUUID();
+    const removed = await app.inject({
+      method: "DELETE",
+      url: `/v1/agent-sessions/${value.id}`,
+      payload: { expected_revision: created.revision, idempotency_key: deleteKey },
+    });
+    expect(removed.statusCode, removed.body).toBe(200);
+    const deleteReplay = await app.inject({
+      method: "DELETE",
+      url: `/v1/agent-sessions/${value.id}`,
+      payload: { expected_revision: created.revision, idempotency_key: deleteKey },
+    });
+    expect(deleteReplay.statusCode, deleteReplay.body).toBe(200);
+    expect((deleteReplay.json() as AgentSessionResponse).session.deleted_at).not.toBeNull();
+
+    // A reused operation key that identifies different intent never replays.
+    const conflict = await app.inject({
+      method: "PUT",
+      url: `/v1/agent-sessions/${value.id}`,
+      payload: {
+        expected_revision: 0,
+        idempotency_key: key,
+        payload: withTurns(structuredClone(value), 1, 200),
+      },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().error.code).toBe("AGENT_SESSION_IDEMPOTENCY_CONFLICT");
+  }, 60_000);
+
+  it("never lets a legacy PUT clear a partial record from its prefix alone", async () => {
+    const id = randomUUID();
+    const base = skeleton(id);
+    const desired = withTurns(base, 3, 1500);
+    const plan = planAgentSessionDeltaFrames(base, desired, {
+      transferId: randomUUID(),
+      maxOperationsPerFrame: 1,
+      maxFrameBytes: 160 * 1024,
+    });
+    const started = await sendFrame(id, {
+      transfer_id: plan.transfer_id,
+      expected_revision: 0,
+      idempotency_key: randomUUID(),
+      target_payload_digest: plan.target_payload_digest,
+      operations: structuredClone(plan.frames[0]!) as never,
+      final: false,
+      skeleton: structuredClone(base) as never,
+    });
+    expect(started.statusCode, started.body).toBe(200);
+    const revision = (started.json() as AgentSessionDeltaResponse).session.revision;
+
+    // An old client writes the whole current prefix back. The write lands, but
+    // the record stays visibly incomplete.
+    const prefix = (await getAgentSession(pool!, auth, id)).payload!;
+    const prefixWrite = await app.inject({
+      method: "PUT",
+      url: `/v1/agent-sessions/${id}`,
+      payload: {
+        expected_revision: revision,
+        idempotency_key: randomUUID(),
+        payload: prefix,
+      },
+    });
+    expect(prefixWrite.statusCode, prefixWrite.body).toBe(200);
+    const afterPrefix = (prefixWrite.json() as AgentSessionResponse).session;
+    expect(afterPrefix.sync?.state).toBe("incomplete");
+    expect(afterPrefix.sync?.transfer_id).not.toBeNull();
+
+    // Only a write that reproduces the exact declared target finalizes.
+    const finalize = await app.inject({
+      method: "PUT",
+      url: `/v1/agent-sessions/${id}`,
+      payload: {
+        expected_revision: afterPrefix.revision,
+        idempotency_key: randomUUID(),
+        payload: desired,
+      },
+    });
+    expect(finalize.statusCode, finalize.body).toBe(200);
+    const finalized = (finalize.json() as AgentSessionResponse).session;
+    expect(finalized.sync?.state).toBe("complete");
+    expect(finalized.sync?.transfer_id).toBeNull();
+  }, 60_000);
+
+  it("rejects malformed frame values structurally and leaves the transaction unchanged", async () => {
+    const id = randomUUID();
+    const base = skeleton(id);
+    const created = withTurns(base, 1, 800);
+    const first = await runTransfer(id, base, created, { withSkeleton: true });
+    const revision = first.responses.at(-1)!.session.revision;
+
+    const malformed: Array<{ name: string; operation: unknown }> = [
+      { name: "title-object", operation: { op: "replace", path: "/title", value: { hostile: true } } },
+      { name: "isUnread-string", operation: { op: "replace", path: "/isUnread", value: "yes" } },
+      { name: "invalid-feedback", operation: { op: "add", path: "/turns/0/feedback", value: 7 } },
+      {
+        name: "malformed-turn-response",
+        operation: {
+          op: "add",
+          path: "/turns/1",
+          value: { ...turn("malformed", 10), response: { disposition: "answered" } },
+        },
+      },
+      {
+        name: "unknown-unsafe-field",
+        operation: {
+          op: "add",
+          path: "/turns/1",
+          value: { ...turn("unknown field", 10), payload_override: "smuggled" },
+        },
+      },
+      {
+        // Malformed structure fails as a typed 400 BEFORE identifier
+        // normalization can touch it; never a server error.
+        name: "missing-turn-response",
+        operation: {
+          op: "add",
+          path: "/turns/1",
+          value: { id: randomUUID(), objective: "no response at all", createdAt: past() },
+        },
+      },
+    ];
+    for (const { name, operation } of malformed) {
+      const response = await sendFrame(id, {
+        transfer_id: randomUUID(),
+        expected_revision: revision,
+        idempotency_key: randomUUID(),
+        target_payload_digest: "d".repeat(64),
+        operations: [operation as never],
+        final: false,
+      });
+      expect(response.statusCode, `${name}: ${response.body}`).toBe(400);
+      expect(response.json().error.code).toBe("AGENT_SESSION_INVALID");
+    }
+    // Every denial rolled its whole transaction back: same revision, same
+    // canonical payload, and no half-started transfer.
+    const after = await getAgentSession(pool!, auth, id);
+    expect(after.revision).toBe(revision);
+    expect(after.payload!.title).toBe(created.title);
+    expect(after.payload!.turns).toHaveLength(1);
+    expect(after.sync?.state).toBe("complete");
+    expect(after.sync?.transfer_id).toBeNull();
+  }, 60_000);
+
+  it("synchronizes non-ASCII and emoji history in truthful UTF-8 request frames", async () => {
+    const id = randomUUID();
+    const base = skeleton(id);
+    const desired = structuredClone(base);
+    for (let index = 0; index < 4; index += 1) {
+      desired.turns.push(turn(`段落${"\u6f22".repeat(30000)}${index}`, 10));
+    }
+    desired.title = "emoji \u{1F389}\u{1F389} 与汉字标题";
+    const run = await runTransfer(id, base, desired, { withSkeleton: true });
+    expect(run.frameBodies.length).toBeGreaterThan(1);
+    for (const size of run.frameBodies) {
+      // Exact serialized request bytes, never a character-count proxy.
+      expect(size).toBeLessThanOrEqual(FRAME_GUARD);
+    }
+    const done = await getAgentSession(pool!, auth, id);
+    expect(done.sync?.state).toBe("complete");
+    expect(agentSessionIntentDigest(done.payload)).toBe(
+      agentSessionIntentDigest(desired),
+    );
+  }, 120_000);
+
+  it("synchronizes a fork with 33 retained screenshot references across frames", async () => {
+    // More than the old twenty-reference ceiling: the retained references and
+    // their live twins arrive paired across several frames and every frame
+    // keeps the inheritance authorization invariants.
+    const tasks: string[] = [];
+    for (let index = 0; index < 33; index += 1) {
+      const task = randomUUID();
+      await pool!.query(
+        `INSERT INTO screenshot_contact_tasks(id,account_id,created_by_user_id,idempotency_key,request_hash,input_manifest,state,status)
+         VALUES($1::uuid,$2,$3,$1::text,$4,'{}','{}','completed')`,
+        [task, auth.accountId, auth.userId, String(index).padStart(64, "a")],
+      );
+      tasks.push(task);
+    }
+    const parentID = randomUUID();
+    const parentBase = skeleton(parentID);
+    const parent = withTurns(parentBase, 2, 900);
+    await runTransfer(parentID, parentBase, parent, {
+      withSkeleton: true,
+    });
+
+    const id = randomUUID();
+    const base = skeleton(id);
+    base.originKind = "local";
+    base.originSessionID = parentID;
+    base.originTurnID = parent.turns[0]!.id;
+    base.title = "Screenshot fork";
+    const desired = structuredClone(base);
+    desired.screenshotTaskIDs = [...tasks];
+    desired.inheritedScreenshotTaskIDs = [...tasks];
+    for (const [index, task] of tasks.entries()) {
+      const forked = turn(`screenshot ${index}`, 6000, task) as ReturnType<
+        typeof turn
+      > & { response: Record<string, unknown> };
+      forked.response.contextManifestID = "none-screenshot";
+      forked.response.knowledgeSnapshotID = "none-screenshot";
+      forked.response.disposition = "screenshot_processing";
+      desired.turns.push(forked);
+    }
+    for (let index = 0; index < 8; index += 1) {
+      desired.turns.push(turn(`fork message ${index}`, 8000));
+    }
+    expect(JSON.stringify(desired).length).toBeGreaterThan(250 * 1024);
+
+    const plan = planAgentSessionDeltaFrames(base, desired, {
+      transferId: randomUUID(),
+      maxOperationsPerFrame: 8,
+      skeleton: base,
+    });
+    expect(plan.frames.length).toBeGreaterThan(2);
+    let revision = 0;
+    let replayBody: AgentSessionDeltaFrameRequest | null = null;
+    let replayKeyRevision = 0;
+    for (const [index, operations] of plan.frames.entries()) {
+      const body: AgentSessionDeltaFrameRequest = {
+        transfer_id: plan.transfer_id,
+        expected_revision: revision,
+        idempotency_key: randomUUID(),
+        target_payload_digest: plan.target_payload_digest,
+        operations: structuredClone(operations) as never,
+        final: index === plan.frames.length - 1,
+        ...(index === 0 ? { skeleton: structuredClone(base) as never } : {}),
+      };
+      const response = await sendFrame(id, body);
+      expect(response.statusCode, response.body).toBe(200);
+      const parsed = response.json() as AgentSessionDeltaResponse;
+      revision = parsed.session.revision;
+      if (index === 1) {
+        replayBody = body;
+        replayKeyRevision = revision;
+      }
+      if (index < plan.frames.length - 1) {
+        expect(parsed.session.sync?.state).toBe("incomplete");
+      }
+    }
+    // Exact frame identity: a lost response replays without applying twice,
+    // and the replay always returns the CURRENT redacted canonical record.
+    const finalRevision = revision;
+    const replay = await sendFrame(id, replayBody!);
+    expect(replay.statusCode, replay.body).toBe(200);
+    const replayed = replay.json() as AgentSessionDeltaResponse;
+    expect(replayed.transfer.replayed).toBe(true);
+    expect(replayed.transfer.frame_index).toBe(2);
+    expect(replayed.session.revision).toBe(finalRevision);
+    expect(finalRevision).toBeGreaterThan(replayKeyRevision);
+
+    const done = await getAgentSession(pool!, auth, id);
+    expect(done.sync?.state).toBe("complete");
+    expect(done.payload!.screenshotTaskIDs).toHaveLength(33);
+    expect(done.payload!.inheritedScreenshotTaskIDs).toHaveLength(33);
+    expect(done.payload!.turns).toHaveLength(41);
+    expect(agentSessionIntentDigest(done.payload)).toBe(
+      agentSessionIntentDigest(desired),
+    );
+
+    // A later source withdrawal retracts derived text without losing the
+    // acknowledged history or resurrecting anything.
+    await pool!.query(
+      "UPDATE screenshot_contact_tasks SET status='deleted' WHERE account_id=$1 AND id=$2",
+      [auth.accountId, tasks[0]!],
+    );
+    const after = await getAgentSession(pool!, auth, id);
+    expect(after.payload!.turns).toHaveLength(41);
+    expect(after.payload!.turns[0]!.response.savedBlocks ?? []).toHaveLength(0);
+  }, 120_000);
+
+  it("fails an individually oversized turn explicitly while the request guard stays truthful", async () => {
+    const id = randomUUID();
+    const base = skeleton(id);
+    const oversized = withTurns(base, 1, 260 * 1024);
+    // A single turn larger than the request guard cannot be planned into any
+    // frame; when such a request is nevertheless sent, the real HTTP guard
+    // rejects it explicitly and the local history is never touched.
+    expect(() =>
+      planAgentSessionDeltaFrames(base, oversized, {
+        transferId: randomUUID(),
+        skeleton: base,
+      }),
+    ).toThrow(/does not fit a single request frame/);
+    const body: AgentSessionDeltaFrameRequest = {
+      transfer_id: randomUUID(),
+      expected_revision: 0,
+      idempotency_key: randomUUID(),
+      target_payload_digest: agentSessionIntentDigest(oversized),
+      operations: [
+        {
+          op: "add",
+          path: "/turns/0",
+          value: structuredClone(oversized.turns[0]),
+        } as never,
+      ],
+      final: true,
+      skeleton: structuredClone(base) as never,
+    };
+    expect(Buffer.byteLength(JSON.stringify(body), "utf8")).toBeGreaterThan(FRAME_GUARD);
+    const rejected = await sendFrame(id, body);
+    expect(rejected.statusCode).toBe(413);
+    // The local history is untouched on the server and the real guard is the
+    // per-frame HTTP limit, not a hidden cumulative cap.
+    const missing = await app.inject({
+      method: "GET",
+      url: `/v1/agent-sessions/${id}`,
+    });
+    expect(missing.statusCode).toBe(404);
+  }, 60_000);
+});

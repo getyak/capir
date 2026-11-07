@@ -1,0 +1,28 @@
+import XCTest
+@testable import TalentSignalMac
+
+final class AgentRunBudgetTests: XCTestCase {
+    func testUnboundedBudgetDecodesWithoutInventingLimits() throws {
+        let budget = try JSONDecoder().decode(AgentRunBudget.self, from: Data("{}".utf8))
+        XCTAssertNil(budget.maxTurns)
+        XCTAssertNil(budget.maxTaskTokens)
+        XCTAssertNil(budget.maximumEstimatedUSD)
+        XCTAssertEqual(budget.displayDescription, "No imposed run limits")
+    }
+
+    func testExistingBoundedBudgetRemainsReadable() throws {
+        let json = #"{"max_turns":6,"max_tool_calls":12,"max_duration_ms":60000,"max_task_tokens":32000,"max_estimated_usd":1}"#
+        let budget = try JSONDecoder().decode(AgentRunBudget.self, from: Data(json.utf8))
+        XCTAssertEqual(budget.maxTurns, 6)
+        XCTAssertEqual(budget.maxTaskTokens, 32000)
+        XCTAssertEqual(budget.maximumEstimatedUSD, 1)
+        XCTAssertTrue(budget.displayDescription.contains("32000 tokens"))
+    }
+
+    func testPartialBudgetDisplaysOnlyExplicitLimits() throws {
+        let budget = try JSONDecoder().decode(AgentRunBudget.self, from: Data(#"{"max_tool_calls":9}"#.utf8))
+        XCTAssertEqual(budget.displayDescription, "9 tool calls")
+        XCTAssertNil(budget.maxTurns)
+        XCTAssertNil(budget.maxTaskTokens)
+    }
+}

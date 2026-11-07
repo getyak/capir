@@ -1,0 +1,258 @@
+/**
+ * Deterministic whole-intent framing for incremental Session synchronization.
+ *
+ * A transfer declares one target digest for the complete desired Session
+ * payload. The digest is SHA-256 over a domain-separated deterministic JSON
+ * framing so TypeScript, Swift and the backend all compute the same bytes:
+ *
+ * - null and booleans carry type tags,
+ * - finite IEEE-754 float64 big-endian numbers with -0 normalized to zero,
+ * - strings frame their UTF-16 code units as big-endian uint16 values with an
+ *   explicit code-unit length; lone surrogates are rejected instead of
+ *   silently replaced,
+ * - arrays frame their length then their ordered elements,
+ * - objects frame their key count then each key/value pair with keys sorted
+ *   lexicographically by UTF-16 code units.
+ *
+ * The framing is injective over JSON values, so two payloads share a digest
+ * exactly when their framed bytes are identical. Digests are never a
+ * checksum-only authority: the server always rebuilds and fully validates the
+ * canonical record before any transfer can complete.
+ *
+ * `agentSessionDeltaFramingFixtures.ts` holds cross-language fixture vectors
+ * (ordering, unicode/emoji/combining, floating numbers, empty and nullable
+ * containers) that the Swift tests reproduce byte for byte.
+ */
+
+const DOMAIN = "talent-signal.session-intent.v1";
+
+export class SessionIntentFramingError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "SessionIntentFramingError";
+    this.code = code;
+  }
+}
+
+const TAG_NULL = 0x6e; // "n"
+const TAG_BOOL = 0x62; // "b"
+const TAG_NUMBER = 0x64; // "d"
+const TAG_STRING = 0x73; // "s"
+const TAG_ARRAY = 0x61; // "a"
+const TAG_OBJECT = 0x6f; // "o"
+
+function isLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+class FramingWriter {
+  private readonly bytes: number[] = [];
+
+  byte(value: number): void {
+    this.bytes.push(value & 0xff);
+  }
+
+  uint32(value: number): void {
+    this.bytes.push((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+  }
+
+  float64(value: number): void {
+    const buffer = new ArrayBuffer(8);
+    new DataView(buffer).setFloat64(0, value, false);
+    const view = new Uint8Array(buffer);
+    for (const item of view) this.bytes.push(item);
+  }
+
+  ascii(value: string): void {
+    for (let index = 0; index < value.length; index += 1) {
+      const unit = value.charCodeAt(index);
+      if (unit > 0x7f) {
+        throw new SessionIntentFramingError(
+          "FRAMING_DOMAIN_INVALID",
+          "The framing domain must be ASCII.",
+        );
+      }
+      this.bytes.push(unit);
+    }
+  }
+
+  utf16(value: string): void {
+    for (let index = 0; index < value.length; index += 1) {
+      const unit = value.charCodeAt(index);
+      this.bytes.push((unit >>> 8) & 0xff, unit & 0xff);
+    }
+  }
+
+  finish(): Uint8Array {
+    return Uint8Array.from(this.bytes);
+  }
+}
+
+function frameValue(writer: FramingWriter, value: unknown, depth: number): void {
+  if (depth > 64) {
+    throw new SessionIntentFramingError(
+      "FRAMING_DEPTH_EXCEEDED",
+      "The framed JSON value nests too deeply.",
+    );
+  }
+  if (value === null) {
+    writer.byte(TAG_NULL);
+    return;
+  }
+  switch (typeof value) {
+    case "boolean":
+      writer.byte(TAG_BOOL);
+      writer.byte(value ? 1 : 0);
+      return;
+    case "number": {
+      if (!Number.isFinite(value)) {
+        throw new SessionIntentFramingError(
+          "FRAMING_NUMBER_NOT_FINITE",
+          "Only finite JSON numbers can be framed.",
+        );
+      }
+      writer.byte(TAG_NUMBER);
+      // -0 and 0 must frame identically: JSON semantics treat them as equal.
+      writer.float64(Object.is(value, -0) ? 0 : value);
+      return;
+    }
+    case "string": {
+      if (isLoneSurrogate(value)) {
+        throw new SessionIntentFramingError(
+          "FRAMING_LONE_SURROGATE",
+          "A string with an unpaired surrogate cannot be framed.",
+        );
+      }
+      writer.byte(TAG_STRING);
+      writer.uint32(value.length);
+      writer.utf16(value);
+      return;
+    }
+    case "object": {
+      if (Array.isArray(value)) {
+        writer.byte(TAG_ARRAY);
+        writer.uint32(value.length);
+        for (const item of value) frameValue(writer, item, depth + 1);
+        return;
+      }
+      const entries = Object.entries(value as Record<string, unknown>).sort(
+        ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
+      );
+      writer.byte(TAG_OBJECT);
+      writer.uint32(entries.length);
+      for (const [key, item] of entries) {
+        if (isLoneSurrogate(key)) {
+          throw new SessionIntentFramingError(
+            "FRAMING_LONE_SURROGATE",
+            "An object key with an unpaired surrogate cannot be framed.",
+          );
+        }
+        frameValue(writer, key, depth + 1);
+        frameValue(writer, item, depth + 1);
+      }
+      return;
+    }
+    default:
+      throw new SessionIntentFramingError(
+        "FRAMING_VALUE_UNSUPPORTED",
+        "Only JSON values can be framed.",
+      );
+  }
+}
+
+export function frameSessionIntent(value: unknown): Uint8Array {
+  const writer = new FramingWriter();
+  writer.uint32(DOMAIN.length);
+  writer.ascii(DOMAIN);
+  frameValue(writer, value, 0);
+  return writer.finish();
+}
+
+// Minimal dependency-free SHA-256 so the framing digest is computable in any
+// JavaScript host (browser, native bridge, server) without platform crypto.
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+  0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+  0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+  0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+  0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+  0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+export function sha256Hex(input: Uint8Array): string {
+  const bitLength = input.length * 8;
+  const padded = new Uint8Array(Math.ceil((input.length + 9) / 64) * 64);
+  padded.set(input);
+  padded[input.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(padded.length - 8, Math.floor(bitLength / 0x100000000), false);
+  view.setUint32(padded.length - 4, bitLength >>> 0, false);
+
+  const state = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
+    0x1f83d9ab, 0x5be0cd19,
+  ]);
+  const words = new Uint32Array(64);
+  for (let offset = 0; offset < padded.length; offset += 64) {
+    for (let index = 0; index < 16; index += 1) {
+      words[index] = view.getUint32(offset + index * 4, false);
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const x = words[index - 15]!;
+      const y = words[index - 2]!;
+      const sigma0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+      const sigma1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+      words[index] = (words[index - 16]! + sigma0 + words[index - 7]! + sigma1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = [
+      state[0]!, state[1]!, state[2]!, state[3]!, state[4]!, state[5]!, state[6]!, state[7]!,
+    ];
+    for (let index = 0; index < 64; index += 1) {
+      const sigma1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+      const choose = (e & f) ^ (~e & g);
+      const temp1 = (h + sigma1 + choose + SHA256_K[index]! + words[index]!) >>> 0;
+      const sigma0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (sigma0 + majority) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+    state[0] = (state[0]! + a) >>> 0;
+    state[1] = (state[1]! + b) >>> 0;
+    state[2] = (state[2]! + c) >>> 0;
+    state[3] = (state[3]! + d) >>> 0;
+    state[4] = (state[4]! + e) >>> 0;
+    state[5] = (state[5]! + f) >>> 0;
+    state[6] = (state[6]! + g) >>> 0;
+    state[7] = (state[7]! + h) >>> 0;
+  }
+  let hex = "";
+  for (const word of state) hex += word.toString(16).padStart(8, "0");
+  return hex;
+}
+
+export function sessionIntentDigest(value: unknown): string {
+  return sha256Hex(frameSessionIntent(value));
+}

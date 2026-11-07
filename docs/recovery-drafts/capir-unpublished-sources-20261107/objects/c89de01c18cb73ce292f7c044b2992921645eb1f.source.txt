@@ -1,0 +1,36 @@
+import { randomUUID } from "node:crypto";
+import { expect, it } from "vitest";
+import { beginMailAttempt, consumeMailAttempt, disconnectMailGrant, mailGrantActive, openMailPayload, registerMailGrant, sealMailPayload } from "./mail-integration-vault";
+it("binds authenticated encryption to purpose and detects tampering without exposing payload", () => {
+  const key = Buffer.alloc(32, 7);
+  const sealed = sealMailPayload({ token: "synthetic-private-token" }, key, "gmail-grant");
+  expect(sealed).not.toContain("synthetic-private-token");
+  expect(openMailPayload(sealed, key, "gmail-grant")).toEqual({ token: "synthetic-private-token" });
+  expect(openMailPayload(sealed, key, "outlook-grant")).toBeNull();
+  expect(openMailPayload(sealed, Buffer.alloc(32, 8), "gmail-grant")).toBeNull();
+  expect(openMailPayload(`A${sealed.slice(1)}`, key, "gmail-grant")).toBeNull();
+  expect(() => sealMailPayload({ token: "a".repeat(3000) }, key, "grant")).toThrow();
+});
+it("consumes an attempt exactly once and refuses grants across provider/session", () => {
+  const binding = randomUUID();
+  const attempt = beginMailAttempt(binding, "gmail");
+  expect(consumeMailAttempt(binding, "outlook", attempt.state, attempt.generation)).toBe(false);
+  expect(consumeMailAttempt("other-session", "gmail", attempt.state, attempt.generation)).toBe(false);
+  expect(consumeMailAttempt(binding, "gmail", attempt.state, attempt.generation)).toBe(true);
+  expect(consumeMailAttempt(binding, "gmail", attempt.state, attempt.generation)).toBe(false);
+  const id = registerMailGrant(binding, "gmail", attempt.generation, Date.now() + 60000)!;
+  expect(mailGrantActive(binding, "gmail", id)).toBe(true);
+  expect(mailGrantActive(binding, "gmail", id, Date.now() + 60001)).toBe(false);
+  disconnectMailGrant(binding, "gmail");
+  expect(mailGrantActive(binding, "gmail", id)).toBe(false);
+});
+it("reconnect or disconnect wins over an in-flight callback", () => {
+  const binding = randomUUID();
+  const old = beginMailAttempt(binding, "gmail");
+  consumeMailAttempt(binding, "gmail", old.state, old.generation);
+  const next = beginMailAttempt(binding, "gmail");
+  expect(registerMailGrant(binding, "gmail", old.generation, Date.now() + 60000)).toBeNull();
+  expect(consumeMailAttempt(binding, "gmail", next.state, next.generation)).toBe(true);
+  disconnectMailGrant(binding, "gmail");
+  expect(registerMailGrant(binding, "gmail", next.generation, Date.now() + 60000)).toBeNull();
+});

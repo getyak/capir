@@ -1,0 +1,1572 @@
+import { randomUUID } from "node:crypto";
+
+import type { Pool, PoolClient } from "pg";
+
+import { ApiError } from "../lib/apiError.js";
+import { digestValue } from "../lib/hash.js";
+import type { AuthContext } from "./auth.js";
+import { captureCurrentReaderAuthority, parseOriginalAuthority, originalAuthorityDeadlines, recheckOriginalAuthority, assertServingAuthority, authorityBusy, type OriginalAuthority, type ServingAuthorityResolver } from "./legacyChatAuthority.js";
+
+/**
+ * Metadata-only request-owned lifecycle for the legacy Chat/Unscoped/Person
+ * create paths. Admission commits durable intent before any provider work; the
+ * execution phase holds no database client; the fenced final transaction writes
+ * the canonical result and the terminal state together.
+ *
+ * Hard boundaries:
+ *  - no raw body/image/tool/prompt/output state lives in these relations;
+ *  - no automatic model retry after restart or unknown execution;
+ *  - the failed lineage of an attempt and permanent tombstones are never reused
+ *    or cleared to permit retry;
+ *  - a new attempt may capture a new AuthSession but never renews the immutable
+ *    original content/source retention.
+ */
+
+export type LifecycleState =
+  | "admitted"
+  | "running"
+  | "cancelling"
+  | "cancelled"
+  | "completed"
+  | "revoked"
+  | "interrupted_unknown"
+  | "failed_retryable";
+
+export type LifecycleOperationScope =
+  | "create_chat_task"
+  | "create_unscoped_chat_task"
+  | "create_person_research_task";
+
+export type LifecycleDispatchState =
+  | "not_dispatched"
+  | "dispatched"
+  | "dispatch_uncertain";
+
+export interface LifecycleIdentity {
+  intentID: string;
+  taskID: string;
+  attemptID: string;
+  runID: string;
+  fencingGeneration: number;
+  revision: number;
+  state: LifecycleState;
+  dispatchState: LifecycleDispatchState;
+  /** Stored terminal usage truth when known; never inferred. */
+  usageUncertain?: boolean;
+  executionAuthorityExpiresAt: Date | null;
+  canonicalRetentionExpiresAt: Date | null;
+}
+
+export interface LifecycleReplay {
+  status: number;
+  body: unknown;
+  idempotencyRecordID: string;
+}
+
+export interface LifecycleAdmission {
+  kind: "admitted" | "retry" | "replayed" | "in_progress" | "recovery_required";
+  identity: LifecycleIdentity;
+  /** Durable processing receipt shared with the legacy idempotency store. */
+  idempotencyRecordID: string;
+  replay: LifecycleReplay | null;
+  /**
+   * Terminal reason for a blocked resolution. Blocked outcomes are returned,
+   * not thrown, so the admission transaction can commit the durable retire to
+   * unknown before the caller reports the typed 409.
+   */
+  reason?: string;
+}
+
+export interface AuthorityClocks {
+  originalAuthority?: OriginalAuthority;
+  /** Trusted DB actor classification, captured for this attempt only. */
+  authActorKind?: AuthContext["userKind"];
+  executionAuthorityExpiresAt: Date | null;
+  canonicalRetentionExpiresAt: Date | null;
+}
+
+/**
+ * Capture the REAL current authority clocks at admission: the original
+ * admitted AuthSession expiry bounds execution; the original Session/source
+ * retention bounds canonical content. Leases, retries and recovery can shorten
+ * but never renew these clocks. Production admission fails closed on missing
+ * original authorization; state-only helpers cannot grant execution authority.
+ */
+export interface AdmittedSourceScope {
+  sessionID?: string | null;
+  /** Relationship subject for identity-handle freshness deadlines. */
+  personID?: string | null;
+  /** Relationship context used by conservative, unupgraded capture selection. */
+  contextID?: string | null;
+  /** Trusted caller opt-in; selected manifests own ordinary relationship source clocks. */
+  captureClockScope?: "context" | "selected_relationship";
+  /** Admitted evidence fragment ids whose capture retention is immutable. */
+  fragmentIDs?: readonly string[];
+  /** Owned screenshot task IDs occupy a separate namespace from evidence fragments. */
+  screenshotTaskIDs?: readonly string[];
+  /** Admitted chat media whose retention bounds the run. */
+  mediaIDs?: readonly string[];
+  /** Previous-answer run whose expiry the derived answer inherits. */
+  previousRunID?: string | null;
+}
+
+/**
+ * Admit the ACTUAL original authority fail-closed in the caller's short
+ * transaction: the real AuthSession must exist, belong to this account/actor,
+ * be unrevoked and unexpired, the actor must be active, and a Lab human must
+ * hold an active unexpired Lab workspace grant. A missing or revoked row is a
+ * typed denial, never a NULL "unlimited" execution clock.
+ */
+export async function admitAuthorityClocks(
+  client: PoolClient | { query: PoolClient["query"] },
+  auth: AuthContext,
+  source?: AdmittedSourceScope,
+  serving?: ServingAuthorityResolver,
+): Promise<AuthorityClocks> {
+  const originalAuthority = await captureCurrentReaderAuthority(client, auth, serving);
+  const row = { user_kind: originalAuthority.session.actorKind };
+  const executionAuthorityExpiresAt = new Date(Math.min(...originalAuthorityDeadlines(originalAuthority)));
+  // Completed ordinary Session replies follow their existing Session/source
+  // retention purpose. The original login bounds execution, not the lifetime
+  // of readable history under a later independently authorized reader.
+  // Unupgraded Lab and non-Session purposes keep their conservative clock here.
+  const ordinarySession = Boolean(source?.sessionID)
+    && ["simulated_human", "password_human", "apple_human", "google_human"].includes(row.user_kind);
+  const deadlines: number[] = ordinarySession ? [] : [executionAuthorityExpiresAt.valueOf()];
+  if (source?.sessionID) {
+    const sourceSession = await client.query<{ expires_at: Date }>(
+      `SELECT expires_at FROM agent_sessions
+       WHERE account_id=$1 AND created_by_user_id=$2 AND id=$3 AND deleted_at IS NULL
+         AND expires_at>clock_timestamp()`,
+      [auth.accountId, auth.userId, source.sessionID],
+    );
+    const expires = sourceSession.rows[0]?.expires_at;
+    // A requested canonical Session must exist and stay current at admission.
+    if (!(expires instanceof Date) || !Number.isFinite(expires.valueOf())) {
+      throw new ApiError(401, "LEGACY_CHAT_AUTHORITY_UNAVAILABLE", "This request has no current authorization to execute.");
+    }
+    deadlines.push(expires.valueOf());
+  }
+  // Freeze the minimum ACTUAL admitted source deadline: capture retention and
+  // authorization, media retention, identity freshness and the inherited
+  // previous-answer expiry. Later receipt renewal cannot extend this clock.
+  const admitted = await client.query<{ deadline: Date | null }>(
+    `SELECT LEAST(
+       (SELECT min(LEAST(c.retention_until, sr.authorization_expires_at))
+        FROM captures c
+        JOIN source_retention_receipts sr ON sr.account_id=c.account_id AND sr.capture_id=c.id
+        WHERE c.account_id=$1 AND (
+          EXISTS (SELECT 1 FROM evidence_fragments f WHERE f.account_id=c.account_id AND f.capture_id=c.id AND f.id=ANY($2::uuid[]))
+          OR ($8::boolean AND $7::uuid IS NOT NULL AND c.subject_id=$4::uuid AND c.assignment_id=$7::uuid)
+          OR EXISTS (SELECT 1 FROM screenshot_contact_tasks t
+            WHERE t.account_id=c.account_id AND t.created_by_user_id=$9::uuid
+              AND t.capture_id=c.id AND t.id=ANY($5::uuid[])))),
+       (SELECT min(e.created_at + interval '30 days') FROM chat_media_assets e
+        WHERE e.account_id=$1 AND e.id=ANY($3::uuid[]) AND e.status<>'deleted'),
+       (SELECT min(h.valid_until) FROM identity_handles h WHERE h.account_id=$1 AND h.subject_id=$4::uuid AND h.status='confirmed'),
+       (SELECT r.expires_at FROM product_runs r WHERE r.account_id=$1 AND r.id=$6::uuid)
+     ) AS deadline`,
+    [auth.accountId, [...(source?.fragmentIDs ?? [])], [...(source?.mediaIDs ?? [])],
+      source?.personID ?? null, [...(source?.screenshotTaskIDs ?? [])], source?.previousRunID ?? null,
+      source?.contextID ?? null,
+      // Only the actual ordinary descriptor can narrow context capture clocks.
+      // Lab/shared callers keep their conservative purpose even if opted in.
+      !(source?.captureClockScope === "selected_relationship" && originalAuthority.kind === "ordinary"),
+      auth.userId],
+  );
+  const admittedDeadline = admitted.rows[0]?.deadline;
+  if (admittedDeadline) deadlines.push(admittedDeadline.valueOf());
+  // Every production canonical clock remains finite and immutable. This does
+  // not change existing no-Session/process-only retention purposes or make an
+  // expired original authority usable for execution.
+  return {
+    originalAuthority,
+    authActorKind: row.user_kind,
+    executionAuthorityExpiresAt,
+    canonicalRetentionExpiresAt: new Date(Math.min(...deadlines)),
+  };
+}
+
+/**
+ * Revalidate the captured ORIGINAL authority with the current clock inside the
+ * caller's transaction: the live AuthSession row, actor status, original
+ * captured deadlines and the immutable stored canonical retention. A completed
+ * historical replay is governed separately and never extends these clocks.
+ */
+export async function assertOriginalAuthorityCurrent(
+  client: PoolClient | { query: PoolClient["query"] },
+  auth: Pick<AuthContext, "accountId" | "userId" | "sessionId" | "userKind">,
+  identity: LifecycleIdentity,
+  serving?: ServingAuthorityResolver,
+): Promise<void> {
+  await assertOriginalAuthority(client, auth, identity, false, serving);
+}
+
+/**
+ * Own every canonical await inside the caller's existing short transaction.
+ * The private active-owner guard retains original authority locks; this closure
+ * compares copied finite clocks after all writes without letting completed
+ * tasks execute. The same client performs the final clock read before COMMIT.
+ */
+export async function withOriginalAuthorityFinalization<T>(
+  client: PoolClient,
+  auth: Pick<AuthContext, "accountId" | "userId" | "sessionId" | "userKind">,
+  identity: LifecycleIdentity,
+  finalize: () => Promise<T>,
+  assertNotCancelled: () => void,
+  serving?: ServingAuthorityResolver,
+  selectedSourceDeadlines: readonly number[] = [],
+): Promise<T> {
+  const authority = await assertOriginalAuthority(client, auth, identity, false, serving);
+  assertNotCancelled();
+  const result = await finalize();
+  const checkedAt = (await client.query<{ checked_at: Date }>(
+    "SELECT clock_timestamp() AS checked_at",
+  )).rows[0]?.checked_at;
+  if (!(checkedAt instanceof Date) || !Number.isFinite(checkedAt.valueOf())
+    || authority.deadlines.some(deadline => !Number.isFinite(deadline) || deadline <= checkedAt.valueOf())) {
+    throw new ApiError(409, "LEGACY_CHAT_AUTHORITY_EXPIRED", "The original authorization for this request expired before completion.");
+  }
+  if (selectedSourceDeadlines.some(deadline => !Number.isFinite(deadline) || deadline <= checkedAt.valueOf())) {
+    throw new ApiError(409, "CHAT_COMPLETION_SOURCE_CHANGED", "The selected source expired before this answer completed. Reload its current state before trying again.");
+  }
+  // A cancel during the last clock await must still roll the whole transaction
+  // back. No await, canonical write or client substitution follows this fence.
+  assertServingAuthority(authority.original, serving);
+  assertNotCancelled();
+  return result;
+}
+
+/** Heartbeat-only liveness never grants execution or canonical-write authority. */
+async function assertOriginalAuthority(
+  client: PoolClient | { query: PoolClient["query"] },
+  auth: Pick<AuthContext, "accountId" | "userId" | "sessionId" | "userKind">,
+  identity: LifecycleIdentity,
+  physicalLiveness: boolean,
+  serving?: ServingAuthorityResolver,
+): Promise<{ deadlines: readonly number[]; original: OriginalAuthority; operationScope: LifecycleOperationScope; manifestID: string | null }> {
+  const expired = () => new ApiError(409, "LEGACY_CHAT_AUTHORITY_EXPIRED", "The original authorization for this request expired before completion.");
+  const assertPhysicalOwner = () => {
+    const owner = pendingLifecycleRunForAttempt(identity.attemptID);
+    if (!owner || owner.intentID !== identity.intentID || owner.taskID !== identity.taskID
+      || owner.runID !== identity.runID || owner.fencingGeneration !== identity.fencingGeneration) throw expired();
+  };
+  if (physicalLiveness) assertPhysicalOwner();
+  // The trusted durable descriptor chooses Lab's nonwaiting protocol before
+  // any blocking account/session lock. NULL historical metadata cannot execute.
+  const snapshot = (await client.query<{ original_authority: unknown }>(
+    `SELECT original_authority FROM legacy_chat_task_attempts
+     WHERE account_id=$1 AND actor_user_id=$2 AND id=$3 AND intent_id=$4 AND task_id=$5 AND run_id=$6 AND fencing_generation=$7`,
+    [auth.accountId, auth.userId, identity.attemptID, identity.intentID, identity.taskID, identity.runID, identity.fencingGeneration],
+  )).rows[0];
+  let original: OriginalAuthority;
+  let lineageDeadlines: readonly number[];
+  try {
+    original = parseOriginalAuthority(snapshot?.original_authority);
+    if (original.session.accountID !== auth.accountId || original.session.userID !== auth.userId) throw expired();
+    lineageDeadlines = await recheckOriginalAuthority(client, {
+      accountId: original.session.accountID, userId: original.session.userID,
+      sessionId: original.session.id, userKind: original.session.actorKind,
+    }, original, serving);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "LEGACY_CHAT_AUTHORITY_UNAVAILABLE") throw expired();
+    return authorityBusy(error);
+  }
+  // Resolve the original session through the exact current durable attempt.
+  const result = await client.query<{
+    auth_actor_kind: AuthContext["userKind"] | null;
+    current_actor_kind: string;
+    session_expires_at: Date;
+    execution_authority_expires_at: Date | null;
+    canonical_retention_expires_at: Date | null;
+    current: boolean;
+    operation_scope: LifecycleOperationScope;
+    manifest_id: string | null;
+  }>(
+    `SELECT a.auth_actor_kind,u.kind AS current_actor_kind,s.expires_at AS session_expires_at,
+       a.execution_authority_expires_at,i.canonical_retention_expires_at,i.operation_scope,i.manifest_id,
+       (s.revoked_at IS NULL AND u.status='active') AS current
+     FROM legacy_chat_task_attempts a
+     JOIN legacy_chat_task_intents i
+       ON i.account_id=a.account_id AND i.id=a.intent_id AND i.actor_user_id=a.actor_user_id
+       AND i.current_attempt_id=a.id AND i.task_id=a.task_id
+       AND i.fencing_generation=a.fencing_generation
+     JOIN users u ON u.account_id=a.account_id AND u.id=a.actor_user_id
+     JOIN sessions s ON s.account_id=a.account_id AND s.user_id=a.actor_user_id AND s.id=a.auth_session_id
+     WHERE a.account_id=$1 AND a.actor_user_id=$2 AND a.intent_id=$3
+       AND a.id=$4 AND a.task_id=$5 AND a.run_id=$6 AND a.fencing_generation=$7
+       AND a.state=ANY($8::text[]) AND i.state=ANY($8::text[])
+     FOR SHARE OF s,u ${original.kind === "ordinary" ? "" : "NOWAIT"}`,
+    [auth.accountId, auth.userId, identity.intentID, identity.attemptID,
+      identity.taskID, identity.runID, identity.fencingGeneration,
+      physicalLiveness ? ["admitted", "running", "cancelling"] : ["admitted", "running"]],
+  );
+  const attempt = result.rows[0];
+  // Sample after awaited lock acquisition: waiting cannot grant expiry grace.
+  // Supplied short transactions retain the original session/actor locks until
+  // their own commit; execution probes never retain a client across model work.
+  const checkedAt = (await client.query<{ checked_at: Date }>(
+    `SELECT clock_timestamp() AS checked_at`,
+  )).rows[0]?.checked_at;
+  const finite = (date: Date | null) => date instanceof Date && Number.isFinite(date.valueOf());
+  if (!attempt || attempt.current !== true || !checkedAt || !finite(checkedAt)
+    || !finite(attempt.session_expires_at) || attempt.session_expires_at <= checkedAt
+    || !finite(attempt.execution_authority_expires_at) || !finite(attempt.canonical_retention_expires_at)
+    || attempt.execution_authority_expires_at! <= checkedAt || attempt.canonical_retention_expires_at! <= checkedAt
+    || !attempt.auth_actor_kind || attempt.auth_actor_kind !== attempt.current_actor_kind) throw expired();
+  if (physicalLiveness) assertPhysicalOwner();
+  if (attempt.auth_actor_kind !== original.session.actorKind) throw expired();
+  assertServingAuthority(original, serving);
+  return { original, operationScope: attempt.operation_scope, manifestID: attempt.manifest_id,
+    deadlines: [...lineageDeadlines, attempt.session_expires_at.valueOf(),
+    attempt.execution_authority_expires_at!.valueOf(), attempt.canonical_retention_expires_at!.valueOf()] };
+
+}
+
+export interface LifecycleAdmissionParams {
+  auth: AuthContext;
+  operation: LifecycleOperationScope;
+  /** Normalized request identity; hashed for the immutable intent fingerprint. */
+  request: unknown;
+  /** Fixed product task id, or per-attempt naming (v1 first attempt, v2 retry). */
+  taskID?: string | ((fencingGeneration: number, intentID: string, attemptID: string) => string);
+  runID?: string;
+  manifestID?: string | null;
+  observationParentRunID?: string | null;
+  authSessionID?: string | null;
+  executionAuthorityExpiresAt?: Date | null;
+  canonicalRetentionExpiresAt?: Date | null;
+  providerFingerprint?: string | null;
+  /**
+   * Current-source checks for a completed exact replay. A completed historical
+   * replay may use a new lawful same-owner login; it never reexecutes.
+   */
+  replayCheck?: (replay: LifecycleReplay) => Promise<void>;
+  /** Explicit recovery decision for an interrupted_UNKNOWN prior attempt. */
+  recovery?: { expectedRevision: number; priorAttemptID: string };
+  /**
+   * Fail-closed authority clocks, evaluated ONLY when a new attempt actually
+   * executes. A completed historical replay is governed by its current-source
+   * checks instead: the original admission login need not remain valid.
+   */
+  clocks?: () => Promise<AuthorityClocks>;
+  /** How long one admitted attempt may own execution between heartbeats. */
+  leaseMs?: number;
+}
+
+const ACTIVE_STATES: readonly LifecycleState[] = ["admitted", "running", "cancelling"];
+const RETRYABLE_STATES: readonly LifecycleState[] = ["failed_retryable", "cancelled", "revoked"];
+const DEFAULT_LEASE_MS = 65_000;
+
+interface IntentRow {
+  id: string;
+  account_id: string;
+  actor_user_id: string;
+  request_hash: string;
+  task_id: string;
+  state: LifecycleState;
+  revision: number;
+  current_attempt_id: string;
+  fencing_generation: string | number;
+  idempotency_record_id: string | null;
+  terminal_reason: string | null;
+  execution_authority_expires_at: Date | null;
+  canonical_retention_expires_at: Date | null;
+}
+
+interface AttemptRow {
+  id: string;
+  intent_id: string;
+  task_id: string;
+  run_id: string;
+  fencing_generation: string | number;
+  state: LifecycleState;
+  dispatch_state: LifecycleDispatchState;
+  revision: number | null;
+  lease_until: Date | null;
+  execution_authority_expires_at: Date | null;
+}
+
+export function lifecycleIdentity(row: {
+  intent_id: string;
+  task_id: string;
+  run_id: string;
+  fencing_generation: string | number;
+  revision: number | null;
+  state: LifecycleState;
+  dispatch_state: LifecycleDispatchState;
+  execution_authority_expires_at: Date | null;
+  canonical_retention_expires_at?: Date | null;
+}, intent: Pick<IntentRow, "id" | "revision" | "canonical_retention_expires_at">): LifecycleIdentity {
+  return {
+    intentID: intent.id,
+    taskID: row.task_id,
+    attemptID: row.intent_id,
+    runID: row.run_id,
+    fencingGeneration: Number(row.fencing_generation),
+    revision: intent.revision,
+    state: row.state,
+    dispatchState: row.dispatch_state,
+    executionAuthorityExpiresAt: row.execution_authority_expires_at,
+    canonicalRetentionExpiresAt: intent.canonical_retention_expires_at,
+  };
+}
+
+/** Source-free in-progress details; never an objective, answer or source id. */
+export function lifecycleStatusDetails(identity: LifecycleIdentity): Record<string, unknown> {
+  return {
+    task_id: identity.taskID,
+    attempt_id: identity.attemptID,
+    state: identity.state,
+    revision: identity.revision,
+    status_url: `/v1/chat/tasks/${identity.taskID}/status`,
+  };
+}
+
+export function lifecycleInProgressError(identity: LifecycleIdentity): ApiError {
+  return new ApiError(
+    409,
+    "IDEMPOTENCY_REQUEST_IN_PROGRESS",
+    "The matching request is still in progress.",
+    lifecycleStatusDetails(identity),
+  );
+}
+
+export function lifecycleRecoveryRequiredError(identity: LifecycleIdentity, reason: string): ApiError {
+  return new ApiError(
+    409,
+    "LEGACY_CHAT_RECOVERY_REQUIRED",
+    "The previous attempt's provider outcome is uncertain. Confirm an explicit recovery decision before sending this request again.",
+    { ...lifecycleStatusDetails(identity), terminal_reason: reason },
+  );
+}
+
+function fencedError(): ApiError {
+  return new ApiError(
+    409,
+    "LEGACY_CHAT_ATTEMPT_FENCED",
+    "A newer attempt owns this work. Reload its current state.",
+  );
+}
+
+function attemptRow(row: Record<string, unknown>): AttemptRow {
+  return row as unknown as AttemptRow;
+}
+
+async function loadIntent(
+  client: PoolClient,
+  params: { accountId: string; actorUserId: string; operation: LifecycleOperationScope; idempotencyKey: string },
+  lock: boolean,
+  noWait = false,
+): Promise<IntentRow | null> {
+  const result = await client.query<IntentRow>(
+    `SELECT id,account_id,actor_user_id,request_hash,task_id,state,revision,current_attempt_id,
+       fencing_generation,idempotency_record_id,terminal_reason,execution_authority_expires_at,canonical_retention_expires_at
+     FROM legacy_chat_task_intents
+     WHERE account_id=$1 AND actor_user_id=$2 AND operation_scope=$3 AND idempotency_key=$4
+     ${lock ? (noWait ? "FOR UPDATE NOWAIT" : "FOR UPDATE") : ""}`,
+    [params.accountId, params.actorUserId, params.operation, params.idempotencyKey],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function loadAttempt(client: PoolClient, accountID: string, attemptID: string, noWait = false): Promise<AttemptRow | null> {
+  const result = await client.query(
+    `SELECT id,intent_id,task_id,run_id,fencing_generation,state,dispatch_state,
+       lease_until,execution_authority_expires_at
+     FROM legacy_chat_task_attempts WHERE account_id=$1 AND id=$2 ${noWait ? "FOR UPDATE NOWAIT" : ""}`,
+    [accountID, attemptID],
+  );
+  return result.rows[0] ? attemptRow(result.rows[0]) : null;
+}
+
+async function insertAttempt(
+  client: PoolClient,
+  identity: {
+    attemptID: string;
+    intentID: string;
+    accountID: string;
+    actorUserID: string;
+    taskID: string;
+    runID: string;
+    fencingGeneration: number;
+    authSessionID: string | null;
+    authActorKind: AuthContext["userKind"] | null;
+    originalAuthority: OriginalAuthority | null;
+    observationParentRunID: string | null;
+    executionAuthorityExpiresAt: Date | null;
+    leaseMs: number;
+  },
+): Promise<void> {
+  await client.query(
+    `INSERT INTO legacy_chat_task_attempts(
+       id,account_id,intent_id,actor_user_id,task_id,run_id,fencing_generation,state,
+       auth_session_id,execution_authority_expires_at,auth_actor_kind,original_authority,dispatch_state,lease_until,heartbeat_at,created_at,observation_parent_run_id)
+     VALUES($1,$2,$3,$4,$5,$6,$7,'running',$8,$9,$10,$12::jsonb,'not_dispatched',clock_timestamp()+($11::double precision * interval '1 second'),clock_timestamp(),now(),$13)`,
+    [identity.attemptID, identity.accountID, identity.intentID, identity.actorUserID, identity.taskID,
+      identity.runID, identity.fencingGeneration, identity.authSessionID,
+      identity.executionAuthorityExpiresAt, identity.authActorKind, identity.leaseMs / 1000,
+      identity.originalAuthority ? JSON.stringify(identity.originalAuthority) : null, identity.observationParentRunID],
+  );
+}
+
+/**
+ * Admission + exact-replay + duplicate/retry/recovery resolution in the caller's
+ * short transaction. Returns the durable attempt identity; the caller commits
+ * before any provider sees content.
+ */
+export async function admitLifecycleTask(
+  client: PoolClient,
+  params: LifecycleAdmissionParams & { idempotencyKey: string },
+): Promise<LifecycleAdmission> {
+  const requestHash = digestValue(params.request);
+  const accountId = params.auth.accountId;
+  const actorUserId = params.auth.userId;
+  let observedOwner: LifecycleIdentity | undefined;
+  // Scoped committed metadata is read BEFORE any FOR UPDATE: the requested
+  // digest is compared first for every existing intent state, and every exact
+  // physically pending current owner (including running/admitted) is resolved
+  // against the registry's ENTIRE identity before the contested locking read.
+  // Peek absence, unclear tuples or a missing registry never authorize a new
+  // attempt: the locked CAS/authority/recovery logic below stays mandatory.
+  {
+    const peek = await client.query<{
+      intent_task_id: string;
+      id: string; current_attempt_id: string; state: LifecycleState; request_hash: string;
+      revision: number;
+      attempt_task_id: string | null; attempt_run_id: string | null;
+      attempt_fence: string | number | null;
+      attempt_lease: Date | null;
+    }>(
+      `SELECT i.id,i.task_id AS intent_task_id,i.current_attempt_id,i.state,i.request_hash,i.revision,
+         a.task_id AS attempt_task_id,a.run_id AS attempt_run_id,
+         a.fencing_generation AS attempt_fence,a.lease_until AS attempt_lease
+       FROM legacy_chat_task_intents i
+       LEFT JOIN legacy_chat_task_attempts a
+         ON a.account_id=i.account_id AND a.actor_user_id=i.actor_user_id
+         AND a.id=i.current_attempt_id AND a.intent_id=i.id AND a.task_id=i.task_id
+         AND a.fencing_generation=i.fencing_generation
+       WHERE i.account_id=$1 AND i.actor_user_id=$2 AND i.operation_scope=$3 AND i.idempotency_key=$4`,
+      [accountId, actorUserId, params.operation, params.idempotencyKey],
+    );
+    const seen = peek.rows[0];
+    if (seen) {
+      // Digest mismatch wins over every other observation (pending, cancelling
+      // or terminal) and is rechecked under the lock below for TOCTOU.
+      if (seen.request_hash !== requestHash) {
+        throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "This idempotency key was already used for a different request.");
+      }
+      const pending = pendingLifecycleRunForIntent(seen.id);
+      const exact = pending !== null
+        && seen.attempt_task_id !== null && seen.attempt_run_id !== null
+        && pending.attemptID === seen.current_attempt_id
+        && pending.intentID === seen.id
+        && pending.taskID === seen.intent_task_id
+        && pending.taskID === seen.attempt_task_id
+        && pending.runID === seen.attempt_run_id
+        && pending.fencingGeneration === Number(seen.attempt_fence);
+      if (exact) {
+        const identity: LifecycleIdentity = {
+          intentID: seen.id,
+          taskID: seen.attempt_task_id!,
+          attemptID: seen.current_attempt_id,
+          runID: seen.attempt_run_id!,
+          fencingGeneration: Number(seen.attempt_fence),
+          revision: seen.revision,
+          state: seen.state,
+          dispatchState: pending.dispatchState,
+          executionAuthorityExpiresAt: pending.executionAuthorityExpiresAt,
+          canonicalRetentionExpiresAt: pending.canonicalRetentionExpiresAt,
+        };
+        observedOwner = identity;
+        const leaseFresh = seen.attempt_lease !== null && seen.attempt_lease.valueOf() > Date.now();
+        if ((seen.state === "admitted" || seen.state === "running") && leaseFresh) {
+          // A legal active exact duplicate (committed running/admitted with a
+          // live lease) returns the SAME current identities with the existing
+          // in-progress receipt; no provider is called and nothing waits.
+          return {
+            kind: "in_progress",
+            identity,
+            idempotencyRecordID: "",
+            replay: null,
+          };
+        }
+        if (seen.state !== "admitted" && seen.state !== "running") {
+          // Committed cancelling/non-active with its exact owner still pending:
+          // typed conflict with the same lawful source-free tuple. Observation
+          // only: it never reports an available completed answer and never
+          // grants a replacement.
+          throw new ApiError(409, "LEGACY_CHAT_PHYSICAL_OWNER_PENDING",
+            "The previous attempt is still executing. It must settle before a new attempt can run.",
+            lifecycleStatusDetails(identity));
+        }
+        // Committed running/admitted with an EXPIRED lease: physical presence
+        // never authorizes a replacement. Fall through to the settled locked
+        // CAS that retires the lost owner to truthful unknown/recovery.
+      }
+    }
+  }
+  const leaseMs = params.leaseMs ?? DEFAULT_LEASE_MS;
+
+  // Old completed receipts stay untouched and replay through their own record.
+  const legacy = await client.query<{ id: string; request_hash: string; status: string; response_status: number | null; response_body: unknown }>(
+    `SELECT id,request_hash,status,response_status,response_body FROM idempotency_records
+     WHERE account_id=$1 AND actor_user_id=$2 AND operation_scope=$3 AND idempotency_key=$4`,
+    [accountId, actorUserId, params.operation, params.idempotencyKey],
+  );
+  const legacyRow = legacy.rows[0];
+
+  // An expired lease must still permit the ordinary locked recovery CAS when
+  // the row is available. It must never wait on a physically pending owner's
+  // uncommitted cancellation/finalization, or on a race after the peek.
+  let intent: IntentRow | null;
+  try {
+    intent = await loadIntent(client, {
+      accountId, actorUserId, operation: params.operation, idempotencyKey: params.idempotencyKey,
+    }, true, observedOwner !== undefined);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "55P03") {
+      if (observedOwner) {
+        throw new ApiError(409, "LEGACY_CHAT_PHYSICAL_OWNER_PENDING",
+          "The previous attempt is still executing. It must settle before a new attempt can run.",
+          lifecycleStatusDetails(observedOwner));
+      }
+      throw fencedError();
+    }
+    throw error;
+  }
+
+  if (!intent && legacyRow && legacyRow.status === "completed" && legacyRow.response_body !== null) {
+    if (legacyRow.request_hash !== requestHash) {
+      throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "This idempotency key was already used for a different request.");
+    }
+    const replay: LifecycleReplay = {
+      status: legacyRow.response_status ?? 201,
+      body: legacyRow.response_body,
+      idempotencyRecordID: legacyRow.id,
+    };
+    if (params.replayCheck) await params.replayCheck(replay);
+    return {
+      kind: "replayed",
+      replay,
+      idempotencyRecordID: legacyRow.id,
+      identity: {
+        intentID: legacyRow.id,
+        taskID: String((replay.body as { task_id?: string } | null)?.task_id ?? ""),
+        attemptID: legacyRow.id,
+        runID: legacyRow.id,
+        fencingGeneration: 0,
+        revision: 0,
+        state: "completed",
+        // Historical legacy receipts have unknown provenance: never invent
+        // positive dispatch evidence for them.
+        dispatchState: "dispatch_uncertain",
+        executionAuthorityExpiresAt: null,
+        canonicalRetentionExpiresAt: null,
+      },
+    };
+  }
+
+  if (intent && intent.request_hash !== requestHash) {
+    throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "This idempotency key was already used for a different request.");
+  }
+
+  if (intent && intent.state === "completed") {
+    const record = await client.query<{ id: string; response_status: number | null; response_body: unknown }>(
+      "SELECT id,response_status,response_body FROM idempotency_records WHERE id=$1",
+      [intent.idempotency_record_id],
+    );
+    const stored = await client.query<{ dispatch_state: LifecycleDispatchState; usage_uncertain: boolean }>(
+      "SELECT dispatch_state,usage_uncertain FROM legacy_chat_task_attempts WHERE account_id=$1 AND id=$2",
+      [accountId, intent.current_attempt_id],
+    );
+    const row = record.rows[0];
+    if (!row || row.response_body === null) {
+      throw new ApiError(409, "IDEMPOTENCY_STATE_UNAVAILABLE", "The idempotency record could not be resolved.");
+    }
+    const replay: LifecycleReplay = { status: row.response_status ?? 201, body: row.response_body, idempotencyRecordID: row.id };
+    if (params.replayCheck) await params.replayCheck(replay);
+    return {
+      kind: "replayed",
+      replay,
+      idempotencyRecordID: row.id,
+      identity: {
+        intentID: intent.id,
+        taskID: intent.task_id,
+        attemptID: intent.current_attempt_id,
+        runID: intent.task_id,
+        fencingGeneration: Number(intent.fencing_generation),
+        revision: intent.revision,
+        state: "completed",
+        // The returned identity carries the ACTUAL stored terminal tuple.
+        dispatchState: stored.rows[0]?.dispatch_state ?? "dispatch_uncertain",
+        usageUncertain: stored.rows[0]?.usage_uncertain ?? true,
+        executionAuthorityExpiresAt: intent.execution_authority_expires_at,
+        canonicalRetentionExpiresAt: intent.canonical_retention_expires_at,
+      },
+    };
+  }
+
+  if (intent && ACTIVE_STATES.includes(intent.state)) {
+    // A reserved cancel with its exact owner still physically pending refuses
+    // every replacement attempt with the typed pending conflict.
+    if (intent.state === "cancelling") {
+      const pending = pendingLifecycleRunForIntent(intent.id);
+      if (pending && pending.attemptID === intent.current_attempt_id) {
+        throw new ApiError(409, "LEGACY_CHAT_PHYSICAL_OWNER_PENDING", "The cancelled attempt is still executing. It must settle before a new attempt can run.");
+      }
+    }
+    let current: AttemptRow | null;
+    try {
+      // Cancellation/finalization lock the attempt before the intent. If the
+      // intent was still available, lock the exact pending attempt NOWAIT too,
+      // before any stale-lease UPDATE can wait in the opposite lock order.
+      current = await loadAttempt(client, accountId, intent.current_attempt_id,
+        observedOwner?.attemptID === intent.current_attempt_id);
+    } catch (error) {
+      if (observedOwner && error && typeof error === "object" && "code" in error && error.code === "55P03") {
+        throw new ApiError(409, "LEGACY_CHAT_PHYSICAL_OWNER_PENDING",
+          "The previous attempt is still executing. It must settle before a new attempt can run.",
+          lifecycleStatusDetails(observedOwner));
+      }
+      throw error;
+    }
+    const fresh = current?.lease_until && current.lease_until.valueOf() > Date.now();
+    const identity: LifecycleIdentity = {
+      intentID: intent.id,
+      taskID: intent.task_id,
+      attemptID: intent.current_attempt_id,
+      runID: current?.run_id ?? intent.task_id,
+      fencingGeneration: Number(intent.fencing_generation),
+      revision: intent.revision,
+      state: intent.state,
+      dispatchState: current?.dispatch_state ?? "not_dispatched",
+      executionAuthorityExpiresAt: current?.execution_authority_expires_at ?? intent.execution_authority_expires_at,
+      canonicalRetentionExpiresAt: intent.canonical_retention_expires_at,
+    };
+    if (fresh) {
+      // Exact active duplicate: same intent/task/attempt, no second dispatch.
+      return {
+        kind: "in_progress",
+        identity,
+        idempotencyRecordID: intent.idempotency_record_id ?? legacyRow?.id ?? "",
+        replay: null,
+      };
+    }
+    // Owner liveness lost. Dispatch evidence decides never-started vs unknown.
+    await client.query(
+      `UPDATE legacy_chat_task_attempts SET state='interrupted_unknown',
+         terminal_reason='lease_expired',
+         dispatch_state=CASE WHEN dispatch_state='dispatched' THEN 'dispatch_uncertain' ELSE dispatch_state END,
+         usage_uncertain=usage_uncertain OR dispatch_state<>'not_dispatched', ended_at=now()
+       WHERE account_id=$1 AND id=$2 AND state IN ('admitted','running','cancelling')`,
+      [accountId, intent.current_attempt_id],
+    );
+    await client.query(
+      `UPDATE legacy_chat_task_intents SET state='interrupted_unknown',terminal_reason='lease_expired',
+         revision=revision+1,updated_at=now() WHERE id=$1 AND current_attempt_id=$2 AND state IN ('admitted','running','cancelling')`,
+      [intent.id, intent.current_attempt_id],
+    );
+    return {
+      kind: "recovery_required",
+      identity: { ...identity, revision: intent.revision + 1, state: "interrupted_unknown", dispatchState: current?.dispatch_state ?? "not_dispatched" },
+      idempotencyRecordID: intent.idempotency_record_id ?? legacyRow?.id ?? "",
+      replay: null,
+      reason: "lease_expired",
+    };
+  }
+
+  if (intent && intent.state === "interrupted_unknown" && !params.recovery) {
+    const current = await loadAttempt(client, accountId, intent.current_attempt_id);
+    return {
+      kind: "recovery_required",
+      identity: {
+        intentID: intent.id,
+        taskID: intent.task_id,
+        attemptID: intent.current_attempt_id,
+        runID: current?.run_id ?? intent.task_id,
+        fencingGeneration: Number(intent.fencing_generation),
+        revision: intent.revision,
+        state: "interrupted_unknown",
+        dispatchState: current?.dispatch_state ?? "not_dispatched",
+        executionAuthorityExpiresAt: intent.execution_authority_expires_at,
+        canonicalRetentionExpiresAt: intent.canonical_retention_expires_at,
+      },
+      idempotencyRecordID: intent.idempotency_record_id ?? legacyRow?.id ?? "",
+      replay: null,
+      reason: intent.terminal_reason ?? "execution_unknown",
+    };
+  }
+
+  if (intent && params.recovery) {
+    if (intent.state !== "interrupted_unknown"
+      || intent.revision !== params.recovery.expectedRevision
+      || intent.current_attempt_id !== params.recovery.priorAttemptID) {
+      throw fencedError();
+    }
+  }
+
+  if (intent && !ACTIVE_STATES.includes(intent.state) && !RETRYABLE_STATES.includes(intent.state)
+    && intent.state !== "interrupted_unknown") {
+    throw fencedError();
+  }
+  // A replacement attempt may never overlap the old physical owner. Admission
+  // REFUSES without waiting or draining: any drain runs outside a transaction
+  // in the explicit recovery command, then this admission revalidates.
+  if (intent) {
+    const pending = pendingLifecycleRunForIntent(intent.id);
+    if (pending && pending.attemptID === intent.current_attempt_id) {
+      throw new ApiError(409, "LEGACY_CHAT_PHYSICAL_OWNER_PENDING", "The previous attempt is still executing. It must settle before a new attempt can run.");
+    }
+    if (pending) releaseLifecycleRun(pending.attemptID);
+  }
+
+  // New attempt under a stable intent, or the first attempt of a new intent.
+  const clocks = params.clocks
+    ? await params.clocks()
+    : {
+        executionAuthorityExpiresAt: params.executionAuthorityExpiresAt ?? null,
+        canonicalRetentionExpiresAt: params.canonicalRetentionExpiresAt ?? null,
+      };
+  const fencingGeneration = intent ? Number(intent.fencing_generation) + 1 : 1;
+  const revision = intent ? intent.revision + 1 : 1;
+  const newIntentID = randomUUID();
+  const resolvedIntentID = intent?.id ?? newIntentID;
+  const attemptID = randomUUID();
+  const taskID = typeof params.taskID === "function"
+    ? params.taskID(fencingGeneration, resolvedIntentID, attemptID)
+    : (params.taskID ?? randomUUID());
+  const runID = params.runID ?? taskID;
+  const idempotencyRecordID = intent?.idempotency_record_id ?? legacyRow?.id ?? randomUUID();
+
+  if (!intent) {
+    await client.query(
+      `INSERT INTO legacy_chat_task_intents(
+         id,account_id,actor_user_id,operation_scope,idempotency_key,request_hash,task_id,state,revision,
+         current_attempt_id,fencing_generation,auth_session_id,execution_authority_expires_at,
+         canonical_retention_expires_at,provider_fingerprint,manifest_id,idempotency_record_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7,'running',$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      [newIntentID, accountId, actorUserId, params.operation, params.idempotencyKey, requestHash,
+        taskID, revision, attemptID, fencingGeneration, params.authSessionID ?? params.auth.sessionId ?? null,
+        clocks.executionAuthorityExpiresAt, clocks.canonicalRetentionExpiresAt,
+        params.providerFingerprint ?? null, params.manifestID ?? null, idempotencyRecordID],
+    );
+    intent = await loadIntent(client, {
+      accountId, actorUserId, operation: params.operation, idempotencyKey: params.idempotencyKey,
+    }, true);
+  } else {
+    await client.query(
+      `UPDATE legacy_chat_task_intents SET task_id=$2,state='running',revision=$3,current_attempt_id=$4,
+         fencing_generation=$5,auth_session_id=$6,execution_authority_expires_at=$7,
+         provider_fingerprint=COALESCE($8,provider_fingerprint),terminal_reason=NULL,updated_at=now()
+       WHERE id=$1 AND fencing_generation=$9`,
+      [intent.id, taskID, revision, attemptID, fencingGeneration, params.authSessionID ?? params.auth.sessionId ?? null,
+        clocks.executionAuthorityExpiresAt, params.providerFingerprint ?? null, Number(intent.fencing_generation)],
+    );
+    // Failed lineage and tombstones stay recorded on the old attempt rows.
+    // The immutable canonical retention is never updated; the returned
+    // identity reads the stored clocks back, never a newer caller value.
+    intent = await loadIntent(client, {
+      accountId, actorUserId, operation: params.operation, idempotencyKey: params.idempotencyKey,
+    }, true);
+  }
+  if (!intent) throw new ApiError(409, "IDEMPOTENCY_STATE_UNAVAILABLE", "The lifecycle intent could not be resolved.");
+
+  await insertAttempt(client, {
+    attemptID,
+    intentID: intent.id,
+    accountID: accountId,
+    actorUserID: actorUserId,
+    taskID,
+    runID,
+    fencingGeneration,
+    authSessionID: params.authSessionID ?? params.auth.sessionId ?? null,
+    executionAuthorityExpiresAt: clocks.executionAuthorityExpiresAt,
+    authActorKind: clocks.authActorKind ?? null,
+    originalAuthority: clocks.originalAuthority ?? null,
+    observationParentRunID: params.observationParentRunID ?? null,
+    leaseMs,
+  });
+
+  if (!legacyRow) {
+    await client.query(
+      `INSERT INTO idempotency_records(id,account_id,actor_user_id,operation_scope,idempotency_key,request_hash,status)
+       VALUES($1,$2,$3,$4,$5,$6,'processing')
+       ON CONFLICT (account_id,actor_user_id,operation_scope,idempotency_key) DO NOTHING`,
+      [idempotencyRecordID, accountId, actorUserId, params.operation, params.idempotencyKey, requestHash],
+    );
+  }
+
+  return {
+    kind: intent.revision === 1 && fencingGeneration === 1 ? "admitted" : "retry",
+    idempotencyRecordID,
+    replay: null,
+    identity: {
+      intentID: intent.id,
+      taskID,
+      attemptID,
+      runID,
+      fencingGeneration,
+      revision,
+      state: "running",
+      dispatchState: "not_dispatched",
+      // The receipt reads the STORED immutable clocks back; a caller value can
+      // never describe a different deadline than the durable intent.
+      executionAuthorityExpiresAt: intent.execution_authority_expires_at,
+      canonicalRetentionExpiresAt: intent.canonical_retention_expires_at,
+    },
+  };
+}
+
+/** Short statement marking real provider dispatch evidence for this attempt. */
+export async function markLifecycleDispatched(
+  client: PoolClient,
+  accountID: string,
+  identity: LifecycleIdentity,
+): Promise<void> {
+  // Cancel/retry own the intent first. Keep this dispatch short and exact.
+  const owner = await client.query(
+    `SELECT 1 FROM legacy_chat_task_intents
+     WHERE account_id=$1 AND id=$2 AND current_attempt_id=$3 AND task_id=$4
+       AND fencing_generation=$5 AND state IN ('admitted','running') FOR SHARE`,
+    [accountID, identity.intentID, identity.attemptID, identity.taskID, identity.fencingGeneration],
+  );
+  if (owner.rowCount !== 1) throw fencedError();
+  const updated = await client.query(
+    `UPDATE legacy_chat_task_attempts a
+     SET dispatch_state='dispatched',dispatched_at=COALESCE(a.dispatched_at,now())
+     FROM legacy_chat_task_intents i
+     WHERE a.account_id=$1 AND a.id=$2 AND a.fencing_generation=$3
+       AND a.intent_id=$4 AND a.task_id=$5 AND a.run_id=$6 AND a.state IN ('admitted','running')
+       AND i.account_id=a.account_id AND i.id=a.intent_id AND i.actor_user_id=a.actor_user_id
+       AND i.current_attempt_id=a.id AND i.task_id=a.task_id AND i.fencing_generation=a.fencing_generation
+       AND i.state IN ('admitted','running')`,
+    [accountID, identity.attemptID, identity.fencingGeneration, identity.intentID, identity.taskID, identity.runID],
+  );
+  if (updated.rowCount !== 1) throw fencedError();
+}
+
+export async function heartbeatLifecycleAttempt(
+  client: PoolClient,
+  accountID: string,
+  identity: LifecycleIdentity,
+  leaseMs = DEFAULT_LEASE_MS,
+): Promise<void> {
+  const updated = await client.query(
+    `UPDATE legacy_chat_task_attempts
+     SET heartbeat_at=clock_timestamp(),lease_until=clock_timestamp()+($4::double precision * interval '1 second')
+     WHERE account_id=$1 AND id=$2 AND fencing_generation=$3
+       AND state IN ('admitted','running','cancelling')
+       AND (execution_authority_expires_at IS NULL OR execution_authority_expires_at>clock_timestamp())`,
+    [accountID, identity.attemptID, identity.fencingGeneration, leaseMs / 1000],
+  );
+  if (updated.rowCount !== 1) throw fencedError();
+}
+
+export interface LifecycleFinish {
+  accountID: string;
+  identity: LifecycleIdentity;
+  state: Extract<LifecycleState, "completed" | "failed_retryable" | "cancelled" | "revoked" | "interrupted_unknown">;
+  terminalReason?: string | null;
+  // No caller overrides: the durable dispatch evidence recorded at the actual
+  // producer boundary is preserved and terminal usage uncertainty is derived
+  // from it atomically. A configured-but-unsent provider stays not_dispatched
+  // and never gains false uncertainty; dispatched evidence is never downgraded.
+}
+
+/**
+ * Terminal transition for one fenced attempt. CAS on attempt fence and intent
+ * generation: a late stale writer can never overwrite a newer attempt's state.
+ * Dispatch evidence is preserved exactly and usage uncertainty is derived from
+ * it: a dispatched attempt that does not complete keeps truthful uncertainty.
+ */
+export async function finishLifecycleAttempt(client: PoolClient, finish: LifecycleFinish): Promise<boolean> {
+  const attempt = await client.query(
+    `UPDATE legacy_chat_task_attempts
+     SET state=$4,terminal_reason=$5,ended_at=now(),
+       usage_uncertain=usage_uncertain OR (dispatch_state<>'not_dispatched' AND $4::text<>'completed')
+     WHERE account_id=$1 AND id=$2 AND fencing_generation=$3
+       AND state IN ('admitted','running','cancelling')`,
+    [finish.accountID, finish.identity.attemptID, finish.identity.fencingGeneration,
+      finish.state, finish.terminalReason ?? null],
+  );
+  if (attempt.rowCount !== 1) return false;
+  const intent = await client.query(
+    `UPDATE legacy_chat_task_intents SET state=$3,terminal_reason=$4,revision=revision+1,updated_at=now()
+     WHERE id=$1 AND current_attempt_id=$2 AND fencing_generation=$5
+       AND state IN ('admitted','running','cancelling')`,
+    [finish.identity.intentID, finish.identity.attemptID, finish.state,
+      finish.terminalReason ?? null, finish.identity.fencingGeneration],
+  );
+  return intent.rowCount === 1;
+}
+
+/**
+ * Monotonic source-free usage uncertainty for an ENTERED producer that failed
+ * or returned no usable receipt. A later success never erases it; a producer
+ * that never entered stays not_dispatched with no uncertainty.
+ */
+export async function markLifecycleUsageUncertain(
+  client: PoolClient | { query: PoolClient["query"] },
+  accountID: string,
+  identity: LifecycleIdentity,
+): Promise<void> {
+  await client.query(
+    `UPDATE legacy_chat_task_attempts SET usage_uncertain=true
+     WHERE account_id=$1 AND id=$2 AND fencing_generation=$3 AND dispatch_state<>'not_dispatched'`,
+    [accountID, identity.attemptID, identity.fencingGeneration],
+  );
+}
+
+/** Transaction-local fencing guard for the final short transaction. */
+export async function assertLifecycleAttemptCurrent(
+  client: PoolClient,
+  accountID: string,
+  identity: LifecycleIdentity,
+): Promise<void> {
+  const row = await client.query<{ state: LifecycleState }>(
+    `SELECT state FROM legacy_chat_task_attempts
+     WHERE account_id=$1 AND id=$2 AND fencing_generation=$3`,
+    [accountID, identity.attemptID, identity.fencingGeneration],
+  );
+  if (row.rows[0]?.state !== "running" && row.rows[0]?.state !== "admitted") throw fencedError();
+}
+
+export interface LifecycleStatus {
+  intent_id: string;
+  task_id: string;
+  attempt_id: string;
+  run_id: string;
+  operation_scope: string;
+  state: LifecycleState;
+  revision: number;
+  dispatch_state: LifecycleDispatchState;
+  usage_uncertain: boolean;
+  terminal_reason: string | null;
+  execution_authority_expires_at: string | null;
+  canonical_retention_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Metadata-only authenticated status readback. */
+export async function readLifecycleStatus(
+  pool: Pool,
+  auth: AuthContext,
+  taskID: string,
+): Promise<LifecycleStatus | null> {
+  const result = await pool.query<{
+    intent_id: string; task_id: string; attempt_id: string; run_id: string;
+    operation_scope: string; state: LifecycleState; revision: number;
+    dispatch_state: LifecycleDispatchState; usage_uncertain: boolean; terminal_reason: string | null;
+    execution_authority_expires_at: Date | null; canonical_retention_expires_at: Date | null;
+    created_at: Date; updated_at: Date;
+  }>(
+    `SELECT i.id AS intent_id,a.task_id,a.id AS attempt_id,a.run_id,i.operation_scope,a.state,
+       i.revision,a.dispatch_state,a.usage_uncertain,a.terminal_reason,
+       a.execution_authority_expires_at,i.canonical_retention_expires_at,i.created_at,i.updated_at
+     FROM legacy_chat_task_attempts a JOIN legacy_chat_task_intents i ON i.account_id=a.account_id AND i.id=a.intent_id
+     WHERE a.account_id=$1 AND a.actor_user_id=$2 AND a.task_id=$3
+     ORDER BY a.fencing_generation DESC LIMIT 1`,
+    [auth.accountId, auth.userId, taskID],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    ...row,
+    execution_authority_expires_at: row.execution_authority_expires_at?.toISOString() ?? null,
+    canonical_retention_expires_at: row.canonical_retention_expires_at?.toISOString() ?? null,
+    created_at: row.created_at.toISOString(),
+    updated_at: row.updated_at.toISOString(),
+  };
+}
+
+/**
+ * Explicit authenticated cancel. Only the winning POST owns disconnect
+ * cancellation; this command needs the current lawful owner plus exact
+ * task/attempt/revision CAS and can never stop a newer attempt.
+ */
+export async function requestLifecycleCancel(
+  pool: Pool,
+  auth: AuthContext,
+  taskID: string,
+  expected: { attemptID: string; revision: number },
+  abortInProcess = true,
+): Promise<LifecycleStatus> {
+  // One short transaction: the SELECT lock, the checked task/attempt/revision/
+  // fence CAS and the atomic 'cancelling' reservation commit together. The
+  // locked intentID is carried out of the reservation; physical presence is
+  // decided by exact registry ownership, never by a durable rowCount.
+  const client = await pool.connect();
+  let intentID = "";
+  try {
+    await client.query("BEGIN");
+    const row = await client.query<{ id: string; current_attempt_id: string; revision: number; state: LifecycleState; fencing_generation: string | number }>(
+      `SELECT id,current_attempt_id,revision,state,fencing_generation FROM legacy_chat_task_intents
+       WHERE account_id=$1 AND actor_user_id=$2 AND task_id=$3 FOR UPDATE`,
+      [auth.accountId, auth.userId, taskID],
+    );
+    const intent = row.rows[0];
+    if (!intent) throw new ApiError(404, "LEGACY_CHAT_TASK_NOT_FOUND", "The task is not available in this account.");
+    if (intent.revision !== expected.revision || intent.current_attempt_id !== expected.attemptID) throw fencedError();
+    if (!ACTIVE_STATES.includes(intent.state) && intent.state !== "interrupted_unknown") throw fencedError();
+    intentID = intent.id;
+    const reserved = await client.query(
+      `UPDATE legacy_chat_task_intents SET state='cancelling',revision=revision+1,updated_at=now()
+       WHERE id=$1 AND current_attempt_id=$2 AND revision=$3 AND state=ANY($4::text[])`,
+      [intent.id, expected.attemptID, expected.revision, [...ACTIVE_STATES, "interrupted_unknown"]],
+    );
+    if (reserved.rowCount !== 1) throw fencedError();
+    await client.query(
+      `UPDATE legacy_chat_task_attempts SET state='cancelling'
+       WHERE account_id=$1 AND id=$2 AND state=ANY($3::text[])`,
+      [auth.accountId, expected.attemptID, [...ACTIVE_STATES, "interrupted_unknown"]],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+  // Physical targeting happens only after the winning durable CAS and only for
+  // the exact attempt. A registered owner stays 'cancelling' and reachable: its
+  // own settlement terminalizes. An ownerless (process-dead/unknown) attempt is
+  // terminalized by one narrow checked atomic intent+attempt settlement that
+  // preserves dispatch-based usage uncertainty; remote absence is never proof
+  // of zero-cost settlement.
+  const owner = pendingLifecycleRunForAttempt(expected.attemptID);
+  if (abortInProcess && owner) abortLifecycleAttempt(expected.attemptID, "owner_cancel");
+  if (!owner) {
+    const settle = await pool.connect();
+    try {
+      await settle.query("BEGIN");
+      await settle.query(
+        `UPDATE legacy_chat_task_attempts SET state='cancelled',terminal_reason='owner_cancel',
+           usage_uncertain=usage_uncertain OR dispatch_state<>'not_dispatched',ended_at=now()
+         WHERE account_id=$1 AND id=$2 AND state IN ('cancelling','interrupted_unknown','admitted','running')`,
+        [auth.accountId, expected.attemptID],
+      );
+      await settle.query(
+        `UPDATE legacy_chat_task_intents SET state='cancelled',terminal_reason='owner_cancel',revision=revision+1,updated_at=now()
+         WHERE id=$1 AND current_attempt_id=$2 AND state IN ('cancelling','interrupted_unknown')`,
+        [intentID, expected.attemptID],
+      );
+      await settle.query("COMMIT");
+    } catch (error) {
+      await settle.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      settle.release();
+    }
+  }
+  const status = await readLifecycleStatus(pool, auth, taskID);
+  if (!status) throw new ApiError(404, "LEGACY_CHAT_TASK_NOT_FOUND", "The task is not available in this account.");
+  return status;
+}
+
+/**
+ * Explicit recovery decision for an interrupted_unknown attempt. It retires the
+ * old attempt, drains its exact physical owner to real settlement before any
+ * new attempt can run, and never starts provider work itself.
+ */
+export async function approveLifecycleRecovery(
+  pool: Pool,
+  auth: AuthContext,
+  taskID: string,
+  expected: { attemptID: string; revision: number },
+): Promise<LifecycleStatus> {
+  // A stale or forged decision is rejected before any physical side effect.
+  const precheck = await pool.query<{ id: string; current_attempt_id: string; revision: number; state: LifecycleState }>(
+    `SELECT id,current_attempt_id,revision,state FROM legacy_chat_task_intents
+     WHERE account_id=$1 AND actor_user_id=$2 AND task_id=$3`,
+    [auth.accountId, auth.userId, taskID],
+  );
+  const pending = precheck.rows[0];
+  if (!pending) throw new ApiError(404, "LEGACY_CHAT_TASK_NOT_FOUND", "The task is not available in this account.");
+  if (pending.state !== "interrupted_unknown"
+    || pending.revision !== expected.revision
+    || pending.current_attempt_id !== expected.attemptID) throw fencedError();
+  // Drain the exact physical owner to actual settlement BEFORE any durable
+  // state change: a still-pending non-cancellable provider refuses recovery
+  // outright and the intent keeps its honest unknown state.
+  await retireLifecycleRunForAttempt(pending.id, expected.attemptID, "explicit_recovery");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const row = await client.query<{ id: string; current_attempt_id: string; revision: number; state: LifecycleState }>(
+      `SELECT id,current_attempt_id,revision,state FROM legacy_chat_task_intents
+       WHERE account_id=$1 AND actor_user_id=$2 AND task_id=$3 FOR UPDATE`,
+      [auth.accountId, auth.userId, taskID],
+    );
+    const intent = row.rows[0];
+    if (!intent) throw new ApiError(404, "LEGACY_CHAT_TASK_NOT_FOUND", "The task is not available in this account.");
+    if (intent.state !== "interrupted_unknown"
+      || intent.revision !== expected.revision
+      || intent.current_attempt_id !== expected.attemptID) throw fencedError();
+    await client.query(
+      `UPDATE legacy_chat_task_intents SET state='failed_retryable',terminal_reason='recovery_approved',
+         revision=revision+1,updated_at=now() WHERE id=$1 AND current_attempt_id=$2 AND revision=$3`,
+      [intent.id, expected.attemptID, expected.revision],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+  const status = await readLifecycleStatus(pool, auth, taskID);
+  if (!status) throw new ApiError(404, "LEGACY_CHAT_TASK_NOT_FOUND", "The task is not available in this account.");
+  return status;
+}
+
+/**
+ * Public readback gate: a known lifecycle task without committed completion and
+ * a pending manifest are never completed provenance. A client-forged pending
+ * task/manifest id is denied without writing any permanent tombstone.
+ */
+export async function assertLegacyTaskReadbackAllowed(
+  client: PoolClient | { query: PoolClient["query"] },
+  accountID: string,
+  taskID: string,
+): Promise<void> {
+  const lifecycle = await client.query<{ state: LifecycleState }>(
+    `SELECT state FROM legacy_chat_task_attempts WHERE account_id=$1 AND task_id=$2
+     ORDER BY fencing_generation DESC LIMIT 1`,
+    [accountID, taskID],
+  );
+  const state = lifecycle.rows[0]?.state;
+  if (state && state !== "completed") {
+    throw new ApiError(
+      409,
+      "LEGACY_CHAT_TASK_NOT_COMPLETED",
+      "This request has no completed answer yet. Check its status instead of reading a result.",
+      { task_id: taskID, state },
+    );
+  }
+  const pending = await client.query(
+    `SELECT 1 FROM context_manifests WHERE account_id=$1 AND task_id=$2 AND status='pending'`,
+    [accountID, taskID],
+  );
+  if (pending.rowCount) {
+    throw new ApiError(
+      409,
+      "LEGACY_CHAT_TASK_NOT_COMPLETED",
+      "This request has no completed answer yet. Check its status instead of reading a result.",
+      { task_id: taskID, state: "admitted" },
+    );
+  }
+}
+
+/** Internal notification capability; never constructed from provider output. */
+export interface LifecycleMaintenanceOwner {
+  accountID: string;
+  actorUserID: string;
+  operationScope: "create_chat_task";
+  intentID: string;
+  taskID: string;
+  attemptID: string;
+  runID: string;
+  fencingGeneration: number;
+}
+export interface LifecycleMaintenanceRegistration {
+  accountID: string;
+  actorUserID: string;
+  operationScope: "create_chat_task";
+  onFailure: (error: ApiError) => void;
+}
+
+interface RuntimeEntry {
+  identity: LifecycleIdentity;
+  controller: AbortController;
+  /** Resolves ONLY at awaited final COMMIT or completed failure settlement. */
+  settled: Promise<void>;
+  /** Physical settlement flag; an aborted controller is still physically live. */
+  isSettled: boolean;
+  maintenance?: { owner: Readonly<LifecycleMaintenanceOwner>; onFailure: (error: ApiError) => void };
+}
+
+/**
+ * Physical owners are keyed by the exact attempt id and fenced by its fencing
+ * generation. A registration counts as physically pending REGARDLESS of its
+ * controller's aborted state: cancellation is a notification, never physical
+ * settlement. Registrations survive until actual final COMMIT or completed
+ * failure settlement so disconnect/shutdown/recovery can reach the owner.
+ */
+const runtimeRegistry = new Map<string, RuntimeEntry>();
+const runtimeByIntent = new Map<string, string>();
+
+/**
+ * Register the exact physical owner. The settled promise is REQUIRED and must
+ * resolve only at the awaited final COMMIT or the completed failure-settlement
+ * boundary. Conflicting or duplicate registrations of an unresolved owner are
+ * rejected instead of overwritten.
+ */
+export function registerLifecycleRun(identity: LifecycleIdentity, controller: AbortController, settled: Promise<void>, maintenance?: LifecycleMaintenanceRegistration): void {
+  const existing = runtimeRegistry.get(identity.attemptID);
+  if (existing && !existing.isSettled) {
+    if (existing.identity.fencingGeneration > identity.fencingGeneration) return;
+    throw new ApiError(409, "LEGACY_CHAT_PHYSICAL_OWNER_PENDING", "This attempt already has a physically pending owner.");
+  }
+  const ownerAttempt = runtimeByIntent.get(identity.intentID);
+  if (ownerAttempt && ownerAttempt !== identity.attemptID) {
+    const owner = runtimeRegistry.get(ownerAttempt);
+    if (owner && !owner.isSettled) {
+      throw new ApiError(409, "LEGACY_CHAT_PHYSICAL_OWNER_PENDING", "A previous attempt is still executing for this request.");
+    }
+    releaseLifecycleRun(ownerAttempt);
+  }
+  const entry: RuntimeEntry = { identity, controller, settled, isSettled: false,
+    ...(maintenance ? { maintenance: { owner: Object.freeze({
+      accountID: maintenance.accountID, actorUserID: maintenance.actorUserID, operationScope: maintenance.operationScope,
+      intentID: identity.intentID, taskID: identity.taskID, attemptID: identity.attemptID,
+      runID: identity.runID, fencingGeneration: identity.fencingGeneration,
+    }), onFailure: maintenance.onFailure } } : {}),
+  };
+  void settled.then(
+    () => { entry.isSettled = true; },
+    () => { entry.isSettled = true; },
+  );
+  runtimeRegistry.set(identity.attemptID, entry);
+  runtimeByIntent.set(identity.intentID, identity.attemptID);
+}
+
+/** Exact attempt release: a stale release never deletes a replacement owner. */
+export function releaseLifecycleRun(attemptID: string): void {
+  const entry = runtimeRegistry.get(attemptID);
+  if (!entry) return;
+  runtimeRegistry.delete(attemptID);
+  if (runtimeByIntent.get(entry.identity.intentID) === attemptID) {
+    runtimeByIntent.delete(entry.identity.intentID);
+  }
+}
+
+/** Copies contain identity metadata only; abort does not remove a physical owner. */
+export function pendingLifecycleMaintenanceOwners(): LifecycleMaintenanceOwner[] {
+  return [...runtimeRegistry.values()].flatMap(entry => !entry.isSettled && entry.maintenance
+    ? [{ ...entry.maintenance.owner }] : []);
+}
+
+/** Trusted maintenance calls this only after its exact durable COMMIT and release. */
+export function notifyLifecycleMaintenanceOwner(owner: LifecycleMaintenanceOwner, error: ApiError): boolean {
+  const entry = runtimeRegistry.get(owner.attemptID);
+  const actual = entry?.maintenance?.owner;
+  if (!entry || entry.isSettled || !actual || entry.controller.signal.aborted
+    || runtimeByIntent.get(owner.intentID) !== owner.attemptID
+    || actual.accountID !== owner.accountID || actual.actorUserID !== owner.actorUserID
+    || actual.operationScope !== owner.operationScope || actual.intentID !== owner.intentID
+    || actual.taskID !== owner.taskID || actual.runID !== owner.runID
+    || actual.fencingGeneration !== owner.fencingGeneration) return false;
+  try { entry.maintenance!.onFailure(error); }
+  finally { entry.controller.abort(error); }
+  return true;
+}
+
+export function abortLifecycleAttempt(attemptID: string, reason: string): boolean {
+  const entry = runtimeRegistry.get(attemptID);
+  if (!entry || entry.controller.signal.aborted) return false;
+  entry.controller.abort(new Error(`LEGACY_CHAT_CANCELLED:${reason}`));
+  return true;
+}
+
+export function abortLifecycleRun(intentID: string, reason: string): boolean {
+  const attemptID = runtimeByIntent.get(intentID);
+  return attemptID ? abortLifecycleAttempt(attemptID, reason) : false;
+}
+
+/** Process shutdown: signal every owned run and fence late writes. */
+export function abortAllLifecycleRuns(reason: string): number {
+  let count = 0;
+  for (const [attemptID] of runtimeRegistry) if (abortLifecycleAttempt(attemptID, reason)) count += 1;
+  return count;
+}
+
+export function activeLifecycleRuns(): LifecycleIdentity[] {
+  return [...runtimeRegistry.values()].map((entry) => entry.identity);
+}
+
+/** Physical presence, regardless of abort state: only settlement ends a run. */
+export function pendingLifecycleRunForIntent(intentID: string): LifecycleIdentity | null {
+  const attemptID = runtimeByIntent.get(intentID);
+  const entry = attemptID ? runtimeRegistry.get(attemptID) : undefined;
+  return entry && !entry.isSettled ? entry.identity : null;
+}
+
+export function pendingLifecycleRunForAttempt(attemptID: string): LifecycleIdentity | null {
+  const entry = runtimeRegistry.get(attemptID);
+  return entry && !entry.isSettled ? entry.identity : null;
+}
+
+/**
+ * Retire a still-physically-pending owner OUTSIDE any database transaction:
+ * abort its exact attempt and await its real settlement. On short drain timeout
+ * the registration and its settled promise are RETAINED (the owner is still
+ * physically live) and a typed pending conflict is returned; the drain timer is
+ * always cleared. No wait is ever performed while a row lock or client is held.
+ */
+export async function retireLifecycleRunForAttempt(intentID: string, attemptID: string, reason: string, waitMs = 5_000): Promise<void> {
+  const entry = runtimeRegistry.get(attemptID);
+  if (!entry || entry.identity.intentID !== intentID) return;
+  if (entry.isSettled) {
+    releaseLifecycleRun(attemptID);
+    return;
+  }
+  abortLifecycleAttempt(attemptID, reason);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const drained = await Promise.race([
+    entry.settled.then(() => true),
+    new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), waitMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (!drained) {
+    // Still physically pending: keep the registration and settled promise so
+    // every repeated retry observes the same pending owner.
+    throw new ApiError(409, "LEGACY_CHAT_PHYSICAL_OWNER_PENDING", "The previous attempt is still executing. It must settle before recovery can run again.");
+  }
+  releaseLifecycleRun(attemptID);
+}
+
+/** Internal capability bound again to the stored ordinary Chat owner per tick. */
+export interface LifecycleHeartbeatSelection {
+  manifestID: string;
+  expiresAt: Date | null;
+  assertCurrent: (client: PoolClient) => Promise<void>;
+  onFailure: (error: ApiError) => void;
+}
+
+export interface LifecycleHeartbeatStop {
+  (): void;
+  /** Stop future ticks and await actual in-flight maintenance outside a TX. */
+  drain(): Promise<void>;
+}
+
+export function startLifecycleHeartbeat(
+  pool: { connect: Pool["connect"] },
+  auth: AuthContext,
+  identity: LifecycleIdentity,
+  controller: AbortController,
+  leaseMs = DEFAULT_LEASE_MS,
+  serving?: ServingAuthorityResolver,
+  selection?: LifecycleHeartbeatSelection,
+): LifecycleHeartbeatStop {
+  let stopped = false;
+  let currentTick: Promise<void> | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  // Copy once. A renewed receipt or mutable caller Date cannot move this bound.
+  const selectedDeadline = !selection || selection.expiresAt === null ? null
+    : selection.expiresAt instanceof Date ? selection.expiresAt.valueOf() : NaN;
+  const stop = () => {
+    stopped = true;
+    if (timer) { clearInterval(timer); timer = undefined; }
+  };
+  const tick = async () => {
+    if (stopped) return;
+    let client: PoolClient | undefined;
+    let failure: ApiError | undefined;
+    try {
+      client = await pool.connect();
+      await client.query("BEGIN");
+      const authority = await assertOriginalAuthority(client, auth, identity, true, serving);
+      if (selection) {
+        if (authority.original.kind !== "ordinary" || authority.operationScope !== "create_chat_task"
+          || authority.manifestID !== selection.manifestID) {
+          throw new ApiError(409, "LEGACY_CHAT_AUTHORITY_EXPIRED", "The original Chat owner is no longer current.");
+        }
+        await selection.assertCurrent(client);
+      }
+      if (authority.original.kind !== "ordinary") {
+        // Row contention precedes BEFORE triggers. Acquire the exact Lab
+        // attempt without waiting before its renewal UPDATE too.
+        await client.query(`SELECT id FROM legacy_chat_task_attempts
+          WHERE account_id=$1 AND actor_user_id=$2 AND id=$3 AND intent_id=$4
+            AND task_id=$5 AND run_id=$6 AND fencing_generation=$7 FOR UPDATE NOWAIT`,
+        [auth.accountId, auth.userId, identity.attemptID, identity.intentID,
+          identity.taskID, identity.runID, identity.fencingGeneration]);
+      }
+      await heartbeatLifecycleAttempt(client, auth.accountId, identity, leaseMs);
+      if (selection) await selection.assertCurrent(client);
+      await assertOriginalAuthority(client, auth, identity, true, serving);
+      if (selection) {
+        // Source and authority probes are awaits. Sample after all of them and
+        // compare the originally copied clocks, retaining every lock to COMMIT.
+        const checkedAt = (await client.query<{ checked_at: Date }>(
+          "SELECT clock_timestamp() AS checked_at",
+        )).rows[0]?.checked_at;
+        if (!(checkedAt instanceof Date) || !Number.isFinite(checkedAt.valueOf())
+          || authority.deadlines.some(deadline => !Number.isFinite(deadline) || deadline <= checkedAt.valueOf())) {
+          throw new ApiError(409, "LEGACY_CHAT_AUTHORITY_EXPIRED", "The original authorization for this request expired.");
+        }
+        if (selectedDeadline !== null && (!Number.isFinite(selectedDeadline) || selectedDeadline <= checkedAt.valueOf())) {
+          throw new ApiError(409, "CHAT_COMPLETION_SOURCE_CHANGED", "The selected source expired while this answer was being prepared.");
+        }
+        const owner = pendingLifecycleRunForAttempt(identity.attemptID);
+        if (!owner || owner.intentID !== identity.intentID || owner.taskID !== identity.taskID
+          || owner.runID !== identity.runID || owner.fencingGeneration !== identity.fencingGeneration) {
+          throw new ApiError(409, "LEGACY_CHAT_AUTHORITY_EXPIRED", "The original Chat owner is no longer current.");
+        }
+        assertServingAuthority(authority.original, serving);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      // Acquisition, query, CAS, authority or COMMIT failure is ownership
+      // uncertainty: abort this exact owner (its registration stays until real
+      // settlement) and stop renewing. Never an unhandled rejection.
+      try { await client?.query("ROLLBACK"); } catch { /* outage: uncertainty */ }
+      failure = error instanceof ApiError ? error
+        : new ApiError(409, "LEGACY_CHAT_AUTHORITY_LOST", "The current execution owner could not be verified.");
+      stop();
+    } finally {
+      try { client?.release(); } catch { /* released or broken pool */ }
+    }
+    // Abort listeners may start cancellation transactions. Release first, and
+    // retain the exact physical registration until the producer really settles.
+    if (failure) {
+      if (selection) {
+        try { selection.onFailure(failure); } catch { /* hook cannot replace the winning failure */ }
+      }
+      if (!controller.signal.aborted) controller.abort(selection ? failure : new Error("LEGACY_CHAT_AUTHORITY_LOST"));
+    }
+  };
+  timer = setInterval(() => {
+    if (stopped || currentTick) return;
+    // Register before connect or any hook can synchronously reenter drain.
+    const pending = Promise.resolve().then(tick);
+    currentTick = pending;
+    const clear = () => { if (currentTick === pending) currentTick = undefined; };
+    void pending.then(clear, clear);
+  }, Math.max(1_000, Math.floor(leaseMs / 4)));
+  timer.unref();
+  return Object.assign(stop, { drain: async () => {
+    stop();
+    const pending = currentTick;
+    await pending;
+  } });
+}
+
+/** Compose client/source/lease/shutdown signals; the first reason wins. */
+export function composeLifecycleSignals(
+  sources: readonly (AbortSignal | undefined)[],
+  onAbort?: (reason: string, error: Error) => void,
+): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  let firstReasonLatched = false;
+  const listeners: Array<() => void> = [];
+  for (const source of sources) {
+    if (!source) continue;
+    const listener = () => {
+      if (firstReasonLatched || controller.signal.aborted) return;
+      firstReasonLatched = true;
+      const error = source.reason instanceof Error ? source.reason : new Error("LEGACY_CHAT_CANCELLED");
+      try { onAbort?.(source.reason instanceof Error ? source.reason.message : "aborted", error); }
+      catch { /* notification cannot replace the first reason or suppress abort */ }
+      finally { controller.abort(error); }
+    };
+    if (source.aborted) listener();
+    else {
+      source.addEventListener("abort", listener, { once: true });
+      listeners.push(() => source.removeEventListener("abort", listener));
+    }
+  }
+  return { signal: controller.signal, dispose: () => { for (const remove of listeners) remove(); } };
+}

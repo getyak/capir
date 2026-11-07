@@ -1,0 +1,321 @@
+import { assertHarnessLabAuthority } from "./harnessSourceGuard.js";
+import { randomUUID } from "node:crypto";
+import type { Pool, PoolClient } from "pg";
+import type { HarnessContinuation, HarnessContinuationFactory } from "@talent-signal/agent";
+import type { AuthContext } from "./auth.js";
+import { assertSessionForChat } from "./agentSessionSources.js";
+import { digestValue } from "../lib/hash.js";
+import { ApiError } from "../lib/apiError.js";
+import { inTransaction, type DatabaseClient } from "../database/pool.js";
+import {
+  acquireHarnessSessionLease,
+  assertHarnessSessionLease,
+  releaseHarnessSessionLease,
+  renewHarnessSessionLease,
+  type HarnessLeaseIdentity,
+} from "./legacyChatLeases.js";
+
+type Store = HarnessContinuation["store"];
+type Key = Parameters<Store["load"]>[0];
+type Entry = Parameters<Store["append"]>[1][number];
+interface Binding {
+  id: string; sdk_session_id: string; configuration_fingerprint: string;
+  scope_fingerprint: string; source_generation: string; committed_turns: number;
+  pending_attempt_id: string | null; pending_fencing_generation: string | number | null;
+}
+const unavailable = () => new ApiError(409, "HARNESS_SESSION_UNAVAILABLE", "The working context changed. Retry from the current Session.");
+
+export async function sweepHarnessSessions(database: DatabaseClient, accountID?: string): Promise<void> {
+  // Expired leases mean ownership lost, never that the old provider stopped.
+  await database.query(`DELETE FROM harness_session_leases l
+    WHERE ($1::uuid IS NULL OR l.account_id=$1) AND l.lease_until<=clock_timestamp()`, [accountID ?? null]);
+  await database.query(`UPDATE harness_sessions h SET invalidated_at=clock_timestamp(),pending_attempt_id=NULL
+    WHERE h.invalidated_at IS NULL AND ($1::uuid IS NULL OR h.account_id=$1) AND
+      (h.expires_at<=clock_timestamp() OR NOT EXISTS (SELECT 1 FROM agent_sessions s
+        WHERE s.account_id=h.account_id AND s.id=h.product_session_id AND s.created_by_user_id=h.owner_user_id
+          AND s.deleted_at IS NULL AND s.expires_at>clock_timestamp()))`, [accountID ?? null]);
+  // A binding whose unpublished attempt lost its lease is disposable cache only.
+  await database.query(`UPDATE harness_sessions h SET invalidated_at=clock_timestamp(),pending_attempt_id=NULL
+    WHERE h.invalidated_at IS NULL AND h.pending_attempt_id IS NOT NULL
+      AND ($1::uuid IS NULL OR h.account_id=$1) AND NOT EXISTS (
+      SELECT 1 FROM harness_session_leases l WHERE l.account_id=h.account_id
+        AND l.product_session_id=h.product_session_id AND l.lease_owner_attempt_id=h.pending_attempt_id
+        AND l.lease_until>clock_timestamp())`, [accountID ?? null]);
+  await database.query(`DELETE FROM harness_session_entries e USING harness_sessions h
+    WHERE e.account_id=h.account_id AND e.harness_session_id=h.id AND h.invalidated_at IS NOT NULL
+      AND ($1::uuid IS NULL OR h.account_id=$1)`, [accountID ?? null]);
+}
+
+export interface HarnessContinuationOwner {
+  /** Current lifecycle attempt (or queue claim) identity fencing all writes. */
+  attemptID: string;
+  taskID?: string | null;
+  leaseMs?: number;
+}
+
+export interface HarnessContinuationController {
+  factory: HarnessContinuationFactory;
+  /** True when the SDK reported a clean finish and the binding awaits commit. */
+  ready(): boolean;
+  /**
+   * Called exactly once inside the product final transaction. `committed=true`
+   * atomically increments committed_turns and releases the lease together with
+   * the canonical product result; `committed=false` invalidates the disposable
+   * binding and its checkpoint entries without touching canonical history.
+   */
+  finalize(client: PoolClient, committed: boolean): Promise<void>;
+}
+
+/**
+ * Durable Session-exclusive lease replacing the transaction-scoped advisory
+ * lock and savepoint. Every store callback opens its own short transaction and
+ * requires this attempt's lease fence; no PoolClient is retained across SDK,
+ * provider, tool-network or filesystem work. Failed/unknown/cancelled attempts
+ * invalidate the disposable binding instead of resuming later.
+ */
+export function createHarnessContinuationController(
+  pool: Pool,
+  auth: AuthContext,
+  productSessionID: string,
+  scope: { kind: "workspace_conversation" } | { kind: "relationship"; personID: string; contextID: string },
+  sources: () => { expiresAt: Date; personIDs: readonly string[] },
+  owner: HarnessContinuationOwner,
+): HarnessContinuationController {
+  let lease: HarnessLeaseIdentity | null = null;
+  let binding: Binding | null = null;
+  let finished = false;
+  let readyToCommit = false;
+  let pending: Promise<void> = Promise.resolve();
+  let appendFailure: unknown;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const stopHeartbeat = () => { if (heartbeat) clearInterval(heartbeat); heartbeat = undefined; };
+  const startHeartbeat = () => {
+    if (heartbeat) return;
+    heartbeat = setInterval(() => {
+      // The lease is a liveness control, never a model deadline: a lawful long
+      // SDK run renews its exact fence only while its original authority and
+      // source expiry remain current.
+      void (async () => {
+        if (!lease || finished) { stopHeartbeat(); return; }
+        try {
+          await inTransaction(pool, async client => {
+            await renewHarnessSessionLease(client, lease!, owner.leaseMs ?? 65_000);
+            await assertCurrent(false, client);
+          });
+        } catch {
+          // Ownership or authority was lost: stop renewing. The fenced writer
+          // fails its CAS and the disposable binding is invalidated on finalize.
+          stopHeartbeat();
+        }
+      })();
+    }, 10_000);
+    heartbeat.unref();
+  };
+
+  const invalidate = async (client: PoolClient) => {
+    if (binding) {
+      await client.query("UPDATE harness_sessions SET invalidated_at=clock_timestamp(),pending_attempt_id=NULL WHERE account_id=$1 AND id=$2", [auth.accountId, binding.id]);
+      await client.query("DELETE FROM harness_session_entries WHERE account_id=$1 AND harness_session_id=$2", [auth.accountId, binding.id]);
+      binding = null;
+    }
+    if (lease) await releaseHarnessSessionLease(client, lease);
+    lease = null;
+  };
+
+  // Guards route through the caller's supplied transaction client so a final
+  // or callback transaction never nests a second pool claim.
+  const assertCurrent = async (fence = false, client: DatabaseClient = pool) => {
+    if (finished) throw unavailable();
+    await assertHarnessLabAuthority(client, auth, "recheck");
+    // Independent autocommit statements notice a pending source writer without
+    // retaining a read lock. Pool starvation fails closed.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const visible = await Promise.race([
+        client.query(`SELECT 1 FROM harness_source_generations g JOIN agent_sessions s ON s.account_id=g.account_id
+          WHERE g.account_id=$1 AND g.generation=$2 AND s.id=$3 AND s.created_by_user_id=$4
+            AND s.deleted_at IS NULL AND s.expires_at>clock_timestamp()
+          FOR SHARE OF g,s NOWAIT`, [auth.accountId, binding?.source_generation, productSessionID, auth.userId]),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(unavailable()), 1000); }),
+      ]);
+      if (!visible.rowCount) throw unavailable();
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "55P03") throw unavailable();
+      throw error;
+    } finally { if (timer) clearTimeout(timer); }
+    const authority = sources();
+    if (!Number.isFinite(authority.expiresAt.valueOf())) throw unavailable();
+    if (binding) {
+      // A matched identity can age out without any worker changing its status.
+      await client.query(`UPDATE harness_sessions SET expires_at=LEAST(expires_at,$3,
+        (SELECT min(valid_until) FROM identity_handles WHERE account_id=$1 AND subject_id=ANY($4::uuid[]) AND status='confirmed'))
+        WHERE account_id=$1 AND id=$2`, [auth.accountId, binding.id, authority.expiresAt, [...authority.personIDs]]);
+    }
+    const ownerRow = (await client.query(`SELECT 1 FROM harness_sessions h JOIN harness_source_generations g ON g.account_id=h.account_id
+      JOIN agent_sessions s ON s.account_id=h.account_id AND s.id=h.product_session_id AND s.created_by_user_id=h.owner_user_id
+      WHERE h.account_id=$1 AND h.id=$2 AND h.owner_user_id=$3 AND h.product_session_id=$4 AND h.invalidated_at IS NULL
+        AND h.source_generation=g.generation AND h.expires_at>clock_timestamp() AND s.deleted_at IS NULL AND s.expires_at>clock_timestamp()
+      ${fence ? "FOR SHARE OF g,s NOWAIT" : ""}`, [auth.accountId, binding?.id, auth.userId, productSessionID])).rowCount;
+    if (!ownerRow) throw unavailable();
+    if (lease) await assertHarnessSessionLease(client, lease);
+  };
+
+  const store: Store = {
+    append: (key, entries) => {
+      const operation = pending.then(async () => {
+        if (appendFailure) throw appendFailure;
+        await inTransaction(pool, async client => {
+          if (lease) await assertHarnessSessionLease(client, lease);
+          const path = subpath(key);
+          await assertCurrent(false, client);
+          for (const entry of entries) {
+            if (!entry || typeof entry.type !== "string" || (entry.uuid !== undefined && (typeof entry.uuid !== "string" || !entry.uuid || entry.uuid.length > 200))) throw unavailable();
+            const raw = JSON.stringify(entry);
+            const inserted = await client.query(`INSERT INTO harness_session_entries(account_id,harness_session_id,subpath,entry_uuid,body)
+              VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(account_id,harness_session_id,subpath,entry_uuid) DO NOTHING RETURNING ordinal`,
+              [auth.accountId, binding!.id, path, entry.uuid ?? null, raw]);
+            if (!inserted.rowCount && !(await client.query(`SELECT 1 FROM harness_session_entries
+              WHERE account_id=$1 AND harness_session_id=$2 AND subpath=$3 AND entry_uuid=$4 AND body=$5::jsonb`,
+              [auth.accountId, binding!.id, path, entry.uuid, raw])).rowCount) throw new Error("HARNESS_SESSION_ENTRY_CONFLICT");
+          }
+        });
+      });
+      pending = operation.catch(error => { appendFailure ??= error; });
+      return operation;
+    },
+    load: async key => {
+      const path = subpath(key); await assertCurrent();
+      const rows = (await pool.query<{ body: Entry }>(`SELECT body FROM harness_session_entries
+        WHERE account_id=$1 AND harness_session_id=$2 AND subpath=$3 ORDER BY ordinal`, [auth.accountId, binding!.id, path])).rows;
+      return rows.length ? rows.map(row => row.body) : null;
+    },
+    listSubkeys: async key => {
+      subpath(key); await assertCurrent();
+      return (await pool.query<{ subpath: string }>(`SELECT DISTINCT subpath FROM harness_session_entries
+        WHERE account_id=$1 AND harness_session_id=$2 AND subpath<>'' ORDER BY subpath`, [auth.accountId, binding!.id])).rows.map(row => row.subpath);
+    },
+    delete: async key => {
+      subpath(key); await assertCurrent();
+      await inTransaction(pool, async client => {
+        if (lease) await assertHarnessSessionLease(client, lease);
+        await client.query("UPDATE harness_sessions SET invalidated_at=clock_timestamp(),pending_attempt_id=NULL WHERE account_id=$1 AND id=$2", [auth.accountId, binding!.id]);
+        await client.query("DELETE FROM harness_session_entries WHERE account_id=$1 AND harness_session_id=$2", [auth.accountId, binding!.id]);
+      });
+    },
+  };
+  function subpath(key: Key) {
+    if (!binding || key.sessionId !== binding.sdk_session_id) throw unavailable();
+    if (key.subpath === undefined) return "";
+    if (!/^subagents\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/u.test(key.subpath) || key.subpath.length > 240) throw unavailable();
+    return key.subpath;
+  }
+
+  const factory: HarnessContinuationFactory = async configurationFingerprint => {
+    const sourceExpiresAt = sources().expiresAt;
+    if (lease || !/^[a-f0-9]{64}$/u.test(configurationFingerprint) || !Number.isFinite(sourceExpiresAt.valueOf()) || sourceExpiresAt.valueOf() <= Date.now()) throw unavailable();
+    const scopeFingerprint = digestValue({ owner: auth.userId, session: productSessionID, ...scope });
+    binding = await inTransaction(pool, async client => {
+      // The real product Session is validated before its lease is claimed; a
+      // foreign user never becomes a lease owner.
+      const expires = await assertSessionForChat(client, auth, productSessionID);
+      const acquired = await acquireHarnessSessionLease(client, {
+        accountID: auth.accountId,
+        productSessionID,
+        ownerUserID: auth.userId,
+        attemptID: owner.attemptID,
+        taskID: owner.taskID ?? null,
+        scopeFingerprint,
+      }, owner.leaseMs ?? 65_000);
+      lease = acquired;
+      await sweepHarnessSessions(client, auth.accountId);
+      // Account creation commits this baseline before any long SDK run.
+      const generation = (await client.query<{ generation: string }>("SELECT generation FROM harness_source_generations WHERE account_id=$1", [auth.accountId])).rows[0]?.generation;
+      if (generation === undefined) throw unavailable();
+      let row = (await client.query<Binding>(`SELECT id,sdk_session_id,configuration_fingerprint,scope_fingerprint,source_generation,committed_turns,
+          pending_attempt_id,pending_fencing_generation
+        FROM harness_sessions WHERE account_id=$1 AND product_session_id=$2 AND owner_user_id=$3 AND invalidated_at IS NULL`,
+        [auth.accountId, productSessionID, auth.userId])).rows[0];
+      if (row && (row.configuration_fingerprint !== configurationFingerprint || row.scope_fingerprint !== scopeFingerprint || row.source_generation !== generation
+        || (row.pending_attempt_id && row.pending_attempt_id !== owner.attemptID))) {
+        // Disposable unpublished state of a failed/other attempt is discarded;
+        // canonical completed turns live in the product store, never here.
+        await client.query("UPDATE harness_sessions SET invalidated_at=clock_timestamp(),pending_attempt_id=NULL WHERE account_id=$1 AND id=$2", [auth.accountId, row.id]);
+        await client.query("DELETE FROM harness_session_entries WHERE account_id=$1 AND harness_session_id=$2", [auth.accountId, row.id]);
+        row = undefined;
+      }
+      if (!row) {
+        row = (await client.query<Binding>(`INSERT INTO harness_sessions
+          (account_id,id,product_session_id,owner_user_id,sdk_session_id,configuration_fingerprint,scope_fingerprint,source_generation,expires_at,pending_attempt_id,pending_fencing_generation)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,LEAST($9,$10,now()+interval '7 days'),$11,$12) RETURNING id,sdk_session_id,configuration_fingerprint,scope_fingerprint,source_generation,committed_turns,pending_attempt_id,pending_fencing_generation`,
+          [auth.accountId, randomUUID(), productSessionID, auth.userId, randomUUID(), configurationFingerprint, scopeFingerprint, generation, expires, sourceExpiresAt,
+            owner.attemptID, acquired.fencingGeneration])).rows[0]!;
+      } else {
+        await client.query("UPDATE harness_sessions SET pending_attempt_id=$3,pending_fencing_generation=$4,expires_at=LEAST(expires_at,$5) WHERE account_id=$1 AND id=$2",
+          [auth.accountId, row.id, owner.attemptID, acquired.fencingGeneration, sourceExpiresAt]);
+      }
+      return row;
+    });
+    startHeartbeat();
+    return {
+      sessionID: binding!.sdk_session_id,
+      resume: binding!.committed_turns > 0,
+      store,
+      assertCurrent,
+      finish: async completed => {
+        if (finished) throw unavailable();
+        stopHeartbeat();
+        await pending;
+        if (!completed || appendFailure) {
+          finished = true;
+          await inTransaction(pool, invalidate);
+          readyToCommit = false;
+          if (completed && appendFailure) throw appendFailure;
+          return;
+        }
+        await assertCurrent(true);
+        const persisted = (await pool.query("SELECT 1 FROM harness_session_entries WHERE account_id=$1 AND harness_session_id=$2 AND subpath='' LIMIT 1", [auth.accountId, binding!.id])).rowCount;
+        if (!persisted) {
+          finished = true;
+          await inTransaction(pool, invalidate);
+          throw new Error("HARNESS_SESSION_MIRROR_EMPTY");
+        }
+        readyToCommit = true;
+        finished = true;
+      },
+    };
+  };
+
+  return {
+    factory,
+    ready: () => readyToCommit,
+    async finalize(client: PoolClient, committed: boolean) {
+      stopHeartbeat();
+      if (!lease) return;
+      if (!binding) {
+        if (lease) await releaseHarnessSessionLease(client, lease);
+        lease = null;
+        return;
+      }
+      // A turn that never reached its ready checkpoint transition (or whose
+      // product result was rejected) must not become resumable: the disposable
+      // binding is invalidated instead of committed.
+      if (committed && readyToCommit) {
+        const updated = await client.query(
+          `UPDATE harness_sessions SET committed_turns=committed_turns+1,pending_attempt_id=NULL,pending_fencing_generation=NULL
+           WHERE account_id=$1 AND id=$2 AND pending_attempt_id=$3 AND invalidated_at IS NULL`,
+          [auth.accountId, binding.id, owner.attemptID],
+        );
+        if (updated.rowCount !== 1) throw unavailable();
+        await client.query(`UPDATE harness_session_leases SET lease_until=clock_timestamp()
+          WHERE account_id=$1 AND product_session_id=$2 AND lease_owner_attempt_id=$3 AND lease_fencing_generation=$4`,
+          [auth.accountId, productSessionID, owner.attemptID, lease.fencingGeneration]);
+        await client.query(`DELETE FROM harness_session_leases
+          WHERE account_id=$1 AND product_session_id=$2 AND lease_owner_attempt_id=$3 AND lease_fencing_generation=$4`,
+          [auth.accountId, productSessionID, owner.attemptID, lease.fencingGeneration]);
+      } else {
+        await invalidate(client);
+      }
+      readyToCommit = false;
+    },
+  };
+}

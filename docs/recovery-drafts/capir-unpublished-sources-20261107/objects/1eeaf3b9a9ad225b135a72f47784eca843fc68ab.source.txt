@@ -1,0 +1,33 @@
+import type { ConversationMessage } from "./types.js";
+
+/**
+ * Product history selection: keep role/current-message filtering and original
+ * source semantics (message_id, role, exact text) with no size or count
+ * clipping. The SDK owns context capacity and compaction, so history is never
+ * silently truncated before the SDK.
+ */
+export function selectConversationHistory(
+  messages: readonly ConversationMessage[] = [],
+  currentMessageID?: string,
+): ConversationMessage[] {
+  return messages
+    .filter(
+      (message) =>
+        message.message_id !== currentMessageID &&
+        Boolean(message.text.trim()) &&
+        (message.role === "user" || message.role === "assistant"),
+    )
+    .map((message) => ({
+      message_id: message.message_id,
+      role: message.role,
+      text: message.text,
+    }));
+}
+
+/** Compatibility name; selection no longer clips message content or count. */
+export function boundedConversationHistory(
+  messages: readonly ConversationMessage[] = [],
+  currentMessageID?: string,
+): ConversationMessage[] {
+  return selectConversationHistory(messages, currentMessageID);
+}

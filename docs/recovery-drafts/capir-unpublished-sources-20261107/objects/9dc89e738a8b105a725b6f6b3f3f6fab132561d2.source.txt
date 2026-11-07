@@ -1,0 +1,71 @@
+import { boundedBody, providerHeaders } from './provider.js';
+import { fail, LIMIT, object, type ModelProfile } from './types.js';
+
+/** Process-local selected-model facts, never catalogue guesses or credentials. */
+export interface ModelCapacity {
+  requested_model: string;
+  resolved_model: string | null;
+  binding: 'metadata' | 'unresolved';
+  max_input_tokens: number | null;
+  max_output_tokens: number | null;
+  output_policy: 'caller' | 'provider_default' | 'advertised_maximum';
+}
+
+function capacity(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
+    fail('CAPIR_MODEL_PROTOCOL', 'Selected-model metadata contains an invalid capacity.', 3);
+  return value;
+}
+
+export async function resolveOutputPolicy(profile: ModelProfile, key: string, requestedModel: string, explicitTokens: number | undefined, signal: AbortSignal): Promise<{ model: string; maxTokens?: number; pinnedModel?: string; capacity: ModelCapacity }> {
+  signal.throwIfAborted();
+  if (explicitTokens !== undefined && (!Number.isSafeInteger(explicitTokens) || explicitTokens < 1))
+    fail('CAPIR_CLI_INVALID_ARGUMENT', 'Output allowance must be a positive safe integer.');
+  const facts: ModelCapacity = {
+    requested_model: requestedModel, resolved_model: null, binding: 'unresolved',
+    max_input_tokens: null, max_output_tokens: null,
+    output_policy: explicitTokens === undefined ? 'provider_default' : 'caller',
+  };
+  if (profile.provider === 'openai-compatible')
+    return { model: requestedModel, ...(explicitTokens === undefined ? {} : { maxTokens: explicitTokens }), capacity: facts };
+
+  const response = await fetch(profile.base_url + '/models/' + encodeURIComponent(requestedModel), {
+    headers: providerHeaders(profile, key), redirect: 'error', signal,
+  });
+  if ([404, 405, 501].includes(response.status)) {
+    // Unsupported metadata is different from malformed, denied or failed metadata.
+    await response.body?.cancel();
+    signal.throwIfAborted();
+  } else {
+    if (!response.ok) {
+      await response.body?.cancel();
+      signal.throwIfAborted();
+      fail('CAPIR_MODEL_HTTP', `Selected-model metadata HTTP ${response.status}; no automatic retry was made.`, response.status === 401 || response.status === 403 ? 4 : response.status === 429 ? 5 : 3);
+    }
+    let value: unknown;
+    try { value = JSON.parse(await boundedBody(response, signal, LIMIT.discovery)); }
+    catch (error) {
+      signal.throwIfAborted();
+      if (error instanceof SyntaxError) fail('CAPIR_MODEL_PROTOCOL', 'Selected-model metadata contains malformed JSON.', 3);
+      throw error;
+    }
+    signal.throwIfAborted();
+    if (!object(value) || value.type !== 'model' || typeof value.id !== 'string' || !value.id.trim())
+      fail('CAPIR_MODEL_PROTOCOL', 'Selected-model metadata has no valid model identity.', 3);
+    facts.resolved_model = value.id;
+    facts.binding = 'metadata';
+    facts.max_input_tokens = capacity(value.max_input_tokens);
+    facts.max_output_tokens = capacity(value.max_tokens);
+  }
+  const maxTokens = explicitTokens ?? facts.max_output_tokens;
+  if (maxTokens === null || maxTokens === undefined)
+    fail('CAPIR_MODEL_CAPACITY_UNAVAILABLE', 'This Anthropic endpoint requires an output allowance but exposes no usable output capacity; supply --max-tokens explicitly.', 3);
+  if (facts.max_output_tokens !== null && maxTokens > facts.max_output_tokens)
+    fail('CAPIR_MODEL_TOKEN_LIMIT', 'Explicit output allowance exceeds the selected model\'s advertised output capacity; no generation was dispatched.', 5);
+  if (explicitTokens === undefined) facts.output_policy = 'advertised_maximum';
+  return {
+    model: facts.resolved_model ?? requestedModel, maxTokens,
+    ...(facts.resolved_model === null ? {} : { pinnedModel: facts.resolved_model }), capacity: facts,
+  };
+}

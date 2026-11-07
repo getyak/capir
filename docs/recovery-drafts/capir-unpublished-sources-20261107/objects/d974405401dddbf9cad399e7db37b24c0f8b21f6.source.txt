@@ -1,0 +1,169 @@
+import { resolve } from "node:path";
+import { homedir } from "node:os";
+
+import {
+  PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+  PersonResearchServiceRequestSchema,
+  PersonResearchServiceResponseSchema,
+  type AgentPersonResearchTerminalReceipt,
+  type PersonResearchServiceRequest,
+  type PersonResearchServiceResponse,
+} from "@talent-signal/agent";
+
+import {
+  type LocalPersonResearchDependencies,
+  runLocalPersonResearchImage,
+} from "./personResearchCommand.js";
+import { LocalPersonResearchStore } from "./localPersonResearchStore.js";
+
+function serviceReceipt(receipt: AgentPersonResearchTerminalReceipt) {
+  return {
+    run_id: receipt.runID,
+    status: receipt.status,
+    reason_code: receipt.reasonCode,
+    artifact_id: receipt.artifactID,
+    no_action_id: receipt.noActionID,
+    candidate_fingerprint: receipt.candidateFingerprint,
+    external_effects: [],
+    permission_denials: receipt.permissionDenials,
+    provider_session_id: receipt.providerSessionID,
+    usage: {
+      input_tokens: receipt.usage.inputTokens,
+      output_tokens: receipt.usage.outputTokens,
+      total_tokens: receipt.usage.totalTokens,
+      estimated_usd: receipt.usage.estimatedUsd,
+      turns: receipt.usage.turns,
+      tool_calls: receipt.usage.toolCalls,
+      duration_ms: receipt.usage.durationMs,
+    },
+    completed_at: receipt.completedAt,
+  } as const;
+}
+
+export interface PersonResearchServiceDependencies
+  extends LocalPersonResearchDependencies {
+  stateRoot?: string;
+}
+
+export async function runPersonResearchServiceRequest(
+  rawRequest: unknown,
+  environment: NodeJS.ProcessEnv = process.env,
+  dependencies: PersonResearchServiceDependencies = {},
+  signal?: AbortSignal,
+): Promise<PersonResearchServiceResponse> {
+  const request: PersonResearchServiceRequest =
+    PersonResearchServiceRequestSchema.parse(rawRequest);
+  const bytes = Buffer.from(request.image.data_base64, "base64");
+  if (bytes.byteLength !== request.image.byte_size) {
+    throw new Error(
+      "The person-research service image size does not match its task envelope.",
+    );
+  }
+  const stateRoot = dependencies.stateRoot ??
+    (environment.TALENT_SIGNAL_AGENT_STATE_DIR?.trim()
+      ? resolve(environment.TALENT_SIGNAL_AGENT_STATE_DIR.trim())
+      : resolve(homedir(), ".talent-signal", "agent"));
+  const result = await runLocalPersonResearchImage(
+    {
+      bytes,
+      mediaType: request.image.media_type,
+      expectedContentHash: request.image.content_hash,
+      objective: request.objective,
+      allowedPlatforms: request.authorization.allowed_platforms,
+      maximumProviderCalls: request.authorization.maximum_provider_calls,
+      maximumResultsPerCall:
+        request.authorization.maximum_results_per_call,
+      runID: request.run_id,
+      stateRoot,
+    },
+    environment,
+    dependencies,
+    signal,
+  );
+  const store = new LocalPersonResearchStore(stateRoot);
+  let serviceResult: PersonResearchServiceResponse["result"];
+  if (
+    result.receipt.status === "artifact_created" &&
+    result.receipt.candidateFingerprint
+  ) {
+    const artifact = await store.readArtifact(
+      request.run_id,
+      result.receipt.candidateFingerprint,
+    );
+    if (
+      !artifact ||
+      artifact.identityAuthority !== "unconfirmed" ||
+      artifact.publicationAuthority !== "none" ||
+      artifact.externalEffectAuthority !== "none"
+    ) {
+      throw new Error(
+        "The local person-research artifact did not preserve its authority boundary.",
+      );
+    }
+    serviceResult = {
+      kind: "artifact",
+      identity_status: artifact.candidate.identityStatus,
+      title: artifact.candidate.title,
+      summary: artifact.candidate.summary,
+      limitations: artifact.candidate.limitations,
+      observed_clues: artifact.candidate.observedClues.map((clue) => ({
+        kind: clue.kind,
+        value: clue.value,
+        source_artifact_id: clue.sourceArtifactID,
+        observation_status: clue.observationStatus,
+      })),
+      candidates: artifact.candidate.candidates.map((candidate) => ({
+        result_id: candidate.resultID,
+        match_basis: candidate.matchBasis,
+      })),
+      claims: artifact.candidate.claims.map((claim) => ({
+        statement: claim.statement,
+        epistemic_status: claim.epistemicStatus,
+        source_refs: claim.sourceRefs,
+      })),
+      sources: artifact.candidate.sources.map((source) => ({
+        result_id: source.resultID,
+        platform: source.platform,
+        profile_url: source.profileUrl,
+        display_name: source.displayName,
+        handle: source.handle,
+        biography: source.biography,
+        avatar_url: source.avatarUrl,
+        verified: source.verified,
+        content_hash: source.contentHash,
+        retrieved_at: source.retrievedAt,
+        provider_id: "tikhub" as const,
+        provider_request_id: source.providerRequestID,
+      })),
+    };
+  } else if (
+    result.receipt.status === "no_action" &&
+    result.receipt.candidateFingerprint
+  ) {
+    const noAction = await store.readNoAction(
+      request.run_id,
+      result.receipt.candidateFingerprint,
+    );
+    if (!noAction) {
+      throw new Error("The local person-research no-action record is missing.");
+    }
+    serviceResult = {
+      kind: "no_action",
+      reason_code: noAction.candidate.reasonCode,
+      reason: noAction.candidate.reason,
+    };
+  } else {
+    serviceResult = {
+      kind: "unavailable",
+      reason_code: result.receipt.reasonCode,
+      reason:
+        "The local public-profile Agent did not complete this screenshot Run. No identity was confirmed and no external effect occurred.",
+    };
+  }
+  return PersonResearchServiceResponseSchema.parse({
+    contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+    run_id: request.run_id,
+    receipt: serviceReceipt(result.receipt),
+    result: serviceResult,
+  });
+}

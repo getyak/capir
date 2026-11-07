@@ -1,0 +1,59 @@
+import Foundation
+import CryptoKit
+
+struct AppSessionEnding: Codable, Identifiable {
+    enum Local: String, Codable { case pending, removed, failed }
+    enum Remote: String, Codable { case pending, revoked, alreadyInvalid, unverified, expired }
+    enum Failure: String, Codable { case storage, network, server, invalidResponse, cancelled }
+    let id: UUID
+    let endpointScope: String
+    let credentialFingerprint: String
+    let identityFingerprint: String
+    let startedAt: Date
+    let expiresAt: Date
+    var local: Local = .pending
+    var remote: Remote = .pending
+    var failure: Failure?
+    // Accessible only through the endpoint's protected ending journal. This
+    // credential never participates in normal session restore or report export.
+    var credential: TalentSignalSession?
+    /// Source-free identity of the exact transfer partition, retained after
+    /// revocation clears credentials so failed cleanup remains retryable.
+    var deltaPartitionScope: String?
+    var deltaCleanupPending: Bool?
+    var remoteSettled: Bool { [.revoked, .alreadyInvalid, .expired].contains(remote) }
+    var settled: Bool { local == .removed && remoteSettled && deltaCleanupPending != true }
+    static func fingerprint(_ session: TalentSignalSession) -> String {
+        SHA256.hex(RuntimeEndpoint.scope(session.baseURL) + "|" + session.accessToken)
+    }
+    init(id: UUID = UUID(), session: TalentSignalSession, now: Date = Date()) {
+        self.id = id; endpointScope = RuntimeEndpoint.scope(session.baseURL)
+        credentialFingerprint = Self.fingerprint(session); startedAt = now; expiresAt = session.expiresAt
+        identityFingerprint = SHA256.hex(session.account.id + "|" + session.user.id)
+        credential = session
+        deltaPartitionScope = SHA256.hex(endpointScope + "|" + session.account.id + "|" + session.user.id)
+        deltaCleanupPending = true
+    }
+}
+
+struct AppSessionEndingArchive: Codable {
+    let version: Int
+    var records: [AppSessionEnding]
+}
+
+
+struct AppSessionEndingReceipt: Identifiable {
+    let id: UUID
+    let startedAt: Date
+    let expiresAt: Date
+    let local: AppSessionEnding.Local
+    let remote: AppSessionEnding.Remote
+    let failure: AppSessionEnding.Failure?
+    let deltaCleanupPending: Bool
+    var settled: Bool { local == .removed && [.revoked, .alreadyInvalid, .expired].contains(remote) && !deltaCleanupPending }
+    init(_ record: AppSessionEnding) {
+        id = record.id; startedAt = record.startedAt; expiresAt = record.expiresAt
+        local = record.local; remote = record.remote; failure = record.failure
+        deltaCleanupPending = record.deltaCleanupPending == true
+    }
+}

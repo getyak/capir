@@ -1,0 +1,28 @@
+import type { AgentBudget } from "./types.js";
+
+/**
+ * Historical fixed V1 ceilings, retained only as a named compatibility export
+ * for existing consumers. These values are never enforced and are never used as
+ * default limits: absent budget fields mean no imposed limit. Do not use them to
+ * construct new budgets.
+ *
+ * @deprecated No ceiling is enforced; declare explicit finite-positive budget
+ * fields only for deliberately bounded tasks.
+ */
+export const AGENT_BUDGET_CEILING: Readonly<AgentBudget> = Object.freeze({
+  maxTurns: 6,
+  maxToolCalls: 12,
+  maxDurationMs: 60_000,
+  maxTaskTokens: 32_000,
+  maxEstimatedUsd: 1,
+});
+
+export class AgentCapabilityError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AgentCapabilityError";
+  }
+}

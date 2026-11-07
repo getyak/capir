@@ -1,0 +1,197 @@
+import { randomUUID } from "node:crypto";
+import { NextRequest, type NextResponse } from "next/server";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ claims: vi.fn() }));
+vi.mock("@/lib/server/backendAuth", () => ({
+  readBackendSessionClaims: mocks.claims, backendAuthBaseUrl: () => "http://127.0.0.1:4317", authSecret: () => "synthetic-auth-key",
+}));
+import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-session";
+import { MAIL_SCOPES } from "@/lib/server/mail-integration-config";
+import { GET, POST } from "./route";
+let identity: { backendAccountId: string; backendUserId: string; backendAccessToken: string; backendExpiresAt: string };
+let scope: string;
+let calls: Array<{ url: string; init: RequestInit | undefined }>;
+let override: ((url: string, init: RequestInit | undefined) => Response | Promise<Response> | null) | null;
+const origin = "http://localhost:3000";
+function context(provider: string, operation: string) { return { params: Promise.resolve({ provider, operation }) }; }
+function request(provider: string, operation: string, method: string, cookie = "", query = "", body?: unknown) {
+  return new NextRequest(`${origin}/api/integrations/mail/${provider}/${operation}${query}`, {
+    method, headers: { host: "localhost:3000", origin, "x-workspace-session": contactHandoffSessionVersion(identity as never),
+      "x-talent-signal-workspace": identity.backendAccountId, cookie, ...(body ? { "content-type": "application/json" } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+}
+function cookie(response: NextResponse, suffix: string) {
+  const found = response.cookies.getAll().find(c => c.name.endsWith(suffix));
+  expect(found).toBeDefined();
+  return `${found!.name}=${found!.value}`;
+}
+function respond(value: unknown, status = 200) { return Response.json(value, { status }); }
+beforeEach(() => {
+  vi.clearAllMocks(); calls = []; override = null;
+  identity = { backendAccountId: randomUUID(), backendUserId: randomUUID(), backendAccessToken: "synthetic-owner-token", backendExpiresAt: "2099-01-01T00:00:00Z" };
+  scope = MAIL_SCOPES.gmail.join(" "); mocks.claims.mockResolvedValue(identity);
+  for (const [key, value] of Object.entries({ NODE_ENV: "development", TALENT_SIGNAL_MAIL_TEST_ENABLED: "true", TALENT_SIGNAL_INTEGRATIONS_ORIGIN: origin,
+    TALENT_SIGNAL_INTEGRATIONS_KEY: Buffer.alloc(32, 9).toString("base64"), TALENT_SIGNAL_GMAIL_CLIENT_ID: "synthetic-google-id", TALENT_SIGNAL_GMAIL_CLIENT_SECRET: "synthetic-google-secret",
+    TALENT_SIGNAL_OUTLOOK_CLIENT_ID: "synthetic-outlook-id", TALENT_SIGNAL_OUTLOOK_CLIENT_SECRET: "synthetic-outlook-secret" })) vi.stubEnv(key, value);
+  vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init?: RequestInit) => {
+    const url = String(input); calls.push({ url, init });
+    const replacement = override?.(url, init); if (replacement) return replacement;
+    if (url.endsWith("/v1/auth/session")) return respond({ account: { id: identity.backendAccountId }, user: { id: identity.backendUserId } });
+    if (url.includes("/token")) return respond({ access_token: "synthetic-mail-token", token_type: "Bearer", expires_in: 3600, scope });
+    if (url.endsWith("/profile")) return respond({ emailAddress: "synthetic@example.com" });
+    if (url.startsWith("https://gmail.googleapis.com") && url.includes("/messages?")) return respond({ messages: [{ id: "a1" }] });
+    if (url.includes("/messages/a1?")) return respond({ id: "a1", threadId: "thread1", internalDate: String(Date.now() - 1000), payload: { headers: [
+      { name: "Subject", value: "Synthetic partnership discussion" }, { name: "From", value: "Partner <partner@example.com>" }, { name: "To", value: "synthetic@example.com" },
+    ] } });
+    if (url.includes("/me?$select")) return respond({ id: "graph-owner", mail: "synthetic@example.com" });
+    if (url.includes("/mailFolders/inbox/messages?")) return respond({ value: [{ id: "graph-message", subject: "Synthetic client kickoff", from: { emailAddress: { address: "partner@example.com" } },
+      toRecipients: [], receivedDateTime: "2026-10-01T09:00:00Z", webLink: "https://outlook.office.com/mail/deeplink/read/graph-message" }] });
+    throw new Error("Unexpected endpoint in deterministic test");
+  }));
+});
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+async function start(provider = "gmail") {
+  const response = await POST(request(provider, "start", "POST", "", "", { returnTo: "/workspace/sessions" }), context(provider, "start"));
+  expect(response.status).toBe(200);
+  const authorization = new URL((await response.json()).authorizationUrl);
+  return { attemptCookie: cookie(response, "attempt"), state: authorization.searchParams.get("state")!, authorization, response };
+}
+async function connect(provider = "gmail") {
+  const attempt = await start(provider);
+  const response = await GET(request(provider, "callback", "GET", attempt.attemptCookie, `?state=${attempt.state}&code=synthetic-code`), context(provider, "callback"));
+  expect(response.status).toBe(303);
+  expect(response.headers.get("location")).toContain("result=authorized");
+  return { ...attempt, grantCookie: cookie(response, "grant"), callbackResponse: response };
+}
+
+it("keeps unavailable providers honest and refuses cross-origin or stale sessions before provider IO", async () => {
+  vi.stubEnv("TALENT_SIGNAL_MAIL_TEST_ENABLED", "false");
+  const status = await GET(request("gmail", "status", "GET"), context("gmail", "status"));
+  expect(await status.json()).toEqual({ configured: false, connected: false, expiresAt: null, connectionVersion: null });
+  expect((await POST(request("gmail", "start", "POST", "", "", {}), context("gmail", "start"))).status).toBe(503);
+  const hostile = request("gmail", "start", "POST", "", "", {}); hostile.headers.set("origin", "https://hostile.invalid");
+  expect((await POST(hostile, context("gmail", "start"))).status).toBe(403);
+  const stale = request("gmail", "status", "GET"); stale.headers.set("x-workspace-session", "old");
+  expect((await GET(stale, context("gmail", "status"))).status).toBe(409);
+  expect(calls.every(c => c.url.endsWith("/v1/auth/session"))).toBe(true);
+});
+it("requires live backend authority rather than cookie claims", async () => {
+  override = url => url.endsWith("/v1/auth/session") ? respond({ error: { code: "backend_session_expired", message: "synthetic-revoked" } }, 401) : null;
+  expect((await GET(request("gmail", "status", "GET"), context("gmail", "status"))).status).toBe(401);
+  expect((await POST(request("gmail", "start", "POST", "", "", {}), context("gmail", "start"))).status).toBe(401);
+  expect(calls.every(c => c.url.endsWith("/v1/auth/session"))).toBe(true);
+});
+it("runs the actual Gmail start/callback/read path without body access, refresh or token exposure", async () => {
+  const connection = await connect();
+  expect(connection.authorization.hostname).toBe("accounts.google.com");
+  expect(connection.authorization.searchParams.get("scope")).toBe(MAIL_SCOPES.gmail[0]);
+  expect(connection.authorization.searchParams.get("code_challenge_method")).toBe("S256");
+  expect(connection.authorization.searchParams.get("access_type")).toBe("online");
+  expect(connection.callbackResponse.headers.get("location")).not.toContain("synthetic-mail-token");
+  const response = await POST(request("gmail", "test", "POST", connection.grantCookie), context("gmail", "test"));
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toContain("no-store");
+  const preview = await response.json();
+  expect(preview).toMatchObject({ provider: "gmail", status: "verified", account: "synthetic@example.com", scope: "inbox_metadata_sample" });
+  expect(preview.items).toHaveLength(1);
+  expect(preview.items[0].sourceUrl).toContain("authuser=synthetic%40example.com");
+  expect(JSON.stringify(preview)).not.toContain("synthetic-mail-token");
+  const gmailCalls = calls.filter(c => c.url.startsWith("https://gmail.googleapis.com"));
+  expect(gmailCalls).toHaveLength(3);
+  expect(gmailCalls.find(c => c.url.includes("/messages?"))!.url).not.toMatch(/[?&]q=/);
+  expect(gmailCalls.find(c => c.url.includes("/messages/a1?"))!.url).toContain("format=metadata");
+  expect(gmailCalls.every(c => c.init?.redirect === "error")).toBe(true);
+  expect(connection.callbackResponse.cookies.getAll().find(c => c.name.endsWith("grant"))).toMatchObject({ httpOnly: true, sameSite: "lax", maxAge: expect.any(Number) });
+});
+it("runs Outlook Graph metadata with exact selection and rejects hostile source links", async () => {
+  scope = "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadBasic";
+  const connection = await connect("outlook");
+  const response = await POST(request("outlook", "test", "POST", connection.grantCookie), context("outlook", "test"));
+  expect(response.status).toBe(200);
+  expect((await response.json()).items[0].subject).toBe("Synthetic client kickoff");
+  const query = new URL(calls.find(c => c.url.includes("/mailFolders/inbox/messages?"))!.url);
+  expect(query.searchParams.get("$top")).toBe("3");
+  expect(query.searchParams.get("$select")).not.toMatch(/body|attachments/);
+  override = url => url.includes("/mailFolders/inbox/messages?") ? respond({ value: [{ id: "graph-message", webLink: "https://hostile.invalid/steal", subject: "Fixture" }] }) : null;
+  const hostile = await POST(request("outlook", "test", "POST", connection.grantCookie), context("outlook", "test"));
+  expect((await hostile.json()).items[0].sourceUrl).toBeNull();
+});
+it("distinguishes a verified empty mailbox and sanitized failed reads", async () => {
+  const connection = await connect();
+  override = url => url.includes("/messages?") ? respond({}) : null;
+  const empty = await POST(request("gmail", "test", "POST", connection.grantCookie), context("gmail", "test"));
+  expect(await empty.json()).toMatchObject({ status: "empty", items: [] });
+  override = url => url.endsWith("/profile") ? respond({ secret: "private-provider-error synthetic-mail-token" }, 403) : null;
+  const denied = await POST(request("gmail", "test", "POST", connection.grantCookie), context("gmail", "test"));
+  expect(denied.status).toBe(403);
+  expect(JSON.stringify(await denied.json())).not.toContain("synthetic-mail-token");
+});
+it("rejects wrong state, wrong provider, replay, cancelled consent and partial/overbroad scope", async () => {
+  const attempt = await start();
+  const wrong = await GET(request("gmail", "callback", "GET", attempt.attemptCookie, "?state=wrong&code=synthetic"), context("gmail", "callback"));
+  expect(wrong.headers.get("location")).toContain("result=expired");
+  const foreign = await GET(request("outlook", "callback", "GET", attempt.attemptCookie, `?state=${attempt.state}&code=synthetic`), context("outlook", "callback"));
+  expect(foreign.headers.get("location")).toContain("result=expired");
+  const cancel = await GET(request("gmail", "callback", "GET", attempt.attemptCookie, `?state=${attempt.state}&error=access_denied`), context("gmail", "callback"));
+  expect(cancel.headers.get("location")).toContain("result=cancelled");
+  const replay = await GET(request("gmail", "callback", "GET", attempt.attemptCookie, `?state=${attempt.state}&code=synthetic`), context("gmail", "callback"));
+  expect(replay.headers.get("location")).toContain("result=expired");
+  expect(calls.filter(c => c.url.includes("/token"))).toHaveLength(0);
+  for (const permissions of ["openid", `${MAIL_SCOPES.gmail[0]} https://www.googleapis.com/auth/gmail.send`]) {
+    scope = permissions;
+    const retry = await start();
+    const declined = await GET(request("gmail", "callback", "GET", retry.attemptCookie, `?state=${retry.state}&code=synthetic`), context("gmail", "callback"));
+    expect(declined.headers.get("location")).toContain("result=failed");
+    expect(declined.cookies.getAll().some(c => c.name.endsWith("grant"))).toBe(false);
+  }
+});
+it("disconnect invalidates a captured grant cookie and stays available when configuration disappears", async () => {
+  const connection = await connect();
+  vi.stubEnv("TALENT_SIGNAL_MAIL_TEST_ENABLED", "false");
+  const cleared = await POST(request("gmail", "disconnect", "POST", connection.grantCookie), context("gmail", "disconnect"));
+  expect(cleared.status).toBe(200);
+  vi.stubEnv("TALENT_SIGNAL_MAIL_TEST_ENABLED", "true");
+  expect((await POST(request("gmail", "test", "POST", connection.grantCookie), context("gmail", "test"))).status).toBe(401);
+});
+it("a replacement attempt survives an old in-flight callback response", async () => {
+  const first = await start();
+  let release!: (response: Response) => void;
+  let entered!: () => void;
+  const reached = new Promise<void>(resolve => { entered = resolve; });
+  override = url => url.includes("/token") ? new Promise<Response>(resolve => { release = resolve; entered(); }) : null;
+  const pending = GET(request("gmail", "callback", "GET", first.attemptCookie, `?state=${first.state}&code=first`), context("gmail", "callback"));
+  await reached;
+  const newer = await start();
+  release(respond({ access_token: "synthetic-mail-token", token_type: "Bearer", expires_in: 3600, scope }));
+  const oldResponse = await pending;
+  expect(oldResponse.headers.get("location")).toContain("result=expired");
+  expect(oldResponse.cookies.getAll()).toHaveLength(0);
+  override = null;
+  const newResponse = await GET(request("gmail", "callback", "GET", newer.attemptCookie, `?state=${newer.state}&code=newer`), context("gmail", "callback"));
+  expect(newResponse.headers.get("location")).toContain("result=authorized");
+});
+it("disconnect during the final live-session read suppresses an old preview", async () => {
+  const connection = await connect();
+  let release!: (response: Response) => void;
+  let entered!: () => void;
+  const reached = new Promise<void>(resolve => { entered = resolve; });
+  let count = 0;
+  override = url => url.endsWith("/v1/auth/session") && ++count === 2 ? new Promise<Response>(resolve => { release = resolve; entered(); }) : null;
+  const pending = POST(request("gmail", "test", "POST", connection.grantCookie), context("gmail", "test"));
+  await reached;
+  const cleared = await POST(request("gmail", "disconnect", "POST", connection.grantCookie), context("gmail", "disconnect"));
+  expect(cleared.status).toBe(200);
+  release(respond({ account: { id: identity.backendAccountId }, user: { id: identity.backendUserId } }));
+  const response = await pending;
+  expect(response.status).toBe(409);
+  expect((await response.json()).code).toBe("MAIL_GRANT_EXPIRED");
+});
+it("rejects a changed workspace without exporting a private provider result", async () => {
+  const connection = await connect();
+  identity = { ...identity, backendAccountId: randomUUID() };
+  mocks.claims.mockResolvedValue(identity);
+  const response = await POST(request("gmail", "test", "POST", connection.grantCookie), context("gmail", "test"));
+  expect(response.status).toBe(401);
+  expect((await response.json()).code).toBe("MAIL_GRANT_EXPIRED");
+});

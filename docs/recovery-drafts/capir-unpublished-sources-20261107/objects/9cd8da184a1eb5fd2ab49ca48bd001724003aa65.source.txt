@@ -1,0 +1,311 @@
+import type { PoolClient } from "pg";
+
+import { ApiError } from "../lib/apiError.js";
+import { digestValue } from "../lib/hash.js";
+
+/**
+ * Shared durable execution leases for the legacy Chat lifecycle slice:
+ *
+ *  - harness_session_leases: one exclusive writer per real product Session,
+ *    coordinated by every queue/legacy/checkpoint writer;
+ *  - lab_operation_claims: one live Lab operation claim per account, decided by
+ *    durable ownership instead of run age.
+ *
+ * Both are metadata-only: no credential, no raw staging content, no answer.
+ */
+
+export interface HarnessLeaseIdentity {
+  accountID: string;
+  productSessionID: string;
+  ownerUserID: string;
+  attemptID: string;
+  taskID: string | null;
+  scopeFingerprint: string;
+  fencingGeneration: number;
+}
+
+export interface LabClaimIdentity {
+  accountID: string;
+  operationKind: "lab_experiment" | "lab_job";
+  operationID: string;
+  actorUserID: string;
+  attemptID: string;
+  fencingGeneration: number;
+}
+
+const busy = (details?: Record<string, unknown>) =>
+  new ApiError(409, "HARNESS_SESSION_BUSY", "Another turn is still using this Session.", details);
+
+function fencedError(code = "HARNESS_SESSION_LEASE_FENCED"): ApiError {
+  return new ApiError(409, code, "A newer owner holds this execution lease.");
+}
+
+/** Acquire (or fenced-replace a stale) Session lease in the caller's short transaction. */
+export async function acquireHarnessSessionLease(
+  client: PoolClient,
+  identity: Omit<HarnessLeaseIdentity, "fencingGeneration">,
+  leaseMs: number,
+): Promise<HarnessLeaseIdentity> {
+  const scopeFingerprint = digestValue({
+    owner: identity.ownerUserID,
+    session: identity.productSessionID,
+    scope: identity.scopeFingerprint,
+    attempt: identity.attemptID,
+  });
+  const existing = await client.query<{
+    lease_owner_attempt_id: string;
+    lease_fencing_generation: string | number;
+    lease_until: Date;
+  }>(
+    `SELECT lease_owner_attempt_id,lease_fencing_generation,lease_until
+     FROM harness_session_leases WHERE account_id=$1 AND product_session_id=$2 FOR UPDATE`,
+    [identity.accountID, identity.productSessionID],
+  );
+  const row = existing.rows[0];
+  if (row && row.lease_until.valueOf() > Date.now() && row.lease_owner_attempt_id !== identity.attemptID) {
+    throw busy();
+  }
+  const fencingGeneration = row ? Number(row.lease_fencing_generation) + 1 : 1;
+  if (row) {
+    await client.query(
+      `UPDATE harness_session_leases SET owner_user_id=$3,lease_owner_attempt_id=$4,lease_task_id=$5,
+         lease_fencing_generation=$6,scope_fingerprint=$7,
+         lease_until=clock_timestamp()+($8::double precision * interval '1 second'),renewed_at=clock_timestamp()
+       WHERE account_id=$1 AND product_session_id=$2`,
+      [identity.accountID, identity.productSessionID, identity.ownerUserID, identity.attemptID,
+        identity.taskID, fencingGeneration, scopeFingerprint, leaseMs / 1000],
+    );
+  } else {
+    await client.query(
+      `INSERT INTO harness_session_leases(account_id,product_session_id,owner_user_id,lease_owner_attempt_id,
+         lease_task_id,lease_fencing_generation,scope_fingerprint,lease_until)
+       VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp()+($8::double precision * interval '1 second'))`,
+      [identity.accountID, identity.productSessionID, identity.ownerUserID, identity.attemptID,
+        identity.taskID, fencingGeneration, scopeFingerprint, leaseMs / 1000],
+    );
+  }
+  return { ...identity, scopeFingerprint, fencingGeneration };
+}
+
+export async function renewHarnessSessionLease(
+  client: PoolClient,
+  identity: HarnessLeaseIdentity,
+  leaseMs: number,
+): Promise<void> {
+  const updated = await client.query(
+    `UPDATE harness_session_leases SET lease_until=clock_timestamp()+($4::double precision * interval '1 second'),renewed_at=clock_timestamp()
+     WHERE account_id=$1 AND product_session_id=$2 AND lease_owner_attempt_id=$3 AND lease_fencing_generation=$5`,
+    [identity.accountID, identity.productSessionID, identity.attemptID, leaseMs / 1000, identity.fencingGeneration],
+  );
+  if (updated.rowCount !== 1) throw fencedError();
+}
+
+export async function assertHarnessSessionLease(client: PoolClient | { query: PoolClient["query"] }, identity: HarnessLeaseIdentity): Promise<void> {
+  const row = await client.query<{ ok: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM harness_session_leases
+      WHERE account_id=$1 AND product_session_id=$2 AND lease_owner_attempt_id=$3
+        AND lease_fencing_generation=$4 AND lease_until>clock_timestamp()) AS ok`,
+    [identity.accountID, identity.productSessionID, identity.attemptID, identity.fencingGeneration],
+  );
+  if (!row.rows[0]?.ok) throw fencedError();
+}
+
+/** CAS release: never removes a replacement owner's binding. */
+export async function releaseHarnessSessionLease(client: PoolClient, identity: HarnessLeaseIdentity): Promise<boolean> {
+  const removed = await client.query(
+    `DELETE FROM harness_session_leases
+     WHERE account_id=$1 AND product_session_id=$2 AND lease_owner_attempt_id=$3 AND lease_fencing_generation=$4`,
+    [identity.accountID, identity.productSessionID, identity.attemptID, identity.fencingGeneration],
+  );
+  return removed.rowCount === 1;
+}
+
+// ---------------------------------------------------------------------------
+// Lab account admission registry. Both the simple experiment API and the batch
+// job API take the same account claim before dispatch; eligibility never
+// depends on run age.
+// ---------------------------------------------------------------------------
+
+export interface LabClaimParams {
+  accountID: string;
+  operationKind: "lab_experiment" | "lab_job";
+  operationID: string;
+  actorUserID: string;
+  attemptID: string;
+  leaseMs: number;
+  executionAuthorityExpiresAt?: Date | null;
+  canonicalRetentionExpiresAt?: Date | null;
+}
+
+export interface LabClaimRow {
+  operationKind: "lab_experiment" | "lab_job";
+  operationID: string;
+  attemptID: string;
+  fencingGeneration: number;
+  state: "claimed" | "running" | "cancelling" | "settled" | "unknown";
+  leaseUntil: Date;
+  executionAuthorityExpiresAt: Date | null;
+  canonicalRetentionExpiresAt: Date | null;
+}
+
+export function labOperationBusyError(): ApiError {
+  return new ApiError(409, "LAB_OPERATION_BUSY", "This account already has a live Lab operation.");
+}
+
+/**
+ * Register the account claim inside the caller's short admission transaction.
+ * A stale claim is retired to honest unknown metadata and replaced; a live
+ * claim by anyone in the account is busy. Returns the winning claim identity.
+ */
+export async function claimLabOperation(client: PoolClient, params: LabClaimParams): Promise<LabClaimRow> {
+  const existing = await client.query<{
+    operation_kind: "lab_experiment" | "lab_job";
+    operation_id: string;
+    attempt_id: string;
+    fencing_generation: string | number;
+    state: LabClaimRow["state"];
+    lease_until: Date;
+    execution_authority_expires_at: Date | null;
+    canonical_retention_expires_at: Date | null;
+  }>(
+    `SELECT operation_kind,operation_id,attempt_id,fencing_generation,state,lease_until,
+       execution_authority_expires_at,canonical_retention_expires_at
+     FROM lab_operation_claims WHERE account_id=$1 FOR UPDATE`,
+    [params.accountID],
+  );
+  const row = existing.rows[0];
+  const live = row && (row.state === "claimed" || row.state === "running" || row.state === "cancelling")
+    && row.lease_until.valueOf() > Date.now();
+  if (live) {
+    if (row.attempt_id === params.attemptID && row.operation_id === params.operationID) {
+      return {
+        operationKind: row.operation_kind,
+        operationID: row.operation_id,
+        attemptID: row.attempt_id,
+        fencingGeneration: Number(row.fencing_generation),
+        state: row.state,
+        leaseUntil: row.lease_until,
+        executionAuthorityExpiresAt: row.execution_authority_expires_at,
+        canonicalRetentionExpiresAt: row.canonical_retention_expires_at,
+      };
+    }
+    throw labOperationBusyError();
+  }
+  const fencingGeneration = row ? Number(row.fencing_generation) + 1 : 1;
+  if (row) {
+    await client.query(
+      `UPDATE lab_operation_claims SET operation_kind=$2,operation_id=$3,actor_user_id=$4,attempt_id=$5,
+         fencing_generation=$6,state='claimed',lease_until=clock_timestamp()+($7::double precision * interval '1 second'),
+         execution_authority_expires_at=$8,canonical_retention_expires_at=$9,renewed_at=clock_timestamp(),settled_at=NULL
+       WHERE account_id=$1`,
+      [params.accountID, params.operationKind, params.operationID, params.actorUserID, params.attemptID,
+        fencingGeneration, params.leaseMs / 1000, params.executionAuthorityExpiresAt ?? null,
+        params.canonicalRetentionExpiresAt ?? null],
+    );
+  } else {
+    await client.query(
+      `INSERT INTO lab_operation_claims(account_id,operation_kind,operation_id,actor_user_id,attempt_id,
+         fencing_generation,state,lease_until,execution_authority_expires_at,canonical_retention_expires_at)
+       VALUES($1,$2,$3,$4,$5,$6,'claimed',clock_timestamp()+($7::double precision * interval '1 second'),$8,$9)`,
+      [params.accountID, params.operationKind, params.operationID, params.actorUserID, params.attemptID,
+        fencingGeneration, params.leaseMs / 1000, params.executionAuthorityExpiresAt ?? null,
+        params.canonicalRetentionExpiresAt ?? null],
+    );
+  }
+  return {
+    operationKind: params.operationKind,
+    operationID: params.operationID,
+    attemptID: params.attemptID,
+    fencingGeneration,
+    state: "claimed",
+    leaseUntil: new Date(Date.now() + params.leaseMs),
+    executionAuthorityExpiresAt: params.executionAuthorityExpiresAt ?? null,
+    canonicalRetentionExpiresAt: params.canonicalRetentionExpiresAt ?? null,
+  };
+}
+
+/** Renew ownership only; never renews execution authority or content retention. */
+export async function renewLabOperationClaim(
+  client: PoolClient | { query: PoolClient["query"] },
+  claim: LabClaimRow,
+  accountID: string,
+  leaseMs: number,
+): Promise<void> {
+  const updated = await client.query(
+    `UPDATE lab_operation_claims SET lease_until=clock_timestamp()+($4::double precision * interval '1 second'),renewed_at=clock_timestamp()
+     WHERE account_id=$1 AND attempt_id=$2 AND fencing_generation=$3
+       AND state IN ('claimed','running','cancelling')
+       AND (execution_authority_expires_at IS NULL OR execution_authority_expires_at>clock_timestamp())
+       AND (canonical_retention_expires_at IS NULL OR canonical_retention_expires_at>clock_timestamp())`,
+    [accountID, claim.attemptID, claim.fencingGeneration, leaseMs / 1000],
+  );
+  if (updated.rowCount !== 1) throw fencedError("LAB_OPERATION_CLAIM_FENCED");
+}
+
+export async function assertLabOperationClaim(
+  client: PoolClient | { query: PoolClient["query"] },
+  claim: LabClaimRow,
+  accountID: string,
+): Promise<void> {
+  const row = await client.query<{ ok: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM lab_operation_claims
+      WHERE account_id=$1 AND attempt_id=$2 AND fencing_generation=$3
+        AND state IN ('claimed','running','cancelling') AND lease_until>clock_timestamp()) AS ok`,
+    [accountID, claim.attemptID, claim.fencingGeneration],
+  );
+  if (!row.rows[0]?.ok) throw fencedError("LAB_OPERATION_CLAIM_FENCED");
+}
+
+/** Guarded settle: a stale writer cannot release a newer claim. */
+export async function settleLabOperationClaim(
+  client: PoolClient,
+  claim: LabClaimRow,
+  accountID: string,
+  outcome: "settled" | "unknown",
+): Promise<boolean> {
+  const updated = await client.query(
+    `UPDATE lab_operation_claims SET state=$4,settled_at=clock_timestamp(),lease_until=clock_timestamp()
+     WHERE account_id=$1 AND attempt_id=$2 AND fencing_generation=$3 AND state IN ('claimed','running','cancelling')`,
+    [accountID, claim.attemptID, claim.fencingGeneration, outcome],
+  );
+  return updated.rowCount === 1;
+}
+
+export async function readLabOperationClaim(
+  client: PoolClient | { query: PoolClient["query"] },
+  accountID: string,
+): Promise<LabClaimRow | null> {
+  const row = (await client.query<{
+    operation_kind: "lab_experiment" | "lab_job";
+    operation_id: string;
+    attempt_id: string;
+    fencing_generation: string | number;
+    state: LabClaimRow["state"];
+    lease_until: Date;
+    execution_authority_expires_at: Date | null;
+    canonical_retention_expires_at: Date | null;
+  }>(
+    `SELECT operation_kind,operation_id,attempt_id,fencing_generation,state,lease_until,
+       execution_authority_expires_at,canonical_retention_expires_at
+     FROM lab_operation_claims WHERE account_id=$1`,
+    [accountID],
+  )).rows[0];
+  if (!row) return null;
+  return {
+    operationKind: row.operation_kind,
+    operationID: row.operation_id,
+    attemptID: row.attempt_id,
+    fencingGeneration: Number(row.fencing_generation),
+    state: row.state,
+    leaseUntil: row.lease_until,
+    executionAuthorityExpiresAt: row.execution_authority_expires_at,
+    canonicalRetentionExpiresAt: row.canonical_retention_expires_at,
+  };
+}
+
+/** True when the account may admit a new Lab operation right now. */
+export function labClaimLive(claim: LabClaimRow | null): boolean {
+  return !!claim
+    && (claim.state === "claimed" || claim.state === "running" || claim.state === "cancelling")
+    && claim.leaseUntil.valueOf() > Date.now();
+}

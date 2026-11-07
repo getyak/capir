@@ -1,0 +1,188 @@
+/**
+ * capir CLI authorization (consent) request parsing and CSRF binding.
+ *
+ * The CLI opens /capir/authorize with public request parameters only. Every
+ * parameter is validated here against the Task 1 contract shapes before the
+ * consent form renders, and the form round-trips those parameters inside a
+ * server-sealed, short-lived envelope so the Allow/Deny POST cannot be
+ * tampered with. Success redirects carry only a one-use code and state to the
+ * validated literal loopback callback; bearer secrets never travel in URLs.
+ */
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export const CONSENT_TTL_SECONDS = 600;
+
+const SECRET_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+
+export interface CapirConsentRequest {
+  redirect_uri: string;
+  state: string;
+  code_challenge: string;
+  code_challenge_method: "S256";
+  web_origin: string;
+  backend_origin: string;
+  client_label: string;
+}
+
+export type ConsentParseResult =
+  | { ok: true; request: CapirConsentRequest }
+  | { ok: false; reason: string };
+
+export function validateLoopbackRedirect(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    url.protocol === "http:" &&
+    url.hostname === "127.0.0.1" &&
+    Boolean(url.port) &&
+    Number(url.port) >= 1 &&
+    url.pathname === "/capir/callback" &&
+    !url.search &&
+    !url.hash &&
+    !url.username &&
+    !url.password &&
+    url.href === value
+  );
+}
+
+function validateOrigin(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  const loopback = url.hostname === "127.0.0.1" || url.hostname === "::1";
+  return (
+    (url.protocol === "https:" || (url.protocol === "http:" && loopback)) &&
+    url.origin === value &&
+    !url.username &&
+    !url.password &&
+    url.pathname === "/" &&
+    !url.search &&
+    !url.hash
+  );
+}
+
+export function parseConsentQuery(
+  query: Record<string, string | undefined>,
+  options: { expectedWebOrigin?: string } = {},
+): ConsentParseResult {
+  const {
+    redirect_uri: redirectUri,
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: codeChallengeMethod,
+    web_origin: webOrigin,
+    backend_origin: backendOrigin,
+    client_label: clientLabel,
+  } = query;
+  if (
+    typeof redirectUri !== "string" ||
+    typeof state !== "string" ||
+    typeof codeChallenge !== "string" ||
+    typeof webOrigin !== "string" ||
+    typeof backendOrigin !== "string" ||
+    typeof clientLabel !== "string" ||
+    codeChallengeMethod !== "S256"
+  ) {
+    return { ok: false, reason: "The authorization request is missing required fields." };
+  }
+  if (!SECRET_SHAPE.test(state) || !SECRET_SHAPE.test(codeChallenge))
+    return { ok: false, reason: "State and code challenge must be 43-character public values." };
+  if (!validateLoopbackRedirect(redirectUri))
+    return {
+      ok: false,
+      reason: "The callback must be a literal loopback http://127.0.0.1:<port>/capir/callback address.",
+    };
+  if (!validateOrigin(webOrigin) || !validateOrigin(backendOrigin))
+    return { ok: false, reason: "Web and backend origins must be exact origins." };
+  if (options.expectedWebOrigin && webOrigin !== options.expectedWebOrigin)
+    return {
+      ok: false,
+      reason: "The requested Web origin does not match this site; capabilities and credentials bind to the exact configured origin.",
+    };
+  if (clientLabel.length < 1 || clientLabel.length > 80)
+    return { ok: false, reason: "The client label must be 1-80 characters." };
+  return {
+    ok: true,
+    request: {
+      redirect_uri: redirectUri,
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+      web_origin: webOrigin,
+      backend_origin: backendOrigin,
+      client_label: clientLabel,
+    },
+  };
+}
+
+interface SealPayload {
+  request: CapirConsentRequest;
+  exp: number;
+}
+
+function b64url(value: Buffer | string): string {
+  return Buffer.from(value).toString("base64url");
+}
+
+export function sealConsent(
+  secret: string,
+  request: CapirConsentRequest,
+  now: number,
+): string {
+  const payload = b64url(
+    JSON.stringify({ request, exp: now + CONSENT_TTL_SECONDS * 1000 } satisfies SealPayload),
+  );
+  const signature = createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+export function openConsent(
+  secret: string,
+  sealed: string,
+  now: number,
+): CapirConsentRequest | null {
+  const [payload, signature, ...rest] = sealed.split(".");
+  if (!payload || !signature || rest.length > 0) return null;
+  const expected = createHmac("sha256", secret).update(payload).digest("base64url");
+  const left = Buffer.from(signature);
+  const right = Buffer.from(expected);
+  if (left.length !== right.length || !timingSafeEqual(left, right)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as SealPayload;
+    if (typeof parsed.exp !== "number" || parsed.exp < now) return null;
+    const check = parseConsentQuery({
+      redirect_uri: parsed.request?.redirect_uri,
+      state: parsed.request?.state,
+      code_challenge: parsed.request?.code_challenge,
+      code_challenge_method: parsed.request?.code_challenge_method,
+      web_origin: parsed.request?.web_origin,
+      backend_origin: parsed.request?.backend_origin,
+      client_label: parsed.request?.client_label,
+    });
+    return check.ok ? check.request : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One-use authorization code + public state; never a bearer secret. */
+export function authorizedCallbackUrl(request: CapirConsentRequest, code: string): string {
+  const url = new URL(request.redirect_uri);
+  url.searchParams.set("code", code);
+  url.searchParams.set("state", request.state);
+  return url.toString();
+}
+
+export function deniedCallbackUrl(request: CapirConsentRequest): string {
+  const url = new URL(request.redirect_uri);
+  url.searchParams.set("error", "access_denied");
+  url.searchParams.set("state", request.state);
+  return url.toString();
+}

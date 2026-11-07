@@ -1,0 +1,97 @@
+import { TalentSignalHttpError, type DesktopAuthResultResponse } from "@talent-signal/contracts";
+import { cookies } from "next/headers";
+
+import {
+  desktopBackendClient,
+  desktopSessionToken,
+  pairingCookieName,
+  requestWebOrigin,
+  sealDesktopContinuation,
+} from "@/lib/server/desktopAuth";
+import {
+  desktopReceiptResponse,
+  isDesktopTransportRequest,
+  readDesktopRequestRef,
+} from "@/lib/server/desktopReceipt";
+
+export const dynamic = "force-dynamic";
+
+function rejected(status: number, code: string, message: string): Response {
+  return Response.json({ error: { code, message } }, { status });
+}
+
+/**
+ * Paired durable result read (ADR 0020). Read-only: it never reruns a
+ * mutation. After an uncertain consume the WK window asks here; a committed
+ * effect returns its immutable receipt plus current Settings, and a relay
+ * attempt whose response was lost re-derives the SAME secret and continuation
+ * instead of minting a second attempt.
+ */
+export async function POST(request: Request): Promise<Response> {
+  const webOrigin = await requestWebOrigin();
+  if (request.headers.get("origin") !== webOrigin) {
+    return rejected(403, "DESKTOP_AUTH_ORIGIN_REQUIRED", "This request origin is not allowed.");
+  }
+  let body: { attempt_id?: string; verifier?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+  }
+  const attemptId = typeof body.attempt_id === "string" ? body.attempt_id : "";
+  const verifier = typeof body.verifier === "string" ? body.verifier : "";
+  if (!/^[A-Za-z0-9-]{8,200}$/.test(attemptId) || !/^[A-Za-z0-9_-]{32,200}$/.test(verifier)) {
+    return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+  }
+  const pairingSecret = (await cookies()).get(pairingCookieName(attemptId))?.value ?? "";
+  if (!pairingSecret) return rejected(409, "DESKTOP_AUTH_ATTEMPT_INVALID", "This sign-in attempt is not paired with this app window.");
+
+  const token = await desktopSessionToken();
+  let result: DesktopAuthResultResponse;
+  try {
+    result = await desktopBackendClient().desktopAuthResult(
+      { attempt_id: attemptId, pairing_secret: pairingSecret, verifier },
+      { origin: webOrigin, accessToken: token ?? undefined },
+    );
+  } catch (error) {
+    if (!(error instanceof TalentSignalHttpError)) throw error;
+    return rejected(502, "DESKTOP_AUTH_UNAVAILABLE", "The result could not be read.");
+  }
+  // Recovery re-seals the SAME server-held continuation (never a replacement
+  // grant and never a refreshed proof time). The page response carries only
+  // safe status metadata: no attempt_secret, no continuation, no raw secret of
+  // any kind enters page JSON, DOM, URLs or the native bridge.
+  if (result.continuation) {
+    await sealDesktopContinuation(attemptId, result.continuation);
+  }
+  const safe = {
+    status: result.status,
+    attempt_id: result.attempt_id,
+    intent: result.continuation?.intent ?? (result.result as { intent?: string } | null)?.intent ?? null,
+    destination: "/workspace/settings",
+  };
+  if (isDesktopTransportRequest(request)) {
+    const ref = await readDesktopRequestRef(request, body as Record<string, unknown>);
+    if (!ref) {
+      return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+    }
+    return desktopReceiptResponse({
+      ref,
+      attemptID: attemptId,
+      purpose: "credential_round",
+      role: result.continuation?.role ?? "current",
+      outcome:
+        result.status === "committed"
+          ? "committed"
+          : result.status === "pending_continuation"
+            ? "result-pending"
+            : "result-unknown",
+      flowRef: result.continuation?.flow_ref,
+      grantRef: result.continuation?.credential_attempt_id,
+    });
+  }
+  return Response.json(safe, {
+    status: 200,
+    headers: { "cache-control": "private, no-store" },
+  });
+}

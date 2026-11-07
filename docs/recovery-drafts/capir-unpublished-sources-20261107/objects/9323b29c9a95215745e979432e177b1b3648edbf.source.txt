@@ -1,0 +1,327 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { Pool } from "pg";
+import { createHarnessContinuationFactory, sweepHarnessSessions } from "./harnessSessions.js";
+import { inTransaction } from "../database/pool.js";
+import { mutateAgentSession } from "./agentSessions.js";
+import type { AuthContext } from "./auth.js";
+import type { HarnessContinuation } from "@talent-signal/agent";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { createUnscopedChatTask } from "./unscopedChat.js";
+import { executeUnscopedChatTask } from "./unscopedChat.js";
+import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
+import type { DatabaseClient } from "../database/pool.js";
+import { ClaudeChatProvider, claudeHarnessConfiguration } from "@talent-signal/agent";
+
+const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+const pool = database ? new Pool({ connectionString: database, max: 4, idleTimeoutMillis: 0, connectionTimeoutMillis: 30_000 }) : null;
+const auth: AuthContext = { accountId: "10000000-0000-4000-8000-000000000001", accountSlug: "fixture-alpha",
+  userId: "10000000-0000-4000-8000-000000000011", userEmail: "recruiter@alpha.local", userKind: "simulated_human", sessionId: randomUUID() };
+const fingerprint = "a".repeat(64);
+const sourceDeadline = () => ({ expiresAt: new Date(Date.now() + 86_400_000), personIDs: [] as string[] });
+const scope = { kind: "workspace_conversation" } as const;
+const entry = () => ({ type: "user", uuid: randomUUID(), message: { role: "user", content: "Synthetic retained working context" } });
+const key = (session: HarnessContinuation, subpath?: string) => ({ projectKey: "sdk-cwd-is-not-tenant-authority", sessionId: session.sessionID, ...(subpath ? { subpath } : {}) });
+beforeAll(async () => {
+  if (!pool) return;
+  auth.accountId=randomUUID();auth.accountSlug=`get9-harness-${randomUUID()}`;auth.userId=randomUUID();
+  await pool.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic harness isolation')",[auth.accountId,auth.accountSlug]);
+  await pool.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic owner','simulated_human')",[auth.userId,auth.accountId,auth.userEmail]);
+  const clients = await Promise.all(Array.from({ length: 4 }, () => pool.connect()));
+  try { await Promise.all(clients.map(client => client.query("SELECT 1"))); } finally { clients.forEach(client => client.release()); }
+}, 30_000);
+afterAll(async () => { await pool?.end(); });
+async function productSession() {
+  const id = randomUUID();
+  await mutateAgentSession(pool!, auth, id, { expected_revision: 0, idempotency_key: randomUUID(), payload: {
+    id, scopeKind: "unresolved_intent", personDisplayLabel: "New session", contextDisplayLabel: "Conversation",
+    title: "Synthetic harness Session", updatedAt: new Date().toISOString(), isUnread: false, turns: [],
+  } });
+  return id;
+}
+async function seed(id: string, sources = sourceDeadline) {
+  return inTransaction(pool!, async client => {
+    const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sources)(fingerprint);
+    await session.store.append(key(session), [entry()]);
+    await session.store.append(key(session, "subagents/agent-synthetic"), [entry()]);
+    await session.finish(true);
+    return session.sessionID;
+  });
+}
+async function identity(expiresAt: Date) {
+  const person = randomUUID(), handle = randomUUID();
+  await pool!.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Synthetic identity')", [person, auth.accountId]);
+  await pool!.query(`INSERT INTO identity_handles(id,account_id,subject_id,handle_type,normalized_value_hash,status,valid_until,freshness_policy_version,validity_basis)
+    VALUES($1::uuid,$2,$3,'source_native_id',$1::text,'confirmed',$4,'identity-freshness-2026-08-07.v1','policy_default')`, [handle, auth.accountId, person, expiresAt]);
+  return { person, handle };
+}
+
+describe.skipIf(!pool)("SDK Session database lifecycle", () => {
+  it("continues a persisted SDK session beyond the former 4000-entry ceiling", async () => {
+    const id = await productSession();
+    await inTransaction(pool!, async client => {
+      const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sourceDeadline)(fingerprint);
+      await session.store.append(key(session), Array.from({ length: 4250 }, entry));
+      expect(await session.store.load(key(session))).toHaveLength(4250);
+      await session.finish(true);
+    });
+    await inTransaction(pool!, async client => {
+      const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sourceDeadline)(fingerprint);
+      expect(session.resume).toBe(true);
+      await session.store.append(key(session), [entry()]);
+      expect(await session.store.load(key(session))).toHaveLength(4251);
+      await session.finish(true);
+    });
+  }, 30_000);
+  it("collects identity authority for real contact reads without a Session or observation owner", async () => {
+    const deadline = new Date(Date.now() + 1500);
+    const { person } = await identity(deadline);
+    const label = `Expiry ${person}`;
+    await pool!.query("UPDATE subjects SET display_label=$2 WHERE id=$1", [person, label]);
+    const received = vi.fn();
+    let readPerson = false;
+    const provider = new ClaudeChatProvider(claudeHarnessConfiguration({ ANTHROPIC_API_KEY: "synthetic", TALENT_SIGNAL_AGENT_MODEL: "synthetic" }),
+      async (_configuration, request, signal) => {
+        await request.assertCurrent();
+        const result = await request.tools.find(tool=>tool.name==="contact_workspace_search")!.execute({ query: label, maximum_results: 5 }, signal);
+        const payload = JSON.parse(result.content.filter(block => block.type === "text")[0]!.text as string);
+        readPerson = payload.data.results.some((row: { person_id: string }) => row.person_id === person);
+        // The real shared harness does this before releasing every tool result.
+        await request.assertCurrent();
+        received(result);
+        throw new Error("Expired identity escaped its source guard");
+      });
+    await inTransaction(pool!, async client => {
+      let waited = false;
+      const database = { query: async (sql: string, values: unknown[]) => {
+        const result = await client.query(sql, values);
+        if (!waited && sql.includes("subjects.display_label AS") === false && sql.includes("subjects.id,") && sql.includes("matched_handle")) {
+          waited = true;
+          await client.query("SELECT pg_sleep(GREATEST(0,EXTRACT(EPOCH FROM $1::timestamptz-clock_timestamp()))+0.05)", [deadline]);
+        }
+        return result;
+      } } as DatabaseClient;
+      const execution = await executeUnscopedChatTask({ database, auth, request: { idempotency_key: randomUUID(), objective: `查找 ${label}` }, provider });
+      expect(execution.remoteStatus).toBe("fallback");
+    });
+    expect(readPerson).toBe(true); expect(received).not.toHaveBeenCalled();
+  });
+  it("rejects source retraction between dialogue compilation and SDK admission", async () => {
+    const id = await productSession();
+    let revoked = false;
+    const answer = vi.fn();
+    await inTransaction(pool!, async client => {
+      const database = { query: async (sql: string, values: unknown[]) => {
+        const result = await client.query(sql, values);
+        if (!revoked && sql.includes("SELECT operation_scope,response_body FROM idempotency_records")) {
+          // Another connection commits the retraction after the host read.
+          await pool!.query("INSERT INTO agent_session_retracted_tasks(account_id,task_id) VALUES($1,$2)", [auth.accountId, randomUUID()]);
+          revoked = true;
+        }
+        return result;
+      } } as DatabaseClient;
+      const execution = await executeUnscopedChatTask({ database, auth,
+        request: { session_id: id, idempotency_key: randomUUID(), objective: "Synthetic follow-up" },
+        provider: { providerId: "claude-agent-sdk", model: "synthetic", supportsImageInput: false, answer },
+        continuation: sources => createHarnessContinuationFactory(client, pool!, auth, id, scope, sources),
+      });
+      expect(execution.remoteStatus).toBe("fallback");
+    });
+    expect(revoked).toBe(true); expect(answer).not.toHaveBeenCalled();
+    expect((await pool!.query("SELECT count(*)::int AS count FROM harness_sessions WHERE account_id=$1 AND product_session_id=$2", [auth.accountId, id])).rows[0].count).toBe(0);
+  });
+  it("checks nonpersistent source and identity deadlines and detects changed Session context", async () => {
+    const { person } = await identity(new Date(Date.now() + 1200));
+    const authority = { expiresAt: new Date(Date.now() + 86_400_000), personIDs: [person] };
+    const guard = await createHarnessSourceGuard(pool!, auth, undefined, () => authority);
+    await guard();
+    await new Promise(resolve => setTimeout(resolve, 1250));
+    await expect(guard()).rejects.toThrow("source context changed");
+    const expiry = { expiresAt: new Date(Date.now() + 86_400_000), personIDs: [] };
+    const timed = await createHarnessSourceGuard(pool!, auth, undefined, () => expiry);
+    expiry.expiresAt = new Date(Date.now() - 1);
+    await expect(timed()).rejects.toThrow("source context changed");
+    const id = await productSession();
+    const scoped = await createHarnessSourceGuard(pool!, auth, id, () => undefined);
+    await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{personID}',to_jsonb($3::text)) WHERE account_id=$1 AND id=$2", [auth.accountId, id, randomUUID()]);
+    await expect(scoped()).rejects.toThrow("source context changed");
+  });
+  it("rolls a successful SDK checkpoint back when the product rejects its reply", async () => {
+    const id = await productSession();
+    const provider: RemoteChatAnswerProviding = {
+      providerId: "claude-agent-sdk", model: "synthetic-model", supportsImageInput: false,
+      answer: async request => {
+        if (!request.continuation) throw new Error("Synthetic fallback is unavailable");
+        const session = await request.continuation(fingerprint);
+        await session.store.append(key(session), [entry()]);
+        await session.finish(true);
+        // Valid SDK terminal output can still violate the product response
+        // contract. A question_set is forbidden in unscoped conversation.
+        return { kind: "question_set", title: "Synthetic", body: "Invalid product reply", citation_ids: [],
+          provider_id: "claude-agent-sdk", model: "synthetic-model", provider_request_id: session.sessionID,
+          input_tokens: 10, output_tokens: 4 };
+      },
+    };
+    await expect(createUnscopedChatTask(pool!, auth, { session_id: id, idempotency_key: randomUUID(), objective: "Synthetic reply" }, provider))
+      .rejects.toMatchObject({statusCode:503,code:"CLAUDE_CHAT_RETRYABLE_FAILURE"});
+    expect((await pool!.query("SELECT count(*)::int AS count FROM harness_sessions WHERE account_id=$1 AND product_session_id=$2", [auth.accountId, id])).rows[0].count).toBe(0);
+  });
+  it("denies a retained identity at its deadline without waiting for a lifecycle worker", async () => {
+    const deadline = new Date(Date.now() + 1600);
+    const { person, handle } = await identity(deadline);
+    const sources = () => ({ ...sourceDeadline(), personIDs: [person] });
+    const id = await productSession(), old = await seed(id, sources);
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, deadline.valueOf() - Date.now() + 50)));
+    expect((await pool!.query("SELECT status FROM identity_handles WHERE id=$1", [handle])).rows[0].status).toBe("confirmed");
+    await inTransaction(pool!, async client => {
+      const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sources)(fingerprint);
+      expect(session.resume).toBe(false); expect(session.sessionID).not.toBe(old);
+      await expect(session.store.load(key(session))).rejects.toThrow("working context");
+      await session.finish(false);
+    });
+    await sweepHarnessSessions(pool!, auth.accountId);
+    expect((await pool!.query(`SELECT count(*)::int AS count FROM harness_session_entries e JOIN harness_sessions h
+      ON h.account_id=e.account_id AND h.id=e.harness_session_id WHERE h.sdk_session_id=$1`, [old])).rows[0].count).toBe(0);
+  });
+  it("purges main and subagent identity claims after an account handle is rebound", async () => {
+    const { person, handle } = await identity(new Date(Date.now() + 86_400_000));
+    const replacement = await identity(new Date(Date.now() + 86_400_000));
+    const id = await productSession(), old = await seed(id, () => ({ ...sourceDeadline(), personIDs: [person] }));
+    await pool!.query("UPDATE identity_handles SET subject_id=$2 WHERE id=$1", [handle, replacement.person]);
+    expect((await pool!.query(`SELECT count(*)::int AS count FROM harness_session_entries e JOIN harness_sessions h
+      ON h.account_id=e.account_id AND h.id=e.harness_session_id WHERE h.sdk_session_id=$1`, [old])).rows[0].count).toBe(0);
+    await inTransaction(pool!, async client => {
+      const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sourceDeadline)(fingerprint);
+      expect(session.resume).toBe(false); await session.finish(false);
+    });
+  });
+  it.each([false,true])("a heartbeat lets revocation complete before its deadline (resume=%s)", async resume => {
+    expect((await pool!.query("SELECT 1 FROM harness_source_generations WHERE account_id=$1",[auth.accountId])).rowCount).toBe(1);
+    const id=await productSession();if(resume)await seed(id);
+    const run=await pool!.connect(),revoke=await pool!.connect();let retraction:Promise<unknown>|undefined;
+    try {
+      await run.query("BEGIN");await revoke.query("BEGIN");await revoke.query("SET LOCAL statement_timeout='2500ms'");
+      const session=await createHarnessContinuationFactory(run,pool!,auth,id,scope,sourceDeadline)(fingerprint);
+      await session.store.append(key(session),[entry()]);
+      const pid=(await revoke.query<{pid:number}>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      retraction=revoke.query("INSERT INTO agent_session_retracted_tasks(account_id,task_id) VALUES($1,$2)",[auth.accountId,randomUUID()]);
+      void retraction.catch(()=>{});
+      const start=Date.now();let waiting=false;
+      while(Date.now()-start<1000){
+        waiting=(await pool!.query("SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock'",[pid])).rowCount===1;
+        if(waiting)break;await delay(5);
+      }
+      if(resume)expect(waiting).toBe(true);
+      else { await retraction;await revoke.query("COMMIT"); }
+      // This is the regular heartbeat check, not final finish(true).
+      await expect(session.assertCurrent()).rejects.toMatchObject({code:"HARNESS_SESSION_UNAVAILABLE"});
+      await session.finish(false);await run.query("COMMIT");
+      await retraction;await revoke.query("COMMIT");
+      expect(Date.now()-start).toBeLessThan(2500);
+      expect((await pool!.query("SELECT 1 FROM harness_session_entries WHERE account_id=$1",[auth.accountId])).rowCount).toBe(0);
+    }finally{
+      await run.query("ROLLBACK");await retraction?.catch(()=>{});await revoke.query("ROLLBACK");run.release();revoke.release();
+    }
+  });
+  it("concurrent heartbeat and store checks release their short read fences",async()=>{
+    const id=await productSession();await seed(id);
+    await inTransaction(pool!,async client=>{
+      const session=await createHarnessContinuationFactory(client,pool!,auth,id,scope,sourceDeadline)(fingerprint);
+      const added=entry();
+      await Promise.all([session.assertCurrent(),session.store.append(key(session),[added]),session.assertCurrent()]);
+      expect((await session.store.load(key(session)))?.some(row=>row.uuid===added.uuid)).toBe(true);
+      const other=await pool!.connect();
+      try {
+        await other.query("BEGIN");await other.query("SELECT generation FROM harness_source_generations WHERE account_id=$1 FOR UPDATE NOWAIT",[auth.accountId]);
+      }finally{await other.query("ROLLBACK");other.release();}
+      await session.finish(false);
+    });
+  });
+  it("does not publish a successful checkpoint while source revocation is waiting on a running turn", async () => {
+    const id = await productSession(); await seed(id);
+    const run = await pool!.connect(), revoke = await pool!.connect();
+    let retraction: Promise<unknown> | undefined;
+    try {
+      await run.query("BEGIN"); await revoke.query("BEGIN");
+      const session = await createHarnessContinuationFactory(run, pool!, auth, id, scope, sourceDeadline)(fingerprint);
+      await session.store.append(key(session), [entry()]);
+      // The generation row is changed first, then physical purge waits for this
+      // turn's row lock. Completion must fail immediately instead of deadlocking
+      // or publishing a reply from the about-to-be-revoked source.
+      await revoke.query("UPDATE harness_source_generations SET generation=generation+1 WHERE account_id=$1", [auth.accountId]);
+      retraction = revoke.query("INSERT INTO agent_session_retracted_tasks(account_id,task_id) VALUES($1,$2)", [auth.accountId, randomUUID()]);
+      await expect(session.finish(true)).rejects.toMatchObject({ code: "HARNESS_SESSION_UNAVAILABLE" });
+      await run.query("COMMIT"); await retraction; await revoke.query("COMMIT");
+      expect((await pool!.query("SELECT count(*)::int AS count FROM harness_session_entries WHERE account_id=$1", [auth.accountId])).rows[0].count).toBe(0);
+    } finally {
+      await run.query("ROLLBACK"); await retraction?.catch(() => {}); await revoke.query("ROLLBACK");
+      run.release(); revoke.release();
+    }
+  });
+  it("resumes only the authenticated binding, deduplicates retries and rolls interrupted turns back", async () => {
+    const id = await productSession(), initial = await seed(id);
+    await inTransaction(pool!, async client => {
+      const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sourceDeadline)(fingerprint);
+      expect(session.resume).toBe(true); expect(session.sessionID).toBe(initial);
+      const before = await session.store.load(key(session));
+      const next = entry(); await session.store.append(key(session), [next]); await session.store.append(key(session), [next]);
+      expect(await session.store.load(key(session))).toHaveLength(before!.length + 1);
+      expect(await session.store.listSubkeys!(key(session))).toEqual(["subagents/agent-synthetic"]);
+      await expect(session.store.load({ ...key(session), sessionId: randomUUID() })).rejects.toThrow("working context");
+      await expect(session.store.load({ ...key(session), subpath: "../../other" })).rejects.toThrow("working context");
+      await session.finish(false);
+    });
+    await inTransaction(pool!, async client => {
+      const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sourceDeadline)(fingerprint);
+      expect(await session.store.load(key(session))).toHaveLength(1);
+      await session.finish(false);
+    });
+    await expect(inTransaction(pool!, client => createHarnessContinuationFactory(client, pool!, { ...auth, userId: randomUUID() }, id, scope, sourceDeadline)(fingerprint))).rejects.toMatchObject({ code: "AGENT_SESSION_NOT_FOUND" });
+  });
+  it("holds one writer per product Session and creates a fresh SDK identity after configuration changes", async () => {
+    const id = await productSession(), old = await seed(id);
+    const left = await pool!.connect(), right = await pool!.connect();
+    try {
+      await left.query("BEGIN"); await right.query("BEGIN");
+      const first = await createHarnessContinuationFactory(left, pool!, auth, id, scope, sourceDeadline)(fingerprint);
+      await expect(createHarnessContinuationFactory(right, pool!, auth, id, scope, sourceDeadline)(fingerprint)).rejects.toMatchObject({ code: "HARNESS_SESSION_BUSY" });
+      await first.finish(false);
+      await left.query("COMMIT"); await right.query("ROLLBACK");
+    } finally { left.release(); right.release(); }
+    await inTransaction(pool!, async client => {
+      const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sourceDeadline)("b".repeat(64));
+      expect(session.resume).toBe(false); expect(session.sessionID).not.toBe(old);
+      expect(await session.store.load(key(session))).toBeNull();
+      await session.store.append(key(session), [entry()]); await session.finish(true);
+    });
+    expect((await pool!.query(`SELECT count(*)::int AS count FROM harness_session_entries e JOIN harness_sessions h
+      ON h.account_id=e.account_id AND h.id=e.harness_session_id WHERE h.sdk_session_id=$1`, [old])).rows[0].count).toBe(0);
+  });
+  it("physically erases main/subagent copies on source retraction and prevents stale append resurrection", async () => {
+    const id = await productSession(); await seed(id);
+    await inTransaction(pool!, async client => {
+      const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sourceDeadline)(fingerprint);
+      await client.query("INSERT INTO agent_session_retracted_tasks(account_id,task_id) VALUES($1,$2)", [auth.accountId, randomUUID()]);
+      await expect(session.assertCurrent()).rejects.toThrow("working context");
+      await expect(session.store.append(key(session), [entry()])).rejects.toThrow("working context");
+      // The retraction and all derived copies remain removed after commit. Do not
+      // roll it back as an interrupted model turn in this direct trigger proof.
+    });
+    expect((await pool!.query(`SELECT count(*)::int AS count FROM harness_session_entries WHERE account_id=$1`, [auth.accountId])).rows[0].count).toBe(0);
+    await inTransaction(pool!, async client => {
+      const session = await createHarnessContinuationFactory(client, pool!, auth, id, scope, sourceDeadline)(fingerprint);
+      expect(session.resume).toBe(false); await session.finish(false);
+    });
+  });
+  it("erases retained content on product deletion and expiry", async () => {
+    for (const deletion of [true, false]) {
+      const id = await productSession(); await seed(id);
+      if (deletion) await pool!.query("UPDATE agent_sessions SET deleted_at=now(),payload=NULL WHERE account_id=$1 AND id=$2", [auth.accountId, id]);
+      else await pool!.query("UPDATE harness_sessions SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND product_session_id=$2", [auth.accountId, id]);
+      await sweepHarnessSessions(pool!, auth.accountId);
+      expect((await pool!.query(`SELECT count(*)::int AS count FROM harness_session_entries e JOIN harness_sessions h
+        ON h.account_id=e.account_id AND h.id=e.harness_session_id WHERE h.account_id=$1 AND h.product_session_id=$2`, [auth.accountId, id])).rows[0].count).toBe(0);
+    }
+  });
+});

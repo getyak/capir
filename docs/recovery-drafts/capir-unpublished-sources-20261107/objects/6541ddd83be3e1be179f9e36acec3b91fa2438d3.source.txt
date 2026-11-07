@@ -1,0 +1,106 @@
+/**
+ * Cross-language framing fixtures for incremental Session intent digests.
+ *
+ * The TypeScript tests and the Swift tests (`AgentSessionDeltaFramingTests`)
+ * assert these exact digests, so all runtimes frame identical bytes for key
+ * ordering, unicode/emoji/combining text, floating numbers (including -0),
+ * and empty or nullable containers.
+ */
+export interface SessionIntentFramingFixture {
+  readonly name: string;
+  readonly value: unknown;
+  readonly digest: string;
+}
+
+export const sessionIntentFramingFixtures: readonly SessionIntentFramingFixture[] = [
+  {
+    name: "empty-object",
+    value: {},
+    digest: "92e5420b60da601f83e2c3346724b96eb92d40537d1a65dc37f2a198ebe29e89",
+  },
+  {
+    name: "empty-array",
+    value: [],
+    digest: "dd35b158a15dd4f8ed7735f631684b203f20f6fa5875d6eb5ab185236f247657",
+  },
+  {
+    name: "nullable-containers",
+    value: { a: null, b: [], c: {}, d: false, e: true },
+    digest: "5c52499b7f86887d2d552b7be6a35140e309bb2d28bc0a406234af8cc3b0819e",
+  },
+  {
+    name: "key-ordering",
+    value: { b: 1, a: 2, C: 3, _: 4, "\u00e9": 5, "\u{1F600}": 6, "\uFFFF": 7, z: 8 },
+    digest: "0a193095a3d7b3c64e7a7df6eacd2610c633afdecbcc6f0f913a59e6fed781ed",
+  },
+  {
+    name: "key-ordering-shuffled",
+    value: { z: 8, "\uFFFF": 7, "\u{1F600}": 6, "\u00e9": 5, _: 4, C: 3, a: 2, b: 1 },
+    digest: "0a193095a3d7b3c64e7a7df6eacd2610c633afdecbcc6f0f913a59e6fed781ed",
+  },
+  {
+    name: "unicode-emoji-combining",
+    value: {
+      composed: "caf\u00e9",
+      combining: "cafe\u0301",
+      emoji: "\u{1F44B}\u{1F3FD}",
+      rtl: "\u05D0\u05D1\u05D2",
+      zwj: "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}",
+    },
+    digest: "092347a797458c7c4db6ef96d31b77c2afbf390f3e68b8155db66d83564abb1a",
+  },
+  {
+    name: "floating-numbers",
+    value: {
+      zero: 0,
+      negZero: -0,
+      one: 1,
+      frac: 1.5,
+      neg: -2.25,
+      tiny: 5e-324,
+      large: 1.7976931348623157e308,
+      pow: 1024,
+      third: 1 / 3,
+    },
+    digest: "2fa0071da2ddf23ee3aeb5de4470410f0eee8118186ae3fa574741505bb8263f",
+  },
+  {
+    name: "integer-limits",
+    value: {
+      maxSafe: 9007199254740991,
+      minSafe: -9007199254740991,
+      bigish: 1234567890123456789,
+    },
+    digest: "78f4014f379e5e0aaf5ad5c586602be0dc62d947db3c895b633d5aac14bc8edd",
+  },
+  {
+    name: "nested-containers",
+    value: {
+      list: [1, [2, [3, { deep: null }]]],
+      obj: { k: [{ v: "" }] },
+      mixed: [[], {}, null, [{}]],
+    },
+    digest: "99126731d6f7c845d87ceb3db0d1a08a66bdae7a58d7f404a8e745f0cfe759d6",
+  },
+  {
+    name: "control-characters",
+    value: { text: "line one\nline two\ttabbed \u0001\u001f\u007f" },
+    digest: "85bebb3015fca5a4ff926d021b6a7edc50f981b20e55bf683901cbb57e85c0ff",
+  },
+  {
+    name: "session-like",
+    value: {
+      id: "7BA9A4B2-8E31-4C0A-9D2E-55AA7C4E1B10",
+      updatedAt: "2026-10-08T03:07:24.000Z",
+      turns: [
+        {
+          id: "0d90b077-2bd1-4c13-82ca-8f4dd366db1b",
+          objective: "hi \u{1F44B}",
+          createdAt: "2026-10-08T03:07:24.123Z",
+        },
+      ],
+      isUnread: false,
+    },
+    digest: "c47904ad663aa2da6d931396c25971dfd792ab59db172f6136a4f27c86787ff5",
+  },
+];

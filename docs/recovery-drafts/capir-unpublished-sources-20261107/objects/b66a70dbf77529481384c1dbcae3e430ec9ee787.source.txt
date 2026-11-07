@@ -1,0 +1,77 @@
+/** Monotonic deadlines with representable timer chunks and explicit cleanup. */
+export interface DeadlineClock {
+  now(): number;
+  set(callback: () => void, milliseconds: number): unknown;
+  clear(handle: unknown): void;
+}
+
+const systemClock: DeadlineClock = {
+  now: () => performance.now(),
+  set: (callback, milliseconds) => setTimeout(callback, milliseconds),
+  clear: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+// Match AbortSignal.timeout: transport timers alone must not keep Node alive.
+// Browsers return a numeric handle and have no unref operation.
+const transportClock: DeadlineClock = {
+  ...systemClock,
+  set(callback, milliseconds) {
+    const handle = setTimeout(callback, milliseconds);
+    (handle as unknown as { unref?: () => unknown }).unref?.();
+    return handle;
+  },
+};
+
+export function scheduleDeadline(
+  callback: () => void,
+  durationMs: number | undefined,
+  clock: DeadlineClock = systemClock,
+): (() => void) | undefined {
+  if (durationMs === undefined) return undefined;
+  if (!Number.isSafeInteger(durationMs) || durationMs <= 0) throw new Error("DEADLINE_INVALID");
+  const started = clock.now();
+  let disposed = false;
+  let handle: unknown;
+  const schedule = () => {
+    if (disposed) return;
+    const remaining = durationMs - Math.max(0, clock.now() - started);
+    if (remaining <= 0) {
+      disposed = true;
+      callback();
+      return;
+    }
+    handle = clock.set(schedule, Math.min(2_147_483_647, Math.max(1, Math.ceil(remaining))));
+  };
+  schedule();
+  return () => { disposed = true; clock.clear(handle); };
+}
+
+/** Covers fetch AND body consumption; callers dispose it only after settlement. */
+export function requestDeadline(
+  durationMs: number,
+  parent?: AbortSignal,
+  clock: DeadlineClock = transportClock,
+): { signal: AbortSignal; dispose(): void } {
+  if (!Number.isSafeInteger(durationMs) || durationMs < 0) throw new Error("DEADLINE_INVALID");
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(parent?.reason);
+  if (parent?.aborted) onAbort();
+  else parent?.addEventListener("abort", onAbort, { once: true });
+  const expire = () => controller.abort(new DOMException("Request deadline exceeded", "TimeoutError"));
+  let cancel: (() => void) | undefined;
+  if (!controller.signal.aborted) {
+    if (durationMs === 0) {
+      // Preserve the existing public transport API's asynchronous zero delay.
+      let disposed = false;
+      const handle = clock.set(() => { if (!disposed) expire(); }, 0);
+      cancel = () => { disposed = true; clock.clear(handle); };
+    } else cancel = scheduleDeadline(expire, durationMs, clock);
+  }
+  return {
+    signal: controller.signal,
+    dispose() {
+      cancel?.();
+      parent?.removeEventListener("abort", onAbort);
+    },
+  };
+}

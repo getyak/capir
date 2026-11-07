@@ -1,0 +1,197 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { Writable } from 'node:stream';
+
+const ttyOutputs = new WeakMap<NodeJS.WriteStream, AsyncTTYOutput>();
+const liveTTYOutputs = new Set<AsyncTTYOutput>();
+let forcedOutputRetirement = false;
+const PENDING_OUTPUT_BYTES = 4 * 1024 * 1024;
+/** One cancellable physical writer owns each POSIX TTY; the parent uses pipes. */
+class AsyncTTYOutput extends Writable {
+  readonly isTTY = true;
+  private activeBytes = 0;
+  private frameID = 0;
+  private ack = '';
+  private pending: { id: number; started: boolean; done: (error?: Error) => void } | undefined;
+  private readonly helper: ChildProcess;
+  readonly closedHelper: Promise<void>;
+  private readonly resize = () => this.emit('resize');
+  constructor(readonly original: NodeJS.WriteStream) {
+    super();
+    original.on('resize', this.resize);
+    this.on('error', error => { if (original.listenerCount('error')) original.emit('error', error); });
+    const fd = (original as NodeJS.WriteStream & { fd: number }).fd;
+    // No body, model, profile, credentials or inherited NODE_OPTIONS reach it.
+    this.helper = spawn(process.execPath, [fileURLToPath(new URL('./ttyWriter.js', import.meta.url))], {
+      env: {}, stdio: ['pipe', 'pipe', 'ignore', fd],
+    });
+    liveTTYOutputs.add(this);
+    this.closedHelper = new Promise(resolve => this.helper.once('close', () => {
+      const pending = this.pending; this.pending = undefined;
+      if (pending) pending.done(new Error('Terminal writer closed before acknowledging output.'));
+      if (!this.destroyed) this.destroy(new Error('Terminal writer closed unexpectedly.'));
+      original.off('resize', this.resize);
+      liveTTYOutputs.delete(this); resolve();
+    }));
+    this.helper.once('error', () => this.destroy(new Error('Terminal writer could not start.')));
+    this.helper.stdin!.on('error', () => this.destroy(new Error('Terminal writer input is unavailable.')));
+    this.helper.stdout!.on('error', () => this.destroy(new Error('Terminal writer acknowledgement is unavailable.')));
+    this.helper.stdout!.on('data', (chunk: Buffer) => {
+      if (this.destroyed) return;
+      if (this.ack.length + chunk.length > 128 || chunk.some(byte => byte > 127)) { this.destroy(new Error('Invalid terminal writer acknowledgement.')); return; }
+      this.ack += chunk.toString('ascii');
+      while (this.ack.includes('\n') && !this.destroyed) {
+        const end = this.ack.indexOf('\n'), line = this.ack.slice(0, end); this.ack = this.ack.slice(end + 1);
+        const pending = this.pending;
+        if (!pending) { this.destroy(new Error('Unexpected terminal writer acknowledgement.')); return; }
+        if (line === `${pending.id}:start` && !pending.started) { pending.started = true; continue; }
+        if (line !== `${pending.id}:done` || !pending.started) { this.destroy(new Error('Invalid terminal writer acknowledgement.')); return; }
+        this.pending = undefined; pending.done();
+      }
+    });
+  }
+  get columns() { return this.original.columns; }
+  get rows() { return this.original.rows; }
+  unref() { this.original.unref(); }
+  override write(chunk: string | Uint8Array, encoding?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void): boolean {
+    const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined) : chunk.byteLength;
+    // The full active output is exempt; only additional simultaneous echo/redraw
+    // or other writes have a physical queue bound.
+    const current = this.writableLength === 0 && !this.writableCorked;
+    if (!this.destroyed && !current && Math.max(0, this.writableLength - this.activeBytes) + bytes > PENDING_OUTPUT_BYTES) {
+      const error = Object.assign(new Error('Terminal output queue could not keep up.'), { code: 'ENOBUFS' });
+      if (this.original.listenerCount('error')) this.original.emit('error', error);
+      this.destroy(error);
+      const done = typeof encoding === 'function' ? encoding : callback;
+      queueMicrotask(() => done?.(error)); return false;
+    }
+    return typeof encoding === 'function' ? super.write(chunk, encoding) : super.write(chunk, encoding ?? 'utf8', callback);
+  }
+  override _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void) { this.writeAll(chunk, callback); }
+  override _writev(chunks: { chunk: Buffer }[], callback: (error?: Error | null) => void) { this.writeAll(Buffer.concat(chunks.map(item => item.chunk)), callback); }
+  private writeAll(buffer: Buffer, callback: (error?: Error | null) => void) {
+    this.activeBytes = buffer.length;
+    let offset = 0, finished = false;
+    const finish = (error?: Error) => { if (finished) return; finished = true; this.activeBytes = 0; callback(error); };
+    const next = () => {
+      if (this.destroyed) { finish(new Error('Terminal output retired.')); return; }
+      if (offset === buffer.length) { finish(); return; }
+      const length = Math.min(32768, buffer.length - offset);
+      this.frameID = this.frameID === 0xffffffff ? 1 : this.frameID + 1;
+      const header = Buffer.alloc(8); header.writeUInt32BE(this.frameID, 0); header.writeUInt32BE(length, 4);
+      this.pending = { id: this.frameID, started: false, done: error => {
+        if (error) { finish(error); return; }
+        offset += length; next();
+      } };
+      // Pipe acceptance is never treated as TTY completion. Matching ACK is.
+      this.helper.stdin!.write(header);
+      this.helper.stdin!.write(buffer.subarray(offset, offset + length));
+    };
+    next();
+  }
+  override _destroy(error: Error | null, callback: (error?: Error | null) => void) {
+    if (this.writableLength) forcedOutputRetirement = true;
+    this.original.off('resize', this.resize);
+    if (error || this.writableLength) { this.original.destroy(); this.original.unref(); }
+    this.helper.stdin!.destroy(); this.helper.stdout!.destroy();
+    this.helper.kill('SIGKILL');
+    // kill() is only dispatch. Owned cleanup waits for actual child close/reap.
+    void this.closedHelper.then(() => callback(error));
+  }
+}
+export function terminalOutput(stream: NodeJS.WriteStream): NodeJS.WriteStream {
+  if (!stream.isTTY || process.platform === 'win32' || stream instanceof AsyncTTYOutput) return stream;
+  let adapter = ttyOutputs.get(stream);
+  if (!adapter) { adapter = new AsyncTTYOutput(stream); ttyOutputs.set(stream, adapter); }
+  return adapter as unknown as NodeJS.WriteStream;
+}
+export function retireTerminalOutputs(): void {
+  for (const original of [process.stdout, process.stderr]) {
+    const target = ttyOutputs.get(original) ?? original;
+    if (target.writableLength) { forcedOutputRetirement = true; target.destroy(); target.unref(); }
+  }
+}
+export async function disposeTerminalOutputs(): Promise<void> {
+  const outputs = [...liveTTYOutputs];
+  for (const output of outputs) output.destroy();
+  await Promise.all(outputs.map(output => output.closedHelper));
+}
+export function outputRequiresForcedExit(): boolean { return forcedOutputRetirement; }
+
+/** Remove terminal controls before exact-secret matching, including cross-chunk sequences. */
+export class SafeText {
+  private state: 'text' | 'esc' | 'csi' | 'osc' | 'osc-esc' = 'text';
+  private pending = '';
+  constructor(private readonly key: string) { }
+  push(text: string, final = false): string {
+    for (const c of text) {
+      if (this.state === 'osc') {
+        if (c === '\x07' || c === '\x9c')
+          this.state = 'text';
+        else if (c === '\x1b')
+          this.state = 'osc-esc';
+        continue;
+      }
+      if (this.state === 'osc-esc') {
+        this.state = c === '\\' ? 'text' : 'osc';
+        continue;
+      }
+      if (this.state === 'csi') {
+        if (c >= '@' && c <= '~')
+          this.state = 'text';
+        continue;
+      }
+      if (this.state === 'esc') {
+        this.state = c === '[' ? 'csi' : c === ']' || c === 'P' || c === '^' || c === '_' || c === 'X' ? 'osc' : c >= ' ' && c <= '/' ? 'esc' : 'text';
+        continue;
+      }
+      if (c === '\x1b') {
+        this.state = 'esc';
+        continue;
+      }
+      if (c === '\x9b') {
+        this.state = 'csi';
+        continue;
+      }
+      if (['\x9d', '\x90', '\x98', '\x9e', '\x9f'].includes(c)) {
+        this.state = 'osc';
+        continue;
+      }
+      const code = c.codePointAt(0)!;
+      if ((code < 32 && c !== '\n' && c !== '\t') || (code >= 127 && code <= 159))
+        continue;
+      this.pending += c;
+    }
+    let out = '';
+    while (this.pending.length && (final || this.pending.length >= Math.max(1, this.key.length))) {
+      if (this.key && this.pending.startsWith(this.key)) {
+        out += '[REDACTED]';
+        this.pending = this.pending.slice(this.key.length);
+      }
+      else {
+        const width = this.pending.codePointAt(0)! > 0xffff ? 2 : 1;
+        out += this.pending.slice(0, width);
+        this.pending = this.pending.slice(width);
+      }
+    }
+    return out;
+  }
+  finish(): string { return this.push('', true); }
+}
+export function sanitize(text: string, key = ''): string { const safe = new SafeText(key); return safe.push(text) + safe.finish(); }
+export class OutputAborted extends Error {
+  constructor(readonly reason: unknown) { super('Output deadline/cancellation interrupted a pending write.'); }
+}
+export function writeOutput(text: string, signal: AbortSignal, stream: NodeJS.WriteStream = process.stdout): Promise<void> {
+  if (signal.aborted)
+    return Promise.reject(signal.reason);
+  stream = terminalOutput(stream);
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); stream.destroy(); stream.unref(); reject(new OutputAborted(signal.reason)); };
+    signal.addEventListener('abort', abort, { once: true });
+    stream.write(text, error => { signal.removeEventListener('abort', abort); if (error)
+      reject(error);
+    else
+      resolve(); });
+  });
+}

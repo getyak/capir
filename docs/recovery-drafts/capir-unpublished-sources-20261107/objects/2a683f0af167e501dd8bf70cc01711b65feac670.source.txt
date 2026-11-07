@@ -1,0 +1,1937 @@
+import { createHash, hkdfSync, randomBytes, randomUUID } from "node:crypto";
+
+import {
+  CONTRACT_VERSION,
+  DESKTOP_AUTH_ATTEMPT_TTL_SECONDS,
+  DESKTOP_AUTH_CODE_TTL_SECONDS,
+  DESKTOP_AUTH_FLOW_TTL_SECONDS,
+  DESKTOP_AUTH_PENDING_PATH,
+  type AccountSettings,
+  type DesktopAuthAckRequest,
+  type DesktopAuthAckResponse,
+  type DesktopAuthApproveRequest,
+  type DesktopAuthApproveResponse,
+  type DesktopAuthAuthorizeRequest,
+  type DesktopAuthAuthorizeResponse,
+  type DesktopAuthCancelRequest,
+  type DesktopAuthCancelResponse,
+  type DesktopAuthCompleteRequest,
+  type DesktopAuthCompleteResponse,
+  type DesktopAuthConsumeRequest,
+  type DesktopAuthConsumeResponse,
+  type DesktopAuthContinuation,
+  type DesktopAuthPrepareRequest,
+  type DesktopAuthPrepareResponse,
+  type DesktopAuthProvider,
+  type DesktopAuthPurpose,
+  type DesktopAuthResultRequest,
+  type DesktopAuthResultResponse,
+  type DesktopAuthRole,
+  type DesktopAuthStatusResponse,
+  DesktopAuthPrepareRequestSchema,
+  DesktopAuthAuthorizeRequestSchema,
+  DesktopAuthApproveRequestSchema,
+  DesktopAuthCompleteRequestSchema,
+  DesktopAuthConsumeRequestSchema,
+  DesktopAuthResultRequestSchema,
+  DesktopAuthAckRequestSchema,
+  DesktopAuthCancelRequestSchema,
+  ErrorResponseSchema,
+  type DesktopCredentialIntent,
+  type ProviderChallenge,
+  type SessionResponse,
+} from "@talent-signal/contracts";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { Pool, PoolClient } from "pg";
+
+import type { BackendConfig } from "../config.js";
+import { ApiError } from "../lib/apiError.js";
+import { sha256 } from "../lib/hash.js";
+import {
+  EmailClaimConflict,
+  createRealIdentity,
+  newAccountSlug,
+  reserveVerifiedEmail,
+} from "./accountIdentity.js";
+import { readAccountSettingsWith } from "./accountManagement.js";
+import {
+  CREDENTIAL_ATTEMPT_TTL_SECONDS,
+  commitCredentialChangeInternal,
+  insertCredentialChangeAttempt,
+  loadLockedCredentialChangeAttempt,
+  verifyAndConsumeProviderProof,
+  type CredentialChangeDeps,
+  type InternalCredentialCompletion,
+  type ProviderId,
+  type VerifiedProviderProof,
+} from "./accountLoginMethods.js";
+import {
+  createAppleLoginChallenge,
+  insertSession,
+  type AuthContext,
+} from "./auth.js";
+import { createGoogleChallenge } from "./googleAuth.js";
+import { labWorkspaceSessionActiveSQL } from "./labWorkspaceAccess.js";
+
+type UserKind = "simulated_human" | "apple_human" | "password_human" | "lab_human" | "google_human";
+
+/**
+ * macOS system authentication handoff (ADR 0019) and credential proof rounds
+ * (ADR 0020).
+ *
+ * One durable `desktop_auth_attempts` state machine owns the protocol:
+ * `prepared -> authorizing -> approved -> consumed` with terminal `cancelled`
+ * and `expired`. Native keeps the PKCE verifier and raw state in memory; the
+ * backend stores only hashes and never reconstructs the raw state. The WK
+ * pairing secret is random 32 bytes returned exactly once to the WK prepare
+ * response; its hash is stored and it is never exported to the system browser.
+ * The system browser cancels only with its own sealed attempt's raw state.
+ *
+ * Identity resolution and credential changes reuse the phase-one primitives
+ * (`createRealIdentity`, `reserveVerifiedEmail`, `insertSession`,
+ * `verifyAndConsumeProviderProof`, `insertCredentialChangeAttempt`,
+ * `commitCredentialChangeInternal`); there is no parallel credential store and
+ * no public `verified: true` shortcut.
+ *
+ * Every attempt binds the exact Web origin, this backend environment, the
+ * initiating authentication fingerprint (explicit `anonymous` included),
+ * state/challenge, pairing secret, expiry, and — for credential rounds — the
+ * frozen WK flow/round, intent, actor scope, revisions, credential snapshot
+ * and absolute original deadline. Consume rechecks all of them atomically under
+ * the shared credential locks; a delayed response can never overwrite a newer
+ * attempt or an intervening login.
+ */
+
+export type DesktopAuthCaller = {
+  /** Exact verified Web origin of the request that reached this backend. */
+  webOrigin: string;
+  /** Presented session, resolved server-side from the bearer token. */
+  auth: AuthContext | null;
+  /** sha256 hex of the presented session token, or the explicit `anonymous`. */
+  authFingerprint: string;
+};
+
+export function desktopAuthFingerprint(accessToken: string | null | undefined): string {
+  return accessToken ? sha256(accessToken) : "anonymous";
+}
+
+function backendEnvironment(config: BackendConfig): string {
+  // Environment comparator only; never a cryptographic key.
+  return sha256(`talent-signal-backend:${config.databaseUrl}`);
+}
+
+function rawSecret(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+/** S256 (base64url) challenge of a native one-time-code verifier. */
+export function desktopCodeChallenge(verifier: string): string {
+  return createHash("sha256").update(verifier).digest("base64url");
+}
+
+function stateHash(state: string): string {
+  return sha256(state);
+}
+
+/** The client label a bound provider challenge was created under. */
+async function boundChallengeClientLabel(client: PoolClient, attempt: AttemptRow): Promise<string> {
+  const table = attempt.provider === "google" ? "google_login_challenges" : "apple_login_challenges";
+  const row = await client.query<{ client_label: string }>(
+    `SELECT client_label FROM ${table} WHERE id = $1`,
+    [attempt.provider_challenge_id],
+  );
+  return row.rows[0]?.client_label ?? attempt.client_label;
+}
+
+/**
+ * Stable attempt secret for a RELAY-created credential attempt (ADR 0020).
+ * HKDF-SHA256 over the HIGH-ENTROPY RANDOM WK pairing secret with a fixed
+ * domain and the immutable flow/desktop/credential ids. Only its hash is
+ * stored (inside `credential_change_attempts`); the paired result read can
+ * regenerate the same secret after verifying the native verifier and the
+ * original actor/session/origin, so a lost response never mints a second
+ * attempt. Ordinary phase-one starts keep fresh random secrets.
+ */
+export function deriveDesktopCredentialSecret(
+  pairingSecret: string,
+  flowRef: string,
+  desktopAttemptId: string,
+  credentialAttemptId: string,
+): string {
+  const derived = hkdfSync(
+    "sha256",
+    Buffer.from(pairingSecret, "utf8"),
+    Buffer.from("talent-signal-desktop-credential-secret-v1"),
+    Buffer.from(`${flowRef}|${desktopAttemptId}|${credentialAttemptId}`),
+    32,
+  );
+  return Buffer.from(derived).toString("base64url");
+}
+
+type AttemptRow = {
+  id: string;
+  provider: DesktopAuthProvider;
+  purpose: DesktopAuthPurpose;
+  role: DesktopAuthRole;
+  protocol_version: number;
+  web_origin: string;
+  backend_environment: string;
+  client_label: string;
+  status: "prepared" | "authorizing" | "approved" | "consumed" | "cancelled" | "expired";
+  code_challenge: string;
+  state_hash: string;
+  pairing_secret_hash: string;
+  auth_fingerprint: string;
+  auth_scope: "anonymous" | "authenticated";
+  account_id: string | null;
+  user_id: string | null;
+  session_id: string | null;
+  expected_account_revision: number | null;
+  expected_user_revision: number | null;
+  credential_fingerprint: string | null;
+  flow_ref: string | null;
+  round_ref: string | null;
+  intent: DesktopCredentialIntent | null;
+  target_provider: "apple" | "google" | "password" | null;
+  flow_deadline_at: Date | null;
+  original_proof_at: Date | null;
+  credential_attempt_id: string | null;
+  provider_challenge_id: string | null;
+  approved_subject_hash: string | null;
+  approved_email: string | null;
+  approved_email_verified: boolean | null;
+  approved_display_name: string | null;
+  approved_at: Date | null;
+  approved_redeemed_at: Date | null;
+  code_hash: string | null;
+  code_expires_at: Date | null;
+  result: unknown;
+  result_committed_at: Date | null;
+  acknowledged_at: Date | null;
+  expires_at: Date;
+};
+
+function invalidAttempt(message: string): ApiError {
+  return new ApiError(409, "DESKTOP_AUTH_ATTEMPT_INVALID", message);
+}
+
+function expiredAttempt(): ApiError {
+  return new ApiError(410, "DESKTOP_AUTH_ATTEMPT_EXPIRED", "This sign-in attempt expired. Start again from the app.");
+}
+
+async function loadAttempt(
+  client: PoolClient,
+  attemptId: string,
+  lock: "FOR UPDATE" | "FOR SHARE" | "" = "FOR UPDATE",
+): Promise<AttemptRow> {
+  const result = await client.query<AttemptRow>(
+    `SELECT * FROM desktop_auth_attempts WHERE id = $1 ${lock}`,
+    [attemptId],
+  );
+  const attempt = result.rows[0];
+  if (!attempt) throw invalidAttempt("This sign-in attempt does not exist. Start again from the app.");
+  return attempt;
+}
+
+async function markExpired(client: PoolClient, attempt: AttemptRow): Promise<void> {
+  if (attempt.status === "prepared" || attempt.status === "authorizing" || attempt.status === "approved") {
+    await client.query(
+      `UPDATE desktop_auth_attempts SET status = 'expired' WHERE id = $1 AND status = $2`,
+      [attempt.id, attempt.status],
+    );
+  }
+}
+
+/**
+ * The initiating identity read UNDER the phase-one lock order: the canonical
+ * account row first (held through commit), then the user row, then the live
+ * initiating session row. Every credential mutation serializes behind these
+ * row locks, so a concurrent revision or credential-set change can never land
+ * between the authority check and the credential write, and a request admitted
+ * before a session revocation can never use its cached context afterwards.
+ */
+async function initiatingIdentity(
+  client: PoolClient,
+  accountId: string,
+  userId: string,
+  sessionId: string,
+): Promise<{
+  settingsRevision: number;
+  userRevision: number;
+  credentialFingerprint: string;
+  userKind: UserKind;
+}> {
+  const account = await client.query<{ settings_revision: number; retired_at: Date | null }>(
+    `SELECT settings_revision, retired_at FROM accounts WHERE id = $1 FOR UPDATE`,
+    [accountId],
+  );
+  const user = await client.query<{ profile_revision: number; kind: string; status: string }>(
+    `SELECT profile_revision, kind, status FROM users WHERE account_id = $1 AND id = $2 FOR UPDATE`,
+    [accountId, userId],
+  );
+  const session = await client.query<{ created_at: Date }>(
+    `SELECT created_at FROM sessions WHERE id = $1 AND account_id = $2 AND user_id = $3
+       AND revoked_at IS NULL AND expires_at > now() FOR UPDATE`,
+    [sessionId, accountId, userId],
+  );
+  const accountRow = account.rows[0];
+  const userRow = user.rows[0];
+  const sessionRow = session.rows[0];
+  if (!accountRow || !userRow || !sessionRow || userRow.status !== "active") {
+    throw new ApiError(401, "SESSION_INVALID", "Sign in again.");
+  }
+  if (accountRow.retired_at) {
+    throw new ApiError(409, "ACCOUNT_RETIRED", "This account is retired.");
+  }
+  return {
+    settingsRevision: accountRow.settings_revision,
+    userRevision: userRow.profile_revision,
+    credentialFingerprint: await credentialFingerprint(client, accountId, userId),
+    userKind: userRow.kind as UserKind,
+  };
+}
+
+/**
+ * Credential revision: the exact set of usable login credentials. Linking,
+ * unlinking or swapping a credential changes this fingerprint and invalidates
+ * every outstanding attempt that was not bound to the new state.
+ */
+export async function credentialFingerprint(
+  client: Pick<Pool, "query"> | PoolClient,
+  accountId: string,
+  userId: string,
+): Promise<string> {
+  const identities = await client.query<{ provider: string; subject_hash: string }>(
+    `SELECT provider, subject_hash FROM auth_identities
+     WHERE account_id = $1 AND user_id = $2 ORDER BY provider, subject_hash`,
+    [accountId, userId],
+  );
+  const passwords = await client.query<{ password_changed_at: Date }>(
+    `SELECT password_changed_at FROM password_credentials WHERE account_id = $1 AND user_id = $2`,
+    [accountId, userId],
+  );
+  return sha256(
+    JSON.stringify({
+      identities: identities.rows.map((row) => `${row.provider}:${row.subject_hash}`),
+      passwords: passwords.rows.map((row) => new Date(row.password_changed_at).toISOString()),
+    }),
+  );
+}
+
+function assertOriginBound(attempt: AttemptRow, caller: DesktopAuthCaller, config: BackendConfig): void {
+  if (
+    attempt.web_origin !== caller.webOrigin ||
+    attempt.backend_environment !== backendEnvironment(config) ||
+    !config.allowedOrigins.includes(caller.webOrigin)
+  ) {
+    throw invalidAttempt("This sign-in attempt is bound to another origin or backend.");
+  }
+}
+
+function assertFlowDeadline(attempt: AttemptRow): void {
+  if (attempt.flow_deadline_at && attempt.flow_deadline_at <= new Date()) {
+    throw new ApiError(
+      409,
+      "DESKTOP_AUTH_FLOW_EXPIRED",
+      "This operation expired. Refresh Settings and start again.",
+    );
+  }
+}
+
+/**
+ * Prepare one attempt from the original WKWebView cookie jar. Credential
+ * rounds resolve their frozen flow/round scope from the WK-sealed operation
+ * state (transported here as immutable expected comparators) and are admitted
+ * only against the CURRENT authenticated server scope under the shared
+ * credential locks. There is no login-age shortcut and no client-supplied
+ * proof. Login binds the initiating fingerprint explicitly, `anonymous`
+ * included.
+ */
+export async function prepareDesktopAuthAttempt(
+  pool: Pool,
+  config: BackendConfig,
+  request: DesktopAuthPrepareRequest,
+  caller: DesktopAuthCaller,
+): Promise<DesktopAuthPrepareResponse> {
+  if (caller.webOrigin !== request.web_origin) {
+    throw new ApiError(403, "DESKTOP_AUTH_ORIGIN_MISMATCH", "This request origin is not allowed.");
+  }
+  if (request.purpose === "credential_round") {
+    if (request.role !== "current" && request.role !== "target") {
+      throw new ApiError(400, "DESKTOP_AUTH_ROLE_INVALID", "This operation role is not supported.");
+    }
+  } else if (request.role !== "login") {
+    throw new ApiError(400, "DESKTOP_AUTH_ROLE_INVALID", "This operation role is not supported.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    let binding: {
+      accountId: string | null;
+      userId: string | null;
+      sessionId: string | null;
+      settingsRevision: number | null;
+      userRevision: number | null;
+      credentialFingerprint: string | null;
+    } = {
+      accountId: null,
+      userId: null,
+      sessionId: null,
+      settingsRevision: null,
+      userRevision: null,
+      credentialFingerprint: null,
+    };
+    let flowDeadline: Date | null = null;
+    let originalProofAt: Date | null = null;
+    let credentialAttemptId: string | null = null;
+    let boundChallengeId: string | null = null;
+    let grantExpiryCap: Date | null = null;
+
+    if (request.purpose === "credential_round") {
+      const auth = caller.auth;
+      if (!auth) {
+        throw new ApiError(401, "AUTHENTICATION_REQUIRED", "Sign in before changing sign-in methods.");
+      }
+      if (
+        !request.flow_ref ||
+        !request.round_ref ||
+        !request.intent ||
+        !request.flow_deadline_at ||
+        !request.original_proof_at ||
+        typeof request.expected_account_id !== "string" ||
+        typeof request.expected_user_id !== "string" ||
+        typeof request.expected_account_revision !== "number" ||
+        typeof request.expected_user_revision !== "number"
+      ) {
+        throw new ApiError(
+          409,
+          "DESKTOP_AUTH_STALE_SCOPE",
+          "This page is out of date. Refresh Settings and start again.",
+        );
+      }
+      const identity = await initiatingIdentity(client, auth.accountId, auth.userId, auth.sessionId);
+      // Lab and fixture identities never use the handoff to reach real-account scope.
+      if (identity.userKind === "lab_human" || identity.userKind === "simulated_human") {
+        throw new ApiError(403, "DESKTOP_AUTH_LAB_SCOPE", "Lab accounts cannot change provider sign-in here.");
+      }
+      // The immutable rendered/flow scope is a comparison constraint against
+      // CURRENT server authority, never proof. Stale pages must refresh instead
+      // of mutating another account.
+      const scopeMatches =
+        request.expected_account_id === auth.accountId &&
+        request.expected_user_id === auth.userId &&
+        request.expected_account_revision === identity.settingsRevision &&
+        request.expected_user_revision === identity.userRevision;
+      if (!scopeMatches) {
+        throw new ApiError(
+          409,
+          "DESKTOP_AUTH_STALE_SCOPE",
+          "This page is out of date. Refresh Settings and start again.",
+        );
+      }
+      const originalProofAtDate = new Date(request.original_proof_at);
+      const flowDeadlineDate = new Date(request.flow_deadline_at);
+      if (
+        !Number.isFinite(originalProofAtDate.getTime()) ||
+        !Number.isFinite(flowDeadlineDate.getTime()) ||
+        flowDeadlineDate <= new Date() ||
+        flowDeadlineDate.getTime() > originalProofAtDate.getTime() + DESKTOP_AUTH_FLOW_TTL_SECONDS * 1_000
+      ) {
+        throw new ApiError(
+          409,
+          "DESKTOP_AUTH_FLOW_EXPIRED",
+          "This operation expired. Refresh Settings and start again.",
+        );
+      }
+      if (request.intent === "link_provider" &&
+        request.target_provider !== "apple" && request.target_provider !== "google"
+      ) {
+        throw new ApiError(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+      }
+      // Unlink may remove any one method, including the password; only the
+      // password intents map their target to the password form.
+      if (request.intent === "unlink_provider" &&
+        request.target_provider !== "apple" &&
+        request.target_provider !== "google" &&
+        request.target_provider !== "password"
+      ) {
+        throw new ApiError(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+      }
+      if (
+        (request.intent === "set_password" || request.intent === "change_password") &&
+        request.target_provider != null &&
+        request.target_provider !== "password"
+      ) {
+        throw new ApiError(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+      }
+      flowDeadline = flowDeadlineDate;
+      originalProofAt = originalProofAtDate;
+
+      if (request.role === "current") {
+        // The current round uses the phase-one reauth challenge created when
+        // the Server Action froze this exact operation. No new login challenge.
+        if (!request.provider_challenge_id) {
+          throw new ApiError(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+        }
+        boundChallengeId = request.provider_challenge_id;
+      } else {
+        // A target round completes the existing credential attempt using that
+        // attempt's own provider challenge and secret.
+        if (!request.credential_attempt_id) {
+          throw new ApiError(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+        }
+        const credential = await client.query<{
+          id: string;
+          account_id: string;
+          user_id: string;
+          session_id: string;
+          intent: string;
+          provider: string | null;
+          provider_challenge_id: string | null;
+          consumed_at: Date | null;
+          expires_at: Date;
+          expected_revision: number;
+          expected_user_revision: number;
+          origin: string;
+          client_label: string;
+        }>(
+          `SELECT * FROM credential_change_attempts WHERE id = $1 FOR UPDATE`,
+          [request.credential_attempt_id],
+        );
+        const row = credential.rows[0];
+        if (
+          !row ||
+          row.consumed_at !== null ||
+          row.expires_at <= new Date() ||
+          row.account_id !== auth.accountId ||
+          row.user_id !== auth.userId ||
+          row.session_id !== auth.sessionId ||
+          row.intent !== "link_provider" ||
+          row.provider !== request.target_provider ||
+          !row.provider_challenge_id ||
+          row.expected_revision !== identity.settingsRevision ||
+          row.expected_user_revision !== identity.userRevision
+        ) {
+          throw invalidAttempt("This sign-in method change is expired, already used, or bound to another session. Start again from Settings.");
+        }
+        // The grant's own trusted stored origin/client context, validated —
+        // never rewritten and never taken from request JSON.
+        validateGrantContext(row, caller.webOrigin);
+        // ADR 0020 ordering: a RELAY-created grant enters its target round
+        // only after the originating CURRENT round of the same flow has been
+        // acknowledged. Ordinary phase-one grants keep their own flow.
+        if (row.client_label === "talent-signal-desktop") {
+          const current = await client.query<{ id: string }>(
+            `SELECT id FROM desktop_auth_attempts
+             WHERE purpose = 'credential_round' AND role = 'current'
+               AND flow_ref = $1 AND credential_attempt_id = $2
+               AND status = 'consumed' AND acknowledged_at IS NOT NULL`,
+            [request.flow_ref, row.id],
+          );
+          if (!current.rowCount) {
+            throw invalidAttempt("Confirm the previous step in the app before continuing.");
+          }
+        }
+        credentialAttemptId = row.id;
+        boundChallengeId = row.provider_challenge_id;
+        // A target round never outlives its grant's absolute deadline.
+        grantExpiryCap = row.expires_at;
+      }
+
+      binding = {
+        accountId: auth.accountId,
+        userId: auth.userId,
+        sessionId: auth.sessionId,
+        settingsRevision: identity.settingsRevision,
+        userRevision: identity.userRevision,
+        credentialFingerprint: identity.credentialFingerprint,
+      };
+    } else if (caller.auth) {
+      // A login attempt may start signed-in; that exact session and fingerprint
+      // are bound so a delayed callback can never overwrite a newer login and a
+      // revoked session invalidates the attempt.
+      const identity = await initiatingIdentity(client, caller.auth.accountId, caller.auth.userId, caller.auth.sessionId);
+      binding = {
+        accountId: caller.auth.accountId,
+        userId: caller.auth.userId,
+        sessionId: caller.auth.sessionId,
+        settingsRevision: identity.settingsRevision,
+        userRevision: identity.userRevision,
+        credentialFingerprint: identity.credentialFingerprint,
+      };
+    }
+
+    const attemptId = randomUUID();
+    const pairingSecret = rawSecret();
+    const ttlExpiry = new Date(Date.now() + DESKTOP_AUTH_ATTEMPT_TTL_SECONDS * 1_000);
+    let expiresAt = flowDeadline && flowDeadline < ttlExpiry ? flowDeadline : ttlExpiry;
+    if (grantExpiryCap && grantExpiryCap < expiresAt) expiresAt = grantExpiryCap;
+    await client.query(
+      `INSERT INTO desktop_auth_attempts(
+         id, provider, purpose, role, protocol_version, web_origin, backend_environment,
+         client_label, status, code_challenge, state_hash, pairing_secret_hash,
+         auth_fingerprint, auth_scope, account_id, user_id, session_id,
+         expected_account_revision, expected_user_revision, credential_fingerprint,
+         flow_ref, round_ref, intent, target_provider, flow_deadline_at, original_proof_at,
+         credential_attempt_id, provider_challenge_id, expires_at
+       ) VALUES ($1, $2, $3, $4, 2, $5, $6, $7, 'prepared', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)`,
+      [
+        attemptId,
+        request.provider,
+        request.purpose,
+        request.role,
+        request.web_origin,
+        backendEnvironment(config),
+        request.client_label,
+        request.code_challenge,
+        stateHash(request.state),
+        sha256(pairingSecret),
+        caller.authFingerprint,
+        caller.auth ? "authenticated" : "anonymous",
+        binding.accountId,
+        binding.userId,
+        binding.sessionId,
+        binding.settingsRevision,
+        binding.userRevision,
+        binding.credentialFingerprint,
+        request.flow_ref ?? null,
+        request.round_ref ?? null,
+        request.intent ?? null,
+        request.target_provider ?? null,
+        flowDeadline,
+        originalProofAt,
+        credentialAttemptId,
+        boundChallengeId,
+        expiresAt,
+      ],
+    );
+    await client.query("COMMIT");
+    return {
+      contract_version: CONTRACT_VERSION,
+      attempt_id: attemptId,
+      pairing_secret: pairingSecret,
+      expires_at: expiresAt.toISOString(),
+      pending_path: `${DESKTOP_AUTH_PENDING_PATH}?attempt=${encodeURIComponent(attemptId)}&state=${encodeURIComponent(request.state)}`,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Authorize in the system authentication browser. The raw state is verified
+ * against the stored hash here and only ever retained in the Web layer's
+ * short-lived sealed browser-attempt cookie; it is never reconstructed. Login
+ * rounds create their own provider challenge; credential rounds bind the
+ * frozen phase-one challenge and expose its exact expected OIDC nonce value.
+ */
+export async function authorizeDesktopAuthAttempt(
+  pool: Pool,
+  config: BackendConfig,
+  request: DesktopAuthAuthorizeRequest,
+  caller: DesktopAuthCaller,
+): Promise<DesktopAuthAuthorizeResponse> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const attempt = await loadAttempt(client, request.attempt_id);
+    assertOriginBound(attempt, caller, config);
+    if (attempt.status !== "prepared") {
+      throw invalidAttempt("This sign-in attempt has already started or ended. Start again from the app.");
+    }
+    if (attempt.expires_at <= new Date()) {
+      await markExpired(client, attempt);
+      await client.query("COMMIT");
+      throw expiredAttempt();
+    }
+    if (attempt.state_hash !== stateHash(request.state)) {
+      throw invalidAttempt("This sign-in attempt does not match the app's request.");
+    }
+
+    let challenge: ProviderChallenge;
+    let oidcNonce: string;
+    if (attempt.purpose === "credential_round") {
+      // Frozen phase-one challenge: current uses the operation's reauth
+      // challenge, target uses the credential attempt's own challenge.
+      const bound = attempt.provider_challenge_id;
+      if (!bound) {
+        throw invalidAttempt("This operation round has no bound provider challenge.");
+      }
+      const table = attempt.provider === "google" ? "google_login_challenges" : "apple_login_challenges";
+      const existing = await client.query<{
+        expected_nonce_hash: string;
+        client_label: string;
+        expires_at: Date;
+        consumed_at: Date | null;
+      }>(
+        `SELECT expected_nonce_hash, client_label, expires_at, consumed_at FROM ${table} WHERE id = $1`,
+        [bound],
+      );
+      const row = existing.rows[0];
+      if (!row || row.consumed_at !== null || row.expires_at <= new Date()) {
+        throw invalidAttempt("This operation round's provider challenge is expired or already used.");
+      }
+      challenge = {
+        challenge_id: bound,
+        // The stored expected nonce hash IS the exact OIDC nonce value the
+        // provider must echo; it is never hashed a second time.
+        nonce: row.expected_nonce_hash,
+        expires_at: row.expires_at.toISOString(),
+      };
+      oidcNonce = row.expected_nonce_hash;
+    } else if (attempt.provider === "google") {
+      const created = await createGoogleChallenge(client, config, attempt.client_label);
+      challenge = { challenge_id: created.challenge_id, nonce: created.nonce, expires_at: created.expires_at };
+      oidcNonce = sha256(created.nonce);
+    } else {
+      const created = await createAppleLoginChallenge(client, config, { client_label: attempt.client_label });
+      challenge = { challenge_id: created.challenge_id, nonce: created.nonce, expires_at: created.expires_at };
+      oidcNonce = sha256(created.nonce);
+    }
+
+    await client.query(
+      `UPDATE desktop_auth_attempts
+       SET status = 'authorizing', authorizing_at = now(), provider_challenge_id = COALESCE(provider_challenge_id, $2)
+       WHERE id = $1 AND status = 'prepared'`,
+      [attempt.id, challenge.challenge_id],
+    );
+    await client.query("COMMIT");
+    return {
+      contract_version: CONTRACT_VERSION,
+      attempt_id: attempt.id,
+      provider: attempt.provider,
+      purpose: attempt.purpose,
+      role: attempt.role,
+      provider_challenge: challenge,
+      oidc_nonce: oidcNonce,
+      flow_ref: attempt.flow_ref,
+      round_ref: attempt.round_ref,
+      intent: attempt.intent,
+      target_provider: attempt.target_provider,
+      expires_at: attempt.expires_at.toISOString(),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Provider completion approves the attempt with the verified provider proof
+ * (phase-one challenge, nonce and assertion anti-replay included; the exact
+ * assertion is consumed exactly once here and never again afterwards). It
+ * records only a verified proof reference and attaches no credential and no
+ * session. A current round must resolve to a subject already linked to the
+ * frozen account/user.
+ */
+export async function approveDesktopAuthAttempt(
+  pool: Pool,
+  config: BackendConfig,
+  request: DesktopAuthApproveRequest,
+  caller: DesktopAuthCaller,
+  deps: CredentialChangeDeps = {},
+): Promise<DesktopAuthApproveResponse> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const attempt = await loadAttempt(client, request.attempt_id);
+    assertOriginBound(attempt, caller, config);
+    if (attempt.status !== "authorizing") {
+      throw invalidAttempt("This sign-in attempt is not waiting for provider proof.");
+    }
+    if (attempt.expires_at <= new Date()) {
+      await markExpired(client, attempt);
+      await client.query("COMMIT");
+      throw expiredAttempt();
+    }
+    if (attempt.state_hash !== stateHash(request.state)) {
+      throw invalidAttempt("This sign-in attempt does not match the app's request.");
+    }
+    if (!attempt.provider_challenge_id || attempt.provider_challenge_id !== request.challenge_id) {
+      throw invalidAttempt("This provider round does not belong to this sign-in attempt.");
+    }
+    const proof: VerifiedProviderProof = await verifyAndConsumeProviderProof(
+      client,
+      config,
+      attempt.provider as ProviderId,
+      { challenge_id: request.challenge_id, identity_token: request.identity_token },
+      // Credential rounds bind the phase-one challenge created by the Web
+      // Server Action under ITS client label; login rounds created their own.
+      attempt.purpose === "credential_round"
+        ? await boundChallengeClientLabel(client, attempt)
+        : attempt.client_label,
+      deps,
+    );
+    if (attempt.role === "current") {
+      // Fresh provider proof for the CURRENT identity: the subject must
+      // already be linked to the frozen account/user. A matching email or an
+      // existing browser login is not proof.
+      const linked = await client.query(
+        `SELECT 1 FROM auth_identities
+         WHERE account_id = $1 AND user_id = $2 AND provider = $3 AND subject_hash = $4`,
+        [attempt.account_id, attempt.user_id, proof.provider, proof.subjectHash],
+      );
+      if (!linked.rowCount) {
+        throw new ApiError(
+          401,
+          "DESKTOP_AUTH_CURRENT_SUBJECT_MISMATCH",
+          "This provider account is not the current sign-in method for this account.",
+        );
+      }
+    }
+    const displayName = (proof.email ? proof.email.split("@")[0] : "") || attempt.provider;
+    await client.query(
+      `UPDATE desktop_auth_attempts
+       SET status = 'approved', approved_at = now(), approved_subject_hash = $2,
+           approved_email = $3, approved_email_verified = $4, approved_display_name = $5
+       WHERE id = $1 AND status = 'authorizing'`,
+      [attempt.id, proof.subjectHash, proof.email, proof.emailVerified, displayName.slice(0, 200)],
+    );
+    await client.query("COMMIT");
+    return {
+      contract_version: CONTRACT_VERSION,
+      attempt_id: attempt.id,
+      status: "approved",
+      provider: attempt.provider,
+      purpose: attempt.purpose,
+      role: attempt.role,
+      verified: {
+        provider: attempt.provider,
+        email_hint: proof.email,
+        email_verified: proof.emailVerified,
+        display_name: displayName.slice(0, 200),
+      },
+      expires_at: attempt.expires_at.toISOString(),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function readDesktopAuthAttempt(
+  pool: Pool,
+  attemptId: string,
+  caller: DesktopAuthCaller,
+  config: BackendConfig,
+): Promise<DesktopAuthStatusResponse> {
+  const client = await pool.connect();
+  try {
+    const attempt = await loadAttempt(client, attemptId, "FOR SHARE");
+    assertOriginBound(attempt, caller, config);
+    return {
+      contract_version: CONTRACT_VERSION,
+      attempt_id: attempt.id,
+      status: attempt.status,
+      provider: attempt.provider,
+      purpose: attempt.purpose,
+      role: attempt.role,
+      verified: attempt.approved_at
+        ? {
+            provider: attempt.provider,
+            email_hint: attempt.approved_email,
+            email_verified: attempt.approved_email_verified === true,
+            display_name: attempt.approved_display_name ?? attempt.provider,
+          }
+        : null,
+      expires_at: attempt.expires_at.toISOString(),
+    };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Mint the one-use short code after the explicit system-browser confirmation.
+ * The code lives at most one minute and only replaces its own attempt's code.
+ */
+export async function issueDesktopAuthCode(
+  pool: Pool,
+  config: BackendConfig,
+  request: DesktopAuthCompleteRequest,
+  caller: DesktopAuthCaller,
+): Promise<DesktopAuthCompleteResponse> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const attempt = await loadAttempt(client, request.attempt_id);
+    assertOriginBound(attempt, caller, config);
+    if (attempt.status !== "approved") {
+      throw invalidAttempt("This sign-in attempt is not confirmed yet.");
+    }
+    if (attempt.expires_at <= new Date()) {
+      await markExpired(client, attempt);
+      await client.query("COMMIT");
+      throw expiredAttempt();
+    }
+    if (attempt.state_hash !== stateHash(request.state)) {
+      throw invalidAttempt("This sign-in attempt does not match the app's request.");
+    }
+    const code = rawSecret();
+    const codeExpiresAt = new Date(
+      Math.min(Date.now() + DESKTOP_AUTH_CODE_TTL_SECONDS * 1_000, attempt.expires_at.getTime()),
+    );
+    await client.query(
+      `UPDATE desktop_auth_attempts SET code_hash = $2, code_expires_at = $3
+       WHERE id = $1 AND status = 'approved'`,
+      [attempt.id, sha256(code), codeExpiresAt],
+    );
+    await client.query("COMMIT");
+    return {
+      contract_version: CONTRACT_VERSION,
+      attempt_id: attempt.id,
+      code,
+      expires_at: codeExpiresAt.toISOString(),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Absolute credential-attempt deadline (ADR 0020): never later than the
+ * original server-verified provider proof (`approved_at` + 300s) nor any
+ * earlier desktop attempt or flow deadline. Redemption never renews the
+ * proof's authority, and no client timestamp or consume time extends it.
+ */
+function grantExpiry(attempt: AttemptRow, now: number): Date {
+  return new Date(
+    Math.min(
+      now + CREDENTIAL_ATTEMPT_TTL_SECONDS * 1_000,
+      attempt.expires_at.getTime(),
+      attempt.flow_deadline_at?.getTime() ?? Number.POSITIVE_INFINITY,
+      (attempt.approved_at?.getTime() ?? now) + DESKTOP_AUTH_ATTEMPT_TTL_SECONDS * 1_000,
+    ),
+  );
+}
+
+/**
+ * Revalidate the frozen authority of an authenticated binding under the
+ * shared account/user/session locks: live session, unchanged revisions and
+ * unchanged credential set.
+ */
+async function recheckFrozenAuthority(
+  client: PoolClient,
+  attempt: AttemptRow,
+): Promise<{ settingsRevision: number; userRevision: number; credentialFingerprint: string }> {
+  const identity = await initiatingIdentity(client, attempt.account_id!, attempt.user_id!, attempt.session_id!);
+  if (attempt.purpose === "credential_round") {
+    if (
+      identity.settingsRevision !== attempt.expected_account_revision ||
+      identity.userRevision !== attempt.expected_user_revision ||
+      identity.credentialFingerprint !== attempt.credential_fingerprint
+    ) {
+      throw invalidAttempt("Sign-in methods changed while this operation was open. Refresh Settings and start again.");
+    }
+  }
+  return identity;
+}
+
+function staleFingerprint(): ApiError {
+  return new ApiError(
+    409,
+    "DESKTOP_AUTH_FINGERPRINT_CHANGED",
+    "This app window's sign-in state changed while the attempt was open. Nothing was overwritten.",
+  );
+}
+
+function approvedProof(attempt: AttemptRow): Pick<VerifiedProviderProof, "provider" | "subjectHash" | "email" | "emailVerified"> {
+  if (!attempt.approved_subject_hash) {
+    throw invalidAttempt("This sign-in attempt has no verified provider proof.");
+  }
+  return {
+    provider: attempt.provider as ProviderId,
+    subjectHash: attempt.approved_subject_hash,
+    email: attempt.approved_email,
+    emailVerified: attempt.approved_email_verified === true,
+  };
+}
+
+export type DesktopAuthConsumeExtra = {
+  /**
+   * Target rounds complete the existing credential attempt using the secret
+   * from the server-sealed WK continuation; only its hash is ever stored.
+   */
+  attemptSecret?: string | undefined;
+};
+
+/**
+ * Atomic single-use consumption. All bindings — pairing cookie secret, code,
+ * PKCE verifier, state hash, exact origin and backend environment, the
+ * initiating authentication fingerprint, the live initiating session, and for
+ * credential rounds the frozen flow/round/intent/scope/revisions/deadline —
+ * are rechecked inside one transaction before any session is created or any
+ * credential mutation commits.
+ */
+export async function consumeDesktopAuthAttempt(
+  pool: Pool,
+  config: BackendConfig,
+  request: DesktopAuthConsumeRequest,
+  caller: DesktopAuthCaller,
+  deps: CredentialChangeDeps = {},
+  extra: DesktopAuthConsumeExtra = {},
+): Promise<DesktopAuthConsumeResponse> {
+  void deps;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const attempt = await loadAttempt(client, request.attempt_id);
+    assertOriginBound(attempt, caller, config);
+    if (attempt.pairing_secret_hash !== sha256(request.pairing_secret)) {
+      throw invalidAttempt("This sign-in attempt is not paired with this app window.");
+    }
+    if (attempt.status === "consumed") {
+      throw invalidAttempt("This sign-in attempt was already used. Start again from the app.");
+    }
+    if (attempt.status === "cancelled" || attempt.status === "expired") {
+      throw invalidAttempt("This sign-in attempt has ended. Start again from the app.");
+    }
+    if (attempt.status !== "approved") {
+      throw invalidAttempt("This sign-in attempt is not ready to complete.");
+    }
+    if (
+      attempt.expires_at <= new Date() ||
+      (attempt.code_expires_at && attempt.code_expires_at <= new Date())
+    ) {
+      await markExpired(client, attempt);
+      await client.query("COMMIT");
+      throw expiredAttempt();
+    }
+    if (!attempt.code_hash || attempt.code_hash !== sha256(request.code)) {
+      throw invalidAttempt("This sign-in code is invalid or was already used.");
+    }
+    if (attempt.code_challenge !== desktopCodeChallenge(request.verifier)) {
+      throw invalidAttempt("This sign-in attempt does not match the app's verifier.");
+    }
+    if (attempt.auth_fingerprint !== caller.authFingerprint) {
+      throw staleFingerprint();
+    }
+    if (attempt.session_id) {
+      if (
+        !caller.auth ||
+        caller.auth.sessionId !== attempt.session_id ||
+        !attempt.account_id ||
+        !attempt.user_id ||
+        caller.auth.accountId !== attempt.account_id ||
+        caller.auth.userId !== attempt.user_id
+      ) {
+        throw staleFingerprint();
+      }
+      // In-transaction revalidation under the phase-one lock order. The caller
+      // was resolved OUTSIDE this transaction; a revocation that committed
+      // after that resolution is detected here. Target rounds defer this to
+      // their grant-first lock order (see consumeTargetRound) so desktop and
+      // ordinary credential completion never wait on each other in a cycle.
+      if (attempt.role !== "target") {
+        await recheckFrozenAuthority(client, attempt);
+      }
+    }
+    assertFlowDeadline(attempt);
+
+    if (attempt.purpose === "login") {
+      const session = await commitDesktopLogin(client, config, attempt);
+      await client.query(
+        `UPDATE desktop_auth_attempts
+         SET status = 'consumed', consumed_at = now(), code_hash = NULL, code_expires_at = NULL,
+             result = $2, result_committed_at = now()
+         WHERE id = $1 AND status = 'approved'`,
+        [attempt.id, JSON.stringify({ kind: "login", session_account_id: session.account.id })],
+      );
+      await client.query("COMMIT");
+      return { contract_version: CONTRACT_VERSION, status: "logged_in", session };
+    }
+
+    // --- Credential round (ADR 0020) -------------------------------------
+    const auth = caller.auth!;
+    const proof = approvedProof(attempt);
+    if (attempt.approved_redeemed_at) {
+      throw invalidAttempt("This provider proof was already used. Start again from Settings.");
+    }
+    if (attempt.role === "current") {
+      return await consumeCurrentRound(client, config, auth, attempt, request, proof);
+    }
+    return await consumeTargetRound(client, config, caller, attempt, proof, extra.attemptSecret ?? "");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    // A same-grant collision with an ordinary credential completion is a
+    // deliberate bounded retryable outcome, never an unhandled database
+    // deadlock (40P01) or an indefinite wait.
+    if ((error as { code?: string }).code === "40P01") {
+      throw new ApiError(
+        503,
+        "DESKTOP_AUTH_CONFLICT",
+        "Another sign-in method change finished first. Refresh Settings and try again.",
+      );
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Current round: redeem the approved proof into exactly ONE existing
+ * credential attempt (or the frozen immediate unlink) inside this transaction.
+ * No login cookie is created or replaced.
+ */
+async function consumeCurrentRound(
+  client: PoolClient,
+  config: BackendConfig,
+  auth: AuthContext,
+  attempt: AttemptRow,
+  request: DesktopAuthConsumeRequest,
+  proof: Pick<VerifiedProviderProof, "provider" | "subjectHash" | "email" | "emailVerified">,
+): Promise<DesktopAuthConsumeResponse> {
+  const intent = attempt.intent!;
+  const credentialAttemptId = randomUUID();
+  // Relay-created attempts use the stable HKDF-derived secret so a lost
+  // response can be paired later without minting a second attempt.
+  const attemptSecret = deriveDesktopCredentialSecret(
+    request.pairing_secret,
+    attempt.flow_ref!,
+    attempt.id,
+    credentialAttemptId,
+  );
+  const expiry = grantExpiry(attempt, Date.now());
+  let providerChallenge: { challenge_id: string; oidc_nonce: string; expires_at: string } | null = null;
+  let providerChallengeId: string | null = null;
+  if (intent === "link_provider") {
+    if (attempt.target_provider === "google") {
+      const challenge = await createGoogleChallenge(client, config, "talent-signal-desktop");
+      providerChallengeId = challenge.challenge_id;
+      providerChallenge = {
+        challenge_id: challenge.challenge_id,
+        oidc_nonce: sha256(challenge.nonce),
+        expires_at: challenge.expires_at,
+      };
+    } else if (attempt.target_provider === "apple") {
+      const challenge = await createAppleLoginChallenge(client, config, { client_label: "talent-signal-desktop" });
+      providerChallengeId = challenge.challenge_id;
+      providerChallenge = {
+        challenge_id: challenge.challenge_id,
+        oidc_nonce: sha256(challenge.nonce),
+        expires_at: challenge.expires_at,
+      };
+    }
+  }
+  await insertCredentialChangeAttempt(client, {
+    attemptId: credentialAttemptId,
+    attemptSecret,
+    accountId: auth.accountId,
+    userId: auth.userId,
+    sessionId: auth.sessionId,
+    intent,
+    // Unlink keeps its exact frozen target (including `password`); only the
+    // password intents map their target to the password form (null provider).
+    provider:
+      intent === "unlink_provider"
+        ? attempt.target_provider
+        : attempt.target_provider === "password"
+          ? null
+          : attempt.target_provider,
+    origin: `client:talent-signal-desktop`,
+    clientLabel: "talent-signal-desktop",
+    expectedRevision: attempt.expected_account_revision!,
+    expectedUserRevision: attempt.expected_user_revision!,
+    providerChallengeId,
+    expiresAt: expiry,
+  });
+
+  const continuation: DesktopAuthContinuation = {
+    flow_ref: attempt.flow_ref!,
+    round_ref: attempt.round_ref!,
+    role: "current",
+    intent,
+    target_provider: attempt.target_provider,
+    credential_attempt_id: credentialAttemptId,
+    attempt_secret: attemptSecret,
+    provider_challenge: providerChallenge,
+  };
+
+  await client.query(
+    `UPDATE desktop_auth_attempts
+     SET status = 'consumed', consumed_at = now(), code_hash = NULL, code_expires_at = NULL,
+         approved_redeemed_at = now(), credential_attempt_id = $2
+     WHERE id = $1 AND status = 'approved'`,
+    [attempt.id, credentialAttemptId],
+  );
+
+  if (intent === "unlink_provider") {
+    // The frozen removal completes in this same transaction; the last-method
+    // guard and audit record come from the shared phase-one primitive.
+    const loaded = await loadLockedCredentialChangeAttempt(client, auth, {
+      attemptId: credentialAttemptId,
+      attemptSecret,
+      requestOrigin: `client:talent-signal-desktop`,
+    });
+    const completion = await commitCredentialChangeInternal(
+      client,
+      auth,
+      loaded.attempt,
+      loaded.settingsRevision,
+      { kind: "unlink" },
+      config.internalLabEnabled === true,
+    );
+    await client.query(
+      `UPDATE desktop_auth_attempts SET result = $2, result_committed_at = now(), acknowledged_at = now() WHERE id = $1`,
+      [attempt.id, JSON.stringify({ intent, status: completion.status })],
+    );
+    await client.query("COMMIT");
+    return {
+      contract_version: CONTRACT_VERSION,
+      status: "completed",
+      result: { intent, status: completion.status },
+      settings: completion.settings,
+    };
+  }
+
+  await client.query("COMMIT");
+  return intent === "link_provider"
+    ? { contract_version: CONTRACT_VERSION, status: "awaiting_target", continuation }
+    : { contract_version: CONTRACT_VERSION, status: "awaiting_password", continuation };
+}
+
+/**
+ * The grant's TRUSTED stored context (ADR 0020 / R3). The origin/client pair
+ * recorded by the operation's own start is validated, never rewritten and
+ * never taken from request JSON: relay-created grants use the fixed desktop
+ * client scope, password-first phase-one grants keep their own `web` client
+ * scope or their actual allowed browser origin (which must equal this
+ * caller's bound origin).
+ */
+function validateGrantContext(
+  stored: { origin: string; client_label: string } | undefined,
+  webOrigin: string,
+): string {
+  if (!stored) {
+    throw invalidAttempt("This sign-in method change is expired, already used, or bound to another session. Start again from Settings.");
+  }
+  const fixedClientScope =
+    (stored.origin === "client:talent-signal-desktop" && stored.client_label === "talent-signal-desktop") ||
+    (stored.origin === "client:talent-signal-web" && stored.client_label === "talent-signal-web");
+  const actualOriginScope =
+    stored.origin === webOrigin &&
+    (stored.client_label === "talent-signal-web" || stored.client_label === "talent-signal-desktop");
+  if (!fixedClientScope && !actualOriginScope) {
+    throw invalidAttempt("This sign-in method change is bound to another origin or client. Start again from Settings.");
+  }
+  return stored.origin;
+}
+
+/** Target round: complete the EXISTING credential attempt with the internal proof. */
+async function consumeTargetRound(
+  client: PoolClient,
+  config: BackendConfig,
+  caller: DesktopAuthCaller,
+  attempt: AttemptRow,
+  proof: Pick<VerifiedProviderProof, "provider" | "subjectHash" | "email" | "emailVerified">,
+  attemptSecret: string,
+): Promise<DesktopAuthConsumeResponse> {
+  const auth = caller.auth!;
+  const credentialAttemptId = attempt.credential_attempt_id;
+  if (!credentialAttemptId || !attemptSecret) {
+    throw invalidAttempt("This operation round has no credential attempt.");
+  }
+  // The grant's own stored origin/client context is the authority; the
+  // hardcoded desktop label is only valid for relay-created grants.
+  const contextRow = await client.query<{ origin: string; client_label: string }>(
+    `SELECT origin, client_label FROM credential_change_attempts WHERE id = $1`,
+    [credentialAttemptId],
+  );
+  const trustedOrigin = validateGrantContext(contextRow.rows[0], caller.webOrigin);
+  // Lock order aligned with ordinary credential completion: the grant row is
+  // locked first, then account/user/session.
+  const loaded = await loadLockedCredentialChangeAttempt(client, auth, {
+    attemptId: credentialAttemptId,
+    attemptSecret,
+    requestOrigin: trustedOrigin,
+  });
+  await recheckFrozenAuthority(client, attempt);
+  const completion = await commitCredentialChangeInternal(
+    client,
+    auth,
+    loaded.attempt,
+    loaded.settingsRevision,
+    { kind: "link-proof", proof },
+    config.internalLabEnabled === true,
+  );
+  await client.query(
+    `UPDATE desktop_auth_attempts
+     SET status = 'consumed', consumed_at = now(), code_hash = NULL, code_expires_at = NULL,
+         approved_redeemed_at = now(), result = $2, result_committed_at = now()
+     WHERE id = $1 AND status = 'approved'`,
+    [attempt.id, JSON.stringify({ intent: "link_provider", status: completion.status })],
+  );
+  await client.query("COMMIT");
+  return {
+    contract_version: CONTRACT_VERSION,
+    status: "completed",
+    result: { intent: "link_provider", status: completion.status },
+    settings: completion.settings,
+  };
+}
+
+/**
+ * Durable paired result read (ADR 0020). Read-only: it never reruns a
+ * mutation. For a relay-created credential attempt it re-derives the same
+ * attempt secret from the random WK pairing secret after verifying the native
+ * verifier, so a lost consume response recovers the SAME attempt and result.
+ */
+/**
+ * Paired-operation caller authority (ADR 0020 / R1). Credential-round
+ * continuation and acknowledgment material belongs to the EXACT live
+ * original account/user/session/fingerprint of its frozen operation — never
+ * to an anonymous caller, another account, a sibling session or a revoked
+ * original. Anonymous LOGIN behavior is different and unchanged: its pairing
+ * secret and verifier are the WK window's own authority.
+ *
+ * `receipt` mode tolerates the operation's OWN committed revision change (the
+ * completion increments settings_revision) while still requiring the exact
+ * live actor/session. `pending` mode additionally requires the original
+ * revisions, credential snapshot and every absolute deadline.
+ */
+async function authorizePairedCaller(
+  client: PoolClient,
+  attempt: AttemptRow,
+  caller: DesktopAuthCaller,
+  mode: "receipt" | "pending",
+): Promise<void> {
+  if (attempt.purpose === "login") return;
+  if (
+    !caller.auth ||
+    caller.authFingerprint !== attempt.auth_fingerprint ||
+    caller.auth.accountId !== attempt.account_id ||
+    caller.auth.userId !== attempt.user_id ||
+    caller.auth.sessionId !== attempt.session_id
+  ) {
+    throw staleFingerprint();
+  }
+  const identity = await initiatingIdentity(client, attempt.account_id!, attempt.user_id!, attempt.session_id!);
+  if (mode === "pending") {
+    if (
+      identity.settingsRevision !== attempt.expected_account_revision ||
+      identity.userRevision !== attempt.expected_user_revision ||
+      identity.credentialFingerprint !== attempt.credential_fingerprint
+    ) {
+      throw invalidAttempt("Sign-in methods changed while this operation was open. Refresh Settings and start again.");
+    }
+    assertFlowDeadline(attempt);
+    if (attempt.expires_at <= new Date()) throw expiredAttempt();
+  }
+}
+
+/**
+ * Durable paired result read (ADR 0020). Read-only: it never reruns a
+ * mutation. For a relay-created credential attempt it re-derives the same
+ * attempt secret from the random WK pairing secret after verifying the native
+ * verifier and the ORIGINAL live actor/session, so a lost consume response
+ * recovers the SAME attempt and result without exporting it beyond its
+ * authorized scope.
+ */
+export async function readDesktopAuthResult(
+  pool: Pool,
+  config: BackendConfig,
+  request: DesktopAuthResultRequest,
+  caller: DesktopAuthCaller,
+): Promise<DesktopAuthResultResponse> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const attempt = await loadAttempt(client, request.attempt_id);
+    assertOriginBound(attempt, caller, config);
+    const base = {
+      contract_version: CONTRACT_VERSION,
+      attempt_id: attempt.id,
+      result: null,
+      continuation: null,
+      settings: null,
+    };
+    if (
+      attempt.pairing_secret_hash !== sha256(request.pairing_secret) ||
+      attempt.code_challenge !== desktopCodeChallenge(request.verifier)
+    ) {
+      await client.query("COMMIT");
+      return { ...base, status: "unknown" };
+    }
+    if (attempt.status === "cancelled" || attempt.status === "expired") {
+      await authorizePairedCaller(client, attempt, caller, "receipt");
+      const status = attempt.status;
+      await client.query("COMMIT");
+      return { ...base, status };
+    }
+    if (attempt.status !== "consumed") {
+      await authorizePairedCaller(client, attempt, caller, "pending");
+      await client.query("COMMIT");
+      return { ...base, status: "pending" };
+    }
+    if (attempt.result_committed_at) {
+      // A completed receipt tolerates its own authorized revision change but
+      // never a different live actor/session or Settings account.
+      await authorizePairedCaller(client, attempt, caller, "receipt");
+      const settings =
+        attempt.purpose === "credential_round" && caller.auth
+          ? await readAccountSettingsWith(client, caller.auth, config.internalLabEnabled === true)
+          : null;
+      await client.query("COMMIT");
+      return { ...base, status: "committed", result: attempt.result, settings };
+    }
+    if (attempt.credential_attempt_id && attempt.flow_ref) {
+      await authorizePairedCaller(client, attempt, caller, "pending");
+      const secret = deriveDesktopCredentialSecret(
+        request.pairing_secret,
+        attempt.flow_ref,
+        attempt.id,
+        attempt.credential_attempt_id,
+      );
+      const credential = await client.query<{
+        attempt_secret_hash: string;
+        intent: string;
+        provider: string | null;
+        consumed_at: Date | null;
+        expires_at: Date;
+        provider_challenge_id: string | null;
+      }>(
+        `SELECT attempt_secret_hash, intent, provider, consumed_at, expires_at, provider_challenge_id
+         FROM credential_change_attempts WHERE id = $1`,
+        [attempt.credential_attempt_id],
+      );
+      const row = credential.rows[0];
+      if (row && row.attempt_secret_hash === sha256(secret) && row.consumed_at === null && row.expires_at > new Date()) {
+        let challenge: DesktopAuthContinuation["provider_challenge"] = null;
+        if (row.intent === "link_provider" && row.provider_challenge_id) {
+          const table = attempt.target_provider === "google" ? "google_login_challenges" : "apple_login_challenges";
+          const providerRow = await client.query<{ expected_nonce_hash: string; expires_at: Date }>(
+            `SELECT expected_nonce_hash, expires_at FROM ${table} WHERE id = $1`,
+            [row.provider_challenge_id],
+          );
+          if (providerRow.rows[0]) {
+            challenge = {
+              challenge_id: row.provider_challenge_id,
+              oidc_nonce: providerRow.rows[0].expected_nonce_hash,
+              expires_at: providerRow.rows[0].expires_at.toISOString(),
+            };
+          }
+        }
+        await client.query("COMMIT");
+        return {
+          ...base,
+          status: "pending_continuation",
+          continuation: {
+            flow_ref: attempt.flow_ref,
+            round_ref: attempt.round_ref!,
+            role: "current",
+            intent: row.intent as DesktopCredentialIntent,
+            target_provider: row.provider as DesktopAuthContinuation["target_provider"],
+            credential_attempt_id: attempt.credential_attempt_id,
+            attempt_secret: secret,
+            provider_challenge: challenge,
+          },
+        };
+      }
+    }
+    await client.query("COMMIT");
+    return { ...base, status: "unknown" };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Paired acknowledgment (ADR 0020 / R1): confirms the original WK request now
+ * carries the server-sealed continuation matching this committed flow and
+ * credential attempt. Only the exact live original actor/session may
+ * acknowledge; idempotent per round. Native may only start a target round
+ * after this acknowledgment (or its deadline).
+ */
+export async function ackDesktopAuthResult(
+  pool: Pool,
+  config: BackendConfig,
+  request: DesktopAuthAckRequest,
+  caller: DesktopAuthCaller,
+): Promise<DesktopAuthAckResponse> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const attempt = await loadAttempt(client, request.attempt_id);
+    assertOriginBound(attempt, caller, config);
+    const status: DesktopAuthAckResponse["status"] = attempt.result_committed_at
+      ? "committed"
+      : attempt.credential_attempt_id
+        ? "pending_continuation"
+        : "unknown";
+    const owned =
+      attempt.pairing_secret_hash === sha256(request.pairing_secret) &&
+      attempt.code_challenge === desktopCodeChallenge(request.verifier) &&
+      attempt.status === "consumed" &&
+      Boolean(attempt.credential_attempt_id) &&
+      attempt.credential_attempt_id === request.credential_attempt_id;
+    if (!owned) {
+      await client.query("COMMIT");
+      return {
+        contract_version: CONTRACT_VERSION,
+        attempt_id: attempt.id,
+        acknowledged: false,
+        status: "unknown",
+      };
+    }
+    // Exact live original actor/session; pending grants also keep their
+    // original revisions and deadlines.
+    await authorizePairedCaller(
+      client,
+      attempt,
+      caller,
+      attempt.result_committed_at ? "receipt" : "pending",
+    );
+    await client.query(
+      `UPDATE desktop_auth_attempts SET acknowledged_at = COALESCE(acknowledged_at, now()) WHERE id = $1`,
+      [attempt.id],
+    );
+    await client.query("COMMIT");
+    return {
+      contract_version: CONTRACT_VERSION,
+      attempt_id: attempt.id,
+      acknowledged: true,
+      status,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Login creates an INDEPENDENT device backend session for the verified
+ * provider identity (same phase-one identity primitives and provider-subject
+ * authority as ordinary login). Only an actually verified provider email ever
+ * becomes a secondary claim; an unverified hint is a label and never reserves
+ * an address or blocks another verified account.
+ */
+async function commitDesktopLogin(
+  client: PoolClient,
+  config: BackendConfig,
+  attempt: AttemptRow,
+): Promise<SessionResponse> {
+  const provider = attempt.provider;
+  const subjectHash = attempt.approved_subject_hash!;
+  const email = attempt.approved_email;
+  const emailVerified = attempt.approved_email_verified === true;
+  const displayName = attempt.approved_display_name || "Talent Signal Recruiter";
+
+  await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${provider}:${subjectHash}`]);
+  const existing = await client.query<{
+    account_id: string;
+    account_name: string;
+    account_slug: string;
+    user_id: string;
+    display_name: string;
+    email: string;
+    status: string;
+    account_role: "admin" | "member";
+    username: string | null;
+  }>(
+    `SELECT identities.account_id, accounts.name AS account_name, accounts.slug AS account_slug,
+       users.id AS user_id, users.display_name, users.email, users.status,
+       users.account_role, users.username
+     FROM auth_identities identities JOIN accounts ON accounts.id = identities.account_id
+     JOIN users ON users.account_id = identities.account_id AND users.id = identities.user_id
+     WHERE identities.provider = $1 AND identities.subject_hash = $2`,
+    [provider, subjectHash],
+  );
+  let user = existing.rows[0];
+  if (user && user.status !== "active") {
+    throw new ApiError(403, "ACCOUNT_INACTIVE", "This workspace account is not active.");
+  }
+  if (!user) {
+    if (!email || !emailVerified) {
+      throw new ApiError(
+        401,
+        "DESKTOP_AUTH_IDENTITY_UNPROVEN",
+        "This provider account did not present a verified email. Use another sign-in method.",
+      );
+    }
+    const accountId = randomUUID();
+    const userId = randomUUID();
+    const accountName = `${displayName}'s workspace`;
+    const accountSlug = newAccountSlug();
+    try {
+      await createRealIdentity(client, {
+        accountId,
+        userId,
+        accountName,
+        accountSlug,
+        email,
+        displayName,
+        kind: provider === "google" ? "google_human" : "apple_human",
+        emailVerifiedAt: new Date(),
+      });
+    } catch (error) {
+      if (error instanceof EmailClaimConflict) {
+        throw new ApiError(
+          409,
+          "EMAIL_CLAIM_CONFLICT",
+          "This email already belongs to a Talent Signal account. Sign in with your existing method first.",
+        );
+      }
+      throw error;
+    }
+    await client.query(
+      `INSERT INTO auth_identities(id, account_id, user_id, provider, subject_hash, email_hint)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [randomUUID(), accountId, userId, provider, subjectHash, email],
+    );
+    user = {
+      account_id: accountId,
+      account_name: accountName,
+      account_slug: accountSlug,
+      user_id: userId,
+      display_name: displayName,
+      email,
+      status: "active",
+      account_role: "member",
+      username: null,
+    };
+  } else if (email && emailVerified) {
+    // Only an actually verified provider email becomes a secondary claim
+    // (ADR 0018). An unverified hint is a label: it never reserves an address,
+    // never becomes verified/owned provenance, and never blocks another
+    // verified account's signup.
+    try {
+      await reserveVerifiedEmail(
+        client,
+        email,
+        { accountId: user.account_id, userId: user.user_id },
+        { source: `provider:${provider}`, verifiedAt: new Date() },
+        "secondary",
+      );
+    } catch (error) {
+      // Truthful conflict handling catches only the intended business claim
+      // conflict; unrelated database or programming failures surface.
+      if (!(error instanceof EmailClaimConflict)) throw error;
+    }
+  }
+  await client.query(
+    `UPDATE auth_identities SET last_authenticated_at = now(), email_hint = COALESCE($3, email_hint)
+     WHERE provider = $1 AND subject_hash = $2`,
+    [provider, subjectHash, email],
+  );
+  return insertSession(
+    client,
+    config,
+    {
+      accountId: user.account_id,
+      accountName: user.account_name,
+      accountSlug: user.account_slug,
+      userId: user.user_id,
+      userEmail: user.email,
+      displayName: user.display_name,
+      role: user.account_role,
+      userKind: provider === "google" ? "google_human" : "apple_human",
+      username: user.username,
+    },
+    `desktop:${attempt.client_label}`,
+  );
+}
+
+/**
+ * Cancel one attempt with its OWN authority (ADR 0020 recovery). The WK
+ * window presents its pairing secret; the system browser presents its sealed
+ * attempt's raw state. Neither can cancel the other's round, no pairing secret
+ * is ever exported to the system browser, and an already consumed result is
+ * reported truthfully instead of a success cancellation.
+ */
+export async function cancelDesktopAuthAttempt(
+  pool: Pool,
+  config: BackendConfig,
+  request: DesktopAuthCancelRequest,
+  caller: DesktopAuthCaller,
+): Promise<DesktopAuthCancelResponse> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const attempt = await loadAttempt(client, request.attempt_id);
+    assertOriginBound(attempt, caller, config);
+    if (request.mode === "wk") {
+      if (attempt.pairing_secret_hash !== sha256(request.pairing_secret)) {
+        throw invalidAttempt("This sign-in attempt is not paired with this app window.");
+      }
+    } else {
+      if (attempt.state_hash !== stateHash(request.state)) {
+        throw invalidAttempt("This sign-in attempt does not match the sealed browser round.");
+      }
+    }
+    let status: DesktopAuthCancelResponse["status"] = "cancelled";
+    if (attempt.status === "consumed") {
+      // Consume-first is truthful history: never rolled back or relabelled.
+      status = "consumed";
+    } else if (attempt.status === "prepared" || attempt.status === "authorizing" || attempt.status === "approved") {
+      if (attempt.expires_at <= new Date()) {
+        await client.query(`UPDATE desktop_auth_attempts SET status = 'expired' WHERE id = $1`, [attempt.id]);
+        status = "expired";
+      } else {
+        await client.query(
+          `UPDATE desktop_auth_attempts SET status = 'cancelled', cancelled_at = now() WHERE id = $1`,
+          [attempt.id],
+        );
+        // Cancelling an uncommitted target revokes exactly THIS operation's
+        // unused credential grant (ADR 0020 recovery): the original secret and
+        // its unconsumed challenge can no longer complete the cancelled
+        // operation through any consumer, and no other target can use it. A
+        // committed grant is never touched.
+        if (attempt.credential_attempt_id) {
+          await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+            `desktop-grant:${attempt.credential_attempt_id}`,
+          ]);
+          const revoked = await client.query<{ id: string }>(
+            `UPDATE credential_change_attempts
+             SET expires_at = LEAST(expires_at, now() - interval '1 second')
+             WHERE id = $1 AND consumed_at IS NULL RETURNING id`,
+            [attempt.credential_attempt_id],
+          );
+          if (revoked.rowCount && attempt.account_id && attempt.user_id) {
+            await client.query(
+              `INSERT INTO account_access_events(id, account_id, actor_user_id, kind, request_hash, details)
+               VALUES ($1, $2, $3, 'desktop_grant_revoked', $4, $5)`,
+              [
+                randomUUID(),
+                attempt.account_id,
+                attempt.user_id,
+                sha256(JSON.stringify({ attempt: attempt.id, grant: attempt.credential_attempt_id })),
+                JSON.stringify({
+                  target_provider: attempt.target_provider,
+                  target_user_id: attempt.user_id,
+                  credential_attempt_id: attempt.credential_attempt_id,
+                  outcome: "grant_revoked",
+                  channel: "desktop_auth_handoff",
+                }),
+              ],
+            );
+          }
+        }
+      }
+    } else {
+      status = attempt.status === "expired" ? "expired" : "cancelled";
+    }
+    await client.query("COMMIT");
+    return { contract_version: CONTRACT_VERSION, attempt_id: attempt.id, status, purpose: attempt.purpose };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Resolve the presented session exactly like the auth guard, but tolerantly:
+ * login attempts may be anonymous. The fingerprint is computed here, server
+ * side, from the presented token; client-supplied fingerprints are never used.
+ */
+export async function resolveDesktopCaller(
+  pool: Pool,
+  config: BackendConfig,
+  request: FastifyRequest,
+  webOrigin: string,
+): Promise<DesktopAuthCaller> {
+  void config;
+  const authorization = request.headers.authorization;
+  const token = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
+  if (!token) return { webOrigin, auth: null, authFingerprint: "anonymous" };
+  const result = await pool.query<{
+    session_id: string;
+    account_id: string;
+    account_slug: string;
+    user_id: string;
+    user_email: string;
+    user_kind: UserKind;
+  }>(
+    `SELECT sessions.id AS session_id, sessions.account_id, accounts.slug AS account_slug,
+       users.id AS user_id, users.email AS user_email, users.kind AS user_kind
+     FROM sessions
+     JOIN accounts ON accounts.id = sessions.account_id
+     JOIN users ON users.account_id = sessions.account_id AND users.id = sessions.user_id
+     WHERE sessions.token_hash = $1 AND sessions.revoked_at IS NULL AND sessions.expires_at > now()
+       AND users.status = 'active' AND ${labWorkspaceSessionActiveSQL}`,
+    [sha256(token)],
+  );
+  const auth = result.rows[0];
+  return {
+    webOrigin,
+    auth: auth
+      ? {
+          accountId: auth.account_id,
+          accountSlug: auth.account_slug,
+          userId: auth.user_id,
+          userEmail: auth.user_email,
+          userKind: auth.user_kind,
+          sessionId: auth.session_id,
+        }
+      : null,
+    authFingerprint: desktopAuthFingerprint(token),
+  };
+}
+
+/**
+ * The exact Web origin of the request. The handoff requires the browser
+ * `Origin` header to equal the bound web origin; a missing or foreign Origin
+ * (iframe or cross-origin entry) fails closed.
+ */
+export function desktopWebOrigin(request: FastifyRequest): string {
+  const origin = request.headers.origin;
+  if (typeof origin !== "string" || origin.length < 1 || origin.length > 500) {
+    throw new ApiError(403, "DESKTOP_AUTH_ORIGIN_REQUIRED", "This request origin is not allowed.");
+  }
+  return origin;
+}
+
+/** Embedded (iframe) entries carry a non-document fetch destination and are refused. */
+export function assertMainFrameNavigation(request: FastifyRequest): void {
+  const destination = request.headers["sec-fetch-dest"];
+  if (typeof destination === "string" && destination.length > 0 && destination !== "document") {
+    throw new ApiError(403, "DESKTOP_AUTH_FRAME_REJECTED", "This sign-in flow must start in the main window.");
+  }
+}
+
+export function registerDesktopAuth(app: FastifyInstance, pool: Pool, config: BackendConfig, deps: CredentialChangeDeps = {}): void {
+  const errorResponse = { "4xx": ErrorResponseSchema };
+  // Fastify's default validator strips unknown body keys; the desktop
+  // contract rejects them explicitly so a malformed or foreign request shape
+  // can never ride into a state-machine transition.
+  const strictBody =
+    (allowed: readonly string[]) =>
+    async (request: FastifyRequest): Promise<void> => {
+      const body = request.body;
+      if (body && typeof body === "object" && !Array.isArray(body)) {
+        for (const key of Object.keys(body)) {
+          if (!allowed.includes(key)) {
+            throw new ApiError(400, "REQUEST_VALIDATION_FAILED", "The request does not match the versioned contract.");
+          }
+        }
+      }
+    };
+  const prepareShape = strictBody([
+    "provider", "purpose", "role", "code_challenge", "state", "client_label", "web_origin",
+    "expected_account_id", "expected_user_id", "expected_account_revision", "expected_user_revision",
+    "flow_ref", "round_ref", "intent", "target_provider", "flow_deadline_at", "original_proof_at",
+    "credential_attempt_id", "provider_challenge_id",
+  ]);
+  const authorizeShape = strictBody(["attempt_id", "state"]);
+  const approveShape = strictBody(["attempt_id", "state", "challenge_id", "identity_token"]);
+  const completeShape = strictBody(["attempt_id", "state"]);
+  const consumeShape = strictBody(["attempt_id", "code", "verifier", "pairing_secret", "credential_attempt_id", "attempt_secret"]);
+  const resultShape = strictBody(["attempt_id", "pairing_secret", "verifier"]);
+  const ackShape = strictBody(["attempt_id", "pairing_secret", "verifier", "credential_attempt_id"]);
+  const cancelShape = strictBody(["attempt_id", "mode", "pairing_secret", "state"]);
+  app.post("/v1/desktop-auth/prepare", {
+    config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+    preValidation: prepareShape,
+    schema: { body: DesktopAuthPrepareRequestSchema, response: errorResponse },
+  }, async (request) => {
+    assertMainFrameNavigation(request);
+    const webOrigin = desktopWebOrigin(request);
+    const caller = await resolveDesktopCaller(pool, config, request, webOrigin);
+    return prepareDesktopAuthAttempt(pool, config, request.body as DesktopAuthPrepareRequest, caller);
+  });
+
+  app.post("/v1/desktop-auth/authorize", {
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    preValidation: authorizeShape,
+    schema: { body: DesktopAuthAuthorizeRequestSchema, response: errorResponse },
+  }, async (request) => {
+    assertMainFrameNavigation(request);
+    const webOrigin = desktopWebOrigin(request);
+    const caller = await resolveDesktopCaller(pool, config, request, webOrigin);
+    return authorizeDesktopAuthAttempt(pool, config, request.body as DesktopAuthAuthorizeRequest, caller);
+  });
+
+  app.post("/v1/desktop-auth/approve", {
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    preValidation: approveShape,
+    schema: { body: DesktopAuthApproveRequestSchema, response: errorResponse },
+  }, async (request) => {
+    const webOrigin = desktopWebOrigin(request);
+    const caller = await resolveDesktopCaller(pool, config, request, webOrigin);
+    return approveDesktopAuthAttempt(pool, config, request.body as DesktopAuthApproveRequest, caller, deps);
+  });
+
+  app.get("/v1/desktop-auth/attempts/:attemptId", {
+    config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+  }, async (request) => {
+    const webOrigin = desktopWebOrigin(request);
+    const caller = await resolveDesktopCaller(pool, config, request, webOrigin);
+    const { attemptId } = request.params as { attemptId: string };
+    return readDesktopAuthAttempt(pool, attemptId, caller, config);
+  });
+
+  app.post("/v1/desktop-auth/complete", {
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    preValidation: completeShape,
+    schema: { body: DesktopAuthCompleteRequestSchema, response: errorResponse },
+  }, async (request) => {
+    assertMainFrameNavigation(request);
+    const webOrigin = desktopWebOrigin(request);
+    const caller = await resolveDesktopCaller(pool, config, request, webOrigin);
+    return issueDesktopAuthCode(pool, config, request.body as DesktopAuthCompleteRequest, caller);
+  });
+
+  app.post("/v1/desktop-auth/consume", {
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    preValidation: consumeShape,
+    schema: { body: DesktopAuthConsumeRequestSchema, response: errorResponse },
+  }, async (request) => {
+    assertMainFrameNavigation(request);
+    const webOrigin = desktopWebOrigin(request);
+    const caller = await resolveDesktopCaller(pool, config, request, webOrigin);
+    const body = request.body as DesktopAuthConsumeRequest & { attempt_secret?: string };
+    return consumeDesktopAuthAttempt(pool, config, body, caller, deps, {
+      attemptSecret: body.attempt_secret,
+    });
+  });
+
+  app.post("/v1/desktop-auth/result", {
+    config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    preValidation: resultShape,
+    schema: { body: DesktopAuthResultRequestSchema, response: errorResponse },
+  }, async (request) => {
+    assertMainFrameNavigation(request);
+    const webOrigin = desktopWebOrigin(request);
+    const caller = await resolveDesktopCaller(pool, config, request, webOrigin);
+    return readDesktopAuthResult(pool, config, request.body as DesktopAuthResultRequest, caller);
+  });
+
+  app.post("/v1/desktop-auth/ack", {
+    config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    preValidation: ackShape,
+    schema: { body: DesktopAuthAckRequestSchema, response: errorResponse },
+  }, async (request) => {
+    assertMainFrameNavigation(request);
+    const webOrigin = desktopWebOrigin(request);
+    const caller = await resolveDesktopCaller(pool, config, request, webOrigin);
+    return ackDesktopAuthResult(pool, config, request.body as DesktopAuthAckRequest, caller);
+  });
+
+  app.post("/v1/desktop-auth/cancel", {
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    preValidation: cancelShape,
+    schema: { body: DesktopAuthCancelRequestSchema, response: errorResponse },
+  }, async (request) => {
+    const webOrigin = desktopWebOrigin(request);
+    const caller = await resolveDesktopCaller(pool, config, request, webOrigin);
+    return cancelDesktopAuthAttempt(pool, config, request.body as DesktopAuthCancelRequest, caller);
+  });
+}

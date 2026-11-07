@@ -1,0 +1,336 @@
+import { createInterface } from 'node:readline';
+import { PassThrough } from 'node:stream';
+import { CapirCliError } from '../errors.js';
+import { generate, type RequestOptions } from './provider.js';
+import { sanitize, SafeText, writeOutput, OutputAborted, terminalOutput, retireTerminalOutputs } from './output.js';
+import { type Message, type SelectedProfile, type Usage } from './types.js';
+import { NativeContext } from './context.js';
+import { modelDeadline } from './deadline.js';
+import { resolveOutputPolicy } from './capacity.js';
+
+const PENDING_LINES = 64;
+const PENDING_BYTES = 128 * 1024;
+// Editing room for Ctrl-U/backspace and priority commands at a full waiting queue.
+// This belongs only to unfinished waiting input, never the full current input.
+const CONTROL_EDIT_BYTES = 4096;
+class ChatRetired extends Error {
+  constructor(readonly kind: 'reset' | 'exit') { super('Chat operation retired.'); }
+}
+class TerminalInput extends PassThrough {
+  readonly isTTY = process.stdin.isTTY;
+  setRawMode(enabled: boolean) { process.stdin.setRawMode?.(enabled); return this; }
+}
+interface Operation {
+  epoch: number;
+  soft: AbortController;
+  hard: AbortController;
+  network: AbortSignal;
+  writer: AbortSignal;
+  pendingWrite: boolean;
+  drainTimer?: ReturnType<typeof setTimeout> | undefined;
+  disposeDeadline?: (() => void) | undefined;
+}
+
+/** Current input is complete; only additional waiting input has a queue bound. */
+export async function runChat(selected: SelectedProfile, key: string, options: RequestOptions, timeoutSeconds: number | undefined, signal: AbortSignal, cancel: () => void, controlUsage: Usage[] = []): Promise<number> {
+  const history: Message[] = [];
+  const context = new NativeContext();
+  let draft: string | null = null;
+  let reportedControls = 0;
+  let resolved: Awaited<ReturnType<typeof resolveOutputPolicy>> | undefined;
+  let epoch = 0;
+  let current: { text: string; epoch: number } | undefined;
+  const queue: { text: string; epoch: number }[] = [];
+  let queuedBytes = 0;
+  let ended = false;
+  let exiting = false;
+  let resetPending = false;
+  let failure: CapirCliError | undefined;
+  let active: Operation | undefined;
+  let wake: (() => void) | undefined;
+  let lineRole: 'current' | 'waiting' | undefined;
+  const input = new TerminalInput();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const display = terminalOutput(process.stderr);
+  const rl = createInterface({ input, output: display, terminal: true, historySize: 0, crlfDelay: Infinity });
+  const clearWaiting = () => { current = undefined; queue.length = 0; queuedBytes = 0; };
+  const stopInput = () => { ended = true; rl.close(); wake?.(); };
+  const rejectInput = (error: CapirCliError) => {
+    failure ??= error;
+    clearWaiting();
+    active?.soft.abort(failure);
+    active?.hard.abort(failure);
+    stopInput();
+  };
+  const retire = (kind: 'reset' | 'exit') => {
+    epoch++;
+    clearWaiting();
+    draft = null;
+    if (kind === 'reset') { history.length = 0; context.reset(); resetPending = true; }
+    else { exiting = true; }
+    const owned = active;
+    owned?.soft.abort(new ChatRetired(kind));
+    if (kind === 'exit') {
+      owned?.hard.abort(new CapirCliError('CAPIR_MODEL_CHAT_EXIT', 0, 'Chat closed.'));
+      retireTerminalOutputs();
+      stopInput();
+    } else if (owned?.pendingWrite && !owned.drainTimer) {
+      // Start while the write is pending, rather than after awaiting its drain.
+      owned.drainTimer = setTimeout(() => {
+        if (active === owned && owned.pendingWrite)
+          owned.hard.abort(new CapirCliError('CAPIR_MODEL_OUTPUT', 3, 'Retired output could not drain; chat closed without admitting another request.'));
+      }, 1000);
+    }
+    wake?.();
+  };
+  rl.on('line', text => {
+    lineRole = undefined;
+    if (failure || exiting) return;
+    if (text === '/reset' || text === '/exit') { retire(text === '/reset' ? 'reset' : 'exit'); return; }
+    const entry = { text, epoch };
+    if (!active && !current && !queue.length) current = entry;
+    else {
+      const bytes = Buffer.byteLength(text);
+      if (queue.length >= PENDING_LINES || queuedBytes + bytes > PENDING_BYTES) {
+        rejectInput(new CapirCliError('CAPIR_MODEL_INPUT_LIMIT', 2, 'Additional waiting chat input exceeds its queue capacity; the active request was cancelled.'));
+        return;
+      }
+      queue.push(entry); queuedBytes += bytes;
+    }
+    wake?.();
+  });
+  const rawData = (chunk: Buffer | string) => {
+    if (ended) return;
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    // Validate the entire received chunk before forwarding any valid prefix.
+    try { decoder.decode(bytes, { stream: true }); }
+    catch {
+      rejectInput(new CapirCliError('CAPIR_MODEL_INPUT', 2, 'Input must be valid UTF-8.'));
+      return;
+    }
+    display.cork();
+    try {
+      for (let offset = 0; offset < bytes.length && !ended;) {
+        if (!lineRole || lineRole === 'waiting' && !active && !current && !queue.length)
+          lineRole = !active && !current && !queue.length ? 'current' : 'waiting';
+        let end = Math.min(offset + 1024, bytes.length);
+        for (let i = offset; i < end; i++) if (bytes[i] === 10 || bytes[i] === 13) { end = i + 1; break; }
+        if (!input.write(bytes.subarray(offset, end))) {
+          rejectInput(new CapirCliError('CAPIR_MODEL_INPUT_BUSY', 5, 'Terminal input could not drain; no additional input was admitted.'));
+          return;
+        }
+        offset = end;
+        // Readline owns actual editing, CRLF folding and logical line boundaries.
+        if (!ended && lineRole === 'waiting' && queuedBytes + Buffer.byteLength(rl.line) > PENDING_BYTES + CONTROL_EDIT_BYTES) {
+          rejectInput(new CapirCliError('CAPIR_MODEL_INPUT_LIMIT', 2, 'Unfinished waiting chat input exceeds its queue capacity; the active request was cancelled.'));
+          return;
+        }
+      }
+    } catch {
+      rejectInput(new CapirCliError('CAPIR_MODEL_INPUT_RESOURCE', 5, 'Terminal input could not be represented; no additional input was admitted.'));
+    } finally { display.uncork(); }
+  };
+  const rawEnd = () => {
+    try { decoder.decode(); input.end(); }
+    catch { rejectInput(new CapirCliError('CAPIR_MODEL_INPUT', 2, 'Input must be valid UTF-8.')); }
+  };
+  const rawError = () => rejectInput(new CapirCliError('CAPIR_MODEL_INPUT', 2, 'Terminal input could not be read.'));
+  const abort = () => { active?.soft.abort(signal.reason); retireTerminalOutputs(); stopInput(); };
+  process.stdin.on('data', rawData);
+  process.stdin.once('end', rawEnd);
+  process.stdin.on('error', rawError);
+  rl.once('close', () => { ended = true; wake?.(); });
+  rl.on('SIGINT', cancel);
+  signal.addEventListener('abort', abort, { once: true });
+  process.stdin.resume();
+  const notice = (text: string) => writeOutput(sanitize(text, key) + '\n', signal, process.stderr);
+  const prompt = () => writeOutput('capir> ', signal, process.stderr);
+  const begin = (withDeadline: boolean): Operation => {
+    const soft = new AbortController(), hard = new AbortController();
+    const owned: Operation = { epoch, soft, hard, network: AbortSignal.any([signal, soft.signal, hard.signal]), writer: AbortSignal.any([signal, hard.signal]), pendingWrite: false };
+    if (withDeadline) owned.disposeDeadline = modelDeadline(() => hard.abort(new CapirCliError('CAPIR_MODEL_TIMEOUT', 3, 'Request deadline exceeded; no automatic retry.')), timeoutSeconds === undefined ? undefined : timeoutSeconds * 1000);
+    active = owned;
+    return owned;
+  };
+  const check = (owned: Operation) => {
+    owned.network.throwIfAborted();
+    if (owned.epoch !== epoch) throw new ChatRetired(exiting ? 'exit' : 'reset');
+  };
+  const write = async (text: string, owned: Operation, stream: NodeJS.WriteStream = process.stdout) => {
+    check(owned);
+    owned.pendingWrite = true;
+    try { await writeOutput(text, owned.writer, stream); }
+    finally {
+      owned.pendingWrite = false;
+      if (owned.drainTimer) { clearTimeout(owned.drainTimer); owned.drainTimer = undefined; }
+    }
+    check(owned);
+  };
+  const finish = (owned: Operation) => {
+    owned.disposeDeadline?.();
+    if (owned.drainTimer) clearTimeout(owned.drainTimer);
+    if (active === owned) active = undefined;
+  };
+  const historyText = async (owned: Operation) => {
+    if (!history.length) { await write('No completed turns.\n', owned); return; }
+    for (const message of history) {
+      const safe = new SafeText(key);
+      await write(`${message.role}:\n`, owned);
+      for (let start = 0; start < message.content.length;) {
+        let end = Math.min(start + 32768, message.content.length);
+        if (end < message.content.length && /[\uD800-\uDBFF]/.test(message.content[end - 1]!)) end++;
+        const clean = safe.push(message.content.slice(start, end));
+        if (clean) await write(clean, owned);
+        start = end;
+      }
+      const tail = safe.finish();
+      if (tail) await write(tail, owned);
+      await write('\n', owned);
+    }
+  };
+  try {
+    signal.throwIfAborted();
+    await notice(`Chat: ${selected.name} / ${options.model}. /help /model /history /retry /compact /usage /reset /exit. History stays in memory.`);
+    await prompt();
+    while (true) {
+      signal.throwIfAborted();
+      if (failure) throw failure;
+      if (exiting) return 0;
+      if (resetPending) {
+        resetPending = false;
+        // This is a bounded control acknowledgement, not a generation deadline.
+        const ack = new AbortController();
+        const timer = setTimeout(() => ack.abort(new CapirCliError('CAPIR_MODEL_OUTPUT', 3, 'Reset acknowledgement could not be written.')), 1000);
+        try {
+          const ackSignal = AbortSignal.any([signal, ack.signal]);
+          await writeOutput('Conversation reset. Already written output cannot be withdrawn.\n', ackSignal, process.stderr);
+          if (controlUsage.length > reportedControls) {
+            await writeOutput(`Compaction usage: ${JSON.stringify(controlUsage.slice(reportedControls))}\n`, ackSignal, process.stderr);
+            reportedControls = controlUsage.length;
+          }
+        }
+        finally { clearTimeout(timer); }
+        await prompt();
+      }
+      if (!current && !queue.length) {
+        if (ended) return 0;
+        await new Promise<void>(resolve => { wake = resolve; }); wake = undefined;
+        continue;
+      }
+      const entry = current ?? queue.shift()!;
+      if (current) current = undefined;
+      else queuedBytes -= Buffer.byteLength(entry.text);
+      if (entry.epoch !== epoch) continue;
+      let text = entry.text;
+      if (text === '/model') {
+        await notice(`Profile ${selected.name}; provider ${selected.profile.provider}; requested model ${options.model}; resolved model ${resolved?.capacity.resolved_model ?? 'unknown'}; output policy ${resolved?.capacity.output_policy ?? 'not_resolved'}.`);
+        await prompt(); continue;
+      }
+      if (text === '/help') {
+        await notice('/history shows completed original turns; /retry explicitly resubmits the failed draft; /compact requests native compaction without changing originals or the failed draft; /usage shows reported compaction consumption, including failed calls and prior resets; /reset retires active work and clears history/draft; /exit closes. Failed turns are never saved or automatically retried.');
+        await prompt(); continue;
+      }
+      if (text === '/usage') {
+        const owned = begin(false);
+        try { await write(`Compaction usage: ${JSON.stringify(controlUsage)}\n`, owned, process.stderr); }
+        catch (error) { if (!(error instanceof ChatRetired)) throw error; }
+        finally { finish(owned); }
+        if (!resetPending && !exiting) await prompt();
+        continue;
+      }
+      if (text === '/history') {
+        const owned = begin(false);
+        try { await historyText(owned); }
+        catch (error) {
+          if (error instanceof OutputAborted || signal.aborted || owned.hard.signal.aborted) throw error;
+          if (!(error instanceof ChatRetired)) throw error;
+        } finally { finish(owned); }
+        if (!resetPending && !exiting) await prompt();
+        continue;
+      }
+      const manual = text === '/compact';
+      if (manual && !history.length) { await notice('No completed turns to compact. Failed draft retained.'); await prompt(); continue; }
+      if (text === '/retry') {
+        if (draft === null) { await notice('No failed draft to retry.'); await prompt(); continue; }
+        text = draft;
+      } else if (!text.trim()) { await prompt(); continue; }
+      else if (!manual && text.startsWith('/')) { await notice('Unknown chat command; use /help.'); await prompt(); continue; }
+      if (!manual) draft = text;
+      const owned = begin(true);
+      const firstControl = controlUsage.length;
+      let answerUsage: Usage | undefined;
+      const accounting = () => controlUsage.length > firstControl ? `Usage: ${JSON.stringify({ compaction: controlUsage.slice(firstControl), answer: answerUsage ?? null })}\n` : '';
+      const recordAccounting = async () => {
+        if (accounting()) { await write(accounting(), owned, process.stderr); reportedControls = controlUsage.length; }
+      };
+      const safe = new SafeText(key);
+      let answer = '';
+      const emit = async (part: string) => {
+        check(owned);
+        const clean = safe.push(part);
+        answer += clean;
+        if (options.stream && clean) await write(clean, owned);
+      };
+      try {
+        if (!resolved) {
+          const candidate = await resolveOutputPolicy(selected.profile, key, options.model, options.maxTokens, owned.network);
+          check(owned); resolved = candidate;
+        }
+        const request = { ...options, ...resolved };
+        const view = await context.prepare(selected.profile, key, request, resolved.capacity, history, manual ? undefined : text, manual, owned.network, () => check(owned), controlUsage,
+          () => write('Native compaction is a separate provider call; its usage will be recorded. Original history stays in memory.\n', owned, process.stderr));
+        check(owned);
+        if (manual) {
+          await write(view.compacted ? 'Active context compacted. Original history and failed draft retained.\n' : 'No completed turns to compact. Failed draft retained.\n', owned, process.stderr);
+          await recordAccounting();
+        } else {
+          const response = await generate(selected.profile, key, { ...request, ...(view.beta ? { beta: view.beta } : {}) }, view.messages, emit, owned.network);
+          answerUsage = response.usage;
+          check(owned);
+          const tail = safe.finish(); answer += tail;
+          if (options.stream) { if (tail) await write(tail, owned); }
+          else await write(answer, owned);
+          if (!answer.endsWith('\n')) await write('\n', owned);
+          await recordAccounting();
+          check(owned);
+          history.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
+          draft = null;
+        }
+      } catch (error) {
+        if (error instanceof Error && 'usage' in error) answerUsage = error.usage as Usage;
+        if (signal.aborted) throw signal.reason;
+        if (error instanceof OutputAborted) throw error;
+        if (failure) throw failure;
+        if (owned.hard.signal.aborted && owned.hard.signal.reason instanceof CapirCliError && owned.hard.signal.reason.exitCode === 0) return 0;
+        if (owned.soft.signal.reason instanceof ChatRetired && !owned.hard.signal.aborted) continue;
+        if (process.stdout.destroyed) throw owned.network.reason ?? error;
+        const cause = owned.network.aborted ? owned.network.reason : error;
+        const causeError = cause instanceof CapirCliError ? cause : new CapirCliError('CAPIR_MODEL_TRANSPORT', 3, 'Model request failed; no automatic retry.');
+        const tail = safe.finish(); answer += tail;
+        // Diagnostic work has its own bounded writer authority; it cannot
+        // restore the failed turn's generation authority or ignore a reset.
+        const cleanup = begin(false);
+        const timer = setTimeout(() => cleanup.hard.abort(causeError), 1000);
+        try {
+          if (options.stream) {
+            if (tail) await write(tail, cleanup);
+            if (answer && !answer.endsWith('\n')) await write('\n', cleanup);
+          }
+          await write(sanitize(`${causeError.code}: ${causeError.message}${answer ? ' Partial response; turn not saved.' : ''} ${manual ? 'Original history and any failed draft retained.' : 'Use /retry to explicitly resubmit the retained draft.'}`, key) + '\n', cleanup, process.stderr);
+          if (accounting()) { await write(accounting(), cleanup, process.stderr); reportedControls = controlUsage.length; }
+        } catch (cleanupError) {
+          if (cleanupError instanceof OutputAborted || signal.aborted || cleanup.hard.signal.aborted) throw cleanupError;
+          if (!(cleanupError instanceof ChatRetired)) throw cleanupError;
+        } finally { clearTimeout(timer); finish(cleanup); }
+        if (causeError.exitCode === 4 || causeError.exitCode === 130) return causeError.exitCode;
+      } finally { finish(owned); }
+      if (!resetPending && !exiting) await prompt();
+    }
+  } finally {
+    active?.soft.abort(new ChatRetired('exit'));
+    if (active) finish(active);
+    signal.removeEventListener('abort', abort);
+    process.stdin.off('data', rawData); process.stdin.off('end', rawEnd); process.stdin.off('error', rawError);
+    rl.off('SIGINT', cancel); rl.close(); input.destroy(); process.stdin.pause();
+  }
+}

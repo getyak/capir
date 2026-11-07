@@ -1,0 +1,745 @@
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
+import {
+  CAPIR_SCHEMA_VERSION,
+  CONTRACT_VERSION,
+  type CapirAuthorizationRequest,
+  type CapirExchangeRequest,
+  type CapirSandboxRequest,
+  type CapirSandbox,
+} from "@talent-signal/contracts";
+import type { Pool, PoolClient } from "pg";
+import type { BackendConfig } from "../config.js";
+import { inTransaction } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import { digestValue, sha256 } from "../lib/hash.js";
+import type { AuthContext } from "./auth.js";
+import { assertAccountActive } from "./accountIdentity.js";
+import { LabWorkspaceService } from "./labWorkspaces.js";
+import {
+  capirScenarios,
+  loadCapirScenario,
+  verifyCapirScenario,
+} from "./capirScenarios.js";
+const secret = () => randomBytes(32).toString("base64url");
+const scopes = [
+  "sandbox:create",
+  "sandbox:read",
+  "sandbox:stop",
+  "sandbox:handoff",
+];
+interface Grant {
+  id: string;
+  account_id: string;
+  user_id: string;
+  parent_session_id: string;
+  client_label: string;
+  expires_at: Date;
+  web_origin: string;
+  backend_origin: string;
+}
+interface Sandbox {
+  id: string;
+  grant_id: string;
+  request_digest: string;
+  request: CapirSandboxRequest;
+  scenario_id: "daily" | "empty";
+  scenario_version: "1";
+  scenario_digest: string;
+  generation: number;
+  preparation_state: "preparing" | "ready" | "failed";
+  failure_code: string | null;
+  expires_at: Date;
+  stop_id: string | null;
+}
+export interface CapirIdentity {
+  grant: Grant;
+  auth: AuthContext;
+}
+function denied(): never {
+  throw new ApiError(
+    401,
+    "CAPIR_AUTH_DENIED",
+    "The capir authorization is expired, revoked, or unavailable.",
+  );
+}
+function conflict(): never {
+  throw new ApiError(
+    409,
+    "CAPIR_INTENT_CONFLICT",
+    "This operation ID belongs to different parameters or authorization.",
+  );
+}
+export class CapirService {
+  constructor(
+    readonly pool: Pool,
+    readonly config: BackendConfig,
+    readonly lab: LabWorkspaceService,
+  ) {}
+  get backendOrigins() {
+    return (
+      this.config.capirBackendOrigins ?? [
+        `http://127.0.0.1:${this.config.port}`,
+      ]
+    );
+  }
+  origins(web: string, backend: string) {
+    for (const origin of [web, backend]) {
+      let parsed: URL;
+      try {
+        parsed = new URL(origin);
+      } catch {
+        throw new ApiError(
+          400,
+          "CAPIR_ORIGIN_DENIED",
+          "Use registered test origins.",
+        );
+      }
+      if (
+        !["http:", "https:"].includes(parsed.protocol) ||
+        parsed.origin !== origin
+      )
+        throw new ApiError(
+          400,
+          "CAPIR_ORIGIN_DENIED",
+          "Use exact registered test origins.",
+        );
+    }
+    if (
+      !this.config.allowedOrigins.includes(web) ||
+      !this.backendOrigins.includes(backend)
+    )
+      throw new ApiError(
+        400,
+        "CAPIR_ORIGIN_DENIED",
+        "Use registered test Web and backend origins.",
+      );
+  }
+  redirect(value: string) {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new ApiError(
+        400,
+        "CAPIR_REDIRECT_DENIED",
+        "A literal loopback callback is required.",
+      );
+    }
+    if (
+      url.protocol !== "http:" ||
+      url.hostname !== "127.0.0.1" ||
+      !url.port ||
+      Number(url.port) < 1 ||
+      url.pathname !== "/capir/callback" ||
+      url.search ||
+      url.hash ||
+      url.username ||
+      url.password ||
+      url.href !== value
+    )
+      throw new ApiError(
+        400,
+        "CAPIR_REDIRECT_DENIED",
+        "Use http://127.0.0.1:<port>/capir/callback.",
+      );
+  }
+  capabilities() {
+    return {
+      schema_version: CAPIR_SCHEMA_VERSION,
+      enabled: this.config.internalLabEnabled === true && this.lab.supported,
+      max_active_sandboxes: 3,
+      web_handoff_available: Boolean(this.config.capirWebHandoffKey),
+      scenarios: capirScenarios,
+      model_policy: "strict_replay",
+      approved_recordings: [],
+      supported_tasks: [
+        "people.read",
+        "relationship.read",
+        "notes.write",
+        "tasks.read",
+        "tasks.write",
+      ],
+      unsupported: [
+        "live",
+        "record",
+        "test",
+        "eval",
+        "mcp",
+        "native",
+        "refresh",
+      ],
+      backend_origins: this.backendOrigins,
+      web_origins: this.config.allowedOrigins,
+    };
+  }
+  assertWebConsumer(header: string | string[] | undefined): void {
+    const expected = this.config.capirWebHandoffKey;
+    if (!expected)
+      throw new ApiError(
+        503,
+        "CAPIR_WEB_HANDOFF_UNAVAILABLE",
+        "The trusted Web cookie consumer is not configured.",
+      );
+    if (
+      typeof header !== "string" ||
+      !timingSafeEqual(
+        createHash("sha256").update(expected).digest(),
+        createHash("sha256").update(header).digest(),
+      )
+    ) {
+      throw new ApiError(
+        401,
+        "CAPIR_HANDOFF_CONSUMER_DENIED",
+        "A trusted Web cookie consumer is required.",
+      );
+    }
+  }
+  async authorize(auth: AuthContext, r: CapirAuthorizationRequest) {
+    this.origins(r.web_origin, r.backend_origin);
+    this.redirect(r.redirect_uri);
+    if (auth.userKind === "lab_human" || r.consent !== true) denied();
+    const code = secret(),
+      expiry = new Date(Date.now() + 120000);
+    await inTransaction(this.pool, async (c) => {
+      await assertAccountActive(c, auth.accountId);
+      const active = await c.query(
+        "SELECT 1 FROM sessions WHERE id=$1 AND account_id=$2 AND user_id=$3 AND revoked_at IS NULL AND expires_at>clock_timestamp() FOR SHARE",
+        [auth.sessionId, auth.accountId, auth.userId],
+      );
+      if (!active.rowCount) denied();
+      await c.query(
+        `INSERT INTO capir_authorization_codes(id,account_id,user_id,owner_session_id,code_hash,state_hash,challenge,redirect_uri,web_origin,backend_origin,client_label,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          randomUUID(),
+          auth.accountId,
+          auth.userId,
+          auth.sessionId,
+          sha256(code),
+          sha256(r.state),
+          r.code_challenge,
+          r.redirect_uri,
+          r.web_origin,
+          r.backend_origin,
+          r.client_label,
+          expiry,
+        ],
+      );
+    });
+    return {
+      schema_version: CAPIR_SCHEMA_VERSION,
+      code,
+      state: r.state,
+      redirect_uri: r.redirect_uri,
+      expires_at: expiry.toISOString(),
+    };
+  }
+  async exchange(r: CapirExchangeRequest) {
+    this.origins(r.web_origin, r.backend_origin);
+    this.redirect(r.redirect_uri);
+    return inTransaction(this.pool, async (c) => {
+      const proof = (
+        await c.query<{
+          id: string;
+          account_id: string;
+          user_id: string;
+          client_label: string;
+          owner_session_id: string;
+        }>(
+          `UPDATE capir_authorization_codes a SET consumed_at=clock_timestamp() WHERE code_hash=$1 AND state_hash=$2 AND challenge=$3 AND redirect_uri=$4 AND web_origin=$5 AND backend_origin=$6 AND consumed_at IS NULL AND expires_at>clock_timestamp() AND EXISTS(SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id AND u.account_id=s.account_id WHERE s.id=a.owner_session_id AND s.account_id=a.account_id AND s.user_id=a.user_id AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() AND u.status='active') RETURNING id,account_id,user_id,client_label,owner_session_id`,
+          [
+            sha256(r.code),
+            sha256(r.state),
+            createHash("sha256").update(r.code_verifier).digest("base64url"),
+            r.redirect_uri,
+            r.web_origin,
+            r.backend_origin,
+          ],
+        )
+      ).rows[0];
+      if (!proof) denied();
+      await assertAccountActive(c, proof.account_id);
+      const owner = await c.query(
+        "SELECT 1 FROM sessions WHERE id=$1 AND account_id=$2 AND user_id=$3 AND revoked_at IS NULL AND expires_at>clock_timestamp() FOR SHARE",
+        [proof.owner_session_id, proof.account_id, proof.user_id],
+      );
+      if (!owner.rowCount) denied();
+      const token = secret(),
+        id = randomUUID(),
+        parent = randomUUID(),
+        expiry = new Date(Date.now() + 24 * 3600000);
+      await c.query(
+        `INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,$5,$6)`,
+        [
+          parent,
+          proof.account_id,
+          proof.user_id,
+          sha256(secret()),
+          `capir: ${proof.client_label}`,
+          expiry,
+        ],
+      );
+      const grant = (
+        await c.query<Grant>(
+          `INSERT INTO capir_grants(id,account_id,user_id,parent_session_id,token_hash,client_label,expires_at,web_origin,backend_origin) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+          [
+            id,
+            proof.account_id,
+            proof.user_id,
+            parent,
+            sha256(token),
+            proof.client_label,
+            expiry,
+            r.web_origin,
+            r.backend_origin,
+          ],
+        )
+      ).rows[0]!;
+      return {
+        schema_version: CAPIR_SCHEMA_VERSION,
+        access_token: token,
+        grant: this.describeGrant(grant),
+      };
+    });
+  }
+  describeGrant(g: Grant) {
+    return {
+      id: g.id,
+      client_label: g.client_label,
+      expires_at: g.expires_at.toISOString(),
+      scopes,
+      refresh_supported: false as const,
+    };
+  }
+  async identity(token: string): Promise<CapirIdentity> {
+    const row = (
+      await this.pool.query<
+        Grant & {
+          account_slug: string;
+          user_email: string;
+          user_kind: AuthContext["userKind"];
+        }
+      >(
+        `SELECT g.*,a.slug AS account_slug,u.email AS user_email,u.kind AS user_kind FROM capir_grants g JOIN sessions s ON s.id=g.parent_session_id AND s.account_id=g.account_id AND s.user_id=g.user_id JOIN accounts a ON a.id=g.account_id JOIN users u ON u.id=g.user_id AND u.account_id=g.account_id WHERE g.token_hash=$1 AND g.revoked_at IS NULL AND g.expires_at>clock_timestamp() AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() AND u.status='active' AND a.retired_at IS NULL`,
+        [sha256(token)],
+      )
+    ).rows[0];
+    if (!row) denied();
+    return {
+      grant: row,
+      auth: {
+        accountId: row.account_id,
+        accountSlug: row.account_slug,
+        userId: row.user_id,
+        userEmail: row.user_email,
+        userKind: row.user_kind,
+        sessionId: row.parent_session_id,
+      },
+    };
+  }
+  async lock(c: PoolClient, i: CapirIdentity) {
+    await assertAccountActive(c, i.auth.accountId);
+    const r = await c.query(
+      `SELECT g.id FROM capir_grants g JOIN sessions s ON s.id=g.parent_session_id WHERE g.id=$1 AND g.revoked_at IS NULL AND g.expires_at>clock_timestamp() AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() FOR SHARE OF g,s`,
+      [i.grant.id],
+    );
+    if (!r.rowCount) denied();
+  }
+  async sandbox(
+    i: CapirIdentity,
+    id: string,
+    c: Pick<Pool, "query"> | PoolClient = this.pool,
+  ): Promise<Sandbox> {
+    const row = (
+      await c.query<Sandbox>(
+        "SELECT * FROM capir_sandboxes WHERE id=$1 AND grant_id=$2",
+        [id, i.grant.id],
+      )
+    ).rows[0];
+    if (!row)
+      throw new ApiError(
+        404,
+        "CAPIR_SANDBOX_NOT_FOUND",
+        "This sandbox is not owned by this authorization.",
+      );
+    return row;
+  }
+  async read(i: CapirIdentity, id: string): Promise<CapirSandbox> {
+    const r = await this.sandbox(i, id);
+    const exists = await this.pool.query(
+      "SELECT 1 FROM lab_test_workspaces WHERE id=$1",
+      [id],
+    );
+    const w = exists.rowCount ? await this.lab.read(i.auth, id) : null;
+    const state: CapirSandbox["state"] =
+      w?.state === "deleted"
+        ? "deleted"
+        : w?.cleanup_error && w.state === "deleting"
+          ? "cleanup_failed"
+          : w?.state === "deleting"
+            ? "deleting"
+            : w?.state === "expired" ||
+                (!w && r.expires_at.getTime() <= Date.now())
+              ? "expired"
+              : r.preparation_state;
+    return {
+      id,
+      state,
+      generation: r.generation,
+      scenario: {
+        id: r.scenario_id,
+        version: r.scenario_version,
+        digest: r.scenario_digest,
+      },
+      member_role: "member",
+      model_policy: "strict_replay",
+      expires_at: w?.expires_at ?? r.expires_at.toISOString(),
+      entry_path: `/capir/sandboxes/${id}`,
+      failure_code: r.failure_code,
+      workspace: w,
+    };
+  }
+  async prepare(i: CapirIdentity, r: CapirSandboxRequest) {
+    const scenario = capirScenarios.find(
+      (s) =>
+        s.id === r.scenario_id &&
+        s.version === r.scenario_version &&
+        s.digest === r.scenario_digest,
+    );
+    if (!scenario)
+      throw new ApiError(
+        400,
+        "CAPIR_SCENARIO_UNSUPPORTED",
+        "Use a scenario version and digest from capability discovery.",
+      );
+    await inTransaction(this.pool, async (c) => {
+      await this.lock(c, i);
+      await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        `capir:${r.id}`,
+      ]);
+      const previous = (
+        await c.query<Sandbox>("SELECT * FROM capir_sandboxes WHERE id=$1", [
+          r.id,
+        ])
+      ).rows[0];
+      if (previous) {
+        if (
+          previous.grant_id !== i.grant.id ||
+          previous.request_digest !== digestValue(r)
+        )
+          conflict();
+        return;
+      }
+      await c.query(
+        `INSERT INTO capir_sandboxes(id,grant_id,request_digest,request,scenario_id,scenario_version,scenario_digest,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+$8::integer*interval '1 hour')`,
+        [
+          r.id,
+          i.grant.id,
+          digestValue(r),
+          r,
+          r.scenario_id,
+          r.scenario_version,
+          r.scenario_digest,
+          r.duration_hours,
+        ],
+      );
+    });
+    // This is only a fast read; the allocation and load transactions below
+    // recheck cancellation under the shared intent row lock.
+    const current = await this.sandbox(i, r.id);
+    if (current.preparation_state === "ready" || current.stop_id)
+      return this.read(i, r.id);
+    try {
+      // Commit the empty Lab allocation separately from scenario loading so a
+      // load failure retains its cleanup receipt. Both phases lock the intent;
+      // stop uses the same row lock and can cancel in the gap between phases.
+      await inTransaction(this.pool, async (c) => {
+        await this.lock(c, i);
+        await c.query("SELECT id FROM capir_sandboxes WHERE id=$1 FOR UPDATE", [
+          r.id,
+        ]);
+        const current = await this.sandbox(i, r.id, c);
+        if (current.preparation_state === "ready" || current.stop_id) return;
+        await this.lab.createInTransaction(c, i.auth, {
+          id: r.id,
+          duration_hours: r.duration_hours,
+        });
+      });
+      await inTransaction(this.pool, async (c) => {
+        await this.lock(c, i);
+        await c.query("SELECT id FROM capir_sandboxes WHERE id=$1 FOR UPDATE", [
+          r.id,
+        ]);
+        const current = await this.sandbox(i, r.id, c);
+        if (current.preparation_state === "ready" || current.stop_id) return;
+        const w = (
+          await c.query<{
+            target_account_id: string;
+            target_user_id: string;
+            state: string;
+            active: boolean;
+          }>(
+            `SELECT target_account_id,target_user_id,state,expires_at>clock_timestamp() AS active FROM lab_test_workspaces WHERE id=$1 FOR SHARE`,
+            [r.id],
+          )
+        ).rows[0]!;
+        if (w.state !== "active" || !w.active)
+          throw new ApiError(
+            410,
+            "LAB_TEST_WORKSPACE_CLOSED",
+            "This sandbox is closed.",
+          );
+        const auth: AuthContext = {
+          ...i.auth,
+          accountId: w.target_account_id,
+          userId: w.target_user_id,
+          userKind: "lab_human",
+        };
+        await loadCapirScenario(c, auth, r.scenario_id);
+        await verifyCapirScenario(c, w.target_account_id, r.scenario_id);
+        await c.query(
+          "UPDATE capir_sandboxes SET preparation_state='ready',failure_code=NULL,loaded_at=clock_timestamp() WHERE id=$1",
+          [r.id],
+        );
+      });
+    } catch (error) {
+      // inTransaction has already rolled back and released its connection.
+      // Do not overwrite a concurrent stop's durable cancellation evidence.
+      await this.pool.query(
+        "UPDATE capir_sandboxes SET preparation_state='failed',failure_code=$2 WHERE id=$1 AND preparation_state<>'ready' AND stop_id IS NULL",
+        [
+          r.id,
+          error instanceof ApiError ? error.code : "CAPIR_PREPARATION_FAILED",
+        ],
+      );
+      throw error;
+    }
+    return this.read(i, r.id);
+  }
+  async stop(i: CapirIdentity, id: string, stopId: string) {
+    await inTransaction(this.pool, async (c) => {
+      await this.lock(c, i);
+      await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        `capir-stop:${stopId}`,
+      ]);
+      await c.query("SELECT id FROM capir_sandboxes WHERE id=$1 FOR UPDATE", [
+        id,
+      ]);
+      const r = await this.sandbox(i, id, c);
+      if (r.stop_id && r.stop_id !== stopId) conflict();
+      const other = await c.query(
+        "SELECT id FROM capir_sandboxes WHERE stop_id=$1 AND id<>$2",
+        [stopId, id],
+      );
+      if (other.rowCount) conflict();
+      await c.query(
+        "UPDATE capir_sandboxes SET stop_id=$2,preparation_state=CASE WHEN preparation_state='ready' THEN preparation_state ELSE 'failed' END,failure_code=CASE WHEN preparation_state='ready' THEN failure_code ELSE 'CAPIR_PREPARATION_CANCELLED' END WHERE id=$1",
+        [id, stopId],
+      );
+    });
+    const has = await this.pool.query(
+      "SELECT 1 FROM lab_test_workspaces WHERE id=$1",
+      [id],
+    );
+    if (has.rowCount) await this.lab.stop(i.auth, id, stopId);
+    return this.read(i, id);
+  }
+  async handoff(i: CapirIdentity, id: string, operationId: string) {
+    if (!this.config.capirWebHandoffKey)
+      throw new ApiError(
+        503,
+        "CAPIR_WEB_HANDOFF_UNAVAILABLE",
+        "The trusted Web cookie consumer is not configured.",
+      );
+    const token = secret(),
+      expiry = new Date(
+        Math.min(Date.now() + 60000, i.grant.expires_at.getTime()),
+      );
+    return inTransaction(this.pool, async (c) => {
+      await this.lock(c, i);
+      const r = await this.sandbox(i, id, c);
+      const w = await c.query(
+        "SELECT 1 FROM lab_test_workspaces WHERE id=$1 AND state='active' AND expires_at>clock_timestamp() FOR SHARE",
+        [id],
+      );
+      if (r.preparation_state !== "ready" || r.stop_id || !w.rowCount)
+        throw new ApiError(
+          410,
+          "CAPIR_SANDBOX_NOT_READY",
+          "The sandbox is unavailable for handoff.",
+        );
+      const prior = await c.query("SELECT 1 FROM capir_handoffs WHERE id=$1", [
+        operationId,
+      ]);
+      if (prior.rowCount)
+        throw new ApiError(
+          409,
+          "CAPIR_HANDOFF_REPLAY",
+          "Create a fresh handoff operation.",
+        );
+      await c.query(
+        `INSERT INTO capir_handoffs(id,account_id,user_id,grant_id,sandbox_id,secret_hash,web_origin,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          operationId,
+          i.auth.accountId,
+          i.auth.userId,
+          i.grant.id,
+          id,
+          sha256(token),
+          i.grant.web_origin,
+          expiry,
+        ],
+      );
+      return {
+        schema_version: CAPIR_SCHEMA_VERSION,
+        handoff_secret: token,
+        expires_at: expiry.toISOString(),
+        entry_path: `/capir/sandboxes/${id}`,
+      };
+    });
+  }
+  async handoffExchange(token: string, webOrigin: string) {
+    return inTransaction(this.pool, async (c) => {
+      const h = (
+        await c.query<{
+          id: string;
+          sandbox_id: string;
+          grant_id: string;
+          expires_at: Date;
+        }>(
+          `SELECT h.* FROM capir_handoffs h WHERE secret_hash=$1 AND web_origin=$2 AND consumed_at IS NULL AND expires_at>clock_timestamp() FOR UPDATE`,
+          [sha256(token), webOrigin],
+        )
+      ).rows[0];
+      if (!h) denied();
+      const grant = (
+        await c.query<Grant>("SELECT * FROM capir_grants WHERE id=$1", [
+          h.grant_id,
+        ])
+      ).rows[0]!;
+      const i: CapirIdentity = {
+        grant,
+        auth: {
+          accountId: grant.account_id,
+          userId: grant.user_id,
+          sessionId: grant.parent_session_id,
+          userKind: "password_human",
+          userEmail: "",
+          accountSlug: "",
+        },
+      };
+      await this.lock(c, i);
+      const r = await this.sandbox(i, h.sandbox_id, c);
+      if (r.preparation_state !== "ready" || r.stop_id) denied();
+      const w = (
+        await c.query<{
+          target_account_id: string;
+          target_user_id: string;
+          expires_at: Date;
+        }>(
+          `SELECT target_account_id,target_user_id,expires_at FROM lab_test_workspaces WHERE id=$1 AND state='active' AND expires_at>clock_timestamp() FOR UPDATE`,
+          [h.sandbox_id],
+        )
+      ).rows[0];
+      if (!w) denied();
+      const count = Number(
+        (
+          await c.query<{
+            n: string;
+          }>(
+            "SELECT count(*) AS n FROM lab_test_workspace_entries WHERE workspace_id=$1 AND revoked_at IS NULL AND expires_at>clock_timestamp()",
+            [h.sandbox_id],
+          )
+        ).rows[0]!.n,
+      );
+      if (count >= 5)
+        throw new ApiError(
+          409,
+          "LAB_WORKSPACE_ENTRY_LIMIT",
+          "Leave an existing test session before starting another.",
+        );
+      const access = secret(),
+        entry = randomUUID(),
+        session = randomUUID(),
+        expiry = new Date(
+          Math.min(
+            w.expires_at.getTime(),
+            grant.expires_at.getTime(),
+            Date.now() + this.config.sessionTtlSeconds * 1000,
+          ),
+        );
+      await c.query(
+        `INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'capir Web handoff',$5)`,
+        [
+          session,
+          w.target_account_id,
+          w.target_user_id,
+          sha256(access),
+          expiry,
+        ],
+      );
+      await c.query(
+        `INSERT INTO lab_test_workspace_entries(id,workspace_id,owner_session_id,session_id,token_hash,expires_at) VALUES($1,$2,$3,$4,$5,$6)`,
+        [
+          entry,
+          h.sandbox_id,
+          grant.parent_session_id,
+          session,
+          sha256(access),
+          expiry,
+        ],
+      );
+      await c.query(
+        "UPDATE capir_handoffs SET consumed_at=clock_timestamp() WHERE id=$1",
+        [h.id],
+      );
+      return {
+        schema_version: CAPIR_SCHEMA_VERSION,
+        entry_path: `/capir/sandboxes/${h.sandbox_id}`,
+        session: {
+          contract_version: CONTRACT_VERSION,
+          access_token: access,
+          expires_at: expiry.toISOString(),
+          account: {
+            id: w.target_account_id,
+            slug: `lab-${h.sandbox_id}`,
+            name: `Test workspace · ${h.sandbox_id.slice(0, 8)}`,
+          },
+          user: {
+            id: w.target_user_id,
+            email: `test-${h.sandbox_id}@lab.invalid`,
+            display_name: "Test user",
+            kind: "lab_human" as const,
+            role: "member" as const,
+            username: null,
+          },
+        },
+      };
+    });
+  }
+  async logout(i: CapirIdentity) {
+    return inTransaction(this.pool, async (c) => {
+      await assertAccountActive(c, i.auth.accountId);
+      await c.query(
+        "UPDATE capir_grants SET revoked_at=coalesce(revoked_at,clock_timestamp()) WHERE id=$1",
+        [i.grant.id],
+      );
+      await c.query(
+        `UPDATE sessions SET revoked_at=coalesce(revoked_at,clock_timestamp()) WHERE id=$1 OR id IN (SELECT session_id FROM lab_test_workspace_entries WHERE owner_session_id=$1)`,
+        [i.grant.parent_session_id],
+      );
+      await c.query(
+        "UPDATE lab_test_workspace_entries SET revoked_at=coalesce(revoked_at,clock_timestamp()) WHERE owner_session_id=$1",
+        [i.grant.parent_session_id],
+      );
+      return {
+        schema_version: CAPIR_SCHEMA_VERSION,
+        revoked_grant_id: i.grant.id,
+      };
+    });
+  }
+}

@@ -1,0 +1,935 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import { bundledPrompt, promptRevision } from "@talent-signal/agent/prompt-registry";
+
+import {
+  createEnvironmentChatAnswerProvider,
+  configuredAgentPrompt,
+  boundedConversationHistory,
+  selectConversationHistory,
+  ZhipuChatAnswerProvider,
+  type RemoteChatAnswerRequest,
+} from "./chatAnswerProvider.js";
+
+const citationID = "00000000-0000-4000-8000-000000000001";
+
+function request(): RemoteChatAnswerRequest {
+  return {
+    objective: "Prepare the most important question for the next conversation.",
+    context_blocks: [
+      {
+        block_id: "00000000-0000-4000-8000-000000000002",
+        block_key: "fact.availability",
+        type: "constraint",
+        status: "confirmed",
+        headline: "Availability is described only as next month.",
+        summary: "",
+        items: [],
+        evidence_fragment_ids: [citationID],
+      },
+    ],
+    allowed_citation_ids: [citationID],
+  };
+}
+
+function provider(
+  content: Record<string, unknown>,
+  inspect?: (url: string, init: RequestInit) => void,
+) {
+  const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    inspect?.(String(input), init ?? {});
+    return new Response(
+      JSON.stringify({
+        id: "provider-request-1",
+        model: "glm-5.3",
+        choices: [{ message: { content: JSON.stringify(content) } }],
+        usage: { prompt_tokens: 120, completion_tokens: 45 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  return new ZhipuChatAnswerProvider({
+    apiKey: "synthetic-zhipu-key",
+    model: "glm-5.3",
+    fetcher,
+  });
+}
+
+describe("Zhipu Chat answer provider", () => {
+  it("retains every citation admitted by the governed manifest beyond the old count cap", async () => {
+    const ids = Array.from({ length: 45 }, (_, index) => `source-${index}`);
+    const result = await provider({ kind: "answer", title: "Complete sources", body: "Review all admitted evidence.", citation_ids: ids })
+      .answer({ ...request(), allowed_citation_ids: ids });
+    expect(result.citation_ids).toEqual(ids);
+    await expect(provider({ kind: "answer", title: "Foreign source", body: "Invalid.", citation_ids: [...ids, "unadmitted-source"] })
+      .answer({ ...request(), allowed_citation_ids: ids })).rejects.toThrow("outside the governed manifest");
+  });
+
+  it("preserves a host-validated proposal on the final allowed model turn", async () => {
+    const fingerprint = "a".repeat(64);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      id: "synthetic-final-tool", model: "glm-5.3", usage: { prompt_tokens: 20, completion_tokens: 10 },
+      choices: [{ message: { content: null, tool_calls: [{ id: "draft-call", type: "function",
+        function: { name: "contact_workspace_propose_create", arguments: JSON.stringify({
+          display_name: "Nira Voss", relationship_context: "", identity_clue: { type: "email", value: "nira.voss@example.com" },
+          source_excerpts: ["Nira Voss", "nira.voss@example.com"], reason: "Prepare the user's note." }) } }] } }],
+    }), { status: 200 })) as typeof fetch;
+    const invokeTool = vi.fn(async () => ({ ok: true, callID: "validated-tool", name: "contact_workspace", candidateFingerprint: fingerprint,
+      data: { operation: "propose_create", status: "needs_review", consequence: "No contact data changed." } }));
+    const result = await new ZhipuChatAnswerProvider({ apiKey: "synthetic-only", model: "glm-5.3", fetcher }).run({
+      runID: "synthetic-final-turn", objective: "Nira Voss, nira.voss@example.com", systemPrompt: "Prepare review-only drafts.",
+      scopeSummary: { kind: "workspace_conversation", workspaceID: "11111111-1111-4111-8111-111111111111", sessionID: null,
+        currentPersonID: null, currentRelationshipContextID: null },
+      toolManifest: ["contact_workspace"], budget: { maxTurns: 1, maxToolCalls: 1, maxDurationMs: 10000, },
+    }, invokeTool, new AbortController().signal);
+    expect(result).toMatchObject({ structuredOutput: { outcome: "contact_change_proposal", candidate_fingerprint: fingerprint },
+      terminalReason: "completed", turns: 1 });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(invokeTool).toHaveBeenCalledWith("contact_workspace", expect.objectContaining({ operation: "propose_create", display_name: "Nira Voss" }));
+  });
+
+  it.each([
+    { name: "contact_workspace_delete", args: {}, admitted: true, error: "TOOL_NOT_ALLOWED" },
+    { name: "contact_workspace_search", args: { query: "Maya" }, admitted: false, error: "TOOL_NOT_ALLOWED" },
+    { name: "contact_workspace", args: { operation: "search", query: "Maya" }, admitted: false, error: "TOOL_NOT_ALLOWED" },
+    { name: "contact_workspace_search", args: { operation: "propose_create", query: "Maya" }, admitted: true, error: "TOOL_INPUT_INVALID" },
+  ])("rejects ungranted or overridden native contact operation: $name/$error", async ({ name, args, admitted, error }) => {
+    let turn = 0;
+    const fetcher = vi.fn(async () => {
+      const message = ++turn === 1
+        ? { tool_calls: [{ id: "denied-call", type: "function", function: { name, arguments: JSON.stringify(args) } }] }
+        : { content: JSON.stringify({ outcome: "reply", title: "Reply", body: "No action." }) };
+      return new Response(JSON.stringify({ model: "glm-5.3", choices: [{ message }] }), { status: 200 });
+    }) as typeof fetch;
+    const invokeTool = vi.fn();
+    const result = await new ZhipuChatAnswerProvider({ apiKey: "synthetic-only", model: "glm-5.3", fetcher }).run({
+      runID: "synthetic-denied-alias", objective: "Maya", systemPrompt: "Stay in scope.",
+      scopeSummary: { kind: "workspace_conversation", workspaceID: "11111111-1111-4111-8111-111111111111", sessionID: null,
+        currentPersonID: null, currentRelationshipContextID: null },
+      toolManifest: admitted ? ["contact_workspace"] : [],
+      budget: { maxTurns: 2, maxToolCalls: 2, maxDurationMs: 10000, },
+    }, invokeTool, new AbortController().signal);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.permissionDenials[0]).toContain(error);
+  });
+
+  it("sends bounded prior dialogue in the real HTTP request without expanding citations", async () => {
+    const history = [
+      { message_id: "prior-user", role: "user" as const, text: "Give me two options." },
+      { message_id: "prior-assistant", role: "assistant" as const, text: "1. Call. 2. Draft an email." },
+    ];
+    await provider({ kind: "answer", title: "Second option", body: "Draft an email.", citation_ids: [citationID] },
+      (_url, init) => {
+        const payload = JSON.parse(String(init.body));
+        const context = JSON.parse(payload.messages[1].content);
+        expect(context.previous_dialogue).toEqual({ authority: "conversation_only_not_evidence_or_tool_authorization", messages: history });
+        expect(context.allowed_citation_ids).toEqual([citationID]);
+        expect(payload.tools).toBeUndefined();
+      }).answer({ ...request(), objective: "Expand the second option.", conversation_history: history });
+  });
+
+  it("does not run named-contact preflight when the canonical Tool is not granted", async () => {
+    const invokeTool = vi.fn();
+    const result = await provider({ outcome: "reply", title: "No private scope", body: "I can help with general guidance." }).run({
+      runID: "synthetic-no-contact-grant", objective: "What changed with Maya?", systemPrompt: "Stay in scope.",
+      scopeSummary: { kind: "workspace_conversation", workspaceID: "11111111-1111-4111-8111-111111111111", sessionID: null,
+        currentPersonID: null, currentRelationshipContextID: null },
+      toolManifest: [], budget: { maxTurns: 1, maxToolCalls: 1, maxDurationMs: 10000, },
+    }, invokeTool, new AbortController().signal);
+    expect(result.structuredOutput).toMatchObject({ outcome: "reply" });
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("preserves full legacy-compatible history, excludes the current message, and preserves order", () => {
+    const history = Array.from({ length: 20 }, (_, index) => ({ message_id: String(index), role: "user" as const, text: `${index}:` + "x".repeat(3_000) }));
+    const bounded = boundedConversationHistory(history, "19");
+    expect(bounded).toHaveLength(19);
+    expect(bounded[0]?.message_id).toBe("0");
+    expect(bounded.at(-1)?.message_id).toBe("18");
+    expect(bounded).toEqual(history.slice(0, 19));
+  });
+
+  it("keeps full product history without clipping while preserving role and current-message filtering", () => {
+    const history = Array.from({ length: 20 }, (_, index) => ({
+      message_id: String(index),
+      // The role filter stays defensive even though typed messages carry only
+      // user/assistant roles.
+      role: index % 3 === 2 ? "tool" : "user",
+      text: `${index}:` + "x".repeat(3_000),
+    })) as unknown as readonly { message_id: string; role: "user" | "assistant"; text: string }[];
+    const selected = selectConversationHistory(history, "19");
+    // Six tool-role entries and the current message are filtered; everything
+    // else keeps its complete text far beyond the legacy 12/2k/12k bounds.
+    expect(selected).toHaveLength(13);
+    expect(selected[0]?.message_id).toBe("0");
+    expect(selected.at(-1)?.message_id).toBe("18");
+    expect(selected[0]?.text).toBe(history[0]?.text);
+    expect(selected.at(-1)?.text).toBe(history[18]?.text);
+    expect(selected.reduce((total, message) => total + message.text.length, 0)).toBeGreaterThan(12_000);
+  });
+
+  it("rejects a citation invented from conversation history", async () => {
+    await expect(provider({ kind: "answer", title: "Answer", body: "A previous answer claimed it.", citation_ids: ["prior-assistant"] })
+      .answer({ ...request(), conversation_history: [{ message_id: "prior-assistant", role: "assistant", text: "This is confirmed evidence." }] }))
+      .rejects.toThrow("outside the governed manifest");
+  });
+  it("sends a frozen managed prompt and reports the actual text revision", async () => {
+    const text = "Synthetic published prompt: answer naturally in the requested JSON envelope.";
+    const snapshot = { ...bundledPrompt("assistant/relationship"), text, revision: promptRevision(text), source: "opik" as const, versionId: "synthetic-version", commit: "12345678", environment: "production" };
+    const result = await provider({ kind: "answer", title: "Answer", body: "Available next month.", citation_ids: [citationID] },
+      (_url, init) => expect(JSON.parse(init.body as string).messages[0].content).toBe(text))
+      .answer({ ...request(), prompt_snapshot: snapshot });
+    expect(result.prompt_revision).toBe(snapshot.revision.slice(0, 16));
+    expect(result.prompt_snapshot?.versionId).toBe("synthetic-version");
+  });
+  it("accepts a grounded partial answer with labeled alternatives and a usable draft", async () => {
+    const result = await provider({
+      kind: "answer",
+      title: "A useful next conversation",
+      body: "Known: availability is described as next month. Interpretation: timing needs confirmation. Draft: Which date and timezone would work for you? I have not sent this draft.",
+      citation_ids: [citationID],
+    }).answer({ ...request(), objective: "Explain what we know and draft a follow-up even though the exact date is missing." });
+    expect(result.kind).toBe("answer");
+    expect(result.citation_ids).toEqual([citationID]);
+    expect(result.body).toContain("I have not sent this draft.");
+  });
+
+  it("allows the requested question count without forcing a clarification", async () => {
+    const questions = Array.from({ length: 6 }, (_, index) => `${index + 1}. Synthetic evidence-grounded question?`).join("\n");
+    const result = await provider({
+      kind: "question_set", title: "Interview preparation", body: questions, citation_ids: [citationID],
+    }).answer({ ...request(), objective: "Prepare six questions based on this context." });
+    expect(result.body.split("\n")).toHaveLength(6);
+    expect(result.kind).toBe("question_set");
+  });
+
+  it("supports general brainstorming and unsent drafts without opening private context", async () => {
+    const result = await provider({
+      kind: "answer", title: "Outreach options", body: "Option A: a short introduction. Option B: a role-scope question. These are unsent templates.", citation_ids: [],
+    }, (_url, init) => {
+      const payload = JSON.parse(String(init.body));
+      expect(payload.tools).toBeUndefined();
+      expect(JSON.parse(payload.messages[1].content)).toMatchObject({ context_blocks: [], allowed_citation_ids: [] });
+    }).answer({ mode: "unscoped_conversation", objective: "Draft two general recruiter outreach approaches.", context_blocks: [], allowed_citation_ids: [] });
+    expect(result.kind).toBe("answer");
+    expect(result.citation_ids).toEqual([]);
+  });
+
+  it("keeps less explicit model-directed contact Tool calls serial and bounded", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "provider-tool-1",
+            model: "glm-5.3",
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: "call-1",
+                  type: "function",
+                  function: {
+                    name: "contact_workspace",
+                    arguments: JSON.stringify({
+                      operation: "search",
+                      query: "Maya",
+                      maximum_results: 4,
+                    }),
+                  },
+                }],
+              },
+            }],
+            usage: { prompt_tokens: 20, completion_tokens: 5 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "provider-tool-2",
+            model: "glm-5.3",
+            choices: [{
+              message: {
+                content: JSON.stringify({
+                  outcome: "clarification",
+                  title: "Which Maya?",
+                  body: "Choose one relationship.",
+                }),
+              },
+            }],
+            usage: { prompt_tokens: 30, completion_tokens: 10 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    const invokeTool = vi.fn(async () => ({
+      ok: true,
+      callID: "tool-call-1",
+      name: "contact_workspace",
+      data: { operation: "search", result_count: 2, results: [] },
+    }));
+
+    const result = await new ZhipuChatAnswerProvider({
+      apiKey: "synthetic-zhipu-key",
+      model: "glm-5.3",
+      fetcher: fetcher as typeof fetch,
+    }).run(
+      {
+        runID: "run-model-directed-search",
+        objective: "Find Maya in my relationships",
+        conversationHistory: [{ message_id: "previous-turn", role: "user", text: "I want to revisit a relationship." }],
+        systemPrompt: "Stay inside the authorized account.",
+        scopeSummary: {
+          kind: "workspace_conversation",
+          workspaceID: "11111111-1111-4111-8111-111111111111",
+          sessionID: null,
+          currentPersonID: null,
+          currentRelationshipContextID: null,
+        },
+        toolManifest: ["contact_workspace"],
+        budget: {
+          maxTurns: 4,
+          maxToolCalls: 4,
+          maxDurationMs: 10_000,
+        },
+      },
+      invokeTool,
+      new AbortController().signal,
+    );
+
+    expect(invokeTool).toHaveBeenCalledWith("contact_workspace", {
+      operation: "search",
+      query: "Maya",
+      maximum_results: 4,
+    });
+    expect(result).toMatchObject({
+      structuredOutput: { outcome: "clarification", title: "Which Maya?" },
+      inputTokens: 50,
+      outputTokens: 15,
+      turns: 2,
+    });
+    const firstRequest = JSON.parse(
+      String(fetcher.mock.calls[0]?.[1]?.body),
+    ) as {
+      messages: Array<{ role: string; content: string }>;
+      parallel_tool_calls: boolean;
+    };
+    expect(firstRequest.parallel_tool_calls).toBe(false);
+    expect(JSON.parse(firstRequest.messages[1]!.content).previous_dialogue.messages)
+      .toEqual([{ message_id: "previous-turn", role: "user", text: "I want to revisit a relationship." }]);
+    expect(firstRequest.messages[0]?.content).toBe(
+      configuredAgentPrompt("Stay inside the authorized account.").text,
+    );
+  });
+
+  it("returns a reviewable clarification after a deterministic ambiguous lookup", async () => {
+    const fetcher = vi.fn();
+    const invokeTool = vi.fn(async () => ({
+      ok: true,
+      callID: "tool-call-1",
+      name: "contact_workspace",
+      data: {
+        operation: "search",
+        result_count: 2,
+        results: [
+          {
+            person_id: "22222222-2222-4222-8222-222222222222",
+            relationship_contexts: [{
+              id: "33333333-3333-4333-8333-333333333333",
+            }],
+          },
+          {
+            person_id: "44444444-4444-4444-8444-444444444444",
+            relationship_contexts: [{
+              id: "55555555-5555-4555-8555-555555555555",
+            }],
+          },
+        ],
+      },
+    }));
+    const result = await new ZhipuChatAnswerProvider({
+      apiKey: "synthetic-zhipu-key",
+      model: "glm-5.3",
+      fetcher: fetcher as typeof fetch,
+    }).run(
+      {
+        runID: "run-1",
+        objective: "What changed with Maya?",
+        systemPrompt: "Stay inside the authorized account.",
+        scopeSummary: {
+          kind: "workspace_conversation",
+          workspaceID: "11111111-1111-4111-8111-111111111111",
+          sessionID: null,
+          currentPersonID: null,
+          currentRelationshipContextID: null,
+        },
+        toolManifest: ["contact_workspace"],
+        budget: {
+          maxTurns: 4,
+          maxToolCalls: 4,
+          maxDurationMs: 10_000,
+        },
+      },
+      invokeTool,
+      new AbortController().signal,
+    );
+
+    expect(invokeTool).toHaveBeenCalledWith("contact_workspace", {
+      operation: "search",
+      query: "Maya",
+      maximum_results: 4,
+    });
+    expect(result).toMatchObject({
+      structuredOutput: {
+        outcome: "clarification",
+        title: "Which relationship do you mean?",
+      },
+      inputTokens: 0,
+      outputTokens: 0,
+      turns: 0,
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("finishes an explicit named lookup after one host-authorized contact read", async () => {
+    const personID = "22222222-2222-4222-8222-222222222222";
+    const relationshipContextID = "33333333-3333-4333-8333-333333333333";
+    const fetcher = vi.fn();
+    const invokeTool = vi.fn(async (_name: string, input: unknown) => {
+      const operation = (input as { operation?: string }).operation;
+      return operation === "search"
+        ? {
+            ok: true,
+            callID: "tool-search",
+            name: "contact_workspace",
+            data: {
+              operation: "search",
+              result_count: 1,
+              results: [{
+                person_id: personID,
+                relationship_contexts: [{ id: relationshipContextID }],
+              }],
+            },
+          }
+        : {
+            ok: true,
+            callID: "tool-read",
+            name: "contact_workspace",
+            data: {
+              operation: "read",
+              person: { id: personID, display_label: "Maya Chen" },
+              relationship_context: {
+                id: relationshipContextID,
+                display_label: "Executive search",
+              },
+            },
+          };
+    });
+
+    const result = await new ZhipuChatAnswerProvider({
+      apiKey: "synthetic-zhipu-key",
+      model: "glm-5.3",
+      fetcher: fetcher as typeof fetch,
+    }).run(
+      {
+        runID: "run-resolved-contact",
+        objective: "What changed with Maya?",
+        systemPrompt: "Stay inside the authorized account.",
+        scopeSummary: {
+          kind: "workspace_conversation",
+          workspaceID: "11111111-1111-4111-8111-111111111111",
+          sessionID: null,
+          currentPersonID: null,
+          currentRelationshipContextID: null,
+        },
+        toolManifest: ["contact_workspace"],
+        budget: {
+          maxTurns: 4,
+          maxToolCalls: 4,
+          maxDurationMs: 35_000,
+        },
+      },
+      invokeTool,
+      new AbortController().signal,
+    );
+
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(invokeTool).toHaveBeenNthCalledWith(1, "contact_workspace", {
+      operation: "search",
+      query: "Maya",
+      maximum_results: 4,
+    });
+    expect(invokeTool).toHaveBeenNthCalledWith(2, "contact_workspace", {
+      operation: "read",
+      person_id: personID,
+      relationship_context_id: relationshipContextID,
+    });
+    expect(result).toMatchObject({
+      structuredOutput: {
+        outcome: "use_contact",
+        person_id: personID,
+        relationship_context_id: relationshipContextID,
+      },
+      inputTokens: 0,
+      outputTokens: 0,
+      turns: 0,
+      terminalReason: "completed",
+    });
+  });
+
+  it("extracts a Chinese named relationship clue without broadening the search", async () => {
+    const fetcher = vi.fn();
+    const invokeTool = vi.fn(async () => ({
+      ok: true,
+      callID: "tool-search",
+      name: "contact_workspace",
+      data: { operation: "search", result_count: 0, results: [] },
+    }));
+
+    const result = await new ZhipuChatAnswerProvider({
+      apiKey: "synthetic-zhipu-key",
+      model: "glm-5.3",
+      fetcher: fetcher as typeof fetch,
+    }).run(
+      {
+        runID: "run-chinese-contact",
+        objective: "Leila 有什么变化？",
+        systemPrompt: "Stay inside the authorized account.",
+        scopeSummary: {
+          kind: "workspace_conversation",
+          workspaceID: "11111111-1111-4111-8111-111111111111",
+          sessionID: null,
+          currentPersonID: null,
+          currentRelationshipContextID: null,
+        },
+        toolManifest: ["contact_workspace"],
+        budget: {
+          maxTurns: 4,
+          maxToolCalls: 4,
+          maxDurationMs: 35_000,
+        },
+      },
+      invokeTool,
+      new AbortController().signal,
+    );
+
+    expect(invokeTool).toHaveBeenCalledWith("contact_workspace", {
+      operation: "search",
+      query: "Leila",
+      maximum_results: 4,
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      structuredOutput: { outcome: "clarification", title: "需要确认关系" },
+    });
+  });
+
+  it("does not start a workspace contact Run after cancellation", async () => {
+    const fetcher = vi.fn() as unknown as typeof fetch;
+    const controller = new AbortController();
+    controller.abort(new Error("user cancelled"));
+
+    await expect(
+      new ZhipuChatAnswerProvider({
+        apiKey: "synthetic-zhipu-key",
+        model: "glm-5.3",
+        fetcher,
+      }).run(
+        {
+          runID: "cancelled-run",
+          objective: "Find Maya",
+          systemPrompt: "Stay inside the authorized account.",
+          scopeSummary: {
+            kind: "workspace_conversation",
+            workspaceID: "11111111-1111-4111-8111-111111111111",
+            sessionID: null,
+            currentPersonID: null,
+            currentRelationshipContextID: null,
+          },
+          toolManifest: ["contact_workspace"],
+          budget: {
+            maxTurns: 4,
+            maxToolCalls: 4,
+            maxDurationMs: 10_000,
+          },
+        },
+        vi.fn(),
+        controller.signal,
+      ),
+    ).rejects.toThrow("user cancelled");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("does not read contact context when cancellation arrives during search", async () => {
+    const personID = "22222222-2222-4222-8222-222222222222";
+    const relationshipContextID = "33333333-3333-4333-8333-333333333333";
+    const fetcher = vi.fn();
+    const controller = new AbortController();
+    const invokeTool = vi.fn(async () => {
+      controller.abort(new Error("user cancelled during search"));
+      return {
+        ok: true,
+        callID: "tool-search",
+        name: "contact_workspace",
+        data: {
+          operation: "search",
+          result_count: 1,
+          results: [{
+            person_id: personID,
+            relationship_contexts: [{ id: relationshipContextID }],
+          }],
+        },
+      };
+    });
+
+    await expect(
+      new ZhipuChatAnswerProvider({
+        apiKey: "synthetic-zhipu-key",
+        model: "glm-5.3",
+        fetcher: fetcher as typeof fetch,
+      }).run(
+        {
+          runID: "cancelled-during-contact-search",
+          objective: "What changed with Maya?",
+          systemPrompt: "Stay inside the authorized account.",
+          scopeSummary: {
+            kind: "workspace_conversation",
+            workspaceID: "11111111-1111-4111-8111-111111111111",
+            sessionID: null,
+            currentPersonID: null,
+            currentRelationshipContextID: null,
+          },
+          toolManifest: ["contact_workspace"],
+          budget: {
+            maxTurns: 4,
+            maxToolCalls: 4,
+            maxDurationMs: 35_000,
+          },
+        },
+        invokeTool,
+        controller.signal,
+      ),
+    ).rejects.toThrow("user cancelled during search");
+    expect(invokeTool).toHaveBeenCalledOnce();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("returns one citation-bound question set without putting the key in the body", async () => {
+    const result = await provider(
+      {
+        kind: "question_set",
+        title: "Priority question",
+        body: "What exact date does next month mean, and in which timezone?",
+        citation_ids: [citationID],
+      },
+      (url, init) => {
+        expect(url).toBe(
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        );
+        expect(String(init.body)).toContain("fact.availability");
+        expect(String(init.body)).not.toContain("synthetic-zhipu-key");
+        expect((init.headers as Record<string, string>).authorization).toBe(
+          "Bearer synthetic-zhipu-key",
+        );
+      },
+    ).answer(request());
+
+    expect(result).toMatchObject({
+      kind: "question_set",
+      citation_ids: [citationID],
+      provider_id: "zhipu-chat-completions",
+      model: "glm-5.3",
+      provider_request_id: "provider-request-1",
+      input_tokens: 120,
+      output_tokens: 45,
+    });
+  });
+
+  it("rejects citations outside the governed manifest", async () => {
+    await expect(
+      provider({
+        kind: "answer",
+        title: "Unsupported claim",
+        body: "A claim from another relationship.",
+        citation_ids: ["00000000-0000-4000-8000-000000000099"],
+      }).answer(request()),
+    ).rejects.toThrow("outside the governed manifest");
+  });
+
+  it("permits citation-free unconfirmed screenshot dialogue only with internal canonical admission", async () => {
+    const content = { kind: "answer", title: "Friday", body: "The prior screenshot interpretation leaves the date unresolved.", citation_ids: [] };
+    const followup = { ...request(), context_blocks: [], allowed_citation_ids: [], conversation_history: [{ message_id: "source-task", role: "assistant" as const, text: "Unconfirmed screenshot context" }] };
+    await expect(provider(content).answer(followup)).rejects.toThrow("requires a citation");
+    await expect(provider(content, (_url, init) => {
+      const sent = JSON.parse(String(init.body));
+      expect(JSON.parse(sent.messages[1].content).answer_boundary).toContain("unconfirmed");
+      expect(sent.messages[0].content).toContain("Do not add participants, shared intent, agreement, dates, or time zones.");
+    }).answer({ ...followup, permits_unconfirmed_session_context_answer: true })).resolves.toMatchObject({ kind: "answer", citation_ids: [] });
+  });
+
+  it("sends screenshot continuity restrictions in the system prompt with its actual revision", async () => {
+    let systemText = "";
+    const result = await provider({ kind: "answer", title: "Friday", body: "Which date and time zone?", citation_ids: [] }, (_url, init) => {
+      const sent = JSON.parse(String(init.body));
+      systemText = sent.messages[0].content;
+      expect(systemText).toContain("Do not default to requesting the same screenshot again.");
+      expect(systemText).toContain("Do not invent concrete dates even as examples; use [date] and [timezone] placeholders or ask directly.");
+      expect(systemText).toContain("reviewing the existing capture");
+      expect(sent.tools).toBeUndefined();
+    }).answer({ mode: "unscoped_conversation", objective: "What does Friday mean?", context_blocks: [], allowed_citation_ids: [],
+      conversation_history: [{ message_id: "canonical-screenshot-task", role: "assistant", text: JSON.stringify({ kind: "prior_screenshot_context", summary: "Friday is mentioned, with no exact date." }) }] });
+    expect(result.prompt_revision).toBe(createHash("sha256").update(systemText).digest("hex").slice(0, 16));
+  });
+
+  it("keeps the same screenshot restrictions in workspace provider execution", async () => {
+    let systemText = "";
+    const observed = vi.fn();
+    const invokeTool = vi.fn();
+    await provider({ outcome: "reply", title: "Friday", body: "The exact date and time zone are unresolved." }, (_url, init) => {
+      const sent = JSON.parse(String(init.body));
+      systemText = sent.messages[0].content;
+      expect(systemText).toContain("Do not add participants, shared intent, agreement, dates, or time zones.");
+      expect(systemText).toContain("Do not default to requesting the same screenshot again.");
+    }).runWithPromptPreset({ runID: "synthetic-screenshot-continuity", objective: "What does Friday mean?", systemPrompt: "Answer within authorized context.",
+      scopeSummary: { kind: "workspace_conversation", workspaceID: "11111111-1111-4111-8111-111111111111", sessionID: null, currentPersonID: null, currentRelationshipContextID: null },
+      conversationHistory: [{ message_id: "canonical-screenshot-task", role: "assistant", text: JSON.stringify({ kind: "prior_screenshot_context", summary: "Friday is mentioned, with no exact date." }) }],
+      toolManifest: [], budget: { maxTurns: 1, maxToolCalls: 1, maxDurationMs: 10000, },
+    }, invokeTool, new AbortController().signal, "baseline", observed);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ prompt_revision: createHash("sha256").update(systemText).digest("hex").slice(0, 16) }));
+  });
+  it("requires citations for evidence-based answers but permits clarification", async () => {
+    await expect(
+      provider({
+        kind: "answer",
+        title: "Answer",
+        body: "An uncited answer.",
+        citation_ids: [],
+      }).answer(request()),
+    ).rejects.toThrow("requires a citation");
+
+    await expect(
+      provider({
+        kind: "clarification",
+        title: "Choose one relationship",
+        body: "Which active search do you mean?",
+        citation_ids: [],
+      }).answer(request()),
+    ).resolves.toMatchObject({ kind: "clarification", citation_ids: [] });
+  });
+
+  it("answers an unscoped greeting without relationship context or citations", async () => {
+    const result = await provider(
+      {
+        kind: "answer",
+        title: "你好",
+        body: "你好，我在。你想聊什么？",
+        citation_ids: [],
+      },
+      (_url, init) => {
+        const body = JSON.parse(String(init.body)) as {
+          messages: Array<{ role: string; content: string }>;
+        };
+        const userPayload = JSON.parse(body.messages[1]!.content) as {
+          mode: string;
+          context_blocks: unknown[];
+          allowed_citation_ids: string[];
+        };
+        expect(userPayload).toMatchObject({
+          mode: "unscoped_conversation",
+          context_blocks: [],
+          allowed_citation_ids: [],
+        });
+        expect(body.messages[1]!.content).not.toContain("fact.availability");
+      },
+    ).answer({
+      mode: "unscoped_conversation",
+      objective: "你好",
+      context_blocks: [],
+      allowed_citation_ids: [],
+    });
+
+    expect(result).toMatchObject({
+      kind: "answer",
+      body: "你好，我在。你想聊什么？",
+      citation_ids: [],
+    });
+  });
+
+  it("rejects candidate context at the unscoped conversation boundary", async () => {
+    await expect(
+      provider({
+        kind: "answer",
+        title: "Unsafe",
+        body: "An answer that should never be requested.",
+        citation_ids: [],
+      }).answer({
+        ...request(),
+        mode: "unscoped_conversation",
+      }),
+    ).rejects.toThrow("cannot receive relationship context");
+  });
+
+  it("fails closed on unsupported effect-oriented output", async () => {
+    await expect(
+      provider({
+        kind: "contact_write",
+        title: "Created contact",
+        body: "The contact was created.",
+        citation_ids: [citationID],
+      }).answer(request()),
+    ).rejects.toThrow("unsupported response kind");
+  });
+
+  it("sends governed images only through an explicitly configured vision model", async () => {
+    const fetcher = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = String(init?.body);
+      expect(body).toContain('"model":"glm-5.3-flash"');
+      expect(body).toContain("data:image/png;base64,aGVsbG8=");
+      return new Response(
+        JSON.stringify({
+          id: "provider-vision-1",
+          model: "glm-5.3-flash",
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                kind: "answer",
+                title: "Attachment reading",
+                body: "The screenshot appears to show a scheduling constraint.",
+                citation_ids: [],
+              }),
+            },
+          }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const result = await new ZhipuChatAnswerProvider({
+      apiKey: "synthetic-zhipu-key",
+      model: "glm-5.3",
+      visionModel: "glm-5.3-flash",
+      fetcher,
+    }).answer({
+      ...request(),
+      images: [{
+        file_name: "conversation.png",
+        media_type: "image/png",
+        data: new TextEncoder().encode("hello"),
+      }],
+    });
+
+    expect(result).toMatchObject({
+      model: "glm-5.3-flash",
+      citation_ids: [],
+      provider_request_id: "provider-vision-1",
+    });
+  });
+
+  it("answers an unscoped greeting without relationship context or citations", async () => {
+    const result = await provider(
+      {
+        kind: "answer",
+        title: "你好",
+        body: "你好，我在。你想聊什么？",
+        citation_ids: [],
+      },
+      (_url, init) => {
+        const body = JSON.parse(String(init.body)) as {
+          messages: Array<{ role: string; content: string }>;
+        };
+        const userPayload = JSON.parse(body.messages[1]!.content) as {
+          mode: string;
+          context_blocks: unknown[];
+          allowed_citation_ids: string[];
+        };
+        expect(userPayload).toMatchObject({
+          mode: "unscoped_conversation",
+          context_blocks: [],
+          allowed_citation_ids: [],
+        });
+        expect(body.messages[1]!.content).not.toContain("fact.availability");
+      },
+    ).answer({
+      mode: "unscoped_conversation",
+      objective: "你好",
+      context_blocks: [],
+      allowed_citation_ids: [],
+    });
+
+    expect(result).toMatchObject({
+      kind: "answer",
+      body: "你好，我在。你想聊什么？",
+      citation_ids: [],
+    });
+  });
+
+  it("rejects candidate context at the unscoped conversation boundary", async () => {
+    await expect(
+      provider({
+        kind: "answer",
+        title: "Unsafe",
+        body: "An answer that should never be requested.",
+        citation_ids: [],
+      }).answer({
+        ...request(),
+        mode: "unscoped_conversation",
+      }),
+    ).rejects.toThrow("cannot receive relationship context");
+  });
+});
+
+describe("environment Chat provider admission", () => {
+  it("stays disabled by default and by the exact false value", () => {
+    expect(createEnvironmentChatAnswerProvider({})).toBeNull();
+    expect(
+      createEnvironmentChatAnswerProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "false",
+      }),
+    ).toBeNull();
+  });
+
+  it("requires one direct Zhipu credential and pinned model", () => {
+    expect(() =>
+      createEnvironmentChatAnswerProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true",
+        TALENT_SIGNAL_CHAT_PROVIDER: "zhipu",
+        TALENT_SIGNAL_CHAT_MODEL: "glm-5.3",
+      }),
+    ).toThrow("ZHIPU_API_KEY");
+
+    expect(() =>
+      createEnvironmentChatAnswerProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true",
+        TALENT_SIGNAL_CHAT_PROVIDER: "zhipu",
+        TALENT_SIGNAL_CHAT_MODEL: "glm-latest",
+        ZHIPU_API_KEY: "synthetic-key",
+      }),
+    ).toThrow("explicitly pinned");
+  });
+
+  it("requires explicit sensitive-processing admission for vision", () => {
+    expect(() =>
+      createEnvironmentChatAnswerProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true",
+        TALENT_SIGNAL_CHAT_PROVIDER: "zhipu",
+        TALENT_SIGNAL_CHAT_MODEL: "glm-5.3",
+        TALENT_SIGNAL_CHAT_VISION_MODEL: "glm-5.3-flash",
+        ZHIPU_API_KEY: "synthetic-key",
+      }),
+    ).toThrow("ALLOW_SENSITIVE_AI_PROCESSING=true");
+
+    expect(
+      createEnvironmentChatAnswerProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true",
+        TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING: "true",
+        TALENT_SIGNAL_CHAT_PROVIDER: "zhipu",
+        TALENT_SIGNAL_CHAT_MODEL: "glm-5.3",
+        TALENT_SIGNAL_CHAT_VISION_MODEL: "glm-5.3-flash",
+        ZHIPU_API_KEY: "synthetic-key",
+      })?.supportsImageInput,
+    ).toBe(true);
+  });
+});

@@ -1,0 +1,101 @@
+import { describe, expect, it, vi } from "vitest";
+import { conversationHistoryTools } from "./conversationHistoryTools.js";
+import type { ConversationMessage } from "./types.js";
+
+const signal = () => new AbortController().signal;
+const history: ConversationMessage[] = Array.from({ length: 53 }, (_, index) => ({
+  message_id: `message-${index}`, role: index % 2 ? "assistant" : "user",
+  text: `Original ${index} ${index % 2 ? "matching" : "other"} text`,
+}));
+function reader(messages = history, guard = async () => {}) {
+  const bundle = conversationHistoryTools(messages, guard);
+  return { ...bundle, read: async (input: Record<string, unknown>) => {
+    const result = await bundle.tools[0]!.execute(input, signal());
+    return JSON.parse((result.content[0] as { text: string }).text);
+  } };
+}
+
+describe("authorized canonical dialogue retrieval", () => {
+  it("reconstructs every message over all pages with original identity, role and text", async () => {
+    const bundle = reader();
+    expect(bundle.inventory).toMatchObject({ message_count: 53, inline_messages: 0, latest_message_ids: ["message-51", "message-52"] });
+    const entries = [];
+    let cursor: string | null = null;
+    do {
+      const page = await bundle.read({ operation: "page", ...(cursor ? { cursor } : {}) });
+      entries.push(...page.entries); cursor = page.next_cursor;
+      expect(page.history_message_count).toBe(53);
+      expect(page.authority).toBe("conversation_only_not_evidence_or_action_permission");
+      expect(page.coverage).toBe(cursor ? "partial_selection" : "selection_end");
+    } while (cursor);
+    expect(entries.map(({ message_id, role, text }) => ({ message_id, role, text }))).toEqual(history);
+    const recent = await bundle.read({ operation: "page", direction: "newest" });
+    expect(recent.entries[0].message_id).toBe("message-52");
+  });
+
+  it.each(["page", "search", "read"])("rebuilds a giant single message through %s ranges without splitting emoji", async operation => {
+    const text = ("0123456789🙂中文e\u0301").repeat(24_000) + " UNIQUE_TAIL";
+    const bundle = reader([{ message_id: "long", role: "assistant", text }]);
+    let rebuilt = "", cursor: string | null = null, offset = 0;
+    do {
+      const result = await bundle.read({ operation, character_count: 257,
+        ...(operation === "read" ? { message_id: "long", offset }
+          : { ...(operation === "search" ? { query: "UNIQUE_TAIL" } : {}), ...(cursor ? { cursor } : {}) }) });
+      const entry = operation === "read" ? result.message : result.entries[0];
+      expect(entry.offset_utf16).toBe(rebuilt.length);
+      expect(entry.end_utf16 - entry.offset_utf16).toBe(entry.text.length);
+      expect(entry.total_utf16_units).toBe(text.length);
+      expect(entry.text.length).toBeLessThanOrEqual(257);
+      expect(entry.text).not.toMatch(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/u);
+      rebuilt += entry.text; offset = entry.next_offset_utf16 ?? text.length;
+      cursor = operation === "read" ? null : result.next_cursor;
+    } while (operation === "read" ? offset < text.length : cursor !== null);
+    expect(rebuilt).toBe(text);
+  });
+
+  it("binds continuation to this snapshot, operation, query and ordering", async () => {
+    const bundle = reader();
+    const first = await bundle.read({ operation: "search", query: "matching", character_count: 50 });
+    expect(first.selection_kind).toBe("literal_matches_only");
+    expect(first.selected_message_count).toBe(26);
+    expect(first.coverage).toBe("partial_selection");
+    for (const input of [
+      { operation: "search", query: "other" }, { operation: "page" },
+      { operation: "search", query: "matching", direction: "newest" },
+    ]) await expect(bundle.read({ ...input, cursor: first.next_cursor })).rejects.toThrow("HISTORY_CURSOR_INVALID");
+    await expect(reader().read({ operation: "search", query: "matching", cursor: first.next_cursor })).rejects.toThrow("HISTORY_CURSOR_INVALID");
+    await expect(bundle.read({ operation: "page", cursor: "invalid" })).rejects.toThrow("HISTORY_CURSOR_INVALID");
+    const empty = await bundle.read({ operation: "search", query: "nonexistent literal" });
+    expect(empty).toMatchObject({ selection_kind: "literal_matches_only", selected_message_count: 0, next_cursor: null, entries: [] });
+  });
+
+  it("rejects cross-scope selectors and invalid ranges instead of exposing a cached body", async () => {
+    const bundle = reader([{ message_id: "emoji", role: "user", text: "A🙂Z" }]);
+    for (const input of [
+      { operation: "read", message_id: "emoji", account_id: "foreign" },
+      { operation: "read", message_id: "emoji", session_id: "foreign" },
+      { operation: "read", message_id: "emoji", offset: 2 },
+      { operation: "read", message_id: "emoji", offset: 20 },
+      { operation: "read", message_id: "missing" },
+    ]) await expect(bundle.read(input)).rejects.toThrow();
+  });
+
+  it.each([1, 2])("rejects withdrawal at authority check %s for every read mode", async rejection => {
+    for (const input of [{ operation: "page" }, { operation: "search", query: "text" }, { operation: "read", message_id: "message-0" }]) {
+      let calls = 0;
+      const guard = vi.fn(async () => { if (++calls === rejection) throw new Error("SOURCE_WITHDRAWN"); });
+      await expect(reader(history, guard).read(input)).rejects.toThrow("SOURCE_WITHDRAWN");
+      expect(guard).toHaveBeenCalledTimes(rejection);
+    }
+  });
+
+  it("honors cancellation before reading and after the source check", async () => {
+    const controller = new AbortController(); controller.abort(new Error("CANCELLED"));
+    const guard = vi.fn(async () => {});
+    await expect(reader(history, guard).tools[0]!.execute({ operation: "page" }, controller.signal)).rejects.toThrow("CANCELLED");
+    expect(guard).not.toHaveBeenCalled();
+    const during = new AbortController(); let calls = 0;
+    const bundle = reader(history, async () => { if (++calls === 2) during.abort(new Error("CANCELLED_LATE")); });
+    await expect(bundle.tools[0]!.execute({ operation: "page" }, during.signal)).rejects.toThrow("CANCELLED_LATE");
+  });
+});

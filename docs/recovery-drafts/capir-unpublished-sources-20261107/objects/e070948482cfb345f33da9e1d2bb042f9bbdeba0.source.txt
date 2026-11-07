@@ -1,0 +1,463 @@
+import Foundation
+
+/// Wire shape of `PATCH /v1/agent-sessions/:id/delta` (decoded from the raw
+/// response bytes so unknown server fields survive a round trip).
+struct AgentSessionDeltaWireResponse: Decodable {
+    let contractVersion: String
+    let session: AgentSessionRemoteRecord
+    let transfer: AgentSessionDeltaWireTransfer
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version", session, transfer
+    }
+}
+
+struct AgentSessionDeltaWireTransfer: Decodable {
+    let transferID: UUID
+    let frameIndex: Int
+    let replayed: Bool
+    let complete: Bool
+    enum CodingKeys: String, CodingKey {
+        case transferID = "transfer_id", frameIndex = "frame_index", replayed, complete
+    }
+}
+
+/// Raw canonical record read: the decoded record plus the untouched raw JSON
+/// object. Unknown server fields (execution, images, provenance) ride through
+/// the raw overlay instead of being dropped by a typed DTO.
+struct AgentSessionDeltaRawRecord {
+    let record: AgentSessionRemoteRecord
+    let raw: [String: Any]
+}
+
+protocol AgentSessionDeltaTransport {
+    /// The current raw canonical record, or nil when the Session does not
+    /// exist yet (first creation uses the canonical empty skeleton).
+    func rawSession(id: UUID) async throws -> AgentSessionDeltaRawRecord?
+    func sendDeltaFrame(id: UUID, requestBody: Data) async throws -> AgentSessionDeltaWireResponse
+    func abandonDelta(id: UUID, requestBody: Data) async throws -> AgentSessionDeltaWireResponse
+}
+
+enum AgentSessionDeltaClientError: LocalizedError, Equatable {
+    case transferMismatch
+    case invalidResponse
+    case locallyOversized
+    case recordGone
+    case staleLease
+
+    var errorDescription: String? {
+        switch self {
+        case .transferMismatch:
+            "This Session already has a different synchronization transfer in flight. Finish it or abandon it explicitly."
+        case .invalidResponse:
+            "Session synchronization returned an unreadable response. Your local history is preserved."
+        case .locallyOversized:
+            "One message is larger than a single sync request. It stays on this device and needs editing before upload."
+        case .recordGone:
+            "The remote Session was deleted or expired; retained sync state was dropped and nothing was restored."
+        case .staleLease:
+            "This synchronization scope no longer owns the Session. The dispatched result stays unknown until the next read."
+        }
+    }
+}
+
+/// Incremental Session synchronization client.
+///
+/// Emits only changed fields, new turns and metadata-array elements as
+/// canonical frames — no raw staging, no full turn-order rewrite, and pending
+/// execution metadata always last. Every uncertain frame is durably retained
+/// (exact serialized bytes, bound to the ORIGINAL Session deadline and one
+/// account/endpoint/user partition) before it is sent, so a lost response
+/// replays byte-exactly after a process restart and reconciliation continues
+/// by message identity. A remotely incomplete record never counts as fully
+/// synchronized.
+struct AgentSessionDeltaClient {
+    let transport: AgentSessionDeltaTransport
+    let store: AgentSessionDeltaTransferStoring
+    let accountID: String
+    let userID: String
+    let endpointScope: String
+
+    struct Progress {
+        var synchronized: Bool
+        var remoteIncomplete: Bool
+        var frameCount: Int
+        var record: AgentSessionRemoteRecord? = nil
+    }
+
+    /// A safe empty canonical skeleton for first creation: the declared
+    /// identity with original timestamps and retention, empty legal turn list
+    /// and empty content. Metadata arrays appear through their append
+    /// operations exactly like the TypeScript semantics (no arbitrary path
+    /// creation; a missing legal parent becomes its empty list).
+    static func emptySkeleton(from desired: [String: Any]) -> [String: Any] {
+        var skeleton: [String: Any] = ["turns": [[String: Any]]()]
+        for key in [
+            "id", "scopeKind", "personID", "relationshipContextID",
+            "identityResolutionCaseID", "personDisplayLabel", "contextDisplayLabel",
+            "title", "createdAt", "updatedAt", "isUnread", "originKind",
+            "originSessionID", "originTurnID",
+        ] where desired[key] != nil {
+            skeleton[key] = desired[key]!
+        }
+        for key in ["contactReceipts", "screenshotTaskIDs", "inheritedScreenshotTaskIDs"] {
+            if let list = desired[key] as? [Any], list.isEmpty { skeleton[key] = list }
+        }
+        return skeleton
+    }
+
+    private static let mutableTurnKeys: Set<String> = ["feedback", "feedbackUpdatedAt"]
+
+    /// Lawful raw overlay: unknown server fields (execution, images,
+    /// provenance) and immutable identity ride through from the raw canonical
+    /// record while only the legitimately mutable local values overlay them.
+    /// Known turn identities merge by message ID so nested unknown turn and
+    /// response fields survive; there is no permissive all-key overwrite.
+    static func mergeDesiredOverRaw(rawPayload: [String: Any]?, desired: [String: Any]) -> [String: Any] {
+        guard let raw = rawPayload, !raw.isEmpty else { return desired }
+        var merged = raw
+        // Legitimate local mutable scalar surface.
+        let scalars: Set<String> = [
+            "personDisplayLabel", "contextDisplayLabel", "title", "contextWasTrimmed",
+            "isUnread", "updatedAt", "composerDraft", "composerDraftUpdatedAt",
+            "pendingUnscopedChatIdempotencyKey", "pendingPersonResearchIdempotencyKey",
+            "pendingPersonResearchRequestIdentity", "pendingScopedAskIdempotencyKey",
+            "pendingScopedAskRequestIdentity", "pendingObjective",
+            "pendingScreenshotIdempotencyKey", "pendingScreenshotRequestIdentity",
+            "pendingScreenshotCapturedAt",
+        ]
+        for key in scalars where desired[key] != nil { merged[key] = desired[key]! }
+        for key in ["composerDraft", "composerDraftUpdatedAt", "contactProposal"]
+        where desired[key] == nil {
+            merged.removeValue(forKey: key)
+        }
+        if desired["contactProposal"] != nil { merged["contactProposal"] = desired["contactProposal"] }
+        for key in ["contactReceipts", "screenshotTaskIDs", "inheritedScreenshotTaskIDs"] {
+            // Retained metadata is an append-only surface: the raw canonical
+            // list is kept unless the desired list legitimately grows it.
+            let rawList = raw[key] as? [Any]
+            let desiredList = desired[key] as? [Any]
+            if let desiredList, (!desiredList.isEmpty || rawList != nil),
+               rawList == nil || desiredList.count >= (rawList?.count ?? 0) {
+                merged[key] = desiredList
+            }
+        }
+        // Turn identities merge; server-owned and unknown nested fields stay.
+        let rawTurns = raw["turns"] as? [[String: Any]] ?? []
+        let desiredTurns = desired["turns"] as? [[String: Any]] ?? []
+        var turns = rawTurns
+        for desiredTurn in desiredTurns {
+            let turnID = desiredTurn["id"] as? String
+            guard let index = rawTurns.firstIndex(where: {
+                AgentSessionDeltaOperations.valuesEqual($0["id"], turnID)
+            })
+            else {
+                turns.append(desiredTurn)
+                continue
+            }
+            var turn = rawTurns[index]
+            for key in mutableTurnKeys {
+                if let value = desiredTurn[key] { turn[key] = value }
+                else if key == "feedback" || key == "feedbackUpdatedAt" {
+                    turn.removeValue(forKey: key)
+                }
+            }
+            // Existing response/block shapes and creation fields are immutable.
+            // DTO round-trips omit explicit nulls and synthesize savedBlocks;
+            // the planner can only update existing-turn feedback. Keep the
+            // complete canonical raw response in both target and applied intent.
+            turns[index] = turn
+        }
+        merged["turns"] = turns
+        return merged
+    }
+
+    /// Synchronize one desired canonical payload as sequential frames.
+    ///
+    /// `isCurrent` is the live scope/lease fence; `isSessionCurrent` is the
+    /// per-Session fence (local existence, tombstone state, original
+    /// retention deadline). Both are re-checked around every await, retain and
+    /// dispatch together with `Task.isCancelled`, so a suspended frame can
+    /// never keep retaining or sending after its Session was deleted, expired
+    /// or its task cancelled.
+    func synchronize(
+        sessionID: UUID, desired: [String: Any], skeleton: [String: Any]?,
+        isCurrent: @escaping () -> Bool = { true },
+        isSessionCurrent: @escaping (UUID) -> Bool = { _ in true }
+    ) async throws -> Progress {
+        try requireLive(sessionID: sessionID, isCurrent: isCurrent, isSessionCurrent: isSessionCurrent)
+        // Governed startup/periodic sweep: idle private frames expire against
+        // their original Session deadline. Cleanup failures stay visible.
+        try store.sweepExpired()
+
+        // Read the current canonical record first, then reconcile by message
+        // identity and send only what is still missing.
+        var rawRecord = try await transport.rawSession(id: sessionID)
+        try requireLive(sessionID: sessionID, isCurrent: isCurrent, isSessionCurrent: isSessionCurrent)
+        if let rawRecord, rawRecord.record.deletedAt != nil || rawRecord.record.expiresAt <= Date() {
+            // A deleted or expired Session can never be resurrected by a
+            // replayed frame; the retained intent goes with it.
+            try store.release(
+                accountID: accountID, userID: userID, endpointScope: endpointScope,
+                sessionID: sessionID
+            )
+            throw AgentSessionDeltaClientError.recordGone
+        }
+
+        // Resume the exact uncertain frame next: identical bytes, identical
+        // identity, so a lost response can never duplicate or lose a frame.
+        var resumed: AgentSessionDeltaInFlightFrame? = nil
+        if let pending = try store.inFlightFrame(
+            accountID: accountID, userID: userID, endpointScope: endpointScope, sessionID: sessionID
+        ) {
+            try requireLive(sessionID: sessionID, isCurrent: isCurrent, isSessionCurrent: isSessionCurrent)
+            _ = try await transport.sendDeltaFrame(id: sessionID, requestBody: pending.requestBody)
+            try requireLive(sessionID: sessionID, isCurrent: isCurrent, isSessionCurrent: isSessionCurrent)
+            try store.release(
+                accountID: accountID, userID: userID, endpointScope: endpointScope,
+                sessionID: sessionID
+            )
+            resumed = pending
+            rawRecord = try await transport.rawSession(id: sessionID)
+            try requireLive(sessionID: sessionID, isCurrent: isCurrent, isSessionCurrent: isSessionCurrent)
+            if let rawRecord, rawRecord.record.deletedAt != nil || rawRecord.record.expiresAt <= Date() {
+                try store.release(
+                    accountID: accountID, userID: userID, endpointScope: endpointScope,
+                    sessionID: sessionID
+                )
+                throw AgentSessionDeltaClientError.recordGone
+            }
+        }
+
+        // Lawful raw overlay BEFORE planning and hashing: the declared intent
+        // keeps server-owned fields the local DTO cannot model.
+        let rawPayload = rawRecord?.raw["payload"] as? [String: Any]
+        let intent = Self.mergeDesiredOverRaw(rawPayload: rawPayload, desired: desired)
+        let targetDigest = try AgentSessionDeltaCanonical.sessionIntentDigest(intent)
+
+        // Identity reconciliation: the current canonical record is the base.
+        let exists = rawRecord != nil
+        let payloadBase = exists ? (rawPayload ?? [:]) : (skeleton ?? Self.emptySkeleton(from: intent))
+
+        // Immutable transfer identity: an ACTIVE remote transfer is continued
+        // (its transfer id and target are immutable) or explicitly refused.
+        var transferID = resumed?.transferID ?? UUID()
+        if let remote = rawRecord?.record.sync, remote.isIncomplete, let remoteTransfer = remote.transferID {
+            if let resumed, resumed.transferID != remoteTransfer {
+                throw AgentSessionDeltaClientError.transferMismatch
+            }
+            guard remote.targetPayloadDigest == targetDigest,
+                  resumed.map({ $0.targetPayloadDigest == targetDigest }) ?? true
+            else {
+                // Changed intent against an active transfer: explicit
+                // abandon/rebase, never a silent retarget.
+                throw AgentSessionDeltaClientError.transferMismatch
+            }
+            transferID = remoteTransfer
+        } else if let resumed, resumed.targetPayloadDigest != targetDigest {
+            throw AgentSessionDeltaClientError.transferMismatch
+        }
+
+        let plan: (targetDigest: String, frames: [[AgentSessionDeltaOperations.Operation]])
+        do {
+            plan = try AgentSessionDeltaOperations.planFrames(
+                before: payloadBase, after: intent,
+                transferID: transferID,
+                skeleton: exists ? nil : (skeleton ?? Self.emptySkeleton(from: intent))
+            )
+        } catch AgentSessionDeltaOperationsError.frameUnpackable {
+            throw AgentSessionDeltaClientError.locallyOversized
+        }
+        guard plan.targetDigest == targetDigest else {
+            throw AgentSessionDeltaClientError.invalidResponse
+        }
+
+        // Producer-owned frame sequence and revision: never assumed locally.
+        var revision = rawRecord?.record.revision ?? 0
+        var producedFrames = rawRecord?.record.sync?.frameCount ?? 0
+
+        if plan.frames.isEmpty {
+            // All declared content is acknowledged. No write is allowed only
+            // with a real complete state AND the exact canonical target digest.
+            if let rawRecord, !rawRecord.record.isRemotelyIncomplete,
+               let payload = rawPayload,
+               (try? AgentSessionDeltaCanonical.sessionIntentDigest(payload)) == targetDigest {
+                return Progress(
+                    synchronized: true, remoteIncomplete: false,
+                    frameCount: producedFrames, record: rawRecord.record
+                )
+            }
+            // Target content reached but the transfer never finalized (final
+            // frame lost or never sent): one zero-op final frame completes the
+            // declared intent through the active or a fresh atomic transfer.
+            let frame = try await dispatch(
+                sessionID: sessionID, transferID: transferID, operations: [],
+                targetDigest: targetDigest, revision: revision, frameIndex: producedFrames + 1,
+                final: true, skeleton: exists ? nil : (skeleton ?? Self.emptySkeleton(from: intent)),
+                sessionExpiresAt: try Self.deadline(record: rawRecord, skeleton: skeleton),
+                isCurrent: isCurrent,
+                isSessionCurrent: isSessionCurrent
+            )
+            return Progress(
+                synchronized: frame.response.transfer.complete,
+                remoteIncomplete: frame.response.session.isRemotelyIncomplete,
+                frameCount: frame.response.transfer.frameIndex,
+                record: frame.response.session
+            )
+        }
+
+        for (index, operations) in plan.frames.enumerated() {
+            let final = index == plan.frames.count - 1
+            let frame = try await dispatch(
+                sessionID: sessionID, transferID: transferID, operations: operations,
+                targetDigest: targetDigest, revision: revision,
+                frameIndex: producedFrames + 1, final: final,
+                skeleton: exists ? nil : (index == 0 ? skeleton ?? Self.emptySkeleton(from: intent) : nil),
+                sessionExpiresAt: try Self.deadline(record: rawRecord, skeleton: skeleton),
+                isCurrent: isCurrent,
+                isSessionCurrent: isSessionCurrent
+            )
+            // Producer-owned sequence and revision come from the response.
+            revision = frame.response.session.revision
+            producedFrames = frame.response.transfer.frameIndex
+            if final {
+                return Progress(
+                    synchronized: frame.response.transfer.complete,
+                    remoteIncomplete: frame.response.session.isRemotelyIncomplete,
+                    frameCount: producedFrames,
+                    record: frame.response.session
+                )
+            }
+        }
+        return Progress(
+            synchronized: true, remoteIncomplete: false,
+            frameCount: producedFrames, record: rawRecord?.record
+        )
+    }
+
+    private func requireLive(
+        sessionID: UUID,
+        isCurrent: () -> Bool,
+        isSessionCurrent: (UUID) -> Bool
+    ) throws {
+        guard !Task.isCancelled, isCurrent(), isSessionCurrent(sessionID) else {
+            throw AgentSessionDeltaClientError.staleLease
+        }
+    }
+
+    /// Parses the timestamps the archive DTO actually emits: fractional
+    /// seconds first (JSONEncoder.agentSession always writes them), with the
+    /// whole-seconds form as legacy fallback.
+    static func parseTimestamp(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    /// The ORIGINAL Session deadline an in-flight frame must expire against.
+    private static func deadline(
+        record: AgentSessionDeltaRawRecord?, skeleton: [String: Any]?
+    ) throws -> Date {
+        if let record { return record.record.expiresAt }
+        // First creation: original createdAt (or the earliest declared time)
+        // plus the existing retention semantics.
+        let created = (skeleton?["createdAt"] as? String).flatMap(parseTimestamp)
+            ?? (skeleton?["updatedAt"] as? String).flatMap(parseTimestamp)
+        guard let created else {
+            // No trustworthy original deadline: fail closed, never grant a
+            // fresh retention window.
+            throw AgentSessionDeltaClientError.invalidResponse
+        }
+        return AgentSessionDeltaTransferStore.originalDeadline(createdAt: created)
+    }
+
+    /// Retain-first dispatch with lease checks before the retain/dispatch
+    /// admission (no await between them) and after every await before any
+    /// storage, publication or next frame.
+    private func dispatch(
+        sessionID: UUID, transferID: UUID,
+        operations: [AgentSessionDeltaOperations.Operation],
+        targetDigest: String, revision: Int, frameIndex: Int, final: Bool,
+        skeleton: [String: Any]?, sessionExpiresAt: Date,
+        isCurrent: @escaping () -> Bool,
+        isSessionCurrent: @escaping (UUID) -> Bool
+    ) async throws -> (response: AgentSessionDeltaWireResponse, retained: Data) {
+        let idempotencyKey = UUID()
+        var request: [String: Any] = [
+            "transfer_id": transferID.uuidString.lowercased(),
+            "expected_revision": revision,
+            "idempotency_key": idempotencyKey.uuidString.lowercased(),
+            "target_payload_digest": targetDigest,
+            "operations": operations,
+            "final": final,
+        ]
+        // First creation carries the canonical skeleton exactly once.
+        if let skeleton { request["skeleton"] = skeleton }
+        let body = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        let frame = AgentSessionDeltaInFlightFrame(
+            sessionID: sessionID,
+            transferID: transferID,
+            frameIndex: frameIndex,
+            idempotencyKey: idempotencyKey,
+            expectedRevision: revision,
+            targetPayloadDigest: targetDigest,
+            requestBody: body,
+            isFinal: final,
+            createdAt: Date(),
+            sessionExpiresAt: sessionExpiresAt
+        )
+        // Lease, per-Session currentness and cancellation check, then durable
+        // exact intent BEFORE the wire, with no await in between: an uncertain
+        // delivery replays these bytes after restart instead of re-planning.
+        try requireLive(sessionID: sessionID, isCurrent: isCurrent, isSessionCurrent: isSessionCurrent)
+        try store.retain(
+            frame, accountID: accountID, userID: userID, endpointScope: endpointScope
+        )
+        try requireLive(sessionID: sessionID, isCurrent: isCurrent, isSessionCurrent: isSessionCurrent)
+        let response = try await transport.sendDeltaFrame(id: sessionID, requestBody: body)
+        // After every await and before any storage, publication or next frame:
+        // a deleted/expired Session or cancelled task stops the wire even when
+        // the handler itself is not cancellation-aware. The already dispatched
+        // outcome stays truthful unknown and the retained bytes stay for exact
+        // replay while the partition remains authorized.
+        try requireLive(sessionID: sessionID, isCurrent: isCurrent, isSessionCurrent: isSessionCurrent)
+        guard response.contractVersion == TalentSignalAPIContract.version,
+              response.session.sessionID == sessionID else {
+            throw AgentSessionDeltaClientError.invalidResponse
+        }
+        try store.release(
+            accountID: accountID, userID: userID, endpointScope: endpointScope,
+            sessionID: sessionID
+        )
+        return (response, body)
+    }
+}
+
+extension AgentSessionDeltaClient: AgentSessionDeltaServing {
+    func synchronizeSessionDelta(
+        sessionID: UUID, desired: [String: Any], skeleton: [String: Any]?,
+        isCurrent: @escaping () -> Bool,
+        isSessionCurrent: @escaping (UUID) -> Bool
+    ) async throws -> Progress {
+        try await synchronize(
+            sessionID: sessionID, desired: desired, skeleton: skeleton,
+            isCurrent: isCurrent, isSessionCurrent: isSessionCurrent
+        )
+    }
+
+    func releaseDeltaTransferPartition() throws {
+        try store.releasePartition(
+            accountID: accountID, userID: userID, endpointScope: endpointScope
+        )
+    }
+
+    func releaseSessionFrame(sessionID: UUID) throws {
+        try store.release(
+            accountID: accountID, userID: userID, endpointScope: endpointScope,
+            sessionID: sessionID
+        )
+    }
+
+    func sweepExpiredFrames() throws {
+        try store.sweepExpired()
+    }
+}

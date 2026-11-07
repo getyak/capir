@@ -1,0 +1,102 @@
+/**
+ * Pure presentation helpers for the Web Agent Session workbench.
+ *
+ * These functions keep readable conversation structure decisions — which block
+ * labels are generic, how assistant content is ordered, who may send, and when
+ * the reader is tracking the latest message — testable without a DOM. They
+ * never read or store conversation content beyond the value already passed in,
+ * and they never change data, send, persistence or authority behavior.
+ */
+
+import type { AgentSessionPayload } from "@talent-signal/contracts";
+
+import type { SessionDetail } from "./session-detail-state";
+
+type SessionTurn = AgentSessionPayload["turns"][number];
+type SessionResponse = SessionTurn["response"];
+type SessionBlock = NonNullable<SessionResponse["savedBlocks"]>[number];
+
+/**
+ * Titles that only name a generic reply container, not the content inside it.
+ * The body still renders; only the redundant heading is suppressed.
+ */
+const GENERIC_BLOCK_TITLES = new Set(["reply", "answer", "回复", "回答"]);
+
+/**
+ * `null` when the block title only repeats that this is a reply or answer. A
+ * meaningful title is preserved verbatim after normalizing surrounding space.
+ */
+export function sessionBlockTitle(title: string): string | null {
+  const normalized = title.normalize("NFKC").trim().toLocaleLowerCase();
+  if (!normalized || GENERIC_BLOCK_TITLES.has(normalized)) return null;
+  return title.trim();
+}
+
+/** Native history can mirror the same block in both compatibility fields. */
+export function sessionTurnBlocks(response: SessionResponse): SessionBlock[] {
+  const seen = new Set<string>();
+  return [
+    ...(response.savedBlocks ?? []),
+    ...(response.unboundConversationBlocks ?? []),
+  ].filter((block) => {
+    if (seen.has(block.id)) return false;
+    seen.add(block.id);
+    return true;
+  });
+}
+
+/**
+ * Only an active, unbound-intent Session can accept a new Ask. A relationship
+ * or identity-review Session returns to its governed surface and never gains
+ * an unsupported send control. A visibly incomplete partial history disables
+ * send until its synchronization transfer finalizes.
+ */
+export function sessionSupportsSend(detail: SessionDetail): boolean {
+  return (
+    detail.state === "active" &&
+    detail.scope_kind === "unresolved_intent" &&
+    detail.sync_incomplete !== true
+  );
+}
+
+export type ConversationScrollMetrics = {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+};
+
+/** Distance below the viewport bottom, clamped at zero. */
+export function conversationDistanceFromBottom(
+  metrics: ConversationScrollMetrics,
+): number {
+  return Math.max(
+    0,
+    metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop,
+  );
+}
+
+/**
+ * "Near bottom" is the only truth for following new turns: incoming content
+ * advances the viewport only while the reader is already at the latest message.
+ */
+export function conversationNearBottom(
+  metrics: ConversationScrollMetrics,
+  threshold = 72,
+): boolean {
+  return conversationDistanceFromBottom(metrics) <= threshold;
+}
+
+/** The jump affordance appears only while the reader is away from latest. */
+export function conversationShowsJumpToLatest(
+  metrics: ConversationScrollMetrics,
+  threshold = 72,
+): boolean {
+  return !conversationNearBottom(metrics, threshold);
+}
+
+/** Reduced motion snaps to the latest message instead of animating. */
+export function conversationScrollBehavior(
+  reducedMotion: boolean,
+): ScrollBehavior {
+  return reducedMotion ? "auto" : "smooth";
+}

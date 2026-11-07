@@ -1,0 +1,41 @@
+import "server-only";
+
+/**
+ * Synchronous single-flight gate for interactive primary-login submissions
+ * (ADR 0021). Enter, alternate-method clicks and rapid retries share ONE
+ * in-flight submission per flow; a render-time disabled flag alone is not
+ * sufficient. An uncertain result keeps the gate closed until the caller
+ * offers the explicit new first-party login entry.
+ */
+
+const inFlight = new Set<string>();
+const uncertain = new Set<string>();
+
+export async function withLoginSingleFlight<T>(
+  key: string,
+  work: () => Promise<T>,
+): Promise<{ kind: "done"; value: T } | { kind: "blocked" } | { kind: "uncertain"; error: unknown }> {
+  if (inFlight.has(key) || uncertain.has(key)) return { kind: "blocked" };
+  inFlight.add(key);
+  try {
+    const value = await work();
+    return { kind: "done", value };
+  } catch (error) {
+    // An UNKNOWN outcome (transport loss after a possibly committing request)
+    // keeps alternate methods and duplicate submissions blocked until a real
+    // read-only check or a fresh first-party entry clears it.
+    uncertain.add(key);
+    return { kind: "uncertain", error };
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/** A real read-only status check or an explicit new entry releases the key. */
+export function clearLoginUncertainty(key: string): void {
+  uncertain.delete(key);
+}
+
+export function loginSubmissionBlocked(key: string): boolean {
+  return inFlight.has(key) || uncertain.has(key);
+}

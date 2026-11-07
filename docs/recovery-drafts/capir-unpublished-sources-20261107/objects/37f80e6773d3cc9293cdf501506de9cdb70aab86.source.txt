@@ -1,0 +1,251 @@
+import XCTest
+@testable import TalentSignalMac
+
+/// ADR 0021 primary-login store ownership: durable selection, process lock,
+/// lease binding, adoption and uncertainty. All roots are task-owned test
+/// directories; no user preference or installed registry is touched.
+final class PrimaryLoginStoreRegistryTests: XCTestCase {
+    private func temporaryRoot() throws -> (directory: URL, lock: URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("login-store-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return (directory, directory.appendingPathComponent("registry.lock"))
+    }
+
+    private func registry(_ roots: (directory: URL, lock: URL), host: String = "host-a") throws -> PrimaryLoginStoreRegistry {
+        PrimaryLoginStoreRegistry(
+            roots: .init(directory: roots.directory, lockFile: roots.lock),
+            hostID: host
+        )
+    }
+
+    func testAdoptsTheLegacyDeterministicStoreExactlyOnce() throws {
+        let roots = try temporaryRoot()
+        let legacy = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let firstHost = try registry(roots)
+        try firstHost.acquireProcessLock()
+        let first = try firstHost.adoptExistingStore(for: "https://workspace.example.com", legacyStoreID: legacy)
+        XCTAssertEqual(first.storeID, legacy)
+        XCTAssertEqual(first.epoch, 1)
+        firstHost.releaseProcessLock()
+        let second = try registry(roots, host: "host-b").adoptExistingStore(
+            for: "https://workspace.example.com", legacyStoreID: UUID()
+        )
+        XCTAssertEqual(second.storeID, legacy, "adoption happens once; a later host never resets the store")
+    }
+
+    func testNewPrimaryLoginPersistsAFreshStoreAndUnresolvedMarkerFirst() throws {
+        let roots = try temporaryRoot()
+        let host = try registry(roots)
+        _ = try host.acquireProcessLock()
+        let lease = try host.beginPrimaryLogin(for: "https://workspace.example.com")
+        let selection = try host.selection(for: "https://workspace.example.com")
+        // The journal already records the NEW store and its uncertainty
+        // BEFORE any login form may be exposed.
+        XCTAssertEqual(selection.storeID, lease.storeID)
+        XCTAssertEqual(selection.epoch, 1)
+        XCTAssertTrue(selection.unresolvedLoginEntry)
+        XCTAssertTrue(host.canExposeLoginForm(for: "https://workspace.example.com"))
+    }
+
+    func testProcessLockContentionIsAnUnavailableState() throws {
+        let roots = try temporaryRoot()
+        let first = try registry(roots, host: "host-a")
+        try first.acquireProcessLock()
+        let second = try registry(roots, host: "host-b")
+        XCTAssertThrowsError(try second.acquireProcessLock()) { error in
+            XCTAssertEqual(error as? LoginStoreRegistryError, .processLockUnavailable)
+        }
+        first.releaseProcessLock()
+        XCTAssertNoThrow(try second.acquireProcessLock())
+    }
+
+    func testPersistenceFailureBlocksTheNewAuthenticationFlow() throws {
+        let roots = try temporaryRoot()
+        let host = try registry(roots)
+        try host.acquireProcessLock()
+        // Corrupt directory: writing the journal must fail loudly and the
+        // caller must not load any authentication flow.
+        let blocking = roots.directory.appendingPathComponent("primary-login-stores.json")
+        FileManager.default.createFile(atPath: blocking.path, contents: Data("not json".utf8))
+        XCTAssertThrowsError(try host.beginPrimaryLogin(for: "https://workspace.example.com"))
+    }
+
+    func testDamagedPreviouslyInitializedRegistryFailsClosed() throws {
+        let roots = try temporaryRoot()
+        let host = try registry(roots)
+        try host.acquireProcessLock()
+        _ = try host.beginPrimaryLogin(for: "https://workspace.example.com")
+        let journal = roots.directory.appendingPathComponent("primary-login-stores.json")
+        try Data("{broken".utf8).write(to: journal)
+        XCTAssertThrowsError(try host.selection(for: "https://workspace.example.com")) { error in
+            XCTAssertEqual(error as? LoginStoreRegistryError, .registryDamaged)
+        }
+    }
+
+    func testStaleLeaseCannotSelectReleaseOrClearTheNewerStore() throws {
+        let roots = try temporaryRoot()
+        let host = try registry(roots)
+        try host.acquireProcessLock()
+        let oldLease = try host.beginPrimaryLogin(for: "https://workspace.example.com")
+        let newLease = try host.beginPrimaryLogin(for: "https://workspace.example.com")
+        XCTAssertGreaterThan(newLease.epoch, oldLease.epoch)
+        XCTAssertFalse(try host.isCurrent(oldLease))
+        XCTAssertTrue(try host.isCurrent(newLease))
+        // A stale lease's resolution is refused and must never clear the newer
+        // store's marker.
+        XCTAssertThrowsError(try host.markResolved(oldLease))
+        XCTAssertTrue(try host.selection(for: "https://workspace.example.com").unresolvedLoginEntry)
+        try host.markResolved(newLease)
+        XCTAssertFalse(try host.selection(for: "https://workspace.example.com").unresolvedLoginEntry)
+    }
+
+    func testRestartUncertaintySurvivesAndBlocksOldStoreReuse() throws {
+        let roots = try temporaryRoot()
+        do {
+            let host = try registry(roots)
+            try host.acquireProcessLock()
+            _ = try host.beginPrimaryLogin(for: "https://workspace.example.com")
+            // Crash before any resolution: the marker persists.
+        }
+        let restarted = try registry(roots, host: "restarted-host")
+        let selection = try restarted.selection(for: "https://workspace.example.com")
+        XCTAssertTrue(selection.unresolvedLoginEntry, "an unresolved restart stays uncertain")
+        XCTAssertFalse(restarted.canExposeLoginForm(for: "https://workspace.example.com"))
+    }
+
+    func testOnlyTheLeaseOwnerExposesTheLoginForm() throws {
+        let roots = try temporaryRoot()
+        let owner = try registry(roots, host: "host-a")
+        try owner.acquireProcessLock()
+        _ = try owner.beginPrimaryLogin(for: "https://workspace.example.com")
+        XCTAssertTrue(owner.canExposeLoginForm(for: "https://workspace.example.com"))
+        let other = try registry(roots, host: "host-b")
+        XCTAssertFalse(other.canExposeLoginForm(for: "https://workspace.example.com"))
+    }
+
+    func testSingleFlightGateBlocksDuplicateSubmissionsIncludingEnterAndRetries() async throws {
+        let gate = LoginSingleFlightGate()
+        let key = "login-flow-1"
+        let started = Counter()
+        let firstTask = Task { () -> String? in
+            await gate.submit(key) {
+                started.increment()
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                return "first"
+            }
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        XCTAssertTrue(gate.isBlocked(key))
+        // A concurrent Enter/alternate-method click is refused while the first
+        // submission is in flight — a render-time flag alone would not do this.
+        let second = await gate.submit(key) {
+            started.increment()
+            return "second"
+        }
+        XCTAssertNil(second)
+        let first = await firstTask.value
+        XCTAssertEqual(first, "first")
+        XCTAssertEqual(started.value, 1)
+        XCTAssertFalse(gate.isBlocked(key))
+        let third = await gate.submit(key) {
+            started.increment()
+            return "third"
+        }
+        XCTAssertEqual(third, "third")
+        XCTAssertEqual(started.value, 2)
+    }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+}
+
+extension PrimaryLoginStoreRegistryTests {
+    /// Actual app-bootstrap acceptance: strict task-only parsing and
+    /// fail-closed behavior for test processes without the configuration.
+    @MainActor
+    func testBootstrapStrictRootParsingAndTestFailClosed() throws {
+        let roots = try temporaryRoot()
+        // Valid test configuration: explicit absolute root, disposable mode,
+        // isolated origin; legacy adoption is disabled and stores are fresh.
+        let configuration = try LoginStoreBootstrap.configuration(arguments: [
+            "TalentSignalMac",
+            "--primary-login-store-root", roots.directory.path,
+            "--primary-login-store-disposable",
+            "--primary-login-store-origin", "https://workspace.example.com",
+        ])
+        XCTAssertNotNil(configuration)
+        XCTAssertEqual(configuration?.disposable, true)
+        XCTAssertEqual(configuration?.isolatedOrigin, "https://workspace.example.com")
+
+        // Strict parser: duplicates, missing values, switch-as-value and
+        // relative paths are all rejected BEFORE any construction.
+        XCTAssertThrowsError(try LoginStoreBootstrap.configuration(arguments: [
+            "--primary-login-store-root", roots.directory.path,
+            "--primary-login-store-root", roots.directory.path,
+        ]))
+        XCTAssertThrowsError(try LoginStoreBootstrap.configuration(arguments: [
+            "--primary-login-store-root",
+        ]))
+        XCTAssertThrowsError(try LoginStoreBootstrap.configuration(arguments: [
+            "--primary-login-store-root", "--primary-login-store-disposable",
+        ]))
+        XCTAssertThrowsError(try LoginStoreBootstrap.configuration(arguments: [
+            "--primary-login-store-root", "relative/path",
+        ]))
+
+        // A test process WITHOUT the explicit task-only configuration must
+        // fail closed: no standard registry, no WK construction.
+        if LoginStoreBootstrap.isTestProcess() {
+            let missing = try LoginStoreApplicationCoordinator.bootstrap(arguments: ["TalentSignalMac"])
+            XCTAssertNil(missing)
+        }
+    }
+
+    /// Disposable mode never adopts the legacy deterministic store and uses
+    /// fresh task-namespaced UUIDs; entry ownership is host+operation bound.
+    @MainActor
+    func testDisposableModeAndEntryOwnership() throws {
+        let roots = try temporaryRoot()
+        let registry = PrimaryLoginStoreRegistry(
+            roots: .init(directory: roots.directory, lockFile: roots.lock),
+            hostID: "app-host"
+        )
+        let coordinator = LoginStoreApplicationCoordinator(
+            registry: registry,
+            disposable: true,
+            isolatedOrigin: "https://workspace.example.com"
+        )
+        let legacy = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        try coordinator.adopt(origin: "https://workspace.example.com", legacyStoreID: legacy)
+        let adopted = coordinator.context(for: "https://workspace.example.com")
+        XCTAssertNotEqual(adopted.storeID, legacy, "disposable mode never opens the installed store")
+
+        // A visible foreground host acquires the first entry; the lease is
+        // bound to its immutable host identity.
+        let lease = try XCTUnwrap(coordinator.acquirePrimaryEntry(for: "https://workspace.example.com"))
+        // Entry acquisition rotates to the FRESH store before any login input;
+        // the host context reflects that new immutable selection.
+        let entered = coordinator.context(for: "https://workspace.example.com")
+        XCTAssertEqual(entered.storeID, lease.storeID)
+        XCTAssertEqual(coordinator.hostState(for: "https://workspace.example.com", wantsPrimaryEntry: true),
+                       .ownedPrimaryEntry(entered, lease))
+        XCTAssertNotEqual(adopted.storeID, lease.storeID)
+        XCTAssertTrue(coordinator.ownsCurrent(lease))
+        try coordinator.markResolved(for: "https://workspace.example.com")
+        XCTAssertFalse(coordinator.ownsCurrent(lease))
+    }
+}

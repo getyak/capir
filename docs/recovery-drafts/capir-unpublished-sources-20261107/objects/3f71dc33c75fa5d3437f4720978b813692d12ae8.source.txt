@@ -1,0 +1,68 @@
+import Foundation
+@testable import TalentSignalMac
+
+/// A real encrypted fixture home for direct service contract tests. Production
+/// AppModel ownership and restart tests use the actual AppModel instead.
+@MainActor
+final class TaskAdmissionTestHome {
+    let directory: URL
+    let store: SecureLocalCapsuleStore
+    private var draft: ContextCapsuleDraft
+    private let record: CapsuleWorkflowOwnershipRecord
+    private let runtimeID = UUID()
+    private let attemptID = UUID()
+
+    init(manifest: SubmittedContextManifest, originalDraft: ContextCapsuleDraft? = nil) throws {
+        directory = FileManager.default.temporaryDirectory.appending(path: "talent-signal-task-contract-\(UUID().uuidString)", directoryHint: .isDirectory)
+        store = SecureLocalCapsuleStore(directory: directory, keyProvider: TaskAdmissionTestKeyProvider())
+        if let originalDraft { draft = originalDraft }
+        else {
+            var fixture = ContextCapsuleDraft()
+            fixture.items = try manifest.selectedItems.map { item in
+                guard let id = UUID(uuidString: item.sourceID) else { throw CocoaError(.fileReadCorruptFile) }
+                return ContextCapsuleItem(id: id, kind: item.kind, displayName: item.displayName,
+                    preview: item.reviewedContent, acquisition: item.acquisition,
+                    capturedAt: manifest.submittedAt, retention: item.retention,
+                    sourceFingerprint: item.sourceFingerprint, actorKind: item.actorKind,
+                    attributionConfirmedAt: item.attributionConfirmedAt)
+            }
+            draft = fixture
+        }
+        guard var ownership = draft.capturedWorkflowOwnershipRecord(accountID: manifest.accountID,
+            operationID: manifest.idempotencyKey, selectedSourceIDs: manifest.selectedItems.compactMap { UUID(uuidString: $0.sourceID) }, now: manifest.submittedAt) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        ownership.localAttemptID = attemptID
+        record = ownership
+        draft.workflowOwnerships = [ownership]
+        try store.save(draft, accountID: ownership.accountID, now: Date())
+    }
+
+    deinit { try? FileManager.default.removeItem(at: directory) }
+
+    var observer: MacTaskLifecycleObserver {
+        MacTaskLifecycleObserver(runtimeID: runtimeID, attemptID: attemptID, expiresAt: record.expiresAt, observe: { [self] event in
+            let reference: MacTaskAdmissionReference
+            let taskID: String
+            let phase: CapsuleWorkflowPhase
+            switch event {
+            case .prepared(let value): reference = value; taskID = ""; phase = .taskOutcomeUnknown
+            case .accepted(let value, let id): reference = value; taskID = id; phase = .canonicalTask
+            }
+            guard reference.operationID == record.operationID, reference.accountID == record.accountID,
+                  reference.expiresAt == record.expiresAt else { throw CocoaError(.fileReadCorruptFile) }
+            var updated = draft
+            updated.workflowOwnerships = [CapsuleWorkflowOwnershipRecord(accountID: record.accountID,
+                workflowID: taskID, operationID: record.operationID, phase: phase, taskAdmission: reference, localAttemptID: record.localAttemptID,
+                originalSubmissionScope: record.originalSubmissionScope,
+                sources: record.sources, capturedAt: record.capturedAt, expiresAt: record.expiresAt)]
+            try store.save(updated, accountID: record.accountID, now: Date())
+            draft = updated
+        })
+    }
+}
+
+struct TaskAdmissionTestKeyProvider: CapsuleKeyProviding {
+    func key(accountID: String) throws -> Data { Data(repeating: 0x3a, count: 32) }
+    func deleteKey(accountID: String) throws -> Bool { true }
+}

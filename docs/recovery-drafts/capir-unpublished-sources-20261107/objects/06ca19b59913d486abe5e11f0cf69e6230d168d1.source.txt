@@ -1,0 +1,40 @@
+export const MAIL_PROVIDERS = ["gmail", "outlook"] as const;
+export type MailProvider = (typeof MAIL_PROVIDERS)[number];
+export type MailItem = {
+  id: string;
+  subject: string;
+  participants: string;
+  occurredAt: string | null;
+  sourceUrl: string | null;
+};
+export type MailPreview = {
+  provider: MailProvider;
+  account: string;
+  checkedAt: string;
+  expiresAt: string;
+  items: MailItem[];
+  status: "verified" | "empty";
+  scope: "inbox_metadata_sample";
+  connectionVersion?: string;
+};
+export type MailConnectionStatus = {
+  configured: boolean;
+  connected: boolean;
+  expiresAt: string | null;
+  connectionVersion?: string | null;
+};
+export function isMailProvider(value: string): value is MailProvider {
+  return MAIL_PROVIDERS.some(provider => provider === value);
+}
+export const MAIL_LABEL: Record<MailProvider, string> = { gmail: "Gmail", outlook: "Outlook" };
+export const MAIL_PERMISSIONS_URL: Record<MailProvider, string> = {
+  gmail: "https://myaccount.google.com/connections",
+  outlook: "https://account.live.com/consent/Manage",
+};
+export const MAIL_RESULT_COPY: Record<string, string> = {
+  authorized: "账号已授权。现在测试一次读取，确认这里能显示真实内容。",
+  cancelled: "你取消了授权，可以重新选择账号，或先进入工作区。",
+  failed: "这次授权未完成。请重试；企业账号可能需要管理员允许访问。",
+  expired: "这次授权已过期或被使用，请重新连接。",
+  stale: "登录或工作区已变化，请重新打开此页后连接。",
+};

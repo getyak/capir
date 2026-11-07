@@ -1,0 +1,308 @@
+import XCTest
+@testable import TalentSignalMac
+
+final class MacRelationshipAuthorityFenceTests: XCTestCase {
+    func testAuthenticationBoundaryInvalidatesAllOldAuthority() {
+        let fence = MacRelationshipAuthorityFence()
+        let submitted = fence.ticket("submit-capsule")
+        let scope = fence.ticket("confirm-scope")
+        let initialization = fence.ticket("initialize-workspace")
+        XCTAssertTrue(fence.preserves(submitted))
+        XCTAssertTrue(fence.preservesAuthority(scope))
+        XCTAssertTrue(fence.preservesAuthentication(initialization))
+
+        fence.invalidate(.authentication)
+
+        XCTAssertFalse(fence.preserves(submitted))
+        XCTAssertFalse(fence.preservesAuthority(scope))
+        XCTAssertFalse(fence.preservesAuthentication(initialization))
+    }
+
+    func testScopeBoundaryInvalidatesOldScopeAndIntakeButPreservesTheLogin() {
+        let fence = MacRelationshipAuthorityFence()
+        let submitted = fence.ticket("submit-capsule")
+        let scope = fence.ticket("confirm-scope")
+        let initialization = fence.ticket("initialize-workspace")
+
+        fence.invalidate(.relationshipScope)
+
+        XCTAssertFalse(fence.preserves(submitted))
+        XCTAssertFalse(fence.preservesAuthority(scope))
+        XCTAssertTrue(
+            fence.preservesAuthentication(initialization),
+            "A relationship-scope change must never force unnecessary reauthentication."
+        )
+    }
+
+    func testSubmittedIntakeBoundaryInvalidatesOnlySubmittedIntakeAuthority() {
+        let fence = MacRelationshipAuthorityFence()
+        let submitted = fence.ticket("submit-capsule")
+        let reminder = fence.ticket("reminder-create")
+        let initialization = fence.ticket("initialize-workspace")
+
+        fence.invalidate(.submittedIntake)
+
+        XCTAssertFalse(fence.preserves(submitted))
+        XCTAssertTrue(
+            fence.preservesAuthority(reminder),
+            "Clear/stop must not revoke an unaffected reminder operation's account and scope authority."
+        )
+        XCTAssertTrue(fence.preservesAuthentication(initialization))
+    }
+
+    func testUnrelatedLocalAdditionsAndSourceEditsCrossNoAuthorityBoundary() {
+        let fence = MacRelationshipAuthorityFence()
+        let submitted = fence.ticket("submit-capsule")
+        let before = fence.currentGenerations()
+
+        // Unrelated local-only attachments and source edits never bump a
+        // generation. Their effect on one frozen submission is judged by that
+        // submission's exact selected-item snapshot, never by a global counter.
+        XCTAssertEqual(fence.currentGenerations(), before)
+        XCTAssertTrue(fence.preserves(submitted))
+    }
+
+    func testGenerationsCascadeSoOldestTicketsCannotBeReused() {
+        let fence = MacRelationshipAuthorityFence()
+        let initial = MacRelationshipAuthorityGenerations.initial
+        XCTAssertEqual(fence.currentGenerations(), initial)
+
+        let scoped = fence.invalidate(.relationshipScope)
+        XCTAssertEqual(scoped.authentication, initial.authentication)
+        XCTAssertEqual(scoped.relationshipScope, initial.relationshipScope + 1)
+        XCTAssertEqual(scoped.submittedIntake, initial.submittedIntake + 1)
+
+        let authenticated = fence.invalidate(.authentication)
+        XCTAssertEqual(authenticated.authentication, initial.authentication + 1)
+        XCTAssertEqual(authenticated.relationshipScope, scoped.relationshipScope + 1)
+        XCTAssertEqual(authenticated.submittedIntake, scoped.submittedIntake + 1)
+    }
+
+    func testSynchronousInvalidationFromAnotherThreadIsVisibleImmediately() {
+        let fence = MacRelationshipAuthorityFence()
+        let ticket = fence.ticket("submit-capsule")
+        let invalidated = expectation(description: "cross-thread invalidation")
+
+        Thread.detachNewThread {
+            fence.invalidate(.authentication)
+            invalidated.fulfill()
+        }
+
+        wait(for: [invalidated], timeout: 5)
+        XCTAssertFalse(fence.preservesAuthority(ticket))
+    }
+
+    func testSelectedSourceRevocationIsOperationBoundAndNeverRevivedByRestore() {
+        let fence = MacRelationshipAuthorityFence()
+        let bound = fence.ticket("submit-capsule", boundSources: ["source-a"])
+        let unbound = fence.ticket("reconcile-decision")
+        XCTAssertTrue(fence.preserves(bound))
+
+        // Redacting or unsharing the exact selected source revokes only the
+        // operations frozen over it.
+        fence.invalidateSelectedSource("source-a")
+        XCTAssertFalse(fence.preservesSelectedSources(bound))
+        XCTAssertFalse(fence.preserves(bound))
+        XCTAssertTrue(fence.preserves(unbound), "An unaffected approved decision is never revoked by source editing.")
+
+        // Restoring the source (re-share) can never revive the obsolete
+        // operation: revocation generations are monotonic.
+        fence.invalidateSelectedSource("source-a")
+        XCTAssertTrue(fence.preserves(unbound))
+        XCTAssertFalse(fence.preservesSelectedSources(bound))
+        XCTAssertTrue(fence.preservesAuthentication(fence.ticket("initialize")))
+    }
+
+    func testUnrelatedSourceRevocationLeavesOtherBoundWorkflowsValid() {
+        let fence = MacRelationshipAuthorityFence()
+        let first = fence.ticket("submit-capsule", boundSources: ["source-a"])
+        let second = fence.ticket("submit-capsule", boundSources: ["source-b"])
+
+        fence.invalidateSelectedSource("source-b")
+
+        XCTAssertFalse(fence.preserves(second))
+        XCTAssertTrue(
+            fence.preserves(first),
+            "An unrelated source withdrawal never invalidates a workflow over an unchanged source."
+        )
+    }
+
+    func testSubmittedIntakeLayerChecksBoundSourcesWhileCredentialLayerIgnoresThem() {
+        let fence = MacRelationshipAuthorityFence()
+        let bound = fence.ticket("submit-capsule", boundSources: ["source-a"])
+        fence.invalidateSelectedSource("source-a")
+
+        XCTAssertTrue(fence.preservesAuthority(bound), "Credential-layer work is not killed by source churn.")
+        XCTAssertFalse(fence.preserves(bound), "Submitted-intake work is bound to its exact selected sources.")
+    }
+
+    func testRetirementTicketsAreOneShotAndNeverEvictLiveCredentials() {
+        let authority = MacRelationshipRetirementAuthority()
+        var tickets: [SessionRetirementTicket] = []
+        for index in 0..<18 {
+            authority.observedNoOperation(generation: UInt64(index + 1))
+            authority.installCredential("token-\(index)", generation: UInt64(index + 1))
+            tickets.append(authority.withdraw(acceptedGeneration: UInt64(index + 1)))
+        }
+        // Every outstanding ticket keeps its own exact original credential
+        // even after 17 later install/withdraw cycles.
+        for (index, ticket) in tickets.enumerated() {
+            guard case .original(let token, _) = authority.consume(ticket) else {
+                return XCTFail("Ticket \(index) lost its original credential to wholesale eviction")
+            }
+            XCTAssertEqual(token, "token-\(index)")
+            XCTAssertEqual(
+                authority.consume(ticket),
+                .alreadyConsumed,
+                "Ticket \(index) must be one-shot."
+            )
+        }
+    }
+
+    func testWithdrawalFreezesExactAdmittedOperationAndIgnoresLaterAdmission() {
+        let authority = MacRelationshipRetirementAuthority()
+        authority.admitOperation(.init(operationID: "operation-old", accountID: "account-a", workspaceID: "account-a", generation: 1))
+        let ticket = authority.withdraw(acceptedGeneration: 1)
+        // A newer operation admitted AFTER withdrawal is never frozen into the
+        // older ticket and can never be retired or deleted by it.
+        authority.admitOperation(.init(operationID: "operation-new", accountID: "account-a", workspaceID: "account-a", generation: 2))
+        authority.installCredential("token-new", generation: 2)
+
+        guard case .none(let operation) = authority.consume(ticket) else {
+            return XCTFail("Expected no original credential for this retirement")
+        }
+        XCTAssertEqual(operation?.operationID, "operation-old", "The exact original operation identity is frozen at withdrawal.")
+    }
+
+    func testHeldInstallThenWithdrawRejectsTheOldInstall() {
+        let authority = MacRelationshipRetirementAuthority()
+        authority.observedNoOperation(generation: 1)
+        authority.installCredential("token-old", generation: 1)
+        let ticket = authority.withdraw(acceptedGeneration: 1)
+        // A stale install after withdrawal must never replace the frozen value.
+        authority.installCredential("token-late", generation: 0)
+        guard case .original(let token, _) = authority.consume(ticket) else {
+            return XCTFail("Expected the frozen original credential")
+        }
+        XCTAssertEqual(token, "token-old")
+    }
+
+    func testUnavailableOriginalOperationIsNotPromotedToNoOperation() {
+        let retirement = MacRelationshipRetirementAuthority()
+        retirement.installCredential("original-token", generation: 0)
+        retirement.operationUnavailable(generation: 0, detail: "Original encrypted correlation cannot be opened.")
+        let ticket = retirement.withdraw(acceptedGeneration: 0)
+        retirement.observedNoOperation(generation: 1)
+        retirement.installCredential("new-token", generation: 1)
+        guard case .unavailable(let token, let generation, let detail) = retirement.consume(ticket) else {
+            return XCTFail("Unreadable original identity must remain explicitly unavailable, never notRequired.")
+        }
+        XCTAssertEqual(token, "original-token")
+        XCTAssertEqual(generation, 0)
+        XCTAssertTrue(detail.contains("cannot be opened"))
+        let next = retirement.withdraw(acceptedGeneration: 1)
+        XCTAssertEqual(retirement.consume(next), .original(token: "new-token", operation: nil))
+    }
+
+    func testReminderOperationIdentityComparesAccountAndExactOperation() {
+        let first = ReminderOperationIdentity(accountID: "account-a", idempotencyKey: "mac-reminder-1")
+        let sameAccountNewOperation = ReminderOperationIdentity(accountID: "account-a", idempotencyKey: "mac-reminder-2")
+        let otherAccountSameOperation = ReminderOperationIdentity(accountID: "account-b", idempotencyKey: "mac-reminder-1")
+
+        XCTAssertNotEqual(first, sameAccountNewOperation)
+        XCTAssertNotEqual(first, otherAccountSameOperation)
+        XCTAssertEqual(first, ReminderOperationIdentity(accountID: "account-a", idempotencyKey: "mac-reminder-1"))
+    }
+    func testSharedWithdrawalWaitsForHeldCredentialAdmissionAndFreezesTheOriginal() {
+        let synchronization = NSRecursiveLock()
+        let fence = MacRelationshipAuthorityFence(synchronization: synchronization)
+        let retirement = MacRelationshipRetirementAuthority(synchronization: synchronization)
+        let original = fence.ticket("held-login")
+        let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let installed = DispatchSemaphore(value: 0), withdrawalStarted = DispatchSemaphore(value: 0)
+        let withdrawn = DispatchSemaphore(value: 0)
+        let box = NativeRetirementTicketBox()
+        defer { release.signal() }
+        DispatchQueue.global().async {
+            _ = fence.admit(original, authenticationOnly: true) {
+                entered.signal()
+                _ = release.wait(timeout: .now() + 10)
+                retirement.observedNoOperation(generation: original.generations.authentication)
+                retirement.installCredential("original-token", generation: original.generations.authentication)
+            }
+            installed.signal()
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        DispatchQueue.global().async {
+            withdrawalStarted.signal()
+            let ticket = fence.synchronized {
+                let generation = fence.currentGenerations().authentication
+                let captured = retirement.withdraw(acceptedGeneration: generation)
+                fence.invalidate(.authentication)
+                return captured
+            }
+            box.store(ticket)
+            withdrawn.signal()
+        }
+        XCTAssertEqual(withdrawalStarted.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(withdrawn.wait(timeout: .now() + 0.05), .timedOut,
+                       "Withdrawal cannot pass a held admission in the shared synchronization domain.")
+        release.signal()
+        XCTAssertEqual(installed.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(withdrawn.wait(timeout: .now() + 5), .success)
+        guard let ticket = box.read(), case .original(let token, _) = retirement.consume(ticket) else {
+            return XCTFail("The original admitted credential must be frozen, not lost or replaced.")
+        }
+        XCTAssertEqual(token, "original-token")
+        XCTAssertFalse(fence.admit(original, authenticationOnly: true) {
+            retirement.installCredential("obsolete-token", generation: original.generations.authentication)
+        })
+        let current = fence.ticket("new-login")
+        XCTAssertTrue(fence.admit(current, authenticationOnly: true) {
+            retirement.observedNoOperation(generation: current.generations.authentication)
+            retirement.installCredential("new-token", generation: current.generations.authentication)
+        })
+        let newer = fence.synchronized {
+            let generation = fence.currentGenerations().authentication
+            let captured = retirement.withdraw(acceptedGeneration: generation)
+            fence.invalidate(.authentication)
+            return captured
+        }
+        guard case .original(let newToken, _) = retirement.consume(newer) else {
+            return XCTFail("An older retirement must preserve the later legitimate credential.")
+        }
+        XCTAssertEqual(newToken, "new-token")
+    }
+
+    func testRetiredSameGenerationCannotReinstallAndOldWithdrawalPreservesNewMirror() {
+        let retirement = MacRelationshipRetirementAuthority()
+        retirement.observedNoOperation(generation: 0)
+        retirement.installCredential("old-token", generation: 0)
+        let original = retirement.withdraw(acceptedGeneration: 0)
+        retirement.installCredential("late-same-generation", generation: 0)
+        let obsolete = retirement.withdraw(acceptedGeneration: 0)
+        XCTAssertEqual(retirement.consume(obsolete), .none(operation: nil),
+                       "The original positively empty home cannot acquire an obsolete same-generation credential.")
+        retirement.observedNoOperation(generation: 1)
+        retirement.installCredential("new-token", generation: 1)
+        _ = retirement.withdraw(acceptedGeneration: 0)
+        let newer = retirement.withdraw(acceptedGeneration: 1)
+        guard case .original(let token, _) = retirement.consume(newer) else {
+            return XCTFail("An old generation withdrawal must never erase a newer mirror.")
+        }
+        XCTAssertEqual(token, "new-token")
+        guard case .original(let originalToken, _) = retirement.consume(original) else {
+            return XCTFail("The original retirement stays one-shot and exact.")
+        }
+        XCTAssertEqual(originalToken, "old-token")
+    }
+
+}
+
+
+private final class NativeRetirementTicketBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ticket: SessionRetirementTicket?
+    func store(_ value: SessionRetirementTicket) { lock.lock(); defer { lock.unlock() }; ticket = value }
+    func read() -> SessionRetirementTicket? { lock.lock(); defer { lock.unlock() }; return ticket }
+}

@@ -1,0 +1,90 @@
+"use client";
+
+import { useActionState, useState } from "react";
+
+import {
+  completeStagedPassword,
+  continueTargetLink,
+  type LoginMethodActionState,
+} from "@/app/workspace/settings/login-methods/actions";
+import styles from "@/components/account-sign-in-methods.module.css";
+
+export type RenderedOperationScope = {
+  operationRef: string;
+  accountId: string;
+  userId: string;
+  accountRevision: number;
+  userRevision: number;
+};
+
+function ScopeFields({ scope }: { scope: RenderedOperationScope }) {
+  return (
+    <>
+      <input type="hidden" name="operationRef" value={scope.operationRef} />
+      <input type="hidden" name="accountId" value={scope.accountId} />
+      <input type="hidden" name="userId" value={scope.userId} />
+      <input type="hidden" name="accountRevision" value={String(scope.accountRevision)} />
+      <input type="hidden" name="userRevision" value={scope.userRevision} />
+    </>
+  );
+}
+
+/** Collect the NEW password after provider reauthentication. */
+export function StagedPasswordForm({ intent, scope }: {
+  intent: "set_password" | "change_password";
+  scope: RenderedOperationScope;
+}) {
+  const [state, action, pending] = useActionState<LoginMethodActionState, FormData>(
+    completeStagedPassword,
+    {},
+  );
+  return (
+    <section className={styles.section} aria-labelledby="staged-password-title">
+      <h2 id="staged-password-title">{intent === "change_password" ? "设置新密码" : "设置密码"}</h2>
+      <p className={styles.secondary}>当前身份已验证。新密码只在这一步输入，不会经过链接或网址。</p>
+      <form className={styles.stepUp} action={action}>
+        <ScopeFields scope={scope} />
+        <label className={styles.field}>
+          <span>新密码</span>
+          <input name="newPassword" type="password" autoComplete="new-password" required minLength={6} maxLength={128} />
+        </label>
+        <div className={styles.actions}>
+          <button type="submit" className={styles.primary} disabled={pending} aria-busy={pending}>
+            {pending ? "正在保存…" : "保存密码"}
+          </button>
+        </div>
+        <p aria-live="polite" className={state.error ? styles.error : styles.notice}>
+          {state.error ?? (state.saved ? "已保存并核验。" : "")}
+        </p>
+      </form>
+    </section>
+  );
+}
+
+/** Continue the second (new-provider) proof of a staged linking operation. */
+export function StagedTargetLinkForm({ targetProvider, note, scope }: {
+  targetProvider: "apple" | "google";
+  note: string;
+  scope: RenderedOperationScope;
+}) {
+  const [pending, setPending] = useState(false);
+  return (
+    <section className={styles.section} aria-labelledby="staged-link-title">
+      <h2 id="staged-link-title">{`将 ${targetProvider === "google" ? "Google" : "Apple"} 绑定到这个账户`}</h2>
+      <p className={styles.secondary}>{note}</p>
+      <form
+        action={async (formData: FormData) => {
+          setPending(true);
+          await continueTargetLink(formData);
+        }}
+      >
+        <ScopeFields scope={scope} />
+        <div className={styles.actions}>
+          <button type="submit" className={styles.primary} disabled={pending} aria-busy={pending}>
+            {pending ? "正在连接…" : "继续绑定"}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}

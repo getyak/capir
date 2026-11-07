@@ -1,0 +1,34 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeEach, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ claims: vi.fn(), data: vi.fn(), form: vi.fn(), redirect: vi.fn() }));
+vi.mock("@/lib/server/backendAuth", () => ({
+  readBackendSessionClaims: mocks.claims, authenticatedBackendClient: async () => ({ accountOnboarding: mocks.data }),
+}));
+vi.mock("@/lib/server/workspaceSessions", () => ({ workspaceSessionsBinding: () => "synthetic-binding" }));
+vi.mock("@/components/account-onboarding-form", () => ({ AccountOnboardingForm: (props: unknown) => { mocks.form(props); return createElement("div", null, "synthetic-form"); } }));
+vi.mock("@/components/brand-mark", () => ({ BrandMark: () => null }));
+vi.mock("@/components/theme-toggle", () => ({ ThemeToggle: () => null }));
+vi.mock("next/navigation", () => ({ redirect: (url: string) => { mocks.redirect(url); throw new Error(`redirect:${url}`); } }));
+import OnboardingPage from "./page";
+const nativeCallback = "/desktop-auth/authorize?attempt=synthetic-attempt&state=synthetic-state";
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.claims.mockResolvedValue({ backendAccountId: "account", backendUserId: "user", backendExpiresAt: "2099-01-01T00:00:00Z" });
+  mocks.data.mockResolvedValue({ account_id: "account", user_id: "user", status: "pending" });
+});
+it("actual pending-user page preserves native authorization callback for both profile completion and skip", async () => {
+  renderToStaticMarkup(await OnboardingPage({ searchParams: Promise.resolve({ callbackUrl: nativeCallback }) }));
+  expect(mocks.form).toHaveBeenCalledWith(expect.objectContaining({ callbackUrl: nativeCallback, nextUrl: nativeCallback, edit: false }));
+});
+it("actual new workspace entry passes optional connections and preserves its original destination", async () => {
+  renderToStaticMarkup(await OnboardingPage({ searchParams: Promise.resolve({ callbackUrl: "/workspace/sessions?new=true" }) }));
+  expect(mocks.form).toHaveBeenCalledWith(expect.objectContaining({ nextUrl: "/workspace/connect?returnTo=%2Fworkspace%2Fsessions%3Fnew%3Dtrue" }));
+});
+it("edited profiles and returning users keep direct callbacks", async () => {
+  renderToStaticMarkup(await OnboardingPage({ searchParams: Promise.resolve({ callbackUrl: "/workspace/sessions", edit: "true" }) }));
+  expect(mocks.form).toHaveBeenCalledWith(expect.objectContaining({ nextUrl: "/workspace/sessions", edit: true }));
+  mocks.data.mockResolvedValue({ account_id: "account", user_id: "user", status: "completed" });
+  await expect(OnboardingPage({ searchParams: Promise.resolve({ callbackUrl: nativeCallback }) })).rejects.toThrow("redirect:");
+  expect(mocks.redirect).toHaveBeenCalledWith(nativeCallback);
+});

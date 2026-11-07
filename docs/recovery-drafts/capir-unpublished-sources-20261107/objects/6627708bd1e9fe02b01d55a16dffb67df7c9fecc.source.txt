@@ -1,0 +1,97 @@
+import Fastify from "fastify";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { registerRecurringJob } from "./recurringJob.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("registerRecurringJob", () => {
+  it("coalesces overlapping ticks and waits for the active tick on shutdown", async () => {
+    vi.useFakeTimers();
+    const app = Fastify();
+    let finish: (() => void) | undefined;
+    const run = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    registerRecurringJob(app, { name: "synthetic-sweep", intervalMs: 1_000, run });
+    await app.ready();
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    let closed = false;
+    const close = app.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+
+    finish?.();
+    await close;
+    expect(closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains metadata at preClose before later preClose hooks and stops future ticks", async () => {
+    vi.useFakeTimers();
+    const app = Fastify();
+    let finish!: () => void;
+    const events: string[] = [];
+    const run = vi.fn(async () => {
+      events.push("run");
+      await new Promise<void>(resolve => { finish = resolve; });
+      events.push("drained");
+    });
+    registerRecurringJob(app, { name: "metadata", intervalMs: 1_000, closePhase: "preClose", run });
+    app.addHook("preClose", async () => { events.push("later_preClose"); });
+    app.addHook("onClose", async () => { events.push("onClose"); });
+    await app.ready();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const closing = app.close();
+    try {
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(events).toEqual(["run"]);
+      expect(run).toHaveBeenCalledOnce();
+      finish();await closing;
+      expect(events).toEqual(["run", "drained", "later_preClose", "onClose"]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(run).toHaveBeenCalledOnce();
+    } finally { finish();await closing; }
+  });
+
+  it("logs a failed tick and allows the next tick to run", async () => {
+    vi.useFakeTimers();
+    const app = Fastify();
+    const error = new Error("synthetic failure");
+    const log = vi.spyOn(app.log, "error");
+    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(undefined);
+    registerRecurringJob(app, { name: "recovering-sweep", intervalMs: 1_000, run });
+    await app.ready();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(log).toHaveBeenCalledWith(
+      { err: error, recurringJob: "recovering-sweep" },
+      "Recurring backend job failed",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(run).toHaveBeenCalledTimes(2);
+
+    await app.close();
+  });
+
+  it("rejects invalid registration instead of creating an accidental hot loop", () => {
+    const app = Fastify();
+    expect(() =>
+      registerRecurringJob(app, { name: "", intervalMs: 1_000, run: () => {} }),
+    ).toThrow("A recurring job requires a name.");
+    expect(() =>
+      registerRecurringJob(app, { name: "invalid", intervalMs: 0, run: () => {} }),
+    ).toThrow("A recurring job interval must be positive.");
+  });
+});

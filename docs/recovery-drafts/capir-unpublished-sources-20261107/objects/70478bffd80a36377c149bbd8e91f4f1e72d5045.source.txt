@@ -1,0 +1,328 @@
+import CryptoKit
+import Foundation
+import XCTest
+@testable import TalentSignalMac
+
+final class LocalCapsuleStoreTests: XCTestCase {
+    private var directory: URL!
+    private var keys: TestCapsuleKeyProvider!
+    private var store: SecureLocalCapsuleStore!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-capsule-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        keys = TestCapsuleKeyProvider()
+        store = SecureLocalCapsuleStore(directory: directory, keyProvider: keys)
+    }
+
+    override func tearDownWithError() throws {
+        if FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
+    }
+
+    func testEncryptedRecoveryIsAccountPartitionedAndDoesNotSubmitOnLoad() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Reviewed local recovery text", now: now)
+        let itemID = try XCTUnwrap(draft.items.first?.id)
+        draft.setRetention(id: itemID, value: .twentyFourHours)
+
+        try store.save(draft, accountID: "account-a", now: now)
+
+        let recovered = try store.load(accountID: "account-a", now: now.addingTimeInterval(120))
+        let otherAccount = try store.load(accountID: "account-b", now: now.addingTimeInterval(120))
+        XCTAssertEqual(recovered.draft.items.map(\.preview), ["Reviewed local recovery text"])
+        XCTAssertEqual(recovered.expiredItemCount, 0)
+        XCTAssertTrue(otherAccount.draft.items.isEmpty)
+        XCTAssertNotEqual(keys.keys["account-a"], keys.keys["account-b"])
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertEqual(files.count, 1)
+        let encrypted = try Data(contentsOf: directory.appending(path: files[0]))
+        XCTAssertFalse(String(data: encrypted, encoding: .utf8)?.contains("Reviewed local recovery text") == true)
+    }
+
+    func testTTLExpiryDeletesExpiredDerivativeBeforeRecovery() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Expires locally", now: now)
+        let itemID = try XCTUnwrap(draft.items.first?.id)
+        draft.setRetention(id: itemID, value: .oneHour)
+        try store.save(draft, accountID: "account-a", now: now)
+
+        let recovered = try store.load(accountID: "account-a", now: now.addingTimeInterval(3_601))
+
+        XCTAssertTrue(recovered.draft.items.isEmpty)
+        XCTAssertEqual(recovered.expiredItemCount, 1)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    }
+
+    func testSignOutDeletionRemovesEncryptedFileAndAccountKey() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Delete on sign-out", now: now)
+        try store.save(draft, accountID: "account-a", now: now)
+
+        let receipt = try store.clear(accountID: "account-a", deleteKey: true)
+
+        XCTAssertTrue(receipt.deletedFile)
+        XCTAssertTrue(receipt.deletedKey)
+        XCTAssertNil(keys.keys["account-a"])
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    }
+
+    func testPreparedDraftIsEncryptedAccountScopedAndExpiresWithoutDeletingSource() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("PRIVATE_SOURCE_SENTINEL", now: now)
+        let itemID = try XCTUnwrap(draft.items.first?.id)
+        draft.setRetention(id: itemID, value: .twentyFourHours)
+        draft.localPreparedDraft = LocalPreparedDraftRecovery(
+            sourceItemID: itemID,
+            sourceDigest: "opaque-source-digest",
+            derivationVersion: ProvisionalFollowUpInsight.compilerVersion,
+            subject: "PRIVATE_SUBJECT_SENTINEL",
+            body: "PRIVATE_DRAFT_SENTINEL",
+            savedAt: now,
+            expiresAt: now.addingTimeInterval(3_600)
+        )
+
+        try store.save(draft, accountID: "account-a", now: now)
+
+        let recovered = try store.load(accountID: "account-a", now: now.addingTimeInterval(120))
+        let otherAccount = try store.load(accountID: "account-b", now: now.addingTimeInterval(120))
+        XCTAssertEqual(recovered.draft.localPreparedDraft?.body, "PRIVATE_DRAFT_SENTINEL")
+        XCTAssertEqual(
+            recovered.draft.localPreparedDraft?.derivationVersion,
+            ProvisionalFollowUpInsight.compilerVersion
+        )
+        XCTAssertNil(otherAccount.draft.localPreparedDraft)
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        let encrypted = try Data(contentsOf: directory.appending(path: try XCTUnwrap(files.first)))
+        let raw = String(data: encrypted, encoding: .utf8) ?? ""
+        XCTAssertFalse(raw.contains("PRIVATE_SOURCE_SENTINEL"))
+        XCTAssertFalse(raw.contains("PRIVATE_SUBJECT_SENTINEL"))
+        XCTAssertFalse(raw.contains("PRIVATE_DRAFT_SENTINEL"))
+
+        let afterDraftExpiry = try store.load(accountID: "account-a", now: now.addingTimeInterval(3_601))
+        XCTAssertNil(afterDraftExpiry.draft.localPreparedDraft)
+        XCTAssertEqual(afterDraftExpiry.draft.items.map(\.preview), ["PRIVATE_SOURCE_SENTINEL"])
+    }
+
+    func testProcessedFileBytesAndDerivativeAreEncryptedAndExpireTogether() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        let rawFile = Data("PRIVATE_RAW_FILE_SENTINEL".utf8)
+        var draft = ContextCapsuleDraft()
+        draft.addProcessedFile(
+            displayName: "authorized-screenshot.png",
+            reviewedText: "PRIVATE_FILE_DERIVATIVE_SENTINEL",
+            rawData: rawFile,
+            mediaType: "image/png",
+            acquisition: "Explicit file picker or drop · local Vision OCR",
+            sourceFingerprint: "opaque-file-fingerprint",
+            now: now
+        )
+        let itemID = try XCTUnwrap(draft.items.first?.id)
+        draft.setRetention(id: itemID, value: .oneHour)
+
+        try store.save(draft, accountID: "account-a", now: now)
+
+        let recovered = try store.load(accountID: "account-a", now: now.addingTimeInterval(120))
+        XCTAssertEqual(recovered.draft.items.first?.localAssetData, rawFile)
+        XCTAssertEqual(recovered.draft.items.first?.preview, "PRIVATE_FILE_DERIVATIVE_SENTINEL")
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        let encrypted = try Data(contentsOf: directory.appending(path: try XCTUnwrap(files.first)))
+        let rawEnvelope = String(data: encrypted, encoding: .utf8) ?? ""
+        XCTAssertFalse(rawEnvelope.contains("PRIVATE_RAW_FILE_SENTINEL"))
+        XCTAssertFalse(rawEnvelope.contains("PRIVATE_FILE_DERIVATIVE_SENTINEL"))
+
+        let expired = try store.load(accountID: "account-a", now: now.addingTimeInterval(3_601))
+        XCTAssertTrue(expired.draft.items.isEmpty)
+        XCTAssertEqual(expired.expiredItemCount, 1)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    }
+
+    func testWorkflowOwnershipRoundTripsEncryptedWithExactBindingsAndOriginalExpiry() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("PRIVATE_RESTART_SOURCE_TEXT", now: now)
+        let sourceID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: sourceID, value: .candidate)
+        draft.confirmAttribution(id: sourceID, now: now)
+        draft.addFile(url: URL(fileURLWithPath: "/tmp/unrelated-local.txt"), size: 4, now: now)
+        let record = try XCTUnwrap(draft.capturedWorkflowOwnershipRecord(
+            accountID: "account-restart",
+            operationID: "operation-restart",
+            selectedSourceIDs: [sourceID],
+            now: now
+        ))
+        draft.workflowOwnerships = [record]
+
+        try store.save(draft, accountID: "account-restart", now: now.addingTimeInterval(60))
+
+        // A fresh store instance is the restart boundary.
+        let restarted = SecureLocalCapsuleStore(directory: directory, keyProvider: keys)
+        let recovery = try restarted.load(accountID: "account-restart", now: now.addingTimeInterval(120))
+
+        let restored = try XCTUnwrap(recovery.draft.workflowOwnerships)
+        XCTAssertEqual(restored, [record], "Restart restores the exact account/workflow/operation/source bindings.")
+        XCTAssertEqual(restored[0].accountID, "account-restart")
+        XCTAssertEqual(restored[0].operationID, "operation-restart")
+        XCTAssertEqual(restored[0].workflowID, "")
+        XCTAssertEqual(restored[0].capturedAt, now)
+        XCTAssertEqual(restored[0].expiresAt, record.expiresAt, "The original expiry is retained; persistence never extends it.")
+        XCTAssertEqual(restored[0].sources.map(\.sourceID), [sourceID])
+        XCTAssertEqual(restored[0].sources.map(\.immutableHash), record.sources.map(\.immutableHash))
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertEqual(files.count, 1)
+        let encrypted = try Data(contentsOf: directory.appending(path: try XCTUnwrap(files.first)))
+        let raw = String(data: encrypted, encoding: .utf8) ?? ""
+        XCTAssertFalse(raw.contains("PRIVATE_RESTART_SOURCE_TEXT"), "No plaintext source shadow is written.")
+        XCTAssertFalse(raw.contains("operation-restart"), "Ownership metadata is encrypted with the Capsule payload.")
+
+        // Restart terminal cleanup can target exactly this workflow.
+        var retiring = recovery.draft
+        let ownership = CapsuleWorkflowOwnership(record: record, runtimeID: UUID())
+        let removed = retiring.retireWorkflowTaskOnlyItems(ownedBy: ownership, survivingOwnerships: [])
+        XCTAssertEqual(removed, 1)
+        XCTAssertFalse(retiring.items.contains { $0.id == sourceID })
+        XCTAssertTrue(retiring.items.contains { $0.displayName == "unrelated-local.txt" })
+    }
+
+    func testLegacyPayloadWithoutOwnershipDecodesEmptyAndExpiresLawfully() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        let itemID = UUID()
+        let legacyDraft: [String: Any] = [
+            "id": UUID().uuidString.lowercased(),
+            "version": 3,
+            "purpose": "Legacy payload without any workflow ownership metadata.",
+            "items": [[
+                "id": itemID.uuidString.lowercased(),
+                "kind": "Selected text",
+                "displayName": "User-selected text",
+                "preview": "LEGACY_PRIVATE_TEXT",
+                "acquisition": "Explicit text entry",
+                "capturedAt": now.timeIntervalSinceReferenceDate,
+                "localOnly": false,
+                "retention": "taskOnly",
+                "redactionCount": 0
+            ]] as [[String: Any]]
+        ]
+        let envelope: [String: Any] = [
+            "savedAt": now.timeIntervalSinceReferenceDate,
+            "draft": legacyDraft
+        ]
+        let clear = try JSONSerialization.data(withJSONObject: envelope)
+        let sealed = try AES.GCM.seal(
+            clear,
+            using: SymmetricKey(data: try keys.key(accountID: "account-legacy"))
+        )
+        let file = storeFileURL(accountID: "account-legacy")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try XCTUnwrap(sealed.combined).write(to: file, options: .atomic)
+
+        let recovered = try store.load(accountID: "account-legacy", now: now.addingTimeInterval(60))
+        XCTAssertNil(
+            recovered.draft.workflowOwnerships,
+            "Legacy unknown bindings stay unknown: ownership is never guessed for unbound assets."
+        )
+        XCTAssertEqual(recovered.draft.items.map(\.id), [itemID])
+
+        // Lawful expiry under the ORIGINAL item TTL only; no global purge and
+        // no ownership invented on the way out.
+        let later = try store.load(accountID: "account-legacy", now: now.addingTimeInterval(3_601))
+        XCTAssertTrue(later.draft.items.isEmpty)
+        XCTAssertEqual(later.expiredItemCount, 1)
+        XCTAssertNil(later.draft.workflowOwnerships)
+    }
+
+    func testOwnershipPruningNeverExtendsItemLifetimeOrPurgesUnrelatedItems() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Bound one-hour source.", now: now)
+        let boundID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: boundID, value: .candidate)
+        draft.confirmAttribution(id: boundID, now: now)
+        draft.addSelectedText("Unrelated day-long local source.", now: now)
+        let unrelatedID = try XCTUnwrap(draft.items.last?.id)
+        draft.setRetention(id: unrelatedID, value: .twentyFourHours)
+        draft.workflowOwnerships = [try XCTUnwrap(draft.capturedWorkflowOwnershipRecord(
+            accountID: "account-ttl",
+            operationID: "operation-ttl",
+            selectedSourceIDs: [boundID],
+            now: now
+        ))]
+
+        try store.save(draft, accountID: "account-ttl", now: now.addingTimeInterval(10))
+
+        let recovery = try store.load(accountID: "account-ttl", now: now.addingTimeInterval(3_601))
+
+        XCTAssertFalse(recovery.draft.items.contains { $0.id == boundID }, "The one-hour source keeps its original TTL.")
+        XCTAssertTrue(
+            recovery.draft.items.contains { $0.id == unrelatedID },
+            "An unrelated item with a longer original lifetime is never purged globally."
+        )
+        XCTAssertNil(recovery.draft.workflowOwnerships, "Ownership expires with its source, never later.")
+    }
+
+    func testSavedOwnershipSurvivesUntilItsExactWorkflowRetires() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Workflow-owned source.", now: now)
+        let sourceID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: sourceID, value: .candidate)
+        draft.confirmAttribution(id: sourceID, now: now)
+        let record = try XCTUnwrap(draft.capturedWorkflowOwnershipRecord(
+            accountID: "account-retry",
+            operationID: "operation-retry",
+            selectedSourceIDs: [sourceID],
+            now: now
+        ))
+        draft.workflowOwnerships = [record]
+        try store.save(draft, accountID: "account-retry", now: now.addingTimeInterval(10))
+
+        // A cleanup that could not persist keeps its retry authority on disk:
+        // only a save that also removes the spent record retires it.
+        let first = try store.load(accountID: "account-retry", now: now.addingTimeInterval(20))
+        XCTAssertEqual(first.draft.workflowOwnerships?.map(\.operationID), ["operation-retry"])
+
+        var retired = first.draft
+        let removed = retired.retireWorkflowTaskOnlyItems(
+            ownedBy: CapsuleWorkflowOwnership(record: record, runtimeID: UUID()),
+            survivingOwnerships: []
+        )
+        XCTAssertEqual(removed, 1)
+        retired.workflowOwnerships = (retired.workflowOwnerships ?? []).filter {
+            $0.operationID != record.operationID
+        }
+        try store.save(retired, accountID: "account-retry", now: now.addingTimeInterval(30))
+
+        let after = try store.load(accountID: "account-retry", now: now.addingTimeInterval(40))
+        XCTAssertNil(after.draft.workflowOwnerships)
+        XCTAssertTrue(after.draft.items.isEmpty)
+    }
+
+    private func storeFileURL(accountID: String) -> URL {
+        let digest = SHA256.hash(data: Data(accountID.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appending(path: "\(digest).capsule")
+    }
+}
+
+private final class TestCapsuleKeyProvider: CapsuleKeyProviding, @unchecked Sendable {
+    var keys: [String: Data] = [:]
+
+    func key(accountID: String) throws -> Data {
+        if let existing = keys[accountID] { return existing }
+        let generated = Data(repeating: UInt8(keys.count + 1), count: 32)
+        keys[accountID] = generated
+        return generated
+    }
+
+    func deleteKey(accountID: String) throws -> Bool {
+        keys.removeValue(forKey: accountID) != nil
+    }
+}

@@ -1,0 +1,39 @@
+/**
+ * Authoritative workspace directory load-state projection.
+ *
+ * The people sidebar renders an asynchronous directory that can be loading,
+ * failed, settled-empty or settled with people. A zero link count alone cannot
+ * tell "verified empty" apart from "still hydrating" or "read failed", so the
+ * sidebar publishes exactly one inspectable load-state element and the entry
+ * verifier (`apps/cli/src/browser-runner.ts`) requires a settled state before
+ * it records any empty-directory claim.
+ */
+
+export type WorkspaceDirectoryLoadState = "loading" | "error" | "ready";
+
+/** DOM contract consumed by the CLI entry verifier; keep names in sync. */
+export const PEOPLE_DIRECTORY_STATE_ATTRIBUTE = "data-people-directory-state";
+export const PEOPLE_DIRECTORY_COUNT_ATTRIBUTE = "data-people-count";
+
+/**
+ * Loading wins over error while a read is in flight; a snapshot that failed
+ * after a successful read reports "error", never a stale "ready".
+ */
+export function workspaceDirectoryLoadState(input: {
+  loading: boolean;
+  failed: boolean;
+}): WorkspaceDirectoryLoadState {
+  if (input.loading) return "loading";
+  return input.failed ? "error" : "ready";
+}
+
+/** Attributes for the single element that publishes the settled state. */
+export function peopleDirectoryStateAttributes(
+  state: WorkspaceDirectoryLoadState,
+  peopleCount: number,
+) {
+  return {
+    [PEOPLE_DIRECTORY_STATE_ATTRIBUTE]: state,
+    [PEOPLE_DIRECTORY_COUNT_ATTRIBUTE]: String(peopleCount),
+  } as const;
+}

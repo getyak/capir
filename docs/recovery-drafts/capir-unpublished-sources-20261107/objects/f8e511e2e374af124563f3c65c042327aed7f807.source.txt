@@ -1,0 +1,379 @@
+import { captureCurrentReaderAuthority, assertServingAuthority, type ServingAuthorityResolver } from "./legacyChatAuthority.js";
+import { createHash } from "node:crypto";
+
+import {
+  CONTRACT_VERSION,
+  type PersonResearchTaskRequest,
+  type PersonResearchTaskResponse,
+} from "@talent-signal/contracts";
+import type { Pool } from "pg";
+
+import { inTransaction } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import { appendAudit } from "../lib/audit.js";
+import {
+  claimIdempotency,
+  completeIdempotency,
+} from "../lib/idempotency.js";
+import type { AuthContext } from "./auth.js";
+import type { PersonResearchAgentProviding } from "./personResearchAgentClient.js";
+import {
+  personResearchRunID,
+  personResearchRunIDV2,
+  runPersonResearchChatIngress,
+} from "./personResearchChatIngress.js";
+import {
+  admitAuthorityClocks,
+  admitLifecycleTask,
+  assertLifecycleAttemptCurrent,
+  assertOriginalAuthorityCurrent,
+  withOriginalAuthorityFinalization,
+  composeLifecycleSignals,
+  finishLifecycleAttempt,
+  lifecycleInProgressError,
+  lifecycleRecoveryRequiredError,
+  markLifecycleDispatched,
+  markLifecycleUsageUncertain,
+  registerLifecycleRun,
+  releaseLifecycleRun,
+  startLifecycleHeartbeat,
+} from "./legacyChatLifecycle.js";
+
+export interface PersonResearchTaskMutationResult {
+  body: PersonResearchTaskResponse;
+  replayed: boolean;
+  status: number;
+}
+
+function imageBytes(request: PersonResearchTaskRequest): Uint8Array {
+  const decoded = Buffer.from(request.image.data_base64, "base64");
+  const canonicalBase64 = decoded.toString("base64");
+  const contentHash = createHash("sha256").update(decoded).digest("hex");
+  if (
+    canonicalBase64 !== request.image.data_base64 ||
+    decoded.byteLength !== request.image.byte_size ||
+    contentHash !== request.image.content_hash
+  ) {
+    throw new ApiError(
+      400,
+      "PERSON_RESEARCH_IMAGE_MISMATCH",
+      "The screenshot bytes do not match the declared size and content hash.",
+    );
+  }
+  return decoded;
+}
+
+function requestIdentity(request: PersonResearchTaskRequest): {
+  objective_hash: string;
+  image: {
+    media_type: PersonResearchTaskRequest["image"]["media_type"];
+    byte_size: number;
+    content_hash: string;
+  };
+} {
+  return {
+    objective_hash: createHash("sha256")
+      .update(request.objective)
+      .digest("hex"),
+    image: {
+      media_type: request.image.media_type,
+      byte_size: request.image.byte_size,
+      content_hash: request.image.content_hash,
+    },
+  };
+}
+
+export async function executePersonResearchTask(input: {
+  accountID: string;
+  request: PersonResearchTaskRequest;
+  provider: PersonResearchAgentProviding;
+  createdAt?: Date;
+  /** Host-owned attempt task identity; never accepted from the public request. */
+  taskID?: string;
+  /** Real request-owned cancellation for the provider socket. */
+  signal?: AbortSignal;
+  /** Durable dispatch evidence recorded at the actual provider entry only. */
+  onProviderDispatch?: () => Promise<void>;
+  assertExecutionCurrent?: () => Promise<void>;
+}): Promise<PersonResearchTaskResponse> {
+  const data = imageBytes(input.request);
+  const taskID = input.taskID ?? personResearchRunID(
+    input.accountID,
+    input.request.idempotency_key,
+  );
+  const research = await runPersonResearchChatIngress({
+    provider: input.provider,
+    media: [{
+      id: "request-image",
+      media_type: input.request.image.media_type,
+    }],
+    loadMedia: async (mediaID) => {
+      if (mediaID !== "request-image") {
+        throw new Error("The person-research Run requested unknown media.");
+      }
+      return data;
+    },
+    runID: taskID,
+    objective: input.request.objective,
+    ...(input.signal ? { signal: input.signal } : {}),
+    ...(input.onProviderDispatch ? { onDispatch: input.onProviderDispatch } : {}),
+    ...(input.assertExecutionCurrent ? { assertCurrent: input.assertExecutionCurrent } : {}),
+  });
+  if (!research.block || research.status === "disabled") {
+    throw new ApiError(
+      503,
+      "PERSON_RESEARCH_DISABLED",
+      "Screenshot public-profile research is not enabled for this workspace.",
+    );
+  }
+  const disposition: PersonResearchTaskResponse["disposition"] =
+    research.status === "completed"
+      ? "answer"
+      : research.status === "no_action"
+        ? "no_action"
+        : "unavailable";
+  return {
+    contract_version: CONTRACT_VERSION,
+    task_id: taskID,
+    disposition,
+    blocks: [research.block],
+    source_image: {
+      media_type: input.request.image.media_type,
+      byte_size: input.request.image.byte_size,
+      content_hash: input.request.image.content_hash,
+      persisted: false,
+    },
+    external_effects: [],
+    created_at: (input.createdAt ?? new Date()).toISOString(),
+  };
+}
+
+export interface PersonResearchRunOptions {
+  servingAuthority?: ServingAuthorityResolver;
+  /** Real request-aborted / unfinished-response-close cancellation. */
+  signal?: AbortSignal;
+  /** Host product observation; bound before dispatch, finalized without onSend. */
+  observation?: import("./productRuns.js").ProductObservationHandle;
+  /** Original admitted execution authority for this attempt. */
+  executionAuthorityExpiresAt?: Date | null;
+  /** Immutable original content/source retention; never renewed by retry. */
+  canonicalRetentionExpiresAt?: Date | null;
+}
+
+export async function createPersonResearchTask(
+  pool: Pool,
+  auth: AuthContext,
+  request: PersonResearchTaskRequest,
+  provider: PersonResearchAgentProviding | null,
+  options: PersonResearchRunOptions = {},
+): Promise<PersonResearchTaskMutationResult> {
+  let servingSnapshot = await inTransaction(pool, client => captureCurrentReaderAuthority(client, auth, options.servingAuthority));
+  const assertServingCurrent = () => assertServingAuthority(servingSnapshot, options.servingAuthority);
+  if (!provider) {
+    throw new ApiError(
+      503,
+      "PERSON_RESEARCH_DISABLED",
+      "Screenshot public-profile research is not enabled for this workspace.",
+    );
+  }
+  // Phase 1: short admission. The v1 run identity keeps existing completed
+  // receipts stable; each explicit retry gets a distinct v2 namespaced identity.
+  const admission = await inTransaction(pool, async (client) => {
+    await captureCurrentReaderAuthority(client, auth, options.servingAuthority);
+    const admitted = await admitLifecycleTask(client, {
+      clocks: async () => {
+        const clocks = await admitAuthorityClocks(client, auth, { sessionID: null }, options.servingAuthority);
+        if (clocks.originalAuthority) servingSnapshot = clocks.originalAuthority;
+        return clocks;
+      },
+      auth,
+      operation: "create_person_research_task",
+      request: requestIdentity(request),
+      idempotencyKey: request.idempotency_key,
+      authSessionID: auth.sessionId,
+      // Every NEW admitted attempt uses the V2 account+actor+intent+attempt
+      // namespace, including generation 1. Early COMPLETED V1 receipts stay
+      // unchanged through the legacy replay branch above.
+      taskID: (_fencingGeneration, intentID, attemptID) =>
+        personResearchRunIDV2(auth.accountId, auth.userId, intentID, attemptID),
+      replayCheck: async (replay) => {
+        const prior = replay.body as PersonResearchTaskResponse;
+        if (
+          !prior ||
+          typeof prior !== "object" ||
+          !("source_image" in prior) ||
+          (prior.task_id !== personResearchRunID(auth.accountId, request.idempotency_key)
+            && !legacy_chat_task_replay_identity(prior.task_id))
+        ) {
+          throw new ApiError(
+            409,
+            "IDEMPOTENCY_STATE_UNAVAILABLE",
+            "The prior screenshot research task could not be resolved.",
+          );
+        }
+      },
+    });
+    await captureCurrentReaderAuthority(client, auth, options.servingAuthority);
+    if (!admitted.replay && admitted.kind !== "in_progress" && admitted.kind !== "recovery_required" && options.observation) {
+      await options.observation.bindTask(client, admitted.identity.taskID, admitted.identity.attemptID);
+    }
+    return admitted;
+  });
+  assertServingCurrent();
+  if (admission.kind === "in_progress") throw lifecycleInProgressError(admission.identity);
+  if (admission.kind === "recovery_required") {
+    throw lifecycleRecoveryRequiredError(admission.identity, admission.reason ?? "execution_unknown");
+  }
+  if (admission.replay) {
+    return {
+      body: admission.replay.body as PersonResearchTaskResponse,
+      replayed: true,
+      status: admission.replay.status,
+    };
+  }
+  const identity = admission.identity;
+  const runController = new AbortController();
+  let settle!: () => void;
+  const settled = new Promise<void>((resolve) => { settle = resolve; });
+  registerLifecycleRun(identity, runController, settled);
+  const stopHeartbeat = startLifecycleHeartbeat(pool, auth, identity, runController, undefined, options.servingAuthority);
+  let cancelling: Promise<void> | null = null;
+  const markCancelling = () => {
+    cancelling ??= inTransaction(pool, async (client) => {
+      await client.query(`UPDATE legacy_chat_task_attempts SET state='cancelling'
+        WHERE account_id=$1 AND id=$2 AND fencing_generation=$3 AND state IN ('admitted','running')`,
+        [auth.accountId, identity.attemptID, identity.fencingGeneration]);
+      await client.query(`UPDATE legacy_chat_task_intents SET state='cancelling',revision=revision+1,updated_at=now()
+        WHERE id=$1 AND current_attempt_id=$2 AND fencing_generation=$3 AND state IN ('admitted','running')`,
+        [identity.intentID, identity.attemptID, identity.fencingGeneration]);
+    }).catch(() => undefined);
+    return cancelling;
+  };
+  const composed = composeLifecycleSignals([options.signal, runController.signal], () => { void markCancelling(); });
+  const assertExecutionCurrent = async (client?: Parameters<typeof assertOriginalAuthorityCurrent>[0]) => {
+    if (composed.signal.aborted) throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+    if (client) await assertOriginalAuthorityCurrent(client, auth, identity, options.servingAuthority);
+    else await inTransaction(pool, (owned) => assertOriginalAuthorityCurrent(owned, auth, identity, options.servingAuthority));
+    assertServingCurrent();
+    if (composed.signal.aborted) throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+  };
+  const settleFailure = async (state: "cancelled" | "failed_retryable", reason: string) => {
+    await markCancelling().catch(() => undefined);
+    await inTransaction(pool, (client) => finishLifecycleAttempt(client, {
+      accountID: auth.accountId, identity, state, terminalReason: reason,
+    })).catch(() => undefined);
+    stopHeartbeat();
+    releaseLifecycleRun(identity.attemptID);
+    composed.dispose();
+    settle();
+  };
+  let entered = false;
+  // Phase 2: provider execution holds no database connection; the submitted
+  // image stays request-owned and is never persisted by this path.
+  let body: PersonResearchTaskResponse;
+  try {
+    body = await executePersonResearchTask({
+      accountID: auth.accountId,
+      request,
+      provider,
+      taskID: identity.taskID,
+      signal: composed.signal,
+      assertExecutionCurrent,
+      onProviderDispatch: async () => {
+        await inTransaction(pool, async (client) => {
+          await assertExecutionCurrent(client);
+          await markLifecycleDispatched(client, auth.accountId, identity);
+        });
+        entered = true;
+      },
+    });
+  } catch (error) {
+    if (composed.signal.aborted || runController.signal.aborted) await settleFailure("cancelled", "request_cancelled");
+    else await settleFailure("failed_retryable", "execution_failed");
+    throw error;
+  }
+  if (composed.signal.aborted || runController.signal.aborted) {
+    await settleFailure("cancelled", "request_cancelled");
+    throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+  }
+  // Phase 3: one short fenced final transaction. The owner stays registered
+  // and heartbeating until this awaited COMMIT resolves or the fenced failed
+  // settlement completes below.
+  const finalizeTransaction = () => inTransaction(pool, async (client) => withOriginalAuthorityFinalization(client, auth, identity, async () => {
+    await assertLifecycleAttemptCurrent(client, auth.accountId, identity);
+    // An entered Person producer that produced no usable answer keeps truthful
+    // monotonic usage uncertainty even though the canonical fallback completes.
+    if (entered && body.disposition === "unavailable") {
+      await markLifecycleUsageUncertain(client, auth.accountId, identity);
+    }
+    if (composed.signal.aborted || runController.signal.aborted) {
+      throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+    }
+    const finished = await finishLifecycleAttempt(client, {
+      accountID: auth.accountId,
+      identity,
+      state: "completed",
+    });
+    if (!finished) throw new ApiError(409, "LEGACY_CHAT_ATTEMPT_FENCED", "A newer attempt owns this work. Reload its current state.");
+    const block = body.blocks[0];
+    await appendAudit(
+      client,
+      { accountId: auth.accountId, actorUserId: auth.userId },
+      "person_research_task.completed",
+      "person_research_task",
+      body.task_id,
+      {
+        disposition: body.disposition,
+        image_media_type: body.source_image.media_type,
+        image_byte_size: body.source_image.byte_size,
+        image_content_hash: body.source_image.content_hash,
+        raw_image_persisted: false,
+        public_source_count: block?.public_source_refs?.length ?? 0,
+        external_effect_count: 0,
+      },
+    );
+    await completeIdempotency(client, { id: admission.idempotencyRecordID, replay: null }, 201, body);
+    if (options.observation) {
+      await options.observation.finalize(client, {
+        taskID: identity.taskID,
+        status: body.disposition === "unavailable" ? "fallback" : "completed",
+        output: body as unknown as Record<string, unknown>,
+      });
+    }
+    // Post-await late-effect fence: a cancel/disconnect observed after the last
+    // final write still rolls this transaction back; no completed receipt.
+    if (composed.signal.aborted || runController.signal.aborted) {
+      throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+    }
+    return { body, replayed: false, status: 201 };
+  }, () => {
+    if (composed.signal.aborted || runController.signal.aborted) throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+  }, options.servingAuthority));
+  const finishOwner = () => { stopHeartbeat(); releaseLifecycleRun(identity.attemptID); composed.dispose(); settle(); };
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const outcome = await finalizeTransaction();
+      options.observation?.markCommitted?.();
+      finishOwner();
+      return outcome;
+    } catch (error) {
+      lastError = error;
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      if (code !== "40001" && code !== "40P01") break;
+    }
+  }
+  // Any audit, observation, completion or COMMIT failure enters the fenced
+  // settlement: no completed canonical receipt, owner released once.
+  if (composed.signal.aborted || runController.signal.aborted) {
+    await settleFailure("cancelled", "request_cancelled");
+  } else {
+    await settleFailure("failed_retryable", "finalization_failed");
+  }
+  throw lastError;
+}
+
+/** Old completed receipts and v2 attempt identities both resolve honestly. */
+function legacy_chat_task_replay_identity(taskID: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(taskID);
+}

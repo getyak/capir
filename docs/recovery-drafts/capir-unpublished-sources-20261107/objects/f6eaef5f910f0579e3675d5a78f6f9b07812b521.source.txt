@@ -1,0 +1,169 @@
+import { describe, expect, it } from "vitest";
+
+import { ApiError } from "../lib/apiError.js";
+import {
+  assertQueryTimeScope,
+  assertTimeScope,
+  decodeTimeActivityCursor,
+  encodeTimeActivityCursor,
+  isValidCalendarDay,
+  isValidTimeZone,
+  timeActivityFingerprint,
+  timeActivityFromContentRow,
+  timeScopeFingerprint,
+  type TimeActivityContentRow,
+} from "./timeWorkspaceShared.js";
+
+function contentRow(
+  overrides: Partial<TimeActivityContentRow> = {},
+): TimeActivityContentRow {
+  return {
+    activity_id: "schedule:11111111-1111-4111-8111-111111111111",
+    kind: "schedule",
+    source_id: "11111111-1111-4111-8111-111111111111",
+    source_revision: 2,
+    title: "Weekly sync",
+    summary: "Planned review",
+    occurred_at: new Date("2026-03-08T05:00:00.000Z"),
+    recorded_at: new Date("2026-03-01T00:00:00.000Z"),
+    ends_at: new Date("2026-03-08T06:00:00.000Z"),
+    local_day: "2026-03-08",
+    person_id: null,
+    person_label: null,
+    relationship_context_id: null,
+    context_label: null,
+    session_id: null,
+    status: "planned",
+    authority: "user_authored",
+    all_day: false,
+    ...overrides,
+  };
+}
+
+describe("time workspace scope validation", () => {
+  it("accepts real calendar dates and rejects impossible ones", () => {
+    expect(isValidCalendarDay("2026-02-28")).toBe(true);
+    expect(isValidCalendarDay("2026-02-30")).toBe(false);
+    expect(isValidCalendarDay("2026-13-01")).toBe(false);
+    expect(isValidCalendarDay("2026-2-1")).toBe(false);
+  });
+
+  it("validates IANA time zones", () => {
+    expect(isValidTimeZone("America/New_York")).toBe(true);
+    expect(isValidTimeZone("UTC")).toBe(true);
+    expect(isValidTimeZone("Not/AZone")).toBe(false);
+    expect(isValidTimeZone("")).toBe(false);
+  });
+
+  it("accepts multi-year scopes with an exclusive upper bound", () => {
+    const scope = assertTimeScope({
+      from: "2026-01-01",
+      to: "2026-04-04",
+      time_zone: "UTC",
+    });
+    expect(scope.to).toBe("2026-04-04");
+    expect(assertTimeScope({
+      from: "2020-01-01", to: "2027-01-01", time_zone: "UTC",
+    }).to).toBe("2027-01-01");
+    expect(() =>
+      assertTimeScope({ from: "2026-01-01", to: "2026-01-01", time_zone: "UTC" }),
+    ).toThrowError(ApiError);
+  });
+
+  it("rejects an invalid timezone or date through the query adapter", () => {
+    expect(() =>
+      assertQueryTimeScope({
+        from: "2026-01-01",
+        to: "2026-01-02",
+        time_zone: "Mars/Olympus",
+      }),
+    ).toThrowError(ApiError);
+    expect(
+      assertQueryTimeScope({
+        from: "2026-01-01",
+        to: "2026-01-02",
+        time_zone: "UTC",
+        kind: "schedule",
+      }).kind,
+    ).toBe("schedule");
+  });
+
+  it("binds a scope fingerprint to the full query shape", () => {
+    const base = assertTimeScope({
+      from: "2026-01-01",
+      to: "2026-01-31",
+      time_zone: "UTC",
+    });
+    expect(timeScopeFingerprint(base)).toBe(
+      timeScopeFingerprint({ ...base }),
+    );
+    expect(timeScopeFingerprint(base)).not.toBe(
+      timeScopeFingerprint({ ...base, time_zone: "America/New_York" }),
+    );
+    expect(timeScopeFingerprint(base)).not.toBe(
+      timeScopeFingerprint({ ...base, kind: "schedule" }),
+    );
+  });
+});
+
+describe("time activity cursors", () => {
+  it("round trips a bound cursor", () => {
+    const cursor = {
+      v: 1 as const,
+      scope_fingerprint: "a".repeat(64),
+      snapshot_id: "22222222-2222-4222-8222-222222222222",
+      before_us: "1700000000000000",
+      before_activity_id: "schedule:22222222-2222-4222-8222-222222222222",
+    };
+    expect(decodeTimeActivityCursor(encodeTimeActivityCursor(cursor))).toEqual(
+      cursor,
+    );
+  });
+
+  it("fails closed on an unknown or malformed cursor", () => {
+    expect(() => decodeTimeActivityCursor("not-a-cursor")).toThrowError(ApiError);
+    expect(() =>
+      decodeTimeActivityCursor(
+        Buffer.from(JSON.stringify({ v: 2 }), "utf8").toString("base64url"),
+      ),
+    ).toThrowError(ApiError);
+  });
+});
+
+describe("time activity mapping", () => {
+  it("preserves authority, explicit status, and a truthful local day", () => {
+    const scope = assertTimeScope({
+      from: "2026-03-01",
+      to: "2026-04-01",
+      time_zone: "America/New_York",
+    });
+    const activity = timeActivityFromContentRow(contentRow(), scope);
+    expect(activity.id).toBe(
+      "schedule:11111111-1111-4111-8111-111111111111",
+    );
+    expect(activity.authority).toBe("user_authored");
+    expect(activity.external_effect).toBe("none");
+    expect(activity.local_day).toBe("2026-03-08");
+    expect(activity.time_zone).toBe("America/New_York");
+    expect(activity.status).toBe("planned");
+  });
+
+  it("fingerprints identity, revision, authority, and occurrence", () => {
+    const scope = assertTimeScope({
+      from: "2026-03-01",
+      to: "2026-04-01",
+      time_zone: "UTC",
+    });
+    const base = timeActivityFromContentRow(contentRow(), scope);
+    const changed = timeActivityFromContentRow(
+      contentRow({ source_revision: 3 }),
+      scope,
+    );
+    expect(timeActivityFingerprint([base])).toBe(
+      timeActivityFingerprint([{ ...base }]),
+    );
+    expect(timeActivityFingerprint([base])).not.toBe(
+      timeActivityFingerprint([changed]),
+    );
+  });
+});

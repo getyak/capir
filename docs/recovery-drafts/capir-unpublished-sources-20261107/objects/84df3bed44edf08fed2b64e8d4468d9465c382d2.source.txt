@@ -1,0 +1,115 @@
+// Trusted protocol driver. This process runs only in a fresh network-none
+// container. Page scripts never receive Node handles or a host API binding.
+import { chromium } from "playwright";
+import { createInterface } from "node:readline";
+const send = value => process.stdout.write(JSON.stringify(value) + "\n");
+const startedAt = performance.now();
+const trace = phase => send({ kind: "phase", phase, elapsedMs: Math.round(performance.now() - startedAt) });
+const replies = new Map();
+let started = false, finishing = false, phase = "launch", sequence = 0, browser;
+const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+const deadline = setTimeout(() => process.exit(2), 25_000);
+input.on("close", () => { if (!finishing) process.exit(2); });
+input.on("line", line => {
+  if (line.length > 1_500_000) process.exit(2);
+  let message;
+  try { message = JSON.parse(line); } catch { process.exit(2); }
+  if (message.kind === "resource") {
+    const complete = replies.get(message.id);
+    if (complete) { replies.delete(message.id); complete(message); }
+  } else if (!started && message.kind === "navigate") {
+    started = true;
+    void run(message.url).catch(error => finish({ kind: "failure", code: "BROWSER_EXECUTION_FAILED", phase,
+      diagnostic: error instanceof Error ? error.message.slice(0, 1_000) : "Unknown renderer failure" }));
+  } else process.exit(2);
+});
+async function finish(result) {
+  if (finishing) return;
+  finishing = true;
+  for (const complete of replies.values()) complete({ ok: false });
+  replies.clear();
+  trace("close_started");
+  try { await browser?.close(); trace("close_completed"); }
+  catch { trace("close_failed"); }
+  clearTimeout(deadline);
+  await new Promise(resolve => process.stdout.write(JSON.stringify(result) + "\n", resolve));
+  process.exit(0);
+}
+async function run(url) {
+  // Container isolation is mandatory. Do not run this driver on the host or
+  // describe this configuration as Chromium's separate renderer sandbox.
+  trace("launch_started");
+  browser = await chromium.launch({ headless: true, chromiumSandbox: false });
+  trace("launch_completed");
+  const context = await browser.newContext({ serviceWorkers: "block", acceptDownloads: false,
+    permissions: [], viewport: { width: 1280, height: 900 } });
+  await context.routeWebSocket("**/*", socket => { send({ kind: "blocked", channel: "websocket" }); socket.close(); });
+  let page = await context.newPage(), creatingPage = false;
+  let redirectTarget = null;
+  page.on("dialog", dialog => void dialog.dismiss());
+  context.on("page", popup => { if (!creatingPage && popup !== page) void popup.close(); });
+  await context.route("**/*", async route => {
+    try {
+    if (finishing) { await route.abort().catch(() => {}); return; }
+    const request = route.request();
+    const id = ++sequence;
+    if (id > 40) {
+      // Report the exhausted budget and close Chromium before the terminal
+      // receipt. Do not keep counting silently and emit an invalid success.
+      void finish({ kind: "failure", code: "BROWSER_REQUEST_LIMIT", phase });
+      await route.abort().catch(() => {}); return;
+    }
+    const response = await new Promise(resolve => {
+      replies.set(id, resolve);
+      let mainFrame = false;
+      try { mainFrame = request.frame() === page.mainFrame(); } catch { /* Worker has no frame. */ }
+      send({ kind: "request", id, url: request.url(), method: request.method(),
+        resourceType: request.resourceType(), navigation: request.isNavigationRequest(),
+        mainFrame });
+    });
+    if (!response.ok) { await route.abort(); return; }
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      // A fulfilled redirect may bypass Playwright interception on the next
+      // request. Re-enter through an explicit, freshly intercepted navigation.
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        redirectTarget = response.headers.location;
+      } else send({ kind: "blocked", channel: "resource_redirect" });
+      await route.abort(); return;
+    }
+    await route.fulfill({ status: response.status, headers: response.headers,
+      body: Buffer.from(response.body, "base64") });
+    } catch (error) {
+      // Closing a page can invalidate a route after its reply was released.
+      // Active-run route errors still propagate through Playwright.
+      if (!finishing) throw error;
+    }
+  });
+  phase = "navigation";
+  trace("navigation_started");
+  let current = url;
+  for (let hop = 0; hop <= 3; hop++) {
+    redirectTarget = null;
+    try { await page.goto(current, { waitUntil: "domcontentloaded", timeout: 18_000 }); }
+    catch (error) { if (!redirectTarget) throw error; }
+    if (!redirectTarget) break;
+    if (hop === 3) throw new Error("BROWSER_REDIRECT_LIMIT");
+    current = redirectTarget;
+    // The aborted navigation may still commit Chromium's error page. Close
+    // that page before navigating the host-admitted redirect destination.
+    await page.close();
+    creatingPage = true;
+    page = await context.newPage();
+    creatingPage = false;
+    page.on("dialog", dialog => void dialog.dismiss());
+  }
+  phase = "render";
+  // Bound asynchronous rendering; an endless background poll cannot own a Run.
+  await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => {});
+  const observation = await page.evaluate(() => ({
+    title: document.title.slice(0, 500),
+    text: (document.body?.innerText ?? ""),
+  }));
+  trace("snapshot_completed");
+  await finish({ kind: "result", ...observation, url: page.url(), engine: "chromium",
+    engineVersion: browser.version(), requests: sequence });
+}

@@ -1,0 +1,483 @@
+import XCTest
+@testable import TalentSignalMac
+
+final class ContextCapsuleTests: XCTestCase {
+    func testFreezeIncludesOnlyReviewedSharedItemsAndPinsVersion() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Candidate explicitly moved the deadline to Wednesday.", now: now)
+        confirmCandidateAttribution(in: &draft, now: now)
+        draft.addFile(url: URL(fileURLWithPath: "/tmp/private-notes.txt"), size: 128, now: now)
+        let frozenVersion = draft.version
+
+        let manifest = try draft.freeze(
+            accountID: "account-1",
+            pursuitID: "pursuit-1",
+            personID: "person-1",
+            now: now
+        )
+
+        XCTAssertEqual(manifest.version, frozenVersion)
+        XCTAssertEqual(manifest.selectedItems.count, 1)
+        XCTAssertEqual(manifest.selectedItems.first?.kind, .selectedText)
+        XCTAssertFalse(manifest.selectedItems.contains { $0.displayName == "private-notes.txt" })
+
+        draft.addSelectedText("A later item belongs to a new task version.", now: now)
+        XCTAssertEqual(manifest.selectedItems.count, 1, "A submitted manifest must be immutable after the draft changes.")
+        XCTAssertNotEqual(draft.version, manifest.version)
+    }
+
+    func testSourceBoundFreezeCannotFallBackToAnEarlierReviewedItem() throws {
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Earlier evidence that was already reviewed.")
+        let earlierID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: earlierID, value: .candidate)
+        draft.confirmAttribution(id: earlierID)
+
+        draft.addSelectedText("Current evidence still needs source review.")
+        let currentID = try XCTUnwrap(draft.items.last?.id)
+
+        XCTAssertTrue(draft.canSubmit, "The earlier reviewed item remains eligible for a general Capsule submission.")
+        XCTAssertFalse(draft.canSubmit(sourceItemID: currentID))
+        XCTAssertThrowsError(
+            try draft.freeze(
+                accountID: "account-1",
+                pursuitID: "pursuit-1",
+                personID: "person-1",
+                sourceItemID: currentID
+            )
+        )
+
+        draft.setActorKind(id: currentID, value: .candidate)
+        draft.confirmAttribution(id: currentID)
+        let manifest = try draft.freeze(
+            accountID: "account-1",
+            pursuitID: "pursuit-1",
+            personID: "person-1",
+            sourceItemID: currentID
+        )
+
+        XCTAssertEqual(manifest.selectedItems.map(\.sourceID), [currentID.uuidString])
+        XCTAssertEqual(manifest.selectedItems.map(\.reviewedContent), ["Current evidence still needs source review."])
+        XCTAssertTrue(manifest.idempotencyKey.contains(currentID.uuidString))
+    }
+
+    func testLocalOnlyAndRetentionChangesCreateNewDraftVersions() {
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Explicit evidence")
+        let itemID = try! XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: itemID, value: .candidate)
+        draft.confirmAttribution(id: itemID)
+        let version = draft.version
+
+        draft.setLocalOnly(id: itemID, value: true)
+        XCTAssertGreaterThan(draft.version, version)
+        XCTAssertFalse(draft.canSubmit)
+
+        draft.setLocalOnly(id: itemID, value: false)
+        draft.setRetention(id: itemID, value: .oneHour)
+        XCTAssertEqual(draft.items.first?.retention, .oneHour)
+        XCTAssertTrue(draft.canSubmit)
+    }
+
+    func testEmptyOrEntirelyLocalCapsuleCannotSubmit() {
+        var draft = ContextCapsuleDraft()
+        XCTAssertThrowsError(try draft.freeze(accountID: "a", pursuitID: nil, personID: nil))
+        draft.addFile(url: URL(fileURLWithPath: "/tmp/local.pdf"), size: nil)
+        XCTAssertThrowsError(try draft.freeze(accountID: "a", pursuitID: nil, personID: nil))
+    }
+
+    func testExactTermRedactionChangesReviewedDerivativeAndManifest() throws {
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Jordan confirmed the meeting. Send Jordan the brief at jordan@example.test.")
+        let itemID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: itemID, value: .candidate)
+        draft.confirmAttribution(id: itemID)
+        let previousVersion = draft.version
+
+        let count = draft.redact(id: itemID, exactTerms: ["Jordan", "jordan@example.test"])
+        let manifest = try draft.freeze(accountID: "a", pursuitID: "p", personID: "person")
+
+        XCTAssertEqual(count, 3)
+        XCTAssertGreaterThan(draft.version, previousVersion)
+        XCTAssertEqual(draft.items.first?.redactionCount, 3)
+        XCTAssertFalse(manifest.selectedItems[0].reviewedContent.localizedCaseInsensitiveContains("Jordan"))
+        XCTAssertFalse(manifest.selectedItems[0].reviewedContent.contains("jordan@example.test"))
+        XCTAssertTrue(manifest.selectedItems[0].reviewedContent.contains("[REDACTED]"))
+    }
+
+    func testSystemSelectedWindowKeepsRawImageLocalAndSubmitsOnlyReviewedOCRDerivative() throws {
+        var draft = ContextCapsuleDraft()
+        let rawImage = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
+        draft.addWindowCapture(
+            recognizedText: "The candidate needs the exact remote-work policy before Wednesday.",
+            imagePNG: rawImage,
+            pixelWidth: 1200,
+            pixelHeight: 800,
+            sourceFingerprint: "synthetic-fingerprint"
+        )
+        let itemID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: itemID, value: .candidate)
+        draft.confirmAttribution(id: itemID)
+
+        XCTAssertTrue(draft.items[0].localOnly)
+        XCTAssertEqual(draft.items[0].localAssetData, rawImage)
+        XCTAssertFalse(draft.canSubmit)
+
+        draft.setLocalOnly(id: itemID, value: false)
+        let manifest = try draft.freeze(accountID: "a", pursuitID: "p", personID: "person")
+
+        XCTAssertTrue(draft.canSubmit)
+        XCTAssertEqual(manifest.selectedItems.count, 1)
+        XCTAssertEqual(manifest.selectedItems[0].kind, .window)
+        XCTAssertEqual(manifest.selectedItems[0].sourceFingerprint, "synthetic-fingerprint")
+        XCTAssertEqual(manifest.selectedItems[0].reviewedContent, "The candidate needs the exact remote-work policy before Wednesday.")
+        XCTAssertEqual(manifest.selectedItems[0].actorKind, .candidate)
+    }
+
+    func testRelationshipScopeDoesNotSilentlyConfirmSourceActor() {
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("I need the written remote policy before Wednesday.")
+        let itemID = try! XCTUnwrap(draft.items.first?.id)
+
+        XCTAssertNil(draft.items[0].actorKind)
+        XCTAssertNil(draft.items[0].attributionConfirmedAt)
+        XCTAssertFalse(draft.canSubmit)
+
+        draft.setActorKind(id: itemID, value: .candidate)
+        XCTAssertFalse(draft.canSubmit, "Choosing an actor is not the separate human confirmation.")
+
+        draft.confirmAttribution(id: itemID)
+        XCTAssertTrue(draft.canSubmit)
+
+        draft.setActorKind(id: itemID, value: .recruiter)
+        XCTAssertNil(draft.items[0].attributionConfirmedAt, "Changing the actor invalidates prior confirmation.")
+        XCTAssertFalse(draft.canSubmit)
+    }
+
+    func testWindowWithoutOCRAndFileCannotCrossUploadBoundary() {
+        var draft = ContextCapsuleDraft()
+        draft.addWindowCapture(
+            recognizedText: "",
+            imagePNG: Data([1, 2, 3]),
+            pixelWidth: 100,
+            pixelHeight: 100,
+            sourceFingerprint: "blank"
+        )
+        draft.addFile(url: URL(fileURLWithPath: "/tmp/local.pdf"), size: 10)
+
+        for id in draft.items.map(\.id) {
+            draft.setLocalOnly(id: id, value: false)
+        }
+
+        XCTAssertTrue(draft.items.allSatisfy(\.localOnly))
+        XCTAssertFalse(draft.canSubmit)
+    }
+
+    func testProcessedFileDerivativeStaysLocalUntilAttributionAndBoundaryReview() throws {
+        var draft = ContextCapsuleDraft()
+        draft.addProcessedFile(
+            displayName: "authorized-screenshot.png",
+            reviewedText: "Candidate needs the remote work policy before September 3, 2026.",
+            rawData: Data([1, 2, 3]),
+            mediaType: "image/png",
+            acquisition: "Explicit file picker or drop · local Vision OCR",
+            sourceFingerprint: "synthetic-file-fingerprint"
+        )
+        let itemID = try XCTUnwrap(draft.items.first?.id)
+
+        XCTAssertTrue(draft.items[0].hasReviewedTextDerivative)
+        XCTAssertTrue(draft.items[0].localOnly)
+        XCTAssertFalse(draft.canSubmit)
+
+        draft.setActorKind(id: itemID, value: .candidate)
+        draft.confirmAttribution(id: itemID)
+        draft.setLocalOnly(id: itemID, value: false)
+
+        let manifest = try draft.freeze(
+            accountID: "account-1",
+            pursuitID: "pursuit-1",
+            personID: "person-1"
+        )
+        XCTAssertEqual(manifest.selectedItems.map(\.reviewedContent), [draft.items[0].preview])
+        XCTAssertEqual(manifest.selectedItems.map(\.sourceFingerprint), ["synthetic-file-fingerprint"])
+        XCTAssertEqual(draft.items[0].localAssetData, Data([1, 2, 3]))
+    }
+
+    func testEveryExplicitIntakePathCreatesAVisibleAcquisitionReceipt() {
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Explicit selected text")
+        draft.addFile(url: URL(fileURLWithPath: "/tmp/explicit-file.txt"), size: 42)
+        draft.addWindowCapture(
+            recognizedText: "Explicit system-selected window text",
+            imagePNG: Data([1, 2]),
+            pixelWidth: 320,
+            pixelHeight: 200,
+            sourceFingerprint: "explicit-window"
+        )
+
+        XCTAssertEqual(draft.items.map(\.kind), [.selectedText, .file, .window])
+        XCTAssertTrue(draft.items.allSatisfy { !$0.acquisition.isEmpty })
+        XCTAssertEqual(draft.items[0].acquisition, "Explicit text entry")
+        XCTAssertTrue(draft.items[1].acquisition.contains("Explicit file picker"))
+        XCTAssertTrue(draft.items[2].acquisition.contains("System picker"))
+    }
+
+    func testSubmittedSnapshotSurvivesUnrelatedLocalOnlyAdditionsAndVersionChurn() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Reviewed source with stable authority.", now: now)
+        let sourceID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: sourceID, value: .candidate)
+        draft.confirmAttribution(id: sourceID, now: now)
+        let manifest = try draft.freeze(accountID: "account-1", pursuitID: "pursuit-1", personID: "person-1", now: now)
+        let versionAtSubmission = draft.version
+
+        draft.addFile(url: URL(fileURLWithPath: "/tmp/unrelated-local-only.txt"), size: 2_048, now: now)
+        draft.addProcessedFile(
+            displayName: "unrelated-note.png",
+            reviewedText: "Unrelated local-only attachment.",
+            rawData: Data([1, 2, 3]),
+            mediaType: "image/png",
+            acquisition: "Explicit file picker or drop · local Vision OCR",
+            sourceFingerprint: "unrelated-fingerprint",
+            now: now
+        )
+
+        XCTAssertNotEqual(draft.version, versionAtSubmission)
+        XCTAssertTrue(
+            draft.matchesSubmittedSnapshot(manifest),
+            "Unrelated local-only additions and global version churn cannot invalidate an unaffected selected source."
+        )
+    }
+
+    func testSubmittedSnapshotRejectsChangedWithdrawnOrUnsharedSelectedSources() throws {
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Reviewed source with private detail.")
+        let sourceID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: sourceID, value: .candidate)
+        draft.confirmAttribution(id: sourceID)
+        let manifest = try draft.freeze(accountID: "account-1", pursuitID: "pursuit-1", personID: "person-1")
+        XCTAssertTrue(draft.matchesSubmittedSnapshot(manifest))
+
+        draft.redact(id: sourceID, exactTerms: ["private"])
+        XCTAssertFalse(draft.matchesSubmittedSnapshot(manifest), "Redacting the selected source makes its old result obsolete.")
+
+        var unshared = draft
+        unshared.setLocalOnly(id: sourceID, value: true)
+        XCTAssertFalse(unshared.matchesSubmittedSnapshot(manifest), "Unsharing the selected source withdraws its authority.")
+
+        var reShared = draft
+        reShared.setLocalOnly(id: sourceID, value: false)
+        reShared.setRetention(id: sourceID, value: .twentyFourHours)
+        XCTAssertFalse(reShared.matchesSubmittedSnapshot(manifest), "A retention change on the selected source is a new authority.")
+
+        var withdrawn = draft
+        withdrawn.remove(id: sourceID)
+        XCTAssertFalse(withdrawn.matchesSubmittedSnapshot(manifest), "Removing the selected source withdraws its authority.")
+    }
+
+    func testScopedWorkflowRetirementRemovesOnlyUnamendedOwnedTaskOnlyCopies() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Retiring workflow source.", now: now)
+        let retiringID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: retiringID, value: .candidate)
+        draft.confirmAttribution(id: retiringID, now: now)
+
+        draft.addSelectedText("Amended source that survives.", now: now)
+        let amendedID = try XCTUnwrap(draft.items.last?.id)
+        draft.setActorKind(id: amendedID, value: .candidate)
+        draft.confirmAttribution(id: amendedID, now: now)
+
+        draft.addFile(url: URL(fileURLWithPath: "/tmp/unrelated-local-only.txt"), size: 8, now: now)
+        let unrelatedID = try XCTUnwrap(draft.items.last?.id)
+
+        let record = try XCTUnwrap(draft.capturedWorkflowOwnershipRecord(
+            accountID: "account-1",
+            operationID: "operation-1",
+            selectedSourceIDs: [retiringID, amendedID],
+            now: now
+        ))
+        let ownership = CapsuleWorkflowOwnership(record: record, runtimeID: UUID())
+
+        // Global version churn between capture and terminal cleanup must not
+        // gate the scoped removal.
+        draft.addFile(url: URL(fileURLWithPath: "/tmp/another-local-only.txt"), size: 16, now: now)
+        let anotherID = try XCTUnwrap(draft.items.last?.id)
+        draft.redact(id: amendedID, exactTerms: ["survives"])
+
+        let removed = draft.retireWorkflowTaskOnlyItems(ownedBy: ownership, survivingOwnerships: [])
+
+        XCTAssertEqual(removed, 1)
+        XCTAssertFalse(draft.items.contains { $0.id == retiringID })
+        XCTAssertTrue(draft.items.contains { $0.id == amendedID }, "An amended source survives its retiring workflow.")
+        XCTAssertTrue(draft.items.contains { $0.id == unrelatedID }, "Unrelated local-only additions are never erased.")
+        XCTAssertTrue(draft.items.contains { $0.id == anotherID })
+    }
+
+    func testScopedWorkflowRetirementKeepsASourceANewerOperationStillOwns() throws {
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Source owned by two workflow operations.")
+        let sourceID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: sourceID, value: .candidate)
+        draft.confirmAttribution(id: sourceID)
+
+        let runtimeID = UUID()
+        let olderOwnership = CapsuleWorkflowOwnership(
+            record: try XCTUnwrap(draft.capturedWorkflowOwnershipRecord(
+                accountID: "account-1",
+                operationID: "operation-1",
+                selectedSourceIDs: [sourceID],
+                now: Date(timeIntervalSince1970: 1_788_134_400)
+            )),
+            runtimeID: runtimeID
+        )
+        let newerOwnership = CapsuleWorkflowOwnership(
+            record: try XCTUnwrap(draft.capturedWorkflowOwnershipRecord(
+                accountID: "account-1",
+                operationID: "operation-2",
+                selectedSourceIDs: [sourceID],
+                now: Date(timeIntervalSince1970: 1_788_134_401)
+            )),
+            runtimeID: runtimeID
+        )
+
+        let removed = draft.retireWorkflowTaskOnlyItems(
+            ownedBy: olderOwnership,
+            survivingOwnerships: [newerOwnership]
+        )
+
+        XCTAssertEqual(removed, 0)
+        XCTAssertTrue(draft.items.contains { $0.id == sourceID }, "A newer operation owning the same source keeps it alive.")
+
+        let removedAfterNewerWorkflow = draft.retireWorkflowTaskOnlyItems(
+            ownedBy: newerOwnership,
+            survivingOwnerships: []
+        )
+        XCTAssertEqual(removedAfterNewerWorkflow, 1)
+        XCTAssertFalse(draft.items.contains { $0.id == sourceID })
+    }
+
+    func testWorkflowOwnershipRecordIsMinimalAndNeverExtendsOriginalLifetime() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("PRIVATE_WORKFLOW_SOURCE_TEXT", now: now)
+        let shortLivedID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: shortLivedID, value: .candidate)
+        draft.confirmAttribution(id: shortLivedID, now: now)
+        draft.addProcessedFile(
+            displayName: "day-long.png",
+            reviewedText: "PRIVATE_FILE_TEXT",
+            rawData: Data([9, 9, 9]),
+            mediaType: "image/png",
+            acquisition: "Explicit file picker or drop · local Vision OCR",
+            sourceFingerprint: "file-fingerprint",
+            now: now
+        )
+        let longLivedID = try XCTUnwrap(draft.items.last?.id)
+        draft.setRetention(id: longLivedID, value: .twentyFourHours)
+
+        let record = try XCTUnwrap(draft.capturedWorkflowOwnershipRecord(
+            accountID: "account-1",
+            operationID: "operation-1",
+            selectedSourceIDs: [shortLivedID, longLivedID],
+            now: now
+        ))
+
+        XCTAssertEqual(record.accountID, "account-1")
+        XCTAssertEqual(record.operationID, "operation-1")
+        XCTAssertEqual(record.workflowID, "")
+        XCTAssertEqual(record.capturedAt, now)
+        XCTAssertEqual(
+            record.expiresAt,
+            now.addingTimeInterval(CapsuleRetention.taskOnly.localRecoveryLifetime),
+            "The original expiry is the earliest source expiry; the record never extends any source lifetime."
+        )
+        XCTAssertEqual(record.sources.map(\.sourceID), [shortLivedID, longLivedID])
+
+        let encoded = try JSONEncoder().encode(record)
+        let json = String(data: encoded, encoding: .utf8) ?? ""
+        XCTAssertFalse(json.contains("PRIVATE_WORKFLOW_SOURCE_TEXT"), "No second raw source snapshot is persisted.")
+        XCTAssertFalse(json.contains("PRIVATE_FILE_TEXT"), "No reviewed derivative copy is persisted.")
+        XCTAssertFalse(json.contains("file-fingerprint"), "No source fingerprint shadow is persisted.")
+        XCTAssertTrue(record.sources.allSatisfy { $0.immutableHash.count == 64 })
+    }
+
+    func testPruneWorkflowOwnershipsExpiresLawfullyWithoutGlobalPurge() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Bound task-only source.", now: now)
+        let boundID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: boundID, value: .candidate)
+        draft.confirmAttribution(id: boundID, now: now)
+        draft.addSelectedText("Legacy unbound task-only source.", now: now)
+        let legacyID = try XCTUnwrap(draft.items.last?.id)
+
+        let record = try XCTUnwrap(draft.capturedWorkflowOwnershipRecord(
+            accountID: "account-1",
+            operationID: "operation-1",
+            selectedSourceIDs: [boundID],
+            now: now
+        ))
+        draft.workflowOwnerships = [record]
+        XCTAssertEqual(draft.workflowOwnerships?.count, 1)
+
+        // An amended source loses its binding; the unbound legacy item is never
+        // guessed into ownership and nothing is purged globally.
+        draft.redact(id: boundID, exactTerms: ["Bound"])
+        draft.pruneWorkflowOwnerships(now: now.addingTimeInterval(60))
+        XCTAssertTrue(draft.workflowOwnerships?.isEmpty ?? true)
+        XCTAssertEqual(draft.items.count, 2, "Lawful ownership expiry never purges items globally.")
+        XCTAssertTrue(draft.items.contains { $0.id == legacyID }, "Legacy unbound assets stay until their own original TTL.")
+
+        // Expiry is also lawful on time alone.
+        var timed = ContextCapsuleDraft()
+        timed.addSelectedText("Timed source.", now: now)
+        let timedID = try XCTUnwrap(timed.items.first?.id)
+        timed.setActorKind(id: timedID, value: .candidate)
+        timed.confirmAttribution(id: timedID, now: now)
+        timed.workflowOwnerships = [try XCTUnwrap(timed.capturedWorkflowOwnershipRecord(
+            accountID: "account-1",
+            operationID: "operation-2",
+            selectedSourceIDs: [timedID],
+            now: now
+        ))]
+        timed.pruneWorkflowOwnerships(now: now.addingTimeInterval(3_601))
+        XCTAssertNil(timed.workflowOwnerships)
+    }
+
+    func testRestoredOwnershipBindingMatchesExactSourceIdentity() throws {
+        let now = Date(timeIntervalSince1970: 1_788_134_400)
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Restart-protected source.", now: now)
+        let sourceID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: sourceID, value: .candidate)
+        draft.confirmAttribution(id: sourceID, now: now)
+        let record = try XCTUnwrap(draft.capturedWorkflowOwnershipRecord(
+            accountID: "account-1",
+            operationID: "operation-1",
+            selectedSourceIDs: [sourceID],
+            now: now
+        ))
+
+        // Round-trip the exact bindings, as restart recovery does.
+        let decoded = try JSONDecoder().decode(
+            CapsuleWorkflowOwnershipRecord.self,
+            from: JSONEncoder().encode(record)
+        )
+        XCTAssertEqual(decoded, record)
+        draft.workflowOwnerships = [decoded]
+
+        let restored = CapsuleWorkflowOwnership(record: decoded, runtimeID: UUID())
+        let removed = draft.retireWorkflowTaskOnlyItems(ownedBy: restored, survivingOwnerships: [])
+        XCTAssertEqual(removed, 1, "Restart terminal cleanup retires exactly the workflow-owned copy.")
+        XCTAssertFalse(draft.items.contains { $0.id == sourceID })
+    }
+
+    private func confirmCandidateAttribution(in draft: inout ContextCapsuleDraft, now: Date = Date()) {
+        guard let id = draft.items.last?.id else { return }
+        draft.setActorKind(id: id, value: .candidate)
+        draft.confirmAttribution(id: id, now: now)
+    }
+}

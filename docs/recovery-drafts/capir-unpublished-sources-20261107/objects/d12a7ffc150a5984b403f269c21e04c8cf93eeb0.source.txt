@@ -1,0 +1,90 @@
+import type { AgentBudget, AgentProviderResult, AgentUsage } from "./types.js";
+
+export type AgentBudgetViolation = "positive";
+
+export interface AgentBudgetViolationDetail {
+  field: keyof AgentBudget;
+  violation: AgentBudgetViolation;
+}
+
+/**
+ * Keep shared budget mechanics here while each runner owns its public error.
+ * Only present fields are validated: each must be finite and positive. An
+ * absent field imposes no limit and is never filled with a default or a
+ * sentinel value.
+ */
+export function assertAgentBudget(
+  budget: AgentBudget,
+  onViolation: (detail: AgentBudgetViolationDetail) => never,
+): void {
+  for (const [field, value] of Object.entries(budget) as Array<
+    [keyof AgentBudget, number]
+  >) {
+    if (value === undefined || !Number.isFinite(value) || value <= 0) {
+      onViolation({ field, violation: "positive" });
+    }
+  }
+}
+
+export function agentUsage(
+  startedAtMs: number,
+  toolCalls: number,
+  provider: AgentProviderResult | null,
+  nowMs: number,
+): AgentUsage {
+  const inputTokens = provider?.inputTokens ?? null;
+  const outputTokens = provider?.outputTokens ?? null;
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens:
+      inputTokens === null || outputTokens === null
+        ? null
+        : inputTokens + outputTokens,
+    estimatedUsd: provider?.estimatedUsd ?? null,
+    turns: provider?.turns ?? null,
+    toolCalls,
+    durationMs: Math.max(0, nowMs - startedAtMs),
+  };
+}
+
+/**
+ * The ordering is part of the terminal reason-code contract. Only explicitly
+ * declared budget fields are enforced; absent fields impose no limit.
+ */
+export function exceededBudget(
+  value: AgentUsage,
+  budget: AgentBudget,
+): string | null {
+  if (
+    budget.maxTurns !== undefined &&
+    value.turns !== null &&
+    value.turns > budget.maxTurns
+  ) {
+    return "MAX_TURNS_EXCEEDED";
+  }
+  if (budget.maxToolCalls !== undefined && value.toolCalls > budget.maxToolCalls) {
+    return "MAX_TOOL_CALLS_EXCEEDED";
+  }
+  if (
+    budget.maxTaskTokens !== undefined &&
+    value.totalTokens !== null &&
+    value.totalTokens > budget.maxTaskTokens
+  ) {
+    return "MAX_TASK_TOKENS_EXCEEDED";
+  }
+  if (
+    budget.maxEstimatedUsd !== undefined &&
+    value.estimatedUsd !== null &&
+    value.estimatedUsd > budget.maxEstimatedUsd
+  ) {
+    return "MAX_COST_EXCEEDED";
+  }
+  if (
+    budget.maxDurationMs !== undefined &&
+    value.durationMs > budget.maxDurationMs
+  ) {
+    return "MAX_DURATION_EXCEEDED";
+  }
+  return null;
+}

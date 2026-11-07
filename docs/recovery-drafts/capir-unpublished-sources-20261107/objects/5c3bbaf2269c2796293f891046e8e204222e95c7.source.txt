@@ -1,0 +1,20 @@
+import type { Metadata } from "next";
+import { redirect } from "next/navigation";
+import { auth } from "@/auth";
+import { IntegrationOnboarding } from "@/components/integration-onboarding";
+import { backendSessionIsExpired, backendSessionRecoveryHref } from "@/lib/backend-session";
+import { integrationReturnTarget } from "@/lib/integration-onboarding-navigation";
+import { readBackendSessionClaims } from "@/lib/server/backendAuth";
+import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-session";
+import { mailConfig } from "@/lib/server/mail-integration-config";
+
+export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "开始连接 · Talent Signal", robots: { follow: false, index: false } };
+export default async function ConnectPage({ searchParams }: { searchParams: Promise<{ returnTo?: string; result?: string }> }) {
+  if (!(await auth())?.user) redirect("/login?callbackUrl=%2Fworkspace%2Fconnect");
+  const claims = await readBackendSessionClaims();
+  if (!claims || backendSessionIsExpired(claims.backendExpiresAt)) redirect(backendSessionRecoveryHref("/workspace/connect"));
+  const parameters = await searchParams;
+  return <IntegrationOnboarding key={contactHandoffSessionVersion(claims)} configured={{ gmail: Boolean(mailConfig("gmail")), outlook: Boolean(mailConfig("outlook")) }}
+    sessionVersion={contactHandoffSessionVersion(claims)} returnTo={integrationReturnTarget(parameters.returnTo)} result={parameters.result} />;
+}

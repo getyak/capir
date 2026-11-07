@@ -1,0 +1,788 @@
+import type { ClaudeHarnessConfiguration } from "@talent-signal/agent";
+import swagger from "@fastify/swagger";
+import Fastify from "fastify";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  ClaudeMessagesPrivateConversationProvider,
+  PRIVATE_CONVERSATION_PATH,
+  PRIVATE_CONVERSATION_SYSTEM_GUIDANCE,
+  PrivateConversationProviderError,
+  ZhipuPrivateConversationProvider,
+  createEnvironmentPrivateConversationProvider,
+  isPrivateConversationRequest,
+  registerPrivateConversationRoutes,
+  validatePrivateConversationBody,
+  type PrivateConversationMessage,
+  type PrivateConversationProvider,
+  type PrivateConversationProviderRequest,
+} from "./privateConversation.js";
+
+const apps: ReturnType<typeof Fastify>[] = [];
+
+afterEach(async () => {
+  await Promise.all(apps.splice(0).map((app) => app.close()));
+});
+
+async function collect(iterable: AsyncIterable<string>): Promise<string> {
+  let text = "";
+  for await (const chunk of iterable) text += chunk;
+  return text;
+}
+
+function byteResponse(chunks: readonly Uint8Array[], status = 200): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    }),
+    { status, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+function sseResponse(frames: readonly string[], status = 200): Response {
+  const encode = new TextEncoder();
+  return byteResponse(frames.map((frame) => encode.encode(frame)), status);
+}
+
+function anthropicFrame(type: string, payload: Record<string, unknown>): string {
+  return `event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`;
+}
+
+const anthropicConfiguration: ClaudeHarnessConfiguration = {
+  model: "claude-private-test",
+  baseUrl: "https://api.anthropic.com",
+  credential: { name: "ANTHROPIC_API_KEY", value: "synthetic-anthropic-key" },
+  taskBudgetEnabled: false,
+};
+
+const userPayload: PrivateConversationProviderRequest = {
+  messages: [{ role: "user", content: "transient user text" }],
+};
+
+describe("private conversation provider SSE frames", () => {
+  it("streams Anthropic deltas with only boundary guidance and transient text", async () => {
+    const fetcher = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        sseResponse([
+          anthropicFrame("message_start", {}),
+          anthropicFrame("content_block_delta", { delta: { type: "text_delta", text: "Hello" } }),
+          anthropicFrame("content_block_delta", { delta: { type: "text_delta", text: " 世界" } }),
+          anthropicFrame("message_stop", {}),
+        ]),
+    );
+    const provider = new ClaudeMessagesPrivateConversationProvider(
+      anthropicConfiguration,
+      fetcher as unknown as typeof fetch, 128_000);
+    const text = await collect(
+      provider.stream(
+        { messages: [{ role: "user", content: "transient user text" }] },
+        new AbortController().signal,
+      ),
+    );
+    expect(text).toBe("Hello 世界");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    const { headers, body } = init as RequestInit;
+    const headerRecord = headers as Record<string, string>;
+    expect(headerRecord["x-api-key"]).toBe("synthetic-anthropic-key");
+    expect(headerRecord.authorization).toBeUndefined();
+    expect(headerRecord["anthropic-version"]).toBe("2023-06-01");
+    const parsed = JSON.parse(String(body)) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual([
+      "max_tokens",
+      "messages",
+      "model",
+      "stream",
+      "system",
+    ]);
+    expect(parsed.system).toBe(PRIVATE_CONVERSATION_SYSTEM_GUIDANCE);
+    expect(parsed.messages).toEqual([{ role: "user", content: "transient user text" }]);
+    expect(parsed.tools).toBeUndefined();
+    expect(parsed.metadata).toBeUndefined();
+    expect(parsed).not.toHaveProperty("account_id");
+    expect(parsed).not.toHaveProperty("session_id");
+    expect(parsed).not.toHaveProperty("provider");
+  });
+
+  it("stops at the terminal marker even when trailing data arrives and the socket stays open", async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ start(c) {
+      c.enqueue(new TextEncoder().encode(
+        anthropicFrame("content_block_delta", {delta:{type:"text_delta",text:"before"}})
+        + anthropicFrame("message_stop", {})
+        + anthropicFrame("content_block_delta", {delta:{type:"text_delta",text:"AFTER_DONE"}})));
+    }, cancel });
+    const provider = new ClaudeMessagesPrivateConversationProvider(anthropicConfiguration, (async()=>new Response(body)) as typeof fetch, 128_000);
+    expect(await collect(provider.stream(userPayload,new AbortController().signal))).toBe("before");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each(["huge line", "multiline frame", "nontext total", "invalid utf8"])("bounds upstream %s", async(kind)=>{
+    const encoder=new TextEncoder();
+    const chunks=kind === "huge line" ? [encoder.encode("data: "+"x".repeat(131073))]
+      : kind === "multiline frame" ? Array.from({length:200},()=>encoder.encode("data: "+"x".repeat(1024)+"\n"))
+      : kind === "nontext total" ? Array.from({length:3000},()=>encoder.encode(":"+"x".repeat(1024)+"\n\n"))
+      : [new Uint8Array([0xff])];
+    const provider = new ClaudeMessagesPrivateConversationProvider(anthropicConfiguration,(async()=>byteResponse(chunks)) as typeof fetch, 128_000);
+    await expect(collect(provider.stream(userPayload,new AbortController().signal))).rejects.toThrow();
+  });
+
+  it("cancels a pending body read immediately", async()=>{
+    const cancel=vi.fn(); const controller=new AbortController();
+    const provider=new ClaudeMessagesPrivateConversationProvider(anthropicConfiguration,(async()=>new Response(new ReadableStream({cancel}))) as typeof fetch, 128_000);
+    const pending=collect(provider.stream(userPayload,controller.signal));
+    await Promise.resolve();await Promise.resolve(); controller.abort(new Error("synthetic abort"));
+    await expect(pending).rejects.toThrow("synthetic abort"); expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("uses a bearer credential without leaking the key header", async () => {
+    const fetcher = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        sseResponse([anthropicFrame("message_stop", {})]),
+    );
+    const provider = new ClaudeMessagesPrivateConversationProvider(
+      {
+        ...anthropicConfiguration,
+        credential: { name: "ANTHROPIC_AUTH_TOKEN", value: "synthetic-auth-token" },
+      },
+      fetcher as unknown as typeof fetch, 128_000);
+    await collect(provider.stream(userPayload, new AbortController().signal));
+    const headers = (fetcher.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer synthetic-auth-token");
+    expect(headers["x-api-key"]).toBeUndefined();
+  });
+
+  it("decodes UTF-8 and frames split across byte chunks", async () => {
+    const raw = [
+      anthropicFrame("content_block_delta", { delta: { type: "text_delta", text: "界a" } }),
+      anthropicFrame("message_stop", {}),
+    ].join("");
+    const bytes = new TextEncoder().encode(raw);
+    const wide = new TextEncoder().encode("界");
+    const split = bytes.indexOf(wide[0]!) + 1;
+    const fetcher = vi.fn(async () =>
+      byteResponse([bytes.slice(0, split), bytes.slice(split)]),
+    );
+    const provider = new ClaudeMessagesPrivateConversationProvider(
+      anthropicConfiguration,
+      fetcher as unknown as typeof fetch, 128_000);
+    expect(await collect(provider.stream(userPayload, new AbortController().signal))).toBe("界a");
+  });
+
+  it("rejects a malformed frame instead of emitting a successful stream", async () => {
+    const fetcher = vi.fn(async () =>
+      sseResponse(["data: not-json\n\n", anthropicFrame("message_stop", {})]),
+    );
+    const provider = new ClaudeMessagesPrivateConversationProvider(
+      anthropicConfiguration,
+      fetcher as unknown as typeof fetch, 128_000);
+    await expect(
+      collect(provider.stream(userPayload, new AbortController().signal)),
+    ).rejects.toMatchObject({ code: "PRIVATE_CONVERSATION_PROVIDER_MALFORMED" });
+  });
+
+  it("rejects a truncated stream that never observed its terminal marker", async () => {
+    const fetcher = vi.fn(async () =>
+      sseResponse([
+        anthropicFrame("content_block_delta", {
+          delta: { type: "text_delta", text: "partial" },
+        }),
+      ]),
+    );
+    const provider = new ClaudeMessagesPrivateConversationProvider(
+      anthropicConfiguration,
+      fetcher as unknown as typeof fetch, 128_000);
+    await expect(
+      collect(provider.stream(userPayload, new AbortController().signal)),
+    ).rejects.toMatchObject({ code: "PRIVATE_CONVERSATION_PROVIDER_TRUNCATED" });
+  });
+
+  it("sanitizes upstream transport failures without echoing provider detail", async () => {
+    const fetcher = vi.fn(async () => new Response("provider secret detail", { status: 500 }));
+    const provider = new ClaudeMessagesPrivateConversationProvider(
+      anthropicConfiguration,
+      fetcher as unknown as typeof fetch, 128_000);
+    await provider.stream(userPayload, new AbortController().signal)[Symbol.asyncIterator]().next()
+      .then(
+        () => {
+          throw new Error("expected rejection");
+        },
+        (error: unknown) => {
+          expect(error).toBeInstanceOf(PrivateConversationProviderError);
+          expect((error as PrivateConversationProviderError).message).toBe(
+            "PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE",
+          );
+          expect((error as Error).message).not.toContain("secret");
+        },
+      );
+  });
+
+  it("fails closed rather than sending private text through an unsupported proxy", () => {
+    expect(
+      () =>
+        new ClaudeMessagesPrivateConversationProvider(
+          { ...anthropicConfiguration, httpsProxy: "http://127.0.0.1:18080/" },
+          fetch, 128_000),
+    ).toThrow("PRIVATE_CONVERSATION_PROXY_UNSUPPORTED");
+  });
+
+  it("streams OpenAI-compatible deltas and terminates only on [DONE]", async () => {
+    const fetcher = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        sseResponse([
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "你" } }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "好" } }] })}\n\n`,
+          "data: [DONE]\n\n",
+        ]),
+    );
+    const provider = new ZhipuPrivateConversationProvider({
+      apiKey: "synthetic-zhipu-key",
+      model: "glm-5.3",
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    expect(await collect(provider.stream(userPayload, new AbortController().signal))).toBe("你好");
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe("https://open.bigmodel.cn/api/paas/v4/chat/completions");
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer synthetic-zhipu-key");
+    const parsed = JSON.parse(String((init as RequestInit).body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(parsed.messages[0]).toEqual({
+      role: "system",
+      content: PRIVATE_CONVERSATION_SYSTEM_GUIDANCE,
+    });
+    expect(parsed.messages[1]).toEqual({ role: "user", content: "transient user text" });
+  });
+
+  it("rejects an OpenAI-compatible stream with no [DONE] marker", async () => {
+    const fetcher = vi.fn(async () =>
+      sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: "x" } }] })}\n\n`]),
+    );
+    const provider = new ZhipuPrivateConversationProvider({
+      apiKey: "synthetic-zhipu-key",
+      model: "glm-5.3",
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    await expect(
+      collect(provider.stream(userPayload, new AbortController().signal)),
+    ).rejects.toMatchObject({ code: "PRIVATE_CONVERSATION_PROVIDER_TRUNCATED" });
+  });
+
+  it("cancels the upstream fetch when the signal aborts", async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn(
+      async (_url: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), {
+            once: true,
+          });
+        }),
+    );
+    const provider = new ClaudeMessagesPrivateConversationProvider(
+      anthropicConfiguration,
+      fetcher as unknown as typeof fetch, 128_000);
+    const pending = collect(provider.stream(userPayload, controller.signal));
+    controller.abort(new Error("client disconnected"));
+    await expect(pending).rejects.toThrow("client disconnected");
+  });
+});
+
+describe("private conversation environment provider", () => {
+  it("stays disabled unless remote processing is explicitly admitted", () => {
+    expect(createEnvironmentPrivateConversationProvider({})).toBeNull();
+    expect(
+      createEnvironmentPrivateConversationProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "false",
+        TALENT_SIGNAL_CHAT_PROVIDER: "claude",
+      }),
+    ).toBeNull();
+    expect(
+      createEnvironmentPrivateConversationProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "yes",
+        TALENT_SIGNAL_CHAT_PROVIDER: "claude",
+      }),
+    ).toBeNull();
+  });
+
+  it("builds the admitted Claude provider from the shared harness configuration", () => {
+    const provider = createEnvironmentPrivateConversationProvider({
+      TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true",
+      TALENT_SIGNAL_CHAT_PROVIDER: "claude",
+      TALENT_SIGNAL_AGENT_MODEL: "claude-private-test",
+      ANTHROPIC_API_KEY: "synthetic-key",
+    });
+    expect(provider).toBeInstanceOf(ClaudeMessagesPrivateConversationProvider);
+    expect(provider?.model).toBe("claude-private-test");
+  });
+
+  it("fails closed when the admitted Claude configuration requires an unsupported proxy", () => {
+    expect(
+      createEnvironmentPrivateConversationProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true",
+        TALENT_SIGNAL_CHAT_PROVIDER: "claude",
+        TALENT_SIGNAL_AGENT_MODEL: "claude-private-test",
+        ANTHROPIC_API_KEY: "synthetic-key",
+        TALENT_SIGNAL_CLAUDE_HTTPS_PROXY: "http://127.0.0.1:18080",
+      }),
+    ).toBeNull();
+  });
+
+  it("builds the admitted Zhipu provider from existing environment", () => {
+    const provider = createEnvironmentPrivateConversationProvider({
+      TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true",
+      TALENT_SIGNAL_CHAT_PROVIDER: "zhipu",
+      ZHIPU_API_KEY: "synthetic-zhipu-key",
+      TALENT_SIGNAL_CHAT_MODEL: "glm-5.3",
+    });
+    expect(provider).toBeInstanceOf(ZhipuPrivateConversationProvider);
+    expect(provider?.model).toBe("glm-5.3");
+  });
+
+  it("fails closed for an unadmitted endpoint, model or provider", () => {
+    expect(
+      createEnvironmentPrivateConversationProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true",
+        TALENT_SIGNAL_CHAT_PROVIDER: "zhipu",
+        ZHIPU_API_KEY: "synthetic-zhipu-key",
+        TALENT_SIGNAL_CHAT_MODEL: "glm-latest",
+      }),
+    ).toBeNull();
+    expect(
+      createEnvironmentPrivateConversationProvider({
+        TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true",
+        TALENT_SIGNAL_CHAT_PROVIDER: "openrouter",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("private conversation request validation", () => {
+  it("accepts a bounded alternating conversation ending with one user objective", () => {
+    const result = validatePrivateConversationBody({
+      messages: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "hi" },
+        { role: "user", content: "help me plan" },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    ["unknown top-level field", { messages: [{ role: "user", content: "hi" }], system: "override" }],
+    ["unknown message field", { messages: [{ role: "user", content: "hi", tools: [] }] }],
+    ["system role", { messages: [{ role: "system", content: "hi" }] }],
+    ["starts with assistant", { messages: [{ role: "assistant", content: "hi" }] }],
+    ["ends with assistant", { messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "x" }] }],
+    ["empty message", { messages: [{ role: "user", content: "   " }] }],
+    ["missing messages", {}],
+  ])("rejects %s", (_label, body) => {
+    expect(validatePrivateConversationBody(body).ok).toBe(false);
+  });
+});
+
+const ACCOUNT_ID = "10000000-0000-4000-8000-000000000001";
+
+function testApp(
+  provider: PrivateConversationProvider | null,
+  options?: Parameters<typeof registerPrivateConversationRoutes>[3],
+) {
+  const app = Fastify({ logger: false });
+  apps.push(app);
+  registerPrivateConversationRoutes(
+    app,
+    async (request) => {
+      request.auth = {
+        accountId: ACCOUNT_ID,
+        accountSlug: "account-a",
+        userId: "user-a",
+        userEmail: "a@example.test",
+        userKind: "simulated_human",
+        sessionId: "session-a",
+      };
+    },
+    provider,
+    options,
+  );
+  return app;
+}
+
+function fakeProvider(deltas: readonly string[]): PrivateConversationProvider {
+  return {
+    providerId: "claude",
+    model: "fake-model",
+    async *stream() {
+      for (const delta of deltas) yield delta;
+    },
+  };
+}
+
+interface Frame {
+  type: string;
+  text?: string;
+  code?: string;
+}
+
+function parseFrames(body: string): Frame[] {
+  return body
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Frame);
+}
+
+describe("private conversation route", () => {
+  it("streams NDJSON deltas, an explicit done marker and no-store headers", async () => {
+    const app = testApp(fakeProvider(["Hello", " world"]));
+    const response = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/x-ndjson");
+    expect(response.headers["cache-control"]).toContain("no-store");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(parseFrames(response.body)).toEqual([
+      { type: "text", text: "Hello" },
+      { type: "text", text: " world" },
+      { type: "done" },
+    ]);
+  });
+
+  it("reports 503 without a provider and never streams", async () => {
+    const app = testApp(null);
+    const response = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(JSON.parse(response.body).error.code).toBe("PRIVATE_CONVERSATION_UNAVAILABLE");
+  });
+
+  it("rejects an unknown or override field before opening a stream", async () => {
+    const app = testApp(fakeProvider(["never"]));
+    const response = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: { messages: [{ role: "user", content: "hi" }], provider: "attacker" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body).error.code).toBe("PRIVATE_CONVERSATION_INVALID");
+  });
+
+  it("rejects an oversized body before parsing messages", async () => {
+    const app = testApp(fakeProvider(["never"]));
+    const response = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: { messages: [{ role: "user", content: "x".repeat(300 * 1024) }] },
+    });
+    expect(response.statusCode).toBe(413);
+    expect(JSON.parse(response.body).error.code).toBe("PRIVATE_CONVERSATION_TOO_LARGE");
+  });
+
+  it("emits a sanitized error frame and never done on provider failure", async () => {
+    const provider: PrivateConversationProvider = {
+      providerId: "claude",
+      model: "fake-model",
+      async *stream() {
+        yield "partial";
+        throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_TRUNCATED");
+      },
+    };
+    const app = testApp(provider);
+    const response = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    expect(parseFrames(response.body)).toEqual([
+      { type: "text", text: "partial" },
+      { type: "error", code: "PRIVATE_CONVERSATION_PROVIDER_TRUNCATED" },
+    ]);
+    expect(response.body).not.toContain('"type":"done"');
+  });
+
+  it("streams complete output beyond the former character bound", async () => {
+    const app = testApp(fakeProvider(["x".repeat(32_001)]));
+    const response = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    expect(parseFrames(response.body)).toEqual([
+      { type: "text", text: "x".repeat(32_001) },
+      { type: "done" },
+    ]);
+    expect(response.body).toContain('"type":"done"');
+  });
+
+  it("emits a sanitized timeout error and releases the account slot", async () => {
+    const provider: PrivateConversationProvider = {
+      providerId: "claude",
+      model: "fake-model",
+      async *stream(_request, signal) {
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    };
+    const app = testApp(provider, { timeoutMs: 25 });
+    const response = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    expect(parseFrames(response.body)).toEqual([
+      { type: "error", code: "PRIVATE_CONVERSATION_TIMEOUT" },
+    ]);
+    const retry = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    expect(retry.statusCode).toBe(200);
+  });
+
+  it("times out and releases slots even when a provider ignores abort forever",async()=>{
+    const provider:PrivateConversationProvider={providerId:"claude",model:"synthetic",async *stream(){await new Promise(()=>{});yield "never";}};
+    const app=testApp(provider,{timeoutMs:15});
+    for(let index=0;index<3;index++) {
+      const response=await app.inject({method:"POST",url:PRIVATE_CONVERSATION_PATH,payload:userPayload});
+      expect(parseFrames(response.body)).toEqual([{type:"error",code:"PRIVATE_CONVERSATION_TIMEOUT"}]);
+    }
+  });
+
+  it("never publishes late text or done after timeout",async()=>{
+    const provider:PrivateConversationProvider={providerId:"claude",model:"synthetic",async *stream(){await new Promise(resolve=>setTimeout(resolve,80));yield "late";}};
+    const app=testApp(provider,{timeoutMs:10});
+    const response=await app.inject({method:"POST",url:PRIVATE_CONVERSATION_PATH,payload:userPayload});
+    expect(parseFrames(response.body)).toEqual([{type:"error",code:"PRIVATE_CONVERSATION_TIMEOUT"}]);
+  });
+
+  it("cancels the upstream provider stream when the request aborts", async () => {
+    let observedAbort = false;
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const provider: PrivateConversationProvider = {
+      providerId: "claude",
+      model: "fake-model",
+      async *stream(_request: PrivateConversationProviderRequest, signal: AbortSignal) {
+        markStarted();
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              observedAbort = true;
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const app = testApp(provider, { timeoutMs: 5_000 });
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const controller = new AbortController();
+    const pending = fetch(`${address}${PRIVATE_CONVERSATION_PATH}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(userPayload),
+      signal: controller.signal,
+    });
+    await started;
+    controller.abort();
+    await pending.catch(() => undefined);
+    await vi.waitFor(() => expect(observedAbort).toBe(true));
+  });
+
+  it("rate limits the thirteenth request in one window per account", async () => {
+    const app = testApp(fakeProvider(["ok"]), { now: () => 1_000 });
+    for (let index = 0; index < 12; index += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: PRIVATE_CONVERSATION_PATH,
+        payload: userPayload,
+      });
+      expect(response.statusCode).toBe(200);
+    }
+    const limited = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    expect(limited.statusCode).toBe(429);
+    expect(JSON.parse(limited.body).error.code).toBe("PRIVATE_CONVERSATION_RATE_LIMITED");
+  });
+
+  it("limits concurrency to two per account and releases slots after completion", async () => {
+    let active = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const provider: PrivateConversationProvider = {
+      providerId: "claude",
+      model: "fake-model",
+      async *stream() {
+        active += 1;
+        yield "x";
+        await gate;
+      },
+    };
+    const app = testApp(provider);
+    const first = app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    const second = app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    await vi.waitFor(() => expect(active).toBe(2));
+    const third = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    expect(third.statusCode).toBe(429);
+    expect(JSON.parse(third.body).error.code).toBe("PRIVATE_CONVERSATION_BUSY");
+    release();
+    const completed = await Promise.all([first, second]);
+    expect(completed.map((response) => response.statusCode)).toEqual([200, 200]);
+    const after = await app.inject({
+      method: "POST",
+      url: PRIVATE_CONVERSATION_PATH,
+      payload: userPayload,
+    });
+    expect(after.statusCode).toBe(200);
+  });
+
+  it("releases the concurrency slot when the provider fails", async () => {
+    const provider: PrivateConversationProvider = {
+      providerId: "claude",
+      model: "fake-model",
+      async *stream() {
+        throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+      },
+    };
+    const app = testApp(provider);
+    for (let index = 0; index < 3; index += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: PRIVATE_CONVERSATION_PATH,
+        payload: userPayload,
+      });
+      expect(parseFrames(response.body)).toEqual([
+        { type: "error", code: "PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE" },
+      ]);
+    }
+  });
+
+  it("marks the route so unrelated observation sweeps can skip it", async () => {
+    const app = testApp(fakeProvider(["ok"]));
+    await app.ready();
+    const route = app
+      .printRoutes({ commonPrefix: false })
+      .includes("private-conversation");
+    expect(route).toBe(true);
+    expect(
+      isPrivateConversationRequest({ routeOptions: { url: PRIVATE_CONVERSATION_PATH } } as never),
+    ).toBe(true);
+    expect(
+      isPrivateConversationRequest({ routeOptions: { url: "/v1/other" } } as never),
+    ).toBe(false);
+  });
+
+  it("registers in Fastify OpenAPI generation without a response schema conflict", async () => {
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(swagger, {
+      openapi: {
+        info: { title: "t", version: "1" },
+        components: {
+          securitySchemes: { bearerSession: { type: "http", scheme: "bearer" } },
+        },
+      },
+    });
+    registerPrivateConversationRoutes(
+      app,
+      async (request) => {
+        request.auth = {
+          accountId: ACCOUNT_ID,
+          accountSlug: "account-a",
+          userId: "user-a",
+          userEmail: "a@example.test",
+          userKind: "simulated_human",
+          sessionId: "session-a",
+        };
+      },
+      fakeProvider(["ok"]),
+    );
+    await app.ready();
+    const spec = app.swagger() as { paths?: Record<string, unknown> };
+    expect(spec.paths?.[PRIVATE_CONVERSATION_PATH]).toBeDefined();
+  });
+
+  it("accepts only the exact private message shape from a real request", () => {
+    const valid: PrivateConversationMessage[] = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+      { role: "user", content: "plan the week" },
+    ];
+    expect(validatePrivateConversationBody({ messages: valid })).toEqual({
+      ok: true,
+      messages: valid,
+    });
+  });
+});
+
+describe("private conversation capacity defaults", () => {
+  it("preserves long inputs and more than the former history count", () => {
+    const messages = Array.from({ length: 27 }, (_, index) => ({ role: index % 2 ? "assistant" : "user", content: "x".repeat(9_000) + " ending" }));
+    expect(validatePrivateConversationBody({ messages })).toEqual({ ok: true, messages });
+  });
+  it("uses the configured gateway's advertised output capacity", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      if (!init?.body) return Response.json({ id: "resolved-sonnet", max_tokens: 128_000, max_input_tokens: 1_000_000 });
+      return sseResponse([anthropicFrame("content_block_delta", { delta: { type: "text_delta", text: "Complete" } }), anthropicFrame("message_stop", {})]);
+    });
+    const provider = new ClaudeMessagesPrivateConversationProvider(anthropicConfiguration, fetcher);
+    expect(await collect(provider.stream(userPayload, new AbortController().signal))).toBe("Complete");
+    expect(String(fetcher.mock.calls[0]![0])).toContain("/v1/models/");
+    expect(fetcher.mock.calls[0]![1]!.body).toBeUndefined();
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]!.body)).max_tokens).toBe(128_000);
+  });
+  it("reports unavailable capacity without sending private text with a guessed bound", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ id: "unadvertised" }));
+    const provider = new ClaudeMessagesPrivateConversationProvider(anthropicConfiguration, fetcher);
+    await expect(collect(provider.stream(userPayload, new AbortController().signal))).rejects.toMatchObject({ code: "PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE" });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0]![1]!.body).toBeUndefined();
+  });
+});
+
+
+it("treats a model output-capacity stop as incomplete even when a terminal marker follows", async () => {
+  const anthropic = new ClaudeMessagesPrivateConversationProvider(anthropicConfiguration, (async () => sseResponse([
+    anthropicFrame("content_block_delta", { delta: { type: "text_delta", text: "Partial" } }),
+    anthropicFrame("message_delta", { delta: { stop_reason: "max_tokens" } }),
+    anthropicFrame("message_stop", {}),
+  ])) as typeof fetch, 128_000);
+  await expect(collect(anthropic.stream(userPayload, new AbortController().signal))).rejects.toMatchObject({ code: "PRIVATE_CONVERSATION_PROVIDER_TRUNCATED" });
+  const zhipu = new ZhipuPrivateConversationProvider({ apiKey: "synthetic-only", model: "glm-5.3", fetcher: (async () => sseResponse([
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}\n\n`, "data: [DONE]\n\n",
+  ])) as typeof fetch });
+  await expect(collect(zhipu.stream(userPayload, new AbortController().signal))).rejects.toMatchObject({ code: "PRIVATE_CONVERSATION_PROVIDER_TRUNCATED" });
+});

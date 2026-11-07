@@ -1,0 +1,14 @@
+import { randomBytes, scryptSync } from "node:crypto";
+
+const password = process.argv[2];
+
+if (!password || password.length < 6 || password.length > 128) {
+  process.stderr.write(
+    "Provide a password between 6 and 128 characters.\n",
+  );
+  process.exitCode = 1;
+} else {
+  const salt = randomBytes(24).toString("hex");
+  const hash = scryptSync(password, salt, 64).toString("hex");
+  process.stdout.write(`scrypt$${salt}$${hash}\n`);
+}

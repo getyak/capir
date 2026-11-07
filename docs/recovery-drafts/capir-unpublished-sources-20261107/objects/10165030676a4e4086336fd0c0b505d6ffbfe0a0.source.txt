@@ -1,0 +1,51 @@
+-- GET-128 execution steering: while one task runs, later accepted messages
+-- steer THAT task instead of queueing as unrelated future work. Each message
+-- keeps its own immutable row (message id, sequence, accepted time, images and
+-- creator), so folding never merges identities. A member row points at the
+-- entry whose run it steers; the run's intake (`steer_closed_at`) closes under
+-- the session advisory lock only when no member is still awaiting delivery,
+-- so an accepted steering message is always processed before the run's one
+-- standalone final answer and only a genuinely late message becomes the next
+-- task.
+--
+-- Delivery is recorded once (`steer_state='delivered'` plus the real delivery
+-- time) under the run's lease fence. Delivered messages fold into the run's
+-- single canonical turn; messages that never reached the model
+-- (`steer_state='awaiting'`, or `'unsupported'` when their image batch cannot
+-- join the run's bounded image budget) are never given fabricated history and
+-- re-queue as the next task on completion or cancellation, or re-form the
+-- group on an explicit retry after a failure.
+ALTER TABLE conversation_queue_entries
+  ADD COLUMN steer_group_entry_id uuid,
+  ADD COLUMN steer_state text NOT NULL DEFAULT 'awaiting'
+    CHECK (steer_state IN ('awaiting','delivered','unsupported')),
+  ADD COLUMN steer_delivered_at timestamptz,
+  ADD COLUMN steer_closed_at timestamptz;
+
+-- Delivery state is only meaningful on a member row, and the delivery record
+-- stands or falls with its state. Only the leader run owns intake closure.
+ALTER TABLE conversation_queue_entries
+  ADD CONSTRAINT conversation_queue_steering_member_only_check
+  CHECK (steer_group_entry_id IS NOT NULL OR (steer_state = 'awaiting' AND steer_delivered_at IS NULL)),
+  ADD CONSTRAINT conversation_queue_steering_delivery_check
+  CHECK ((steer_state = 'delivered') = (steer_delivered_at IS NOT NULL)),
+  ADD CONSTRAINT conversation_queue_steering_intake_check
+  CHECK (steer_closed_at IS NULL OR steer_group_entry_id IS NULL);
+
+-- A member never holds a run lease: it is processed inside its leader's run.
+ALTER TABLE conversation_queue_entries
+  ADD CONSTRAINT conversation_queue_steering_lease_check
+  CHECK (steer_group_entry_id IS NULL OR lease_owner IS NULL);
+
+-- Member rows live and die with their leader row; the Session-level sweep and
+-- the account purge already delete every row of the group together.
+ALTER TABLE conversation_queue_entries
+  ADD CONSTRAINT conversation_queue_steering_group_fkey
+  FOREIGN KEY (account_id, steer_group_entry_id)
+  REFERENCES conversation_queue_entries(account_id, id) ON DELETE CASCADE;
+
+-- The runner reads awaiting members in accepted order and the admission path
+-- looks up the live leader under the advisory lock; both are per Session.
+CREATE INDEX conversation_queue_steering_idx
+  ON conversation_queue_entries(account_id, steer_group_entry_id, sequence)
+  WHERE steer_group_entry_id IS NOT NULL;

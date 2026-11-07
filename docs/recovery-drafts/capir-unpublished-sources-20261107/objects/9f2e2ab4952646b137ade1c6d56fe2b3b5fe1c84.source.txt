@@ -1,0 +1,69 @@
+import type { RuntimeObservationContext } from "@talent-signal/agent";
+import type { DatabaseClient } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import { chatSelectionChanged } from "./chatCompletionSources.js";
+import type { AuthContext } from "./auth.js";
+
+/** Host-owned reverse references; never accepted from a model or public request. */
+export async function productObservationContext(database: DatabaseClient, auth: Pick<AuthContext, "accountId" | "userId">, runID: string, scope: string,
+  sources: { sessionID?: string | null | undefined; personID?: string; contextID?: string; fragmentIDs?: string[];
+    mediaIDs?: string[]; screenshotTaskIDs?: string[] }): Promise<RuntimeObservationContext> {
+  const context: RuntimeObservationContext = { run_id: runID, workspace_id: auth.accountId,
+    authorization_scope: scope, source_session_id: sources.sessionID ?? null };
+  const fragments = sources.fragmentIDs ?? [], screenshotTasks = sources.screenshotTaskIDs ?? [];
+  // A conversation without a persisted Session or scoped source has no deletion owner.
+  if (!sources.sessionID && !sources.personID && !fragments.length && !sources.mediaIDs?.length) return context;
+  const expiry = [Date.now() + 7 * 86_400_000];
+  // Read stored source clocks, not renewed current grants. A known-new join
+  // miss is typed denial; it cannot silently downgrade into historical policy.
+  try {
+    const stored = (await database.query<{ known: boolean; state: string | null; canonical: Date | null; selected: Date | null }>(`
+      SELECT EXISTS (SELECT 1 FROM legacy_chat_task_attempts known
+        JOIN legacy_chat_task_intents owner ON owner.account_id=known.account_id AND owner.id=known.intent_id
+        WHERE known.account_id=$1 AND known.task_id::text=$3 AND owner.operation_scope='create_chat_task'
+          AND (known.original_authority->>'kind'='ordinary' OR known.auth_actor_kind IN
+            ('simulated_human','password_human','apple_human','google_human'))) AS known,
+        legacy_chat_observation_task_state($1,$3,$2) AS state,
+        i.canonical_retention_expires_at AS canonical,m.selected_source_expires_at AS selected
+      FROM (SELECT 1) root LEFT JOIN legacy_chat_task_attempts a ON a.account_id=$1 AND a.task_id::text=$3 AND a.actor_user_id=$2
+      LEFT JOIN legacy_chat_task_intents i ON i.account_id=a.account_id AND i.id=a.intent_id AND i.operation_scope='create_chat_task'
+        AND i.actor_user_id=a.actor_user_id AND i.current_attempt_id=a.id AND i.task_id=a.task_id AND i.fencing_generation=a.fencing_generation
+      LEFT JOIN context_manifests m ON m.account_id=i.account_id AND m.id=i.manifest_id
+        AND m.lifecycle_intent_id=i.id AND m.lifecycle_attempt_id=a.id AND m.lifecycle_actor_user_id=a.actor_user_id
+        AND m.task_id=a.task_id AND m.lifecycle_fencing_generation=a.fencing_generation`,[auth.accountId,auth.userId,runID])).rows;
+    if (stored.some(row=>row.known)) {
+      const row=stored.length===1 ? stored[0] : undefined;
+      if (!row || row.state === "withdrawn" || !row.canonical || !Number.isFinite(row.canonical.valueOf())
+        || row.selected && !Number.isFinite(row.selected.valueOf())) throw chatSelectionChanged();
+      expiry.push(row.canonical.valueOf());
+      if (row.selected) expiry.push(row.selected.valueOf());
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(503,"CHAT_OBSERVATION_SOURCE_UNAVAILABLE","The observation source could not be verified. Retry after its current state is available.");
+  }
+  if (sources.sessionID) {
+    const session = (await database.query<{ expires_at: Date }>(`SELECT expires_at FROM agent_sessions
+      WHERE account_id=$1 AND created_by_user_id=$2 AND id=$3 AND deleted_at IS NULL AND expires_at>now()`,
+    [auth.accountId, auth.userId, sources.sessionID])).rows[0];
+    if (!session) return context;
+    expiry.push(session.expires_at.valueOf());
+  }
+  const rows = (await database.query<{ id: string; retention_until: Date | null; authorization_expires_at: Date | null }>(
+    `SELECT DISTINCT c.id,c.retention_until,sr.authorization_expires_at FROM captures c
+      JOIN source_retention_receipts sr ON sr.account_id=c.account_id AND sr.capture_id=c.id
+      WHERE c.account_id=$1 AND (EXISTS (SELECT 1 FROM evidence_fragments f WHERE f.account_id=c.account_id
+        AND f.capture_id=c.id AND f.id=ANY($2::uuid[])) OR EXISTS (SELECT 1 FROM screenshot_contact_tasks t
+        WHERE t.account_id=c.account_id AND t.capture_id=c.id AND t.id=ANY($3::uuid[])))`,
+  [auth.accountId, fragments, screenshotTasks])).rows;
+  for (const row of rows) for (const time of [row.retention_until, row.authorization_expires_at]) if (time) expiry.push(time.valueOf());
+  if (screenshotTasks.length) {
+    const tasks = await database.query<{ expires_at: Date }>(`SELECT expires_at FROM screenshot_contact_tasks
+      WHERE account_id=$1 AND created_by_user_id=$2 AND id=ANY($3::uuid[])`, [auth.accountId, auth.userId, screenshotTasks]);
+    for (const task of tasks.rows) expiry.push(task.expires_at.valueOf());
+  }
+  context.source_refs = { kind: "product", capture_ids: rows.map((row) => row.id), fragment_ids: [...fragments],
+    media_ids: [...(sources.mediaIDs ?? [])], person_ids: sources.personID ? [sources.personID] : [],
+    relationship_context_ids: sources.contextID ? [sources.contextID] : [], expires_at: new Date(Math.min(...expiry)).toISOString() };
+  return context;
+}

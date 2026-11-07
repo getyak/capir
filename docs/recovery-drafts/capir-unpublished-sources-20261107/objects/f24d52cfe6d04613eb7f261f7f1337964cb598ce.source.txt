@@ -1,0 +1,134 @@
+import { Type, type Static } from "@sinclair/typebox";
+import { CONTRACT_VERSION } from "./constants.js";
+import {
+  AgentSessionRecordSchema,
+  AgentSessionPayloadSchema,
+  AgentSessionDeltaSyncStateSchema,
+} from "./agentSessionSchemas.js";
+
+const obj = { additionalProperties: false } as const;
+const id = Type.String({ format: "uuid" });
+const stamp = Type.String({ format: "date-time" });
+const text = (maxLength: number) => Type.String({ maxLength });
+
+/**
+ * One restricted JSON-pointer mutation of a Session payload.
+ *
+ * The server and the native clients share the same restrictions: no prototype
+ * keys, no absent parents, no invalid indexes, no fabricated execution or
+ * action authority. Paths are limited to the mutable surface of the canonical
+ * payload (new turns, metadata-array elements, drafts and pending execution
+ * metadata); identity, provenance and server-owned execution fields can only
+ * change through their own governed flows.
+ */
+export const AgentSessionDeltaOperationSchema = Type.Union(
+  [
+    Type.Object(
+      {
+        op: Type.Literal("add"),
+        path: Type.String({ minLength: 1, maxLength: 512 }),
+        value: Type.Unknown(),
+      },
+      obj,
+    ),
+    Type.Object(
+      {
+        op: Type.Literal("replace"),
+        path: Type.String({ minLength: 1, maxLength: 512 }),
+        value: Type.Unknown(),
+      },
+      obj,
+    ),
+    Type.Object(
+      {
+        op: Type.Literal("remove"),
+        path: Type.String({ minLength: 1, maxLength: 512 }),
+      },
+      obj,
+    ),
+  ],
+  { description: "Restricted add/remove/replace JSON-pointer operation." },
+);
+
+export const AgentSessionDeltaFrameRequestSchema = Type.Object(
+  {
+    /** Stable transfer identity; a new transfer must not reuse an active one. */
+    transfer_id: id,
+    expected_revision: Type.Integer({ minimum: 0 }),
+    idempotency_key: id,
+    /**
+     * SHA-256 of the domain-separated deterministic framing of the complete
+     * declared intent. Declared once at transfer start and immutable for
+     * ordinary continuation; never accepted as authority on its own.
+     */
+    target_payload_digest: Type.String({
+      minLength: 64,
+      maxLength: 64,
+      pattern: "^[0-9a-f]{64}$",
+    }),
+    operations: Type.Array(AgentSessionDeltaOperationSchema, {
+      maxItems: 256,
+    }),
+    /** Only the last frame may declare completion, and only when the rebuilt
+     * canonical payload matches the declared target digest. */
+    final: Type.Boolean(),
+    /**
+     * First offline creation only: a safe empty canonical skeleton with the
+     * original timestamps and retention. Prohibited when the Session row
+     * already exists.
+     */
+    skeleton: Type.Optional(AgentSessionPayloadSchema),
+  },
+  obj,
+);
+
+export const AgentSessionDeltaAbandonRequestSchema = Type.Object(
+  {
+    transfer_id: id,
+    expected_revision: Type.Integer({ minimum: 0 }),
+    idempotency_key: id,
+    reason: Type.Optional(
+      Type.Union([Type.Literal("abandon"), Type.Literal("rebase")]),
+    ),
+  },
+  obj,
+);
+
+/** Durable partial status lives on the record schema (agentSessionSchemas) so
+ * legacy readers and every consumer see the same visible incomplete state. */
+export { AgentSessionDeltaSyncStateSchema };
+
+export const AgentSessionDeltaTransferSchema = Type.Object(
+  {
+    transfer_id: id,
+    frame_index: Type.Integer({ minimum: 1 }),
+    replayed: Type.Boolean(),
+    complete: Type.Boolean(),
+  },
+  obj,
+);
+
+export const AgentSessionDeltaResponseSchema = Type.Object(
+  {
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    session: AgentSessionRecordSchema,
+    transfer: AgentSessionDeltaTransferSchema,
+  },
+  obj,
+);
+
+export type AgentSessionDeltaOperation = Static<
+  typeof AgentSessionDeltaOperationSchema
+>;
+export type AgentSessionDeltaFrameRequest = Static<
+  typeof AgentSessionDeltaFrameRequestSchema
+>;
+export type AgentSessionDeltaAbandonRequest = Static<
+  typeof AgentSessionDeltaAbandonRequestSchema
+>;
+export type AgentSessionDeltaTransfer = Static<
+  typeof AgentSessionDeltaTransferSchema
+>;
+export type AgentSessionDeltaResponse = Static<
+  typeof AgentSessionDeltaResponseSchema
+>;

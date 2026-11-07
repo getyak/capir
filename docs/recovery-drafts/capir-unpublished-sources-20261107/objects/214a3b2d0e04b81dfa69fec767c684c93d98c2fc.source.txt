@@ -1,0 +1,1400 @@
+// @vitest-environment node
+import { beforeEach, expect, it, vi } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
+
+/**
+ * Actual Web consumer chain for the macOS system authentication handoff
+ * (ADR 0019 / ADR 0020): real routes, real Auth.js JWT callback routing, the
+ * real LoginPage/ConfirmPage renderers, real cookie sealing and the real
+ * contracts HTTP client, with SEPARATE request cookie jars for the original
+ * WKWebView and the system authentication browser. Only the external
+ * boundaries are controlled: backend HTTP, provider launch and Next request
+ * transport. This is not live OAuth, native or PostgreSQL proof.
+ */
+
+const transport = vi.hoisted(() => ({
+  wk: new Map<string, { value: string; options: Record<string, unknown> }>(),
+  system: new Map<string, { value: string; options: Record<string, unknown> }>(),
+  active: "wk" as "wk" | "system",
+  applePost: false,
+}));
+
+vi.hoisted(() => {
+  process.env.AUTH_SECRET = "repo-desktop-chain-encryption-only";
+  process.env.AUTH_URL = "https://chain.example.invalid";
+  process.env.TALENT_SIGNAL_BACKEND_URL = "https://chain-backend.example.invalid";
+});
+
+vi.mock("next/headers", () => {
+  const jar = () => transport[transport.active];
+  const sent = () =>
+    [...jar()].filter(
+      ([, c]) =>
+        !transport.applePost ||
+        ((c.options.sameSite as string) === "none" && c.options.secure === true),
+    );
+  return {
+    cookies: async () => ({
+      get: (name: string) => {
+        const entry = sent().find(([key]) => key === name);
+        return entry ? { name, value: entry[1].value } : undefined;
+      },
+      set: (name: string, value: string, options: Record<string, unknown> = {}) =>
+        jar().set(name, { value, options }),
+      delete: (name: string) => jar().delete(name),
+    }),
+    headers: async () =>
+      new Headers({
+        host: "chain.example.invalid",
+        "x-forwarded-proto": "https",
+        origin: transport.applePost ? "https://appleid.apple.com" : "https://chain.example.invalid",
+        cookie: sent()
+          .map(([name, cookie]) => `${name}=${cookie.value}`)
+          .join("; "),
+      }),
+  };
+});
+
+vi.mock("next/navigation", () => ({
+  redirect: (url: string) => {
+    throw Object.assign(new Error("REDIRECT"), {
+      target: url,
+      digest: `NEXT_REDIRECT;replace;${url};307;`,
+    });
+  },
+}));
+
+vi.mock("next-auth", () => {
+  class AuthError extends Error {
+    static type = "AuthError";
+  }
+  class CredentialsSignin extends AuthError {
+    code = "";
+  }
+  return {
+    AuthError,
+    CredentialsSignin,
+    default: () => ({
+      handlers: {},
+      signOut: vi.fn(),
+      auth: async () => null,
+      signIn: async (provider: string, options: { redirectTo: string }) => {
+        const { buildAuthConfig } = await import("@/auth");
+        const cookie = buildAuthConfig().cookies!.callbackUrl!;
+        transport[transport.active].set(cookie.name as string, {
+          value: options.redirectTo,
+          options: cookie.options as Record<string, unknown>,
+        });
+        return provider === "apple"
+          ? "https://appleid.apple.com/auth/authorize?state=synthetic"
+          : "https://accounts.google.com/o/oauth2/v2/auth?state=synthetic";
+      },
+    }),
+  };
+});
+
+vi.mock("@/lib/server/apple-oauth", () => ({
+  getAppleOAuthCredentials: () => ({ clientId: "synthetic", clientSecret: "synthetic" }),
+}));
+vi.mock("@/lib/server/google-oauth", () => ({ getGoogleOAuthCredentials: () => null }));
+
+import { buildAuthConfig } from "@/auth";
+import { encode } from "next-auth/jwt";
+import { AUTH_SESSION_COOKIE } from "@/lib/server/backendAuth";
+import {
+  browserAttemptCookieName,
+  pairingCookieName,
+  readDesktopBrowserAttempt,
+} from "@/lib/server/desktopAuth";
+import { POST as preparePOST } from "@/app/api/desktop-auth/prepare/route";
+import { POST as consumePOST } from "@/app/api/desktop-auth/consume/route";
+import { POST as cancelPOST } from "@/app/api/desktop-auth/cancel/route";
+import { POST as completePOST } from "@/app/desktop-auth/complete/route";
+import { GET as authorizeGET } from "@/app/desktop-auth/authorize/route";
+import ConfirmPage from "@/app/desktop-auth/confirm/page";
+import LoginPage from "@/app/login/page";
+
+const ORIGIN = "https://chain.example.invalid";
+// The account/user the controlled settings fixture reports; the chain test
+// drives the real Server Action against these synthetic identities.
+let bodyAccountId = "10000000-0000-4000-8000-000000000001";
+let bodyUserId = "20000000-0000-4000-8000-000000000002";
+
+function treeNodes(node: unknown, type: string): Array<{ props?: Record<string, unknown> }> {
+  if (!node || typeof node !== "object") return [];
+  if (Array.isArray(node)) return node.flatMap((child) => treeNodes(child, type));
+  const element = node as { type?: unknown; props?: { children?: unknown } };
+  return [
+    ...(element.type === type ? [element as { props?: Record<string, unknown> }] : []),
+    ...treeNodes(element.props?.children, type),
+  ];
+}
+const attempts = new Map<string, Record<string, unknown>>();
+const consumeBodies = new Map<string, Record<string, unknown>>();
+let calls: Array<{ path: string; attempt_id?: string; expected_account_id?: string | null }> = [];
+
+function jsonPost(path: string, body: unknown) {
+  return new Request(ORIGIN + path, {
+    method: "POST",
+    headers: { origin: ORIGIN, "content-type": "application/json", "sec-fetch-dest": "document" },
+    body: JSON.stringify(body),
+  });
+}
+
+function formPost(path: string, fields: Record<string, string>) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.set(key, value);
+  return new Request(ORIGIN + path, {
+    method: "POST",
+    headers: { origin: ORIGIN, "sec-fetch-dest": "document" },
+    body: form,
+  });
+}
+
+/** Controlled backend fixture standing in for the real HTTP boundary. */
+async function backendFixture(url: unknown, init: { body?: string; headers?: HeadersInit } = {}) {
+  const parsed = new URL(String(url));
+  expect(parsed.origin).toBe("https://chain-backend.example.invalid");
+  const body = init.body ? JSON.parse(init.body) : {};
+  const path = parsed.pathname;
+  calls.push({
+    path,
+    attempt_id: body.attempt_id,
+    expected_account_id: body.expected_account_id ?? null,
+  });
+  const id = (body.attempt_id ?? path.split("/").at(-1)) as string;
+  let value: Record<string, unknown>;
+  if (path === "/v1/account/login-methods/attempts") {
+    return new Response(
+      JSON.stringify({
+        contract_version: "2026-08-24.10",
+        attempt_id: randomUUID(),
+        attempt_secret: "fixture-attempt-secret-abcdefghijklmnopqrstuvwxyz",
+        intent: body.intent ?? "link_provider",
+        provider: body.provider ?? "google",
+        expires_at: new Date(Date.now() + 300_000).toISOString(),
+        provider_challenge: {
+          challenge_id: randomUUID(),
+          nonce: "fixture-target-nonce",
+          expires_at: new Date(Date.now() + 300_000).toISOString(),
+        },
+      }),
+      { status: 201, headers: { "content-type": "application/json" } },
+    );
+  }
+  if (path === "/v1/account/settings") {
+    return new Response(
+      JSON.stringify({
+        contract_version: "2026-08-24.10",
+        user: { id: bodyUserId, revision: 2, email: "actor@example.test", display_name: "Actor", username: null, kind: "google_human", login_methods: ["google"], email_verified_at: null },
+        workspace: { id: bodyAccountId, revision: 3, name: "Actor", slug: "actor", owner_user_id: bodyUserId, role: "member", is_owner: true, can_manage: true, is_test: false },
+        sign_in_methods: [], email_ownership_state: "verified", sessions: [], members: [], activity: [], lab_enabled: false,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+  if (path === "/v1/auth/google/challenges" || path === "/v1/auth/apple/challenges") {
+    return new Response(
+      JSON.stringify({
+        contract_version: "2026-08-24.10",
+        challenge_id: randomUUID(),
+        nonce: "fixture-challenge-nonce",
+        expires_at: new Date(Date.now() + 300_000).toISOString(),
+      }),
+      { status: 201, headers: { "content-type": "application/json" } },
+    );
+  }
+  if (path === "/v1/desktop-auth/prepare") {
+    const attempt_id = randomUUID();
+    value = {
+      contract_version: "2026-08-24.10",
+      attempt_id,
+      pairing_secret: "p".repeat(43),
+      expires_at: new Date(Date.now() + 300_000).toISOString(),
+      pending_path: `/desktop-auth/pending?attempt=${attempt_id}&state=${body.state}`,
+    };
+    attempts.set(attempt_id, { ...body, ...value, status: "prepared" });
+  } else {
+    const attempt = attempts.get(id);
+    expect(attempt, "fixture only accepts issued attempts").toBeDefined();
+    if (path === "/v1/desktop-auth/authorize") {
+      attempt!.provider_challenge_id = randomUUID();
+      attempt!.status = "authorizing";
+      value = {
+        ...attempt,
+        provider_challenge: {
+          challenge_id: attempt!.provider_challenge_id,
+          nonce: "expected-oidc-nonce",
+          expires_at: attempt!.expires_at,
+        },
+        oidc_nonce: "expected-oidc-nonce",
+        role: attempt!.role ?? "login",
+        purpose: attempt!.purpose ?? "login",
+        flow_ref: attempt!.flow_ref ?? null,
+        round_ref: attempt!.round_ref ?? null,
+        intent: attempt!.intent ?? null,
+        target_provider: attempt!.target_provider ?? null,
+      };
+    } else if (path === "/v1/desktop-auth/approve") {
+      expect(body.challenge_id).toBe(attempt!.provider_challenge_id);
+      attempt!.status = "approved";
+      value = {
+        ...attempt,
+        verified: {
+          provider: attempt!.provider,
+          email_hint: "verified@example.test",
+          email_verified: true,
+          display_name: "Verified",
+        },
+      };
+    } else if (path.startsWith("/v1/desktop-auth/attempts/")) {
+      value = {
+        ...attempt,
+        verified: attempt!.approved_at || attempt!.status === "approved"
+          ? {
+              provider: attempt!.provider,
+              email_hint: "verified@example.test",
+              email_verified: true,
+              display_name: "Verified",
+            }
+          : null,
+      };
+    } else if (path === "/v1/desktop-auth/complete") {
+      expect(attempt!.status).toBe("approved");
+      attempt!.code = "c".repeat(43);
+      value = { ...attempt, code: attempt!.code };
+    } else if (path === "/v1/desktop-auth/consume") {
+      consumeBodies.set(id, body);
+      expect(body.pairing_secret).toBe("p".repeat(43));
+      attempt!.status = "consumed";
+      if (attempt!.purpose === "login") {
+        value = {
+          status: "logged_in",
+          session: {
+            access_token: "synthetic-device-session",
+            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+            account: { id: randomUUID(), name: "Synthetic", slug: "synthetic" },
+            user: {
+              id: randomUUID(),
+              email: "user@example.test",
+              display_name: "Synthetic",
+              role: "member",
+              username: null,
+            },
+          },
+        };
+      } else if (attempt!.intent === "set_password") {
+        attempt!.credential_attempt_id = randomUUID();
+        value = {
+          status: "awaiting_password",
+          continuation: {
+            flow_ref: attempt!.flow_ref,
+            round_ref: attempt!.round_ref,
+            role: "current",
+            intent: "set_password",
+            target_provider: "password",
+            credential_attempt_id: attempt!.credential_attempt_id,
+            attempt_secret: "s".repeat(43),
+            provider_challenge: null,
+          },
+        };
+      } else {
+        attempt!.credential_attempt_id = randomUUID();
+        value = {
+          status: "awaiting_target",
+          continuation: {
+            flow_ref: attempt!.flow_ref,
+            round_ref: attempt!.round_ref,
+            role: "current",
+            intent: "link_provider",
+            target_provider: "google",
+            credential_attempt_id: attempt!.credential_attempt_id,
+            attempt_secret: "s".repeat(43),
+            provider_challenge: {
+              challenge_id: randomUUID(),
+              oidc_nonce: "target-nonce",
+              expires_at: new Date(Date.now() + 300_000).toISOString(),
+            },
+          },
+        };
+      }
+    } else if (path === "/v1/desktop-auth/result") {
+    value = {
+      contract_version: "2026-08-24.10",
+      attempt_id: id,
+      status: "pending_continuation",
+      result: null,
+      continuation: {
+        flow_ref: attempt!.flow_ref ?? `flow-${randomUUID()}`,
+        round_ref: attempt!.round_ref ?? `round-${randomUUID()}`,
+        role: "current",
+        intent: attempt!.intent ?? "set_password",
+        target_provider: attempt!.target_provider ?? "password",
+        credential_attempt_id: (attempt!.credential_attempt_id as string) ?? randomUUID(),
+        attempt_secret: "recovered-secret-abcdefghijklmnopqrstuvwxyz",
+        provider_challenge: null,
+      },
+      settings: null,
+    };
+  } else if (path === "/v1/desktop-auth/ack") {
+    value = {
+      contract_version: "2026-08-24.10",
+      attempt_id: id,
+      acknowledged: true,
+      status: "pending_continuation",
+    };
+  } else if (path === "/v1/desktop-auth/cancel") {
+      if (body.mode === "system") expect(body.state).toBeDefined();
+      if (body.mode === "wk") expect(body.pairing_secret).toBe("p".repeat(43));
+      attempt!.status = "cancelled";
+      value = { ...attempt, status: "cancelled", purpose: attempt!.purpose ?? "login" };
+    } else {
+      throw new Error("Unexpected consumer path " + path);
+    }
+  }
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+beforeEach(() => {
+  transport.wk.clear();
+  transport.system.clear();
+  transport.active = "wk";
+  transport.applePost = false;
+  attempts.clear();
+  calls = [];
+  vi.stubGlobal("fetch", vi.fn(backendFixture));
+});
+
+async function wkPrepare(options: {
+  provider?: "google" | "apple";
+  purpose?: "login" | "credential_round";
+  role?: "login" | "current" | "target";
+  intent?: string;
+  expected_account_id?: string;
+} = {}) {
+  transport.active = "wk";
+  const response = await preparePOST(
+    jsonPost("/api/desktop-auth/prepare", {
+      provider: options.provider ?? "google",
+      purpose: options.purpose ?? "login",
+      role: options.role ?? (options.purpose === "credential_round" ? "current" : "login"),
+      code_challenge: "h".repeat(43),
+      state: randomUUID().replaceAll("-", ""),
+      ...(options.intent ? { intent: options.intent } : {}),
+      ...(options.expected_account_id ? { expected_account_id: options.expected_account_id } : {}),
+    }),
+  );
+  expect(response.status, response.headers.get("location") ?? "").toBe(303);
+  expect(response.headers.get("location") ?? "", "prepare target").toContain("/desktop-auth/pending");
+  const pending = new URL(response.headers.get("location")!, ORIGIN);
+  const attempt = attempts.get(pending.searchParams.get("attempt")!)!;
+  expect(transport.wk.has(pairingCookieName(attempt.attempt_id as string))).toBe(true);
+  return attempt;
+}
+
+async function systemRound(attempt: Record<string, unknown>) {
+  transport.active = "system";
+  const response = await authorizeGET(
+    new Request(
+      `${ORIGIN}/desktop-auth/authorize?attempt=${attempt.attempt_id}&state=${attempt.state}`,
+    ),
+  );
+  expect(response.status).toBe(303);
+  expect(new URL(response.headers.get("location")!).hostname).toBe(
+    attempt.provider === "apple" ? "appleid.apple.com" : "accounts.google.com",
+  );
+  const sealed = await readDesktopBrowserAttempt(attempt.attempt_id as string);
+  expect(sealed?.attempt_id).toBe(attempt.attempt_id);
+  expect(sealed?.state).toBe(attempt.state);
+  transport.applePost = attempt.provider === "apple";
+  await expect(
+    buildAuthConfig().callbacks!.jwt!({
+      token: {},
+      user: { id: "synthetic-provider-user" },
+      account: {
+        provider: attempt.provider,
+        id_token: `synthetic-provider-token-${attempt.provider_challenge_id}`,
+      },
+      profile: {},
+    } as never),
+  ).rejects.toThrow("desktop_staged");
+  transport.applePost = false;
+  try {
+    await LoginPage({ searchParams: Promise.resolve({ error: "AccessDenied" }) });
+    throw new Error("Expected redirect");
+  } catch (error) {
+    expect((error as { target?: string }).target).toBe(
+      `/desktop-auth/confirm?attempt=${attempt.attempt_id}`,
+    );
+  }
+  // The system jar never receives an ordinary session cookie.
+  expect(transport.system.has(AUTH_SESSION_COOKIE)).toBe(false);
+  return ConfirmPage({ searchParams: Promise.resolve({ attempt: attempt.attempt_id as string }) });
+}
+
+it("completes the Google login chain through confirmation and the WK consume", async () => {
+  const attempt = await wkPrepare({ provider: "google" });
+  const page = await systemRound(attempt);
+  const forms = treeNodes(page, "form").map((form) => form.props?.action);
+  expect(forms).toContain("/desktop-auth/complete");
+  const response = await completePOST(
+    formPost("/desktop-auth/complete", { attempt_id: attempt.attempt_id as string }),
+  );
+  const callback = new URL(response.headers.get("location")!);
+  expect(callback.protocol).toBe("com.talentsignal.macos.auth:");
+  expect(callback.searchParams.get("attempt")).toBe(attempt.attempt_id);
+  transport.active = "wk";
+  const result = await consumePOST(
+    jsonPost("/api/desktop-auth/consume", {
+      attempt_id: attempt.attempt_id,
+      code: callback.searchParams.get("code"),
+      verifier: "v".repeat(43),
+    }),
+  );
+  expect(result.headers.get("location")).toBe("/workspace");
+  expect(transport.wk.has(AUTH_SESSION_COOKIE)).toBe(true);
+  expect(transport.wk.has(pairingCookieName(attempt.attempt_id as string))).toBe(false);
+});
+
+it("completes the Apple chain with form-post cookie policy", async () => {
+  const attempt = await wkPrepare({ provider: "apple" });
+  const page = await systemRound(attempt);
+  expect(treeNodes(page, "form").map((form) => form.props?.action)).toContain("/desktop-auth/complete");
+  const response = await completePOST(
+    formPost("/desktop-auth/complete", { attempt_id: attempt.attempt_id as string }),
+  );
+  expect(new URL(response.headers.get("location")!).searchParams.get("code")).toBeTruthy();
+});
+
+it("a stale A complete form with current B never mints a code and preserves B", async () => {
+  const a = await wkPrepare({ provider: "google" });
+  await systemRound(a);
+  const b = await wkPrepare({ provider: "apple" });
+  await systemRound(b);
+  const response = await completePOST(formPost("/desktop-auth/complete", { attempt_id: a.attempt_id as string }));
+  expect(response.status).toBe(409);
+  const minted = calls.filter((call) => call.path === "/v1/desktop-auth/complete");
+  expect(minted.some((call) => call.attempt_id === b.attempt_id)).toBe(false);
+  expect(minted.some((call) => call.attempt_id === a.attempt_id)).toBe(false);
+  // B's sealed round and cookies survive; its own form still works.
+  expect(transport.system.has(browserAttemptCookieName(b.attempt_id as string))).toBe(true);
+  const fresh = await completePOST(formPost("/desktop-auth/complete", { attempt_id: b.attempt_id as string }));
+  const callback = new URL(fresh.headers.get("location")!);
+  expect(callback.searchParams.get("attempt")).toBe(b.attempt_id);
+});
+
+it("system cancel cancels the owned attempt and emits the fixed cancelled callback", async () => {
+  const attempt = await wkPrepare({ provider: "google" });
+  await systemRound(attempt);
+  const response = await cancelPOST(
+    formPost("/api/desktop-auth/cancel", { attempt_id: attempt.attempt_id as string }),
+  );
+  const cancelCalls = calls.filter((call) => call.path === "/v1/desktop-auth/cancel");
+  expect(cancelCalls).toHaveLength(1);
+  const location = new URL(response.headers.get("location")!);
+  expect(location.protocol).toBe("com.talentsignal.macos.auth:");
+  expect(location.searchParams.get("outcome")).toBe("cancelled");
+  expect(location.searchParams.get("attempt")).toBe(attempt.attempt_id);
+  expect(location.searchParams.get("code")).toBeNull();
+  // The system jar's sealed round is cleared; nothing claims success for a
+  // consumed result.
+  expect(transport.system.has(browserAttemptCookieName(attempt.attempt_id as string))).toBe(false);
+});
+
+it("the real Server Action start reaches prepare and a password round seals both continuations", async () => {
+  // Real Server Action -> actual prepare handler: the frozen operation and
+  // round are created by `startProviderReauth` itself (reauthChallengeId and
+  // the sealed round challenge agree), never by invented recovery state.
+  const { startProviderReauth } = await import(
+    "@/app/workspace/settings/login-methods/actions"
+  );
+  const { sessionFingerprint } = await import("@/lib/server/stagedAuth");
+  const { AUTH_SESSION_COOKIE: sessionCookie, authSecret } = await import(
+    "@/lib/server/backendAuth"
+  );
+  const accountId = bodyAccountId;
+  const userId = bodyUserId;
+  const claims = {
+    backendAccessToken: "synthetic-actor",
+    backendAccountId: accountId,
+    backendAccountName: "Actor",
+    backendAccountSlug: "actor",
+    backendUserId: userId,
+    backendExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    backendRole: "member" as const,
+    backendUsername: null,
+  };
+  transport.wk.set(sessionCookie, {
+    value: await encode({ secret: authSecret(), salt: sessionCookie, maxAge: 3600, token: claims }),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  void sessionFingerprint;
+  const originalSessionCookie = transport.wk.get(sessionCookie)?.value;
+
+  const form = new FormData();
+  form.set("intent", "set_password");
+  form.set("reauthProvider", "google");
+  form.set("accountId", accountId);
+  form.set("userId", userId);
+  form.set("accountRevision", "3");
+  form.set("userRevision", "2");
+  form.set("operationRef", "");
+  form.set("nativeHost", "1");
+  form.set("hasPassword", "false");
+  let redirected: string | null = null;
+  try {
+    await startProviderReauth(form);
+    throw new Error("Expected native redirect");
+  } catch (error) {
+    redirected = (error as { target?: string }).target ?? null;
+  }
+  // The capable host gets the fixed native request link and embedded signIn is
+  // never invoked for this flow.
+  expect(redirected).toContain("/desktop-auth/request?provider=google&purpose=credential_round&role=current");
+
+  const attempt = await wkPrepare({
+    purpose: "credential_round",
+    role: "current",
+    intent: "set_password",
+    expected_account_id: accountId,
+  });
+  const prepareCall = calls.find((call) => call.path === "/v1/desktop-auth/prepare");
+  // The frozen rendered scope travels as an expected comparator.
+  expect(prepareCall?.expected_account_id).toBe(accountId);
+  const page = await systemRound(attempt);
+  expect(JSON.stringify(page)).toContain("密码");
+  const response = await completePOST(
+    formPost("/desktop-auth/complete", { attempt_id: attempt.attempt_id as string }),
+  );
+  const callback = new URL(response.headers.get("location")!);
+  transport.active = "wk";
+  const consume = await consumePOST(
+    jsonPost("/api/desktop-auth/consume", {
+      attempt_id: attempt.attempt_id,
+      code: callback.searchParams.get("code"),
+      verifier: "v".repeat(43),
+    }),
+  );
+  expect(consume.headers.get("location")).toContain("/workspace/settings?desktop-auth=password");
+  // The server-sealed per-flow continuation resolves the SAME grant for the
+  // real password consumer; relay state is never mirrored into a shared
+  // mutable credential cookie (a held older response cannot overwrite it).
+  expect([...transport.wk.keys()].some((name) => name.includes("desktop-continuation"))).toBe(true);
+  const { resolveActiveCredentialGrant } = await import("@/lib/server/desktopAuth");
+  const resolved = await resolveActiveCredentialGrant();
+  expect(resolved?.continuation.credential_attempt_id).toBeTruthy();
+  expect(resolved?.continuation.intent).toBe("set_password");
+  expect(transport.wk.has("talent-signal.credential-attempt")).toBe(false);
+  // The pairing authority survives the successful consume until the REAL
+  // server acknowledgment (a WK navigation is not an acknowledgment).
+  expect(transport.wk.has(pairingCookieName(attempt.attempt_id as string))).toBe(true);
+  // The primary session is never replaced by a credential continuation.
+  expect(transport.wk.get(sessionCookie)?.value).toBe(originalSessionCookie);
+});
+
+it("stale rendered actor is forwarded as an expected comparator and refused by scope", async () => {
+  const actorA = randomUUID();
+  const actorB = randomUUID();
+  const { sealAuthOperation, sealAuthRound, sessionFingerprint } = await import(
+    "@/lib/server/stagedAuth"
+  );
+  const { AUTH_SESSION_COOKIE: sessionCookie, authSecret } = await import(
+    "@/lib/server/backendAuth"
+  );
+  const claims = {
+    backendAccessToken: "synthetic-actor-B",
+    backendAccountId: actorB,
+    backendAccountName: "Actor B",
+    backendAccountSlug: "actor-b",
+    backendUserId: randomUUID(),
+    backendExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    backendRole: "member" as const,
+    backendUsername: null,
+  };
+  transport.wk.set(sessionCookie, {
+    value: await encode({ secret: authSecret(), salt: sessionCookie, maxAge: 3600, token: claims }),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  const operation = {
+    ref: randomUUID(),
+    intent: "link_provider" as const,
+    reauthProvider: "apple" as const,
+    reauthChallengeId: randomUUID(),
+    clientLabel: "talent-signal-web",
+    accountId: actorA,
+    userId: randomUUID(),
+    sessionFingerprint: sessionFingerprint(claims.backendAccessToken),
+    accountRevision: 1,
+    userRevision: 1,
+    step: "awaiting-reauth" as const,
+    roleChallenges: { current: { provider: "apple" as const, challengeId: randomUUID() } },
+    createdAt: new Date().toISOString(),
+  };
+  await sealAuthOperation(operation, true);
+  await sealAuthRound(
+    {
+      roundRef: randomUUID(),
+      flowRef: operation.ref,
+      role: "current",
+      provider: "apple",
+      challengeId: operation.roleChallenges.current.challengeId,
+      purpose: "reauth",
+      createdAt: operation.createdAt,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    },
+    true,
+  );
+  const response = await preparePOST(
+    jsonPost("/api/desktop-auth/prepare", {
+      provider: "apple",
+      purpose: "credential_round",
+      role: "current",
+      code_challenge: "h".repeat(43),
+      state: "s".repeat(32),
+      intent: "link_provider",
+      expected_account_id: actorA,
+      expected_account_revision: 1,
+      expected_user_revision: 1,
+    }),
+  );
+  // The sealed flow names actor A while the live session is B: the resolved
+  // scope cannot match the CURRENT session, so the round is refused before any
+  // backend prepare call.
+  expect([303, 409]).toContain(response.status);
+  expect(calls.filter((call) => call.path === "/v1/desktop-auth/prepare")).toHaveLength(0);
+});
+
+it("hashes the OIDC nonce exactly once and never rebuilds the callback with tokens", async () => {
+  const attempt = await wkPrepare({ provider: "google" });
+  transport.active = "system";
+  const response = await authorizeGET(
+    new Request(
+      `${ORIGIN}/desktop-auth/authorize?attempt=${attempt.attempt_id}&state=${attempt.state}`,
+    ),
+  );
+  const location = response.headers.get("location")!;
+  expect(location).toContain("nonce=expected-oidc-nonce");
+  expect(location).not.toContain("expected-oidc-nonceexpected-oidc-nonce");
+  expect(createHash("sha256").update("expected-oidc-nonce").digest("hex")).not.toBe(
+    "expected-oidc-nonce",
+  );
+});
+
+it("an uncertain consume keeps its pairing authority and recovers through the sealed result", async () => {
+  // A real current round produces a sealed continuation; then only the
+  // consume RESPONSE is lost (network failure after the request left).
+  const { sealAuthOperation, sealAuthRound, sessionFingerprint } = await import(
+    "@/lib/server/stagedAuth"
+  );
+  const { AUTH_SESSION_COOKIE: sessionCookie, authSecret } = await import(
+    "@/lib/server/backendAuth"
+  );
+  const claims = {
+    backendAccessToken: "synthetic-actor",
+    backendAccountId: bodyAccountId,
+    backendAccountName: "Actor",
+    backendAccountSlug: "actor",
+    backendUserId: bodyUserId,
+    backendExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    backendRole: "member" as const,
+    backendUsername: null,
+  };
+  transport.wk.set(sessionCookie, {
+    value: await encode({ secret: authSecret(), salt: sessionCookie, maxAge: 3600, token: claims }),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  const challengeId = randomUUID();
+  const operation = {
+    ref: randomUUID(),
+    intent: "set_password" as const,
+    reauthProvider: "google" as const,
+    reauthChallengeId: challengeId,
+    clientLabel: "talent-signal-web",
+    accountId: claims.backendAccountId,
+    userId: claims.backendUserId,
+    sessionFingerprint: sessionFingerprint(claims.backendAccessToken),
+    accountRevision: 3,
+    userRevision: 2,
+    step: "awaiting-reauth" as const,
+    createdAt: new Date().toISOString(),
+  };
+  await sealAuthOperation(operation, false);
+  await sealAuthRound(
+    {
+      roundRef: randomUUID(),
+      flowRef: operation.ref,
+      role: "current",
+      provider: "google",
+      challengeId,
+      purpose: "reauth",
+      createdAt: operation.createdAt,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    },
+    false,
+  );
+  const attempt = await wkPrepare({
+    purpose: "credential_round",
+    role: "current",
+    intent: "set_password",
+    expected_account_id: claims.backendAccountId,
+  });
+  const page = await systemRound(attempt);
+  expect(JSON.stringify(page)).toContain("密码");
+  const response = await completePOST(
+    formPost("/desktop-auth/complete", { attempt_id: attempt.attempt_id as string }),
+  );
+  const callback = new URL(response.headers.get("location")!);
+  transport.active = "wk";
+
+  // The consume request leaves but its response is lost.
+  let consumeDispatched = 0;
+  const failingFetch = vi.fn(async (url: unknown, init?: { body?: string }) => {
+    const path = new URL(String(url)).pathname;
+    if (path === "/v1/desktop-auth/consume") {
+      consumeDispatched += 1;
+      calls.push({ path, attempt_id: JSON.parse(init?.body ?? "{}").attempt_id });
+      throw new TypeError("Response lost after server commit");
+    }
+    return backendFixture(url, init ?? {});
+  });
+  vi.stubGlobal("fetch", failingFetch);
+  const uncertain = await consumePOST(
+    jsonPost("/api/desktop-auth/consume", {
+      attempt_id: attempt.attempt_id,
+      code: callback.searchParams.get("code"),
+      verifier: "v".repeat(43),
+    }),
+  );
+  // Uncertainty is reported on the operation's recovery surface and the
+  // pairing authority is KEPT for the paired result read.
+  expect(uncertain.headers.get("location")).toContain("/workspace/settings?desktop-auth=unknown");
+  expect(transport.wk.has(pairingCookieName(attempt.attempt_id as string))).toBe(true);
+  expect(consumeDispatched).toBe(1);
+
+  // The paired result read recovers the SAME sealed continuation and exposes
+  // no secret to the page.
+  vi.stubGlobal("fetch", vi.fn(backendFixture));
+  const { POST: resultPOST } = await import("@/app/api/desktop-auth/result/route");
+  const recovered = await resultPOST(
+    jsonPost("/api/desktop-auth/result", { attempt_id: attempt.attempt_id, verifier: "v".repeat(43) }),
+  );
+  expect(recovered.status).toBe(200);
+  const payload = await recovered.json();
+  expect(payload.status).toBe("pending_continuation");
+  expect(JSON.stringify(payload)).not.toContain("recovered-secret-abcdefghijklmnopqrstuvwxyz");
+  expect(JSON.stringify(payload)).not.toContain("attempt_secret");
+  expect(payload.destination).toBe("/workspace/settings");
+  // The recovered continuation is SERVER-sealed, never returned raw.
+  expect([...transport.wk.keys()].some((name) => name.includes("desktop-continuation"))).toBe(true);
+
+  // The real acknowledgment consumes the pairing authority and returns to the
+  // fixed purpose route; no mutation is replayed.
+  const { POST: ackPOST } = await import("@/app/api/desktop-auth/ack/route");
+  const acked = await ackPOST(
+    jsonPost("/api/desktop-auth/ack", { attempt_id: attempt.attempt_id, verifier: "v".repeat(43) }),
+  );
+  expect(acked.headers.get("location")).toContain("/workspace/settings?desktop-auth=acknowledged");
+  // A PENDING continuation ack confirms only that the grant is sealed: the
+  // pairing/verifier authority survives for the later password mutation's
+  // recovery and is released only by a committed ACK or honest terminal.
+  expect(transport.wk.has(pairingCookieName(attempt.attempt_id as string))).toBe(true);
+  expect(consumeDispatched, "the one-use consume is never replayed").toBe(1);
+});
+
+it("a stale or mismatched acknowledgment never clears a newer operation", async () => {
+  const { sealDesktopContinuation } = await import("@/lib/server/desktopAuth");
+  // Two rounds: A (stale) and B (current). A's ack must not touch B.
+  const a = await wkPrepare({ purpose: "login", provider: "google" });
+  await systemRound(a);
+  const b = await wkPrepare({ purpose: "login", provider: "apple" });
+  await systemRound(b);
+  transport.active = "wk";
+  transport.wk.set(pairingCookieName(a.attempt_id as string), {
+    value: "p".repeat(43),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  transport.wk.set(pairingCookieName(b.attempt_id as string), {
+    value: "p".repeat(43),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  await sealDesktopContinuation(a.attempt_id as string, {
+    flow_ref: "flow-aaaaaaaa",
+    round_ref: "round-aaaaaaaa",
+    role: "current",
+    intent: "set_password",
+    target_provider: "password",
+    credential_attempt_id: "credential-aaaaaaaa",
+    attempt_secret: "a".repeat(43),
+    provider_challenge: null,
+  });
+  const { POST: ackPOST } = await import("@/app/api/desktop-auth/ack/route");
+  const stale = await ackPOST(
+    jsonPost("/api/desktop-auth/ack", {
+      attempt_id: a.attempt_id,
+      verifier: "v".repeat(43),
+      credential_attempt_id: "credential-bbbbbbbb",
+    }),
+  );
+  expect(stale.status).toBe(409);
+  // Neither operation's pairing is cleared by the refused acknowledgment.
+  expect(transport.wk.has(pairingCookieName(a.attempt_id as string))).toBe(true);
+  expect(transport.wk.has(pairingCookieName(b.attempt_id as string))).toBe(true);
+});
+
+it("capable-host mode returns the strict receipt contract and never a secret", async () => {
+  // The same real current round, driven through the CAPABLE transport: strict
+  // request reference (query + body + header), 200 minimal HTML and the
+  // allowlisted receipt headers only after authoritative success and sealing.
+  const { sealAuthOperation, sealAuthRound, sessionFingerprint } = await import(
+    "@/lib/server/stagedAuth"
+  );
+  const { AUTH_SESSION_COOKIE: sessionCookie, authSecret } = await import(
+    "@/lib/server/backendAuth"
+  );
+  const claims = {
+    backendAccessToken: "synthetic-actor",
+    backendAccountId: bodyAccountId,
+    backendAccountName: "Actor",
+    backendAccountSlug: "actor",
+    backendUserId: bodyUserId,
+    backendExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    backendRole: "member" as const,
+    backendUsername: null,
+  };
+  transport.wk.set(sessionCookie, {
+    value: await encode({ secret: authSecret(), salt: sessionCookie, maxAge: 3600, token: claims }),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  const challengeId = randomUUID();
+  const operation = {
+    ref: randomUUID(),
+    intent: "set_password" as const,
+    reauthProvider: "google" as const,
+    reauthChallengeId: challengeId,
+    clientLabel: "talent-signal-web",
+    accountId: claims.backendAccountId,
+    userId: claims.backendUserId,
+    sessionFingerprint: sessionFingerprint(claims.backendAccessToken),
+    accountRevision: 3,
+    userRevision: 2,
+    step: "awaiting-reauth" as const,
+    createdAt: new Date().toISOString(),
+  };
+  await sealAuthOperation(operation, false);
+  await sealAuthRound(
+    {
+      roundRef: randomUUID(),
+      flowRef: operation.ref,
+      role: "current",
+      provider: "google",
+      challengeId,
+      purpose: "reauth",
+      createdAt: operation.createdAt,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    },
+    false,
+  );
+  const attempt = await wkPrepare({
+    purpose: "credential_round",
+    role: "current",
+    intent: "set_password",
+    expected_account_id: claims.backendAccountId,
+  });
+  const page = await systemRound(attempt);
+  expect(JSON.stringify(page)).toContain("密码");
+  const response = await completePOST(
+    formPost("/desktop-auth/complete", { attempt_id: attempt.attempt_id as string }),
+  );
+  const callback = new URL(response.headers.get("location")!);
+  transport.active = "wk";
+
+  const ref = "xchg-web-1-1-1-abcdefgh";
+  const consume = await consumePOST(
+    new Request(`${ORIGIN}/api/desktop-auth/consume?ref=${ref}`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "sec-fetch-dest": "document",
+        "x-desktop-transport": "capable-v2",
+        "x-request-ref": ref,
+      },
+      body: JSON.stringify({
+        attempt_id: attempt.attempt_id,
+        code: callback.searchParams.get("code"),
+        verifier: "v".repeat(43),
+        request_ref: ref,
+      }),
+    }),
+  );
+  // A valid receipt: 200 minimal HTML with exactly the allowlisted headers.
+  expect(consume.status).toBe(200);
+  expect(consume.headers.get("content-type")).toContain("text/html");
+  expect(consume.headers.get("x-desktop-receipt-version")).toBe("1");
+  expect(consume.headers.get("x-desktop-request-ref")).toBe(ref);
+  expect(consume.headers.get("x-desktop-attempt-ref")).toBe(attempt.attempt_id);
+  expect(consume.headers.get("x-desktop-outcome")).toBe("continue-password");
+  expect(consume.headers.get("x-desktop-grant-ref")).toBeTruthy();
+  const document = await consume.text();
+  expect(document).not.toContain("attempt_secret");
+  expect(document).not.toContain("recovered-secret");
+  // The continuation is SERVER-sealed and the pairing authority is retained
+  // for the real acknowledgment.
+  expect([...transport.wk.keys()].some((name) => name.includes("desktop-continuation"))).toBe(true);
+  expect(transport.wk.has(pairingCookieName(attempt.attempt_id as string))).toBe(true);
+
+  // An INCONSISTENT request reference (query/header/body disagree) is refused
+  // before any backend call: the reference is strict correlation only. A
+  // consistent-but-old reference is matched and rejected by the native receipt
+  // policy (covered in the macOS tests), never by trusting the echo here.
+  const stale = await consumePOST(
+    new Request(`${ORIGIN}/api/desktop-auth/consume?ref=xchg-stale-1-1-zzzzzzzz`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "sec-fetch-dest": "document",
+        "x-desktop-transport": "capable-v2",
+        "x-request-ref": "xchg-other-2-2-yyyyyyyy",
+      },
+      body: JSON.stringify({
+        attempt_id: attempt.attempt_id,
+        code: "c".repeat(43),
+        verifier: "v".repeat(43),
+        request_ref: "xchg-stale-1-1-zzzzzzzz",
+      }),
+    }),
+  );
+  expect(stale.status).toBe(400);
+  expect(stale.headers.get("x-desktop-outcome")).toBeNull();
+
+  // The real ACK consumes the pairing and returns its own receipt.
+  const ackRef = "xchg-web-2-2-2-abcdefgh";
+  const { POST: ackPOST } = await import("@/app/api/desktop-auth/ack/route");
+  const acked = await ackPOST(
+    new Request(`${ORIGIN}/api/desktop-auth/ack?ref=${ackRef}`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "sec-fetch-dest": "document",
+        "x-desktop-transport": "capable-v2",
+        "x-request-ref": ackRef,
+      },
+      body: JSON.stringify({
+        attempt_id: attempt.attempt_id,
+        verifier: "v".repeat(43),
+        request_ref: ackRef,
+      }),
+    }),
+  );
+  expect(acked.status).toBe(200);
+  expect(acked.headers.get("x-desktop-outcome")).toBe("acknowledged");
+  // Pending ack: pairing survives for the later mutation's paired recovery.
+  expect(transport.wk.has(pairingCookieName(attempt.attempt_id as string))).toBe(true);
+});
+
+it("a late older-flow response can never overwrite the newer flow's shared state", async () => {
+  // Late-response cookie rule: per-flow continuations are attempt-keyed and
+  // the shared phase-one credential-attempt cookie is written ONLY for the
+  // CURRENT sealed flow, so a delayed A response cannot touch B.
+  const { sealDesktopContinuation, readDesktopContinuation } = await import(
+    "@/lib/server/desktopAuth"
+  );
+  const { sealAuthOperation, sealAuthRound, sessionFingerprint } = await import(
+    "@/lib/server/stagedAuth"
+  );
+  const { AUTH_SESSION_COOKIE: sessionCookie, authSecret } = await import(
+    "@/lib/server/backendAuth"
+  );
+  const claims = {
+    backendAccessToken: "synthetic-actor",
+    backendAccountId: bodyAccountId,
+    backendAccountName: "Actor",
+    backendAccountSlug: "actor",
+    backendUserId: bodyUserId,
+    backendExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    backendRole: "member" as const,
+    backendUsername: null,
+  };
+  transport.wk.set(sessionCookie, {
+    value: await encode({ secret: authSecret(), salt: sessionCookie, maxAge: 3600, token: claims }),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  // B is the CURRENT sealed flow; A is an older completed flow.
+  const flowB = randomUUID();
+  await sealAuthOperation(
+    {
+      ref: flowB,
+      intent: "set_password",
+      reauthProvider: "google",
+      reauthChallengeId: randomUUID(),
+      clientLabel: "talent-signal-web",
+      accountId: claims.backendAccountId,
+      userId: claims.backendUserId,
+      sessionFingerprint: sessionFingerprint(claims.backendAccessToken),
+      accountRevision: 3,
+      userRevision: 2,
+      step: "awaiting-reauth",
+      createdAt: new Date().toISOString(),
+    },
+    false,
+  );
+  await sealDesktopContinuation("attempt-bbbbbbbb", {
+    flow_ref: flowB,
+    round_ref: "round-bbbbbbbb",
+    role: "current",
+    intent: "set_password",
+    target_provider: "password",
+    credential_attempt_id: "credential-bbbbbbbb",
+    attempt_secret: "b".repeat(43),
+    provider_challenge: null,
+  });
+  const { resolveActiveCredentialGrant: resolveGrant } = await import("@/lib/server/desktopAuth");
+  const resolvedB = await resolveGrant();
+  expect(resolvedB?.continuation.credential_attempt_id).toBe("credential-bbbbbbbb");
+
+  // A delayed response for the OLD flow updates only A's own cookie.
+  await sealDesktopContinuation("attempt-aaaaaaaa", {
+    flow_ref: "flow-aaaaaaaa",
+    round_ref: "round-aaaaaaaa",
+    role: "current",
+    intent: "set_password",
+    target_provider: "password",
+    credential_attempt_id: "credential-aaaaaaaa",
+    attempt_secret: "a".repeat(43),
+    provider_challenge: null,
+  });
+  // The delayed A receipt updates only A's own per-flow cookie; the ACTIVE
+  // operation still resolves B's grant for every real consumer.
+  expect((await resolveGrant())?.continuation.credential_attempt_id).toBe("credential-bbbbbbbb");
+  expect((await readDesktopContinuation("attempt-aaaaaaaa"))?.credential_attempt_id).toBe(
+    "credential-aaaaaaaa",
+  );
+  expect((await readDesktopContinuation("attempt-bbbbbbbb"))?.credential_attempt_id).toBe(
+    "credential-bbbbbbbb",
+  );
+});
+
+it("first-party status is read-only: live session, safe metadata, no Set-Cookie", async () => {
+  const { GET: statusGET } = await import("@/app/api/desktop-auth/status/route");
+  const { AUTH_SESSION_COOKIE: sessionCookie, authSecret } = await import(
+    "@/lib/server/backendAuth"
+  );
+  // Unauthenticated: no actor, no-store, and absolutely no cookie writes.
+  const anonymous = await statusGET();
+  expect(anonymous.status).toBe(200);
+  expect(anonymous.headers.get("cache-control")).toContain("no-store");
+  expect(anonymous.headers.get("set-cookie")).toBeNull();
+  expect(await anonymous.json()).toEqual({ authenticated: false, actor: null });
+
+  // Authenticated: the OBSERVED actor's safe metadata only.
+  const claims = {
+    backendAccessToken: "synthetic-actor",
+    backendAccountId: bodyAccountId,
+    backendAccountName: "Actor",
+    backendAccountSlug: "actor",
+    backendUserId: bodyUserId,
+    backendExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    backendRole: "member" as const,
+    backendUsername: null,
+  };
+  const originalCookie = await encode({
+    secret: authSecret(),
+    salt: sessionCookie,
+    maxAge: 3600,
+    token: claims,
+  });
+  transport.wk.set(sessionCookie, {
+    value: originalCookie,
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  transport.active = "wk";
+  const authenticated = await statusGET();
+  const payload = await authenticated.json();
+  expect(authenticated.headers.get("set-cookie")).toBeNull();
+  expect(transport.wk.get(sessionCookie)?.value).toBe(originalCookie);
+  expect(payload.authenticated).toBe(true);
+  expect(payload.actor).toEqual({
+    account_id: bodyAccountId,
+    account_name: "Actor",
+    user_id: bodyUserId,
+  });
+  // No tokens, counts or provider details in the readback.
+  expect(JSON.stringify(payload)).not.toContain("synthetic-actor");
+});
+
+it("R1: password-first Action seals its operation and grant BEFORE the native target handoff", async () => {
+  // Real Action -> real prepare consumer: the redirect must carry a flow the
+  // next prepare can actually resolve (sealed operation + password-proven
+  // grant + explicit target round), not a stale prior operation.
+  const { startPasswordStepUpLink } = await import(
+    "@/app/workspace/settings/login-methods/actions"
+  );
+  const { AUTH_SESSION_COOKIE: sessionCookie, authSecret } = await import(
+    "@/lib/server/backendAuth"
+  );
+  const claims = {
+    backendAccessToken: "synthetic-actor",
+    backendAccountId: bodyAccountId,
+    backendAccountName: "Actor",
+    backendAccountSlug: "actor",
+    backendUserId: bodyUserId,
+    backendExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    backendRole: "member" as const,
+    backendUsername: null,
+  };
+  transport.wk.set(sessionCookie, {
+    value: await encode({ secret: authSecret(), salt: sessionCookie, maxAge: 3600, token: claims }),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  // The backend fixture mints a real credential grant + target challenge.
+  calls = [];
+  const form = new FormData();
+  form.set("currentPassword", "quiet-current-password-1");
+  form.set("targetProvider", "google");
+  form.set("accountId", bodyAccountId);
+  form.set("userId", bodyUserId);
+  form.set("accountRevision", "3");
+  form.set("userRevision", "2");
+  form.set("nativeHost", "1");
+  let redirected: string | null = null;
+  try {
+    await startPasswordStepUpLink({} as never, form);
+    throw new Error("Expected native target redirect");
+  } catch (error) {
+    redirected = (error as { target?: string }).target ?? null;
+  }
+  expect(redirected).toContain("/desktop-auth/request?provider=google&purpose=credential_round&role=target");
+  // No embedded signIn round was created for the capable host.
+  expect(calls.some((call) => call.path === "/v1/desktop-auth/prepare")).toBe(false);
+
+  // The NEXT actual prepare resolves the just-sealed operation and its
+  // password-proven grant instead of failing stale.
+  transport.active = "wk";
+  const response = await preparePOST(
+    jsonPost("/api/desktop-auth/prepare", {
+      provider: "google",
+      purpose: "credential_round",
+      role: "target",
+      intent: "link_provider",
+      target_provider: "google",
+      code_challenge: "h".repeat(43),
+      state: "s".repeat(32),
+    }),
+  );
+  expect(response.status, response.headers.get("location") ?? "").toBe(303);
+  expect(response.headers.get("location")).toContain("/desktop-auth/pending");
+  const prepareCall = calls.find((call) => call.path === "/v1/desktop-auth/prepare");
+  expect(prepareCall, "the real prepare consumer must reach the backend").toBeTruthy();
+  expect(new URL(response.headers.get("location")!, ORIGIN).searchParams.get("attempt")).toBeTruthy();
+});
+
+it("R2: cancel validates the ACTUAL body request_ref before any effect", async () => {
+  const attempt = await wkPrepare({ purpose: "login", provider: "google" });
+  const ref = "xchg-cancel-1-1-abcdefgh";
+  // Mismatched body reference: exact 400, no backend call, no cookie change.
+  const mismatch = await cancelPOST(
+    new Request(`${ORIGIN}/api/desktop-auth/cancel?ref=${ref}`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "sec-fetch-dest": "document",
+        "x-desktop-transport": "capable-v2",
+        "x-request-ref": ref,
+      },
+      body: JSON.stringify({ attempt_id: attempt.attempt_id, request_ref: "xchg-cancel-9-9-zzzzzzzz" }),
+    }),
+  );
+  expect(mismatch.status).toBe(400);
+  const missing = await cancelPOST(
+    new Request(`${ORIGIN}/api/desktop-auth/cancel?ref=${ref}`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "sec-fetch-dest": "document",
+        "x-desktop-transport": "capable-v2",
+        "x-request-ref": ref,
+      },
+      body: JSON.stringify({ attempt_id: attempt.attempt_id }),
+    }),
+  );
+  expect(missing.status).toBe(400);
+  expect(calls.filter((call) => call.path === "/v1/desktop-auth/cancel")).toHaveLength(0);
+  expect(transport.wk.has(pairingCookieName(attempt.attempt_id as string))).toBe(true);
+
+  // A valid correlated cancellation is accepted with its strict receipt.
+  const valid = await cancelPOST(
+    new Request(`${ORIGIN}/api/desktop-auth/cancel?ref=${ref}`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "sec-fetch-dest": "document",
+        "x-desktop-transport": "capable-v2",
+        "x-request-ref": ref,
+      },
+      body: JSON.stringify({ attempt_id: attempt.attempt_id, request_ref: ref }),
+    }),
+  );
+  expect(valid.status).toBe(200);
+  expect(valid.headers.get("x-desktop-outcome")).toBe("cancelled");
+  expect(calls.filter((call) => call.path === "/v1/desktop-auth/cancel")).toHaveLength(1);
+});
+
+it("R3: capable prepare and cancel return strict inert receipts with semantic context", async () => {
+  const ref = "xchg-prepare-1-abcdefgh";
+  const response = await preparePOST(
+    new Request(`${ORIGIN}/api/desktop-auth/prepare?ref=${ref}`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "sec-fetch-dest": "document",
+        "x-desktop-transport": "capable-v2",
+        "x-request-ref": ref,
+      },
+      body: JSON.stringify({
+        provider: "google",
+        purpose: "login",
+        role: "login",
+        code_challenge: "h".repeat(43),
+        state: "s".repeat(32),
+        request_ref: ref,
+      }),
+    }),
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("text/html");
+  expect(response.headers.get("x-desktop-request-ref")).toBe(ref);
+  expect(response.headers.get("x-desktop-outcome")).toBe("prepared");
+  expect(response.headers.get("x-desktop-purpose")).toBe("login");
+  expect(response.headers.get("x-desktop-role")).toBe("login");
+  expect(response.headers.get("x-desktop-deadline")).toBeTruthy();
+  const document = await response.text();
+  expect(document).not.toContain("verifier");
+  expect(document).not.toContain("attempt_secret");
+
+  // Invalid refs are refused BEFORE any backend call on prepare too.
+  const before = calls.length;
+  const bad = await preparePOST(
+    new Request(`${ORIGIN}/api/desktop-auth/prepare?ref=xchg-bad-1-abcdefgh`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "sec-fetch-dest": "document",
+        "x-desktop-transport": "capable-v2",
+        "x-request-ref": "xchg-bad-1-abcdefgh",
+      },
+      body: JSON.stringify({
+        provider: "google",
+        purpose: "login",
+        role: "login",
+        code_challenge: "h".repeat(43),
+        request_ref: "xchg-other-9-9-zzzzzzzz",
+      }),
+    }),
+  );
+  expect(bad.status).toBe(400);
+  expect(calls.length).toBe(before);
+});
+
+it("R2: target consume injects the SERVER-held grant secret, never a client value", async () => {
+  // Password-first target: the Action seals the operation + grant; the native
+  // target round then consumes with only D/code/verifier and the Web injects
+  // the sealed grant secret server-to-server.
+  const { startPasswordStepUpLink } = await import(
+    "@/app/workspace/settings/login-methods/actions"
+  );
+  const { AUTH_SESSION_COOKIE: sessionCookie, authSecret } = await import(
+    "@/lib/server/backendAuth"
+  );
+  const claims = {
+    backendAccessToken: "synthetic-actor",
+    backendAccountId: bodyAccountId,
+    backendAccountName: "Actor",
+    backendAccountSlug: "actor",
+    backendUserId: bodyUserId,
+    backendExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    backendRole: "member" as const,
+    backendUsername: null,
+  };
+  transport.wk.set(sessionCookie, {
+    value: await encode({ secret: authSecret(), salt: sessionCookie, maxAge: 3600, token: claims }),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  const form = new FormData();
+  form.set("currentPassword", "quiet-current-password-1");
+  form.set("targetProvider", "google");
+  form.set("accountId", bodyAccountId);
+  form.set("userId", bodyUserId);
+  form.set("accountRevision", "3");
+  form.set("userRevision", "2");
+  form.set("nativeHost", "1");
+  try {
+    await startPasswordStepUpLink({} as never, form);
+  } catch {
+    /* native redirect */
+  }
+  // The target prepare resolves the sealed operation + grant (server-held).
+  transport.active = "wk";
+  const response = await preparePOST(
+    jsonPost("/api/desktop-auth/prepare", {
+      provider: "google",
+      purpose: "credential_round",
+      role: "target",
+      intent: "link_provider",
+      target_provider: "google",
+      code_challenge: "h".repeat(43),
+      state: "s".repeat(32),
+    }),
+  );
+  expect(response.status, response.headers.get("location") ?? "").toBe(303);
+  expect(response.headers.get("location")).toContain("/desktop-auth/pending");
+  // The sealed target continuation is installed so the final ACK can match.
+  expect([...transport.wk.keys()].some((name) => name.includes("desktop-continuation"))).toBe(true);
+  const consumeSecretBefore = calls.filter((call) => call.path === "/v1/desktop-auth/consume");
+  expect(consumeSecretBefore).toHaveLength(0);
+  // A client-supplied secret is ignored: the Web resolves the sealed one.
+  const pending = new URL(response.headers.get("location")!, ORIGIN);
+  const attemptId = pending.searchParams.get("attempt")!;
+  const fakeSecret = "client-supplied-secret-should-be-ignored-aaaaaa";
+  transport.wk.set(pairingCookieName(attemptId), {
+    value: "p".repeat(43),
+    options: { httpOnly: true, sameSite: "lax", secure: true },
+  });
+  const ref = "xchg-target-1-1-abcdefgh";
+  await consumePOST(
+    new Request(`${ORIGIN}/api/desktop-auth/consume?ref=${ref}`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "sec-fetch-dest": "document",
+        "x-desktop-transport": "capable-v2",
+        "x-request-ref": ref,
+      },
+      body: JSON.stringify({
+        attempt_id: attemptId,
+        code: "c".repeat(43),
+        verifier: "v".repeat(43),
+        attempt_secret: fakeSecret,
+        role: "target",
+        purpose: "credential_round",
+        request_ref: ref,
+      }),
+    }),
+  );
+  const consumeCall = calls.find((call) => call.path === "/v1/desktop-auth/consume");
+  expect(consumeCall).toBeTruthy();
+  const body = consumeBodies.get(consumeCall!.attempt_id ?? attemptId);
+  // The SERVER-held sealed grant secret travels; the client value never does.
+  expect(body?.attempt_secret).toBe("fixture-attempt-secret-abcdefghijklmnopqrstuvwxyz");
+  expect(body?.attempt_secret).not.toBe(fakeSecret);
+});

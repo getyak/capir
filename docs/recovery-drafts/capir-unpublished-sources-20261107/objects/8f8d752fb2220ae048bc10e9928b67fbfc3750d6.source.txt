@@ -1,0 +1,12 @@
+import { expect, it } from "vitest";
+import { mailConfig } from "./mail-integration-config";
+const env = { NODE_ENV: "production", TALENT_SIGNAL_MAIL_TEST_ENABLED: "true", TALENT_SIGNAL_INTEGRATIONS_ORIGIN: "https://app.example.com",
+  TALENT_SIGNAL_INTEGRATIONS_KEY: Buffer.alloc(32, 5).toString("base64"), TALENT_SIGNAL_GMAIL_CLIENT_ID: "synthetic-id", TALENT_SIGNAL_GMAIL_CLIENT_SECRET: "synthetic-secret" };
+it("admits only explicitly enabled fixed origins and a dedicated encryption key", () => {
+  expect(mailConfig("gmail", env)?.origin).toBe("https://app.example.com");
+  for (const origin of ["http://app.example.com", "http://localhost:3000", "https://secret@app.example.com", "https://app.example.com/path", "https://app.example.com/?q=token"]) expect(mailConfig("gmail", { ...env, TALENT_SIGNAL_INTEGRATIONS_ORIGIN: origin })).toBeNull();
+  expect(mailConfig("gmail", { ...env, TALENT_SIGNAL_MAIL_TEST_ENABLED: "false" })).toBeNull();
+  expect(mailConfig("gmail", { ...env, TALENT_SIGNAL_INTEGRATIONS_KEY: "not-a-key" })).toBeNull();
+  expect(mailConfig("outlook", env)).toBeNull();
+  expect(mailConfig("gmail", { ...env, NODE_ENV: "development", TALENT_SIGNAL_INTEGRATIONS_ORIGIN: "http://localhost:3000" })).not.toBeNull();
+});

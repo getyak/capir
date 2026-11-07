@@ -1,0 +1,86 @@
+import { createHash } from "node:crypto";
+import type { Pool } from "pg";
+import type { AgentProviderInputPart, AuthoredImageInput, ContactAgentModel, ContactChatExtraction } from "@talent-signal/agent";
+import type { AuthContext } from "./auth.js";
+import type { ChatMediaStorage } from "./chatMediaStorage.js";
+import { authoredDocumentSummary, cancelScreenshotContactTask, createScreenshotContactTask, ScreenshotContactTaskRunner, loadScreenshotContactTask } from "./screenshotContactTasks.js";
+import { loadSessionScreenshotContexts } from "./agentSessionSources.js";
+import { ApiError } from "../lib/apiError.js";
+
+/** Reuse governed task filing; the main SDK already read the admitted pixels.
+ * This adapter does no second inference, private recall, or research dispatch.
+ */
+export async function fileWorkspaceImageAuthor(input: {
+  pool: Pool; auth: AuthContext; storage: ChatMediaStorage;
+  sessionID: string; messageID: string;
+  image: Extract<AgentProviderInputPart, {kind:"image"}>;
+  extraction: AuthoredImageInput; signal: AbortSignal;
+  assertCurrent: () => Promise<void>;
+}) {
+  const { pool, auth, extraction, image, signal } = input;
+  signal.throwIfAborted(); await input.assertCurrent();
+  const index = Number(image.artifactID.match(/^conversation-image-[0-9a-f-]{36}-(\d+)-/iu)?.[1]);
+  if (!Number.isSafeInteger(index) || index < 0 || index > 9) throw new ApiError(409,"IMAGE_SOURCE_NOT_CURRENT","The image source is not current.");
+  const origin=await pool.query<{created_at:Date}>("SELECT created_at FROM conversation_message_images WHERE account_id=$1 AND session_id=$2 AND message_id=$3 AND image_index=$4",[auth.accountId,input.sessionID,input.messageID,index]);
+  if(!origin.rows[0])throw new ApiError(409,"IMAGE_SOURCE_NOT_CURRENT","The image source is not current.");
+  const request = { idempotency_key:`image-author:${input.messageID}:${index}`, objective:"File the visible author and proposed authored document evidence.",
+    captured_at:origin.rows[0].created_at.toISOString(), allow_public_research:false,
+    image:{media_type:image.mimeType as "image/png"|"image/jpeg"|"image/webp",data_base64:image.dataBase64,byte_size:image.byteSize,content_hash:image.contentHash} };
+  // Capture time belongs to immutable admission, never the visible post time.
+  const existing = await pool.query<{input_manifest:{captured_at:string}}>(
+    "SELECT input_manifest FROM screenshot_contact_tasks WHERE account_id=$1 AND created_by_user_id=$2 AND idempotency_key=$3",
+    [auth.accountId,auth.userId,request.idempotency_key]);
+  if (existing.rows[0]) request.captured_at=existing.rows[0].input_manifest.captured_at;
+  const admitted=await createScreenshotContactTask(pool,auth,request,input.storage,{workspaceAuthorSource:{
+    session_id:input.sessionID,message_id:input.messageID,artifact_id:image.artifactID,content_hash:image.contentHash,
+  }});
+  const part: ContactChatExtraction={platform:extraction.platform,conversation_kind:"authored_content",contact_name:extraction.author_label,
+    identity_clues:[{kind:"name",value:extraction.author_label,source_excerpt:extraction.author_label},...extraction.identity_clues],
+    messages:extraction.blocks.map((block,sequence)=>({message_id:`m${sequence+1}`,sequence,text:block.text,speaker_side:"unknown",speaker_label:extraction.author_label,time_text:block.time_text})),uncertainties:[]};
+  const model:ContactAgentModel={
+    extract:async()=>{throw Error("AUTHOR_EXTRA_INFERENCE_FORBIDDEN");}, next:async()=>{throw Error("AUTHOR_EXTRA_INFERENCE_FORBIDDEN");},
+    run:async(admission,executionSignal)=>{
+      const current=async()=>{signal.throwIfAborted();executionSignal.throwIfAborted();await input.assertCurrent();};
+      await current();
+      const recorded=await admission.recordUnderstanding([part],executionSignal) as {status?:string};
+      if(recorded.status!=="waiting_for_user"&&recorded.status!=="completed"){
+        await current();
+        const result=await admission.invoke("search_contacts",{query:extraction.author_label},executionSignal) as {candidates?:unknown[];error?:string};
+        if(result.error)throw Error(result.error);
+        if(result.candidates?.length){
+          await admission.invoke("ask_contact_clarification",{question:"存在同名作者，请确认将这次发布内容归入哪个联系人。"},executionSignal);
+        }else{
+          await current();
+          const saved=await admission.invoke("create_contact",{display_name:extraction.author_label},executionSignal) as {error?:string};
+          if(saved.error)throw Error(saved.error);
+          await current();
+          const finished=await admission.invoke("finish_contact_task",{summary:authoredDocumentSummary(part),
+            findings:[],limitations:[]},executionSignal) as {error?:string};
+          if(finished.error)throw Error(finished.error);
+        }
+      }
+      return {providerRequestID:`source-${createHash("sha256").update(image.artifactID).digest("hex").slice(0,24)}`,model:"main-sdk-source-filing",inputTokens:0,outputTokens:0};
+    },
+  };
+  const runner=new ScreenshotContactTaskRunner(pool,{model,research:null},input.storage);
+  const onAbort=()=>{runner.fenceTaskCancellation(auth,admitted.body.task_id);};
+  signal.addEventListener("abort",onAbort,{once:true});
+  try{signal.throwIfAborted();await runner.start(auth,admitted.body.task_id);}
+  finally{
+    signal.removeEventListener("abort",onAbort);
+    if(signal.aborted){
+      try{
+        const latest=await loadScreenshotContactTask(pool,auth,admitted.body.task_id);
+        if(latest.status==="running")await cancelScreenshotContactTask(pool,auth,latest.task_id,latest.revision);
+      }catch(error){
+        // Concurrent withdrawal/deletion already fences the task; other errors
+        // must remain visible rather than silently abandoning a running owner.
+        if(!(error instanceof ApiError&&["CONTACT_TASK_SOURCE_UNAVAILABLE","CONTACT_TASK_REVISION_CHANGED","CONTACT_TASK_NOT_FOUND"].includes(error.code)))throw error;
+      }
+    }
+  }
+  await input.assertCurrent(); signal.throwIfAborted();
+  const response=await loadScreenshotContactTask(pool,auth,admitted.body.task_id);
+  const contexts=await loadSessionScreenshotContexts(pool,auth,[response.task_id]);
+  return {response,source:contexts[0]?{taskID:contexts[0].id,fingerprint:contexts[0].fingerprint}:null};
+}

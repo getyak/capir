@@ -1,0 +1,137 @@
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import type {
+  CapabilityReport,
+  CaptureRequest,
+  CaptureResult,
+  OcrRequest,
+  OcrResult,
+  PlatformAdapter,
+  QuickPanelRequest,
+  QuickPanelResult,
+  StateNotificationRequest,
+  StateNotificationResult,
+} from "@talent-signal/workspace-ui";
+
+export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+export type BindingStatus =
+  | { state: "unbound"; reason: string | null }
+  | { state: "stale" | "revoked"; reason: string }
+  | {
+      state: "verified";
+      accountId: string;
+      accountName: string;
+      sessionId: string;
+      sessionTitle: string;
+      userDisplayName: string;
+      verifiedAt: string;
+      cleanupWarning: string | null;
+    };
+
+export type ActivateBindingRequest = {
+  baseUrl: string;
+  serverCertificatePem: string;
+  accessToken: string;
+  sessionId: string;
+};
+
+const COMMANDS = {
+  activateBinding: "activate_session_binding",
+  bindingStatus: "session_binding_status",
+  cancelCapture: "cancel_capture",
+  cancelOcr: "cancel_ocr",
+  capabilities: "desktop_capabilities",
+  capture: "capture_selected_window",
+  disconnect: "disconnect_session_binding",
+  notification: "notify_state",
+  ocr: "recognize_local_text",
+  quickPanel: "open_quick_panel",
+} as const;
+
+export function createDesktopPlatformAdapter(invoke: Invoke = tauriInvoke): PlatformAdapter {
+  return {
+    host: "desktop",
+    capabilities: () => invoke<CapabilityReport>(COMMANDS.capabilities),
+    captureSelectedWindow: (request, signal) =>
+      invokeWithCaptureCancellation(invoke, request, signal),
+    cancelCapture: (request) =>
+      invoke<CaptureResult>(COMMANDS.cancelCapture, { request }),
+    recognizeLocalText: (request, signal) =>
+      invokeWithOcrCancellation(invoke, request, signal),
+    openQuickPanel: (request) =>
+      invoke<QuickPanelResult>(COMMANDS.quickPanel, { request }),
+    notifyState: (request) =>
+      invoke<StateNotificationResult>(COMMANDS.notification, { request }),
+  };
+}
+
+async function invokeWithOcrCancellation(
+  invoke: Invoke,
+  request: OcrRequest,
+  signal?: AbortSignal,
+): Promise<OcrResult> {
+  if (signal?.aborted) return { status: "cancelled" };
+  const onAbort = () => {
+    void invoke<OcrResult>(COMMANDS.cancelOcr, { request }).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    const result = await invoke<OcrResult>(COMMANDS.ocr, { request });
+    if (signal?.aborted && result.status === "recognized") {
+      return {
+        status: "failed",
+        reason: "已取消接纳识别结果；未返回文本，无法确认 helper 是否已停止。",
+      };
+    }
+    return result;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+async function invokeWithCaptureCancellation(
+  invoke: Invoke,
+  request: CaptureRequest,
+  signal?: AbortSignal,
+): Promise<CaptureResult> {
+  if (signal?.aborted) {
+    return { status: "cancelled" };
+  }
+
+  const onAbort = () => {
+    void invoke<CaptureResult>(COMMANDS.cancelCapture, { request }).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await invoke<CaptureResult>(COMMANDS.capture, { request });
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+export const desktopSession = {
+  activate(request: ActivateBindingRequest, invoke: Invoke = tauriInvoke) {
+    return invoke<BindingStatus>(COMMANDS.activateBinding, { request });
+  },
+  disconnect(invoke: Invoke = tauriInvoke) {
+    return invoke<BindingStatus>(COMMANDS.disconnect);
+  },
+  status(invoke: Invoke = tauriInvoke) {
+    return invoke<BindingStatus>(COMMANDS.bindingStatus);
+  },
+};
+
+export const nativeCommandNames = Object.freeze(Object.values(COMMANDS));
+
+export function isQuickPanelShortcut(
+  event: Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey">,
+): boolean {
+  return event.metaKey && !event.altKey && !event.ctrlKey && event.key.toLowerCase() === "k";
+}
+
+export type {
+  CaptureRequest,
+  OcrRequest,
+  QuickPanelRequest,
+  StateNotificationRequest,
+};
