@@ -53,7 +53,8 @@ Files: narrowly extend `apps/backend/src/modules/agentSessions.ts` complete-dial
 
 - [x] Run focused pure regressions sequentially with existing read-only dependency resolution; capture commands and results in a registered artifact.
 - [ ] Check exact diff, owning architecture/dependency contracts and static TypeScript diagnostics where lightweight.
-- [ ] Request independent review; fix confirmed P0/P1.
+- [x] Independently review the initial candidate and fix the two confirmed P1s.
+- [ ] Independently review the queue/login authority CI repair and rerun Hosted gates.
 - [ ] Report exact source/base, remaining CI and resident deployment gates; no claim of functional release before those gates pass.
 
 ## Review ledger and current evidence
@@ -83,11 +84,22 @@ with live owner and screenshot authority after all other awaited guards. A final
 database-clock check observes the shortest auth/Session/task/source deadline.
 Original task/source expiry also narrows observation and SDK continuation clocks.
 
-Current local evidence: 171 pure backend regressions across eight files and 11
+Current local evidence: 181 pure backend regressions across eight files and 11
 pure Agent regressions across two files passed sequentially. Reader, tool
 construction, pre-snapshot auth ordering, host budgets and honest unavailability
-have observed failing-then-passing checks. Five new real PostgreSQL cases are in
-the existing integration suite but have not run locally. Syntax-only TypeScript
-transpilation is not semantic type-check evidence. The independent reviewer is
-the coordinator; final review, full CI and source-bound resident deployment are
-still pending. No build, install, provider or native acceptance was run.
+have observed failing-then-passing checks. Hosted run42371894343 at8eae1307
+passed all55 Agent Session PostgreSQL cases, including the five added cases;
+this is remote evidence, not a local database run or a pass for the whole CI.
+Its queue token-exhaustion case failed because its synthetic login ID had no
+persisted Session, and docs exceeded the unchanged320-line budget. The repair
+persists a synthetic live login, compresses canonical prose, and preserves the
+existing null-login queue path only after a database-verified live claim, with
+no complete-history reader. The [Agent system](../docs/agent-system.md) owns
+that boundary. Ten stale/foreign/login PostgreSQL cases and one real null-login
+Runner case were added for Hosted execution, not run locally. A pure production
+entry regression observed failure then pass for the null-login case; missing
+claims, login loss after claim and database errors still fail before the model.
+Syntax-only TypeScript transpilation is not semantic type-check evidence.
+Independent review of this increment, full latest CI and source-bound resident
+deployment remain pending. No local build, install, database, provider or native
+acceptance was run.

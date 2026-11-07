@@ -137,34 +137,15 @@ Use this order:
 7. exact evidence excerpts;
 8. prior observations and artifacts.
 
-Every included item should have a reason, version, authorization scope, and
-restorable reference. Large observations belong in artifacts, not the active
-prompt.
+Every included item needs a reason, version, authorization scope and restorable reference. Large observations belong in artifacts, not the active prompt.
 
-Ordinary workspace SDK conversations keep a bounded recent-dialogue prompt and
-may read earlier admitted dialogue through `read_session_history`. The host
-freezes the canonical conversation separately; bounded pages, literal search
-and UTF-16 continuations expose coverage without injecting the entire history.
-Each cursor belongs to that snapshot/version, and every read rechecks the live
-actor, authenticated and product Sessions, source generation and retention.
-Original reply-task retention remains authoritative even when a fork Session
-outlives that reply. Its earliest deadline also bounds retained SDK context.
-Host snapshot construction has separate row and byte budgets. If a complete
-snapshot cannot be admitted, earlier-history access is explicitly unavailable
-while ordinary recent-context chat remains available; the model must not call
-that partial context a complete history search.
-The admitted dependency union must fit the existing reply-persistence source
-limit before the capability is offered; it is never clipped to make a save pass.
-The capability snapshot conservatively remains a reply dependency for withdrawal,
-even when the model leaves some pages unread. Historical assistant prose and
-screenshot summaries remain unconfirmed context, never a current authored source,
-identity binding, Memory confirmation or action grant. Selected-Person Memory
-draft requests do not receive this history capability.
+Ordinary workspace SDK conversations keep bounded recent dialogue inline. `read_session_history` reads a separately frozen canonical snapshot through bounded pages, literal search and UTF-16 continuations. Cursors bind that snapshot/version. Every read rechecks actor, authenticated/product Sessions, source generation and retention; original reply expiry remains authoritative across forks and bounds retained SDK context.
 
-Each run records a knowledge snapshot and context manifest: task version,
-Pursuit and subject scope, references, inclusion reasons, authorization and
-content identity. The manifest references governed content for replay instead
-of copying an unbounded transcript.
+Snapshot construction has separate row/byte budgets, and its dependency union must fit reply-persistence limits before admission, without clipping. Unavailable complete history leaves ordinary inline chat available, explicitly partial. A database-verified live queue continuation without a login Session gets no history capability; browser runs still require their live login. Authentication and database failures remain fatal.
+
+The snapshot remains a withdrawal dependency even when unread. Historical assistant prose and screenshot summaries stay unconfirmed, without current-authored-source, identity, Memory or action authority. Selected-Person Memory drafts receive no history capability.
+
+Each run's knowledge snapshot and context manifest record task version, Pursuit/subject scope, references, inclusion reasons, authorization and content identity. Replay references governed content rather than copying an unbounded transcript.
 
 Screenshots, web pages, files, connector results, and generated wiki text remain
 untrusted content. They cannot modify policy, permissions, or approval
@@ -333,7 +314,4 @@ and [Agent systems research](research/agent-systems.md).
 
 ## Reconsider when
 
-Revisit this design when evidence shows that a governed workflow cannot express
-the core product, users can safely delegate a broader consequence class, or a
-runtime-specific capability creates durable value that a provider-neutral
-boundary cannot preserve.
+Revisit when a governed workflow cannot express the core product, users can safely delegate broader consequences, or a runtime-specific capability creates durable value that a provider-neutral boundary cannot preserve.

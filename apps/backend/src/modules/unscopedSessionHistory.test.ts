@@ -83,4 +83,50 @@ describe("ordinary workspace production history entry", () => {
     const firstLiveAuth = query.mock.calls.findIndex(([sql]) => sql.includes("FROM sessions"));
     expect(firstLiveAuth).toBeLessThan(canonicalReads[1]!);
   });
+
+  it.each(["live-null", "missing-claim", "database-error", "login-lost-after-claim"] as const)(
+    "requires queue/login authority before admitting complete history: %s", async (state) => {
+    const hostAuth = { ...auth, sessionId: state === "login-lost-after-claim" ? auth.sessionId : "conversation-queue-runner" };
+    const taskID = "10000000-0000-4000-8000-000000000007";
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("AS history_queue_auth_session_id")) {
+        if (state === "database-error") throw new Error("SYNTHETIC_DATABASE_OUTAGE");
+        return { rows: state === "missing-claim" ? [] : [{ history_queue_auth_session_id: state === "login-lost-after-claim" ? auth.sessionId : null }] };
+      }
+      if (sql.includes("FROM sessions")) return { rows: [] }; // The sentinel is never a browser login.
+      if (sql.includes("AS session_stamp")) return { rows: [{ generation: "1", session_stamp: "empty-canonical-turns", current: true }] };
+      if (sql.startsWith("SELECT *") && sql.includes("FROM agent_sessions")) return { rows: [{ created_by_user_id: auth.userId,
+        deleted_at: null, expires_at: new Date(Date.now() + 60_000), payload: { turns: [] } }] };
+      if (sql.includes("SELECT expires_at FROM agent_sessions")) return { rows: [{ expires_at: new Date(Date.now() + 60_000) }] };
+      return { rows: [] };
+    });
+    const provider = Object.assign(new ScriptedAgentProvider([], { outcome: "reply", title: "Current reply", body: "Synthetic inline answer" }),
+      { providerId: "claude-agent-sdk" as const, supportsImageInput: true, answer: vi.fn() });
+    const original = provider.run.bind(provider);
+    const run = vi.spyOn(provider, "run").mockImplementation(async (request, invoke, signal) => {
+      expect(request.supplementalTools?.some(tool => tool.name === "read_session_history")).toBe(false);
+      expect(request.systemPrompt).toContain("Earlier canonical dialogue is unavailable");
+      expect(request.systemPrompt).not.toContain("snapshot budget was exceeded");
+      return original(request, invoke, signal);
+    });
+    const operation = executeUnscopedChatTask({ taskID, request: { objective: "Synthetic host continuation", session_id: sessionID,
+      message_id: currentID, idempotency_key: "synthetic-null-login-history" }, auth: hostAuth,
+      database: { query, release() {} } as unknown as DatabaseClient, provider: provider as RemoteChatAnswerProviding,
+      hostAuthority: { sessionId: sessionID, messageId: currentID, fence: { accountId: auth.accountId, sessionId: sessionID,
+        entryId: "10000000-0000-4000-8000-000000000008", runId: taskID, leaseOwner: "synthetic-worker", leaseGeneration: 1 } } });
+    if (state !== "live-null") {
+      if (state === "database-error") await expect(operation).rejects.toThrow("SYNTHETIC_DATABASE_OUTAGE");
+      else await expect(operation).rejects.toMatchObject({ code: "SESSION_HISTORY_UNAVAILABLE" });
+      expect(run).not.toHaveBeenCalled();
+      return;
+    }
+    const result = await operation;
+    expect(run).toHaveBeenCalledOnce();
+    expect(result.remoteStatus).toBe("agent_completed");
+    expect(result.conversationMessageIDs).toEqual([]);
+    expect(result.previousTaskIDs).toEqual([]);
+    expect(result.conversationSources).toBeUndefined();
+    expect(query.mock.calls.some(([sql]) => sql.includes("AS history_result_rows"))).toBe(false);
+    expect(query.mock.calls.some(([sql]) => sql.includes("FROM sessions"))).toBe(false);
+  });
 });

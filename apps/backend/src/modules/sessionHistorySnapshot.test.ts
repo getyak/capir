@@ -1,11 +1,41 @@
 import { describe, expect, it, vi } from "vitest";
-import { createSessionHistorySnapshot, readSessionHistoryBodies, readSessionHistorySources } from "./sessionHistorySnapshot.js";
+import { admitSessionHistoryOwner, createSessionHistorySnapshot, readSessionHistoryBodies, readSessionHistorySources } from "./sessionHistorySnapshot.js";
 import type { AuthContext } from "./auth.js";
 import type { DatabaseClient } from "../database/pool.js";
 
 const auth = { accountId: "account-one", userId: "actor-one", sessionId: "auth-session-one" } as AuthContext;
 const messages = [{ message_id: "earlier", role: "user" as const, text: "Earlier authorized synthetic choice" },
   { message_id: "current", role: "user" as const, text: "Current instruction" }];
+
+describe("history admission authority kinds", () => {
+  it.each(["account", "fence-session", "host-session", "message", "run"] as const)(
+    "rejects a host fence that does not bind the current caller: %s", async (mismatch) => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [{ history_queue_auth_session_id: null }] }));
+    const authority = { sessionId: "product-session", messageId: "current", fence: {
+      accountId: auth.accountId, sessionId: "product-session", entryId: "entry", runId: "run", leaseOwner: "worker", leaseGeneration: 1 } };
+    switch (mismatch) {
+      case "account": authority.fence.accountId = "other"; break;
+      case "fence-session": authority.fence.sessionId = "other"; break;
+      case "host-session": authority.sessionId = "other"; break;
+      case "message": authority.messageId = "other"; break;
+      case "run": authority.fence.runId = "other"; break;
+    }
+    await expect(admitSessionHistoryOwner({ database: { query } as unknown as DatabaseClient, auth,
+      sessionID: "product-session", taskID: "run", messageID: "current", hostAuthority: authority }))
+      .rejects.toMatchObject({ code: "SESSION_HISTORY_UNAVAILABLE" });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a runner sentinel without a verified host claim into login authority", async () => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [] }));
+    await expect(admitSessionHistoryOwner({ database: { query } as unknown as DatabaseClient,
+      auth: { ...auth, sessionId: "conversation-queue-runner" }, sessionID: "product-session", taskID: "run", messageID: "current" }))
+      .rejects.toMatchObject({ code: "SESSION_HISTORY_UNAVAILABLE" });
+    expect(query).toHaveBeenCalledOnce();
+    expect(query.mock.calls[0]?.[0]).toContain("FROM sessions");
+  });
+});
+
 function setup(options: { onAuth?: () => Promise<void>; withoutScreenshots?: boolean; readUntil?: Date } = {}) {
   let live = true, sourceCurrent = true;
   const originalExpiry = new Date(Date.now() + 60_000);

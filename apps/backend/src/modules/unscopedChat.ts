@@ -2,7 +2,7 @@ import { conversationRunDiagnostics } from "./conversationRunDiagnostics.js";
 import { recordProductEvent } from "@talent-signal/agent";
 import { calendarDraftContextForRequest } from "./calendarDraftContext.js";
 import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
-import { assertSessionHistoryOwner, createSessionHistorySnapshot } from "./sessionHistorySnapshot.js";
+import { admitSessionHistoryOwner, createSessionHistorySnapshot } from "./sessionHistorySnapshot.js";
 import { loadAgentResponsePreference } from "./agentPreferences.js";
 import { claudeHarnessInterruptionCode, type AgentProviderInputPart, type RuntimeObservationContext } from "@talent-signal/agent";
 import type { HarnessContinuationFactory } from "@talent-signal/agent";
@@ -193,21 +193,27 @@ export async function executeUnscopedChatTask(input: {
   let completeConversation: Awaited<ReturnType<typeof readAgentSessionConversation>> | undefined;
   let sessionHistoryUnavailable = false;
   if (assertCurrent && !input.memoryDraftTarget && input.request.session_id && input.database && input.auth) {
-    await assertSessionHistoryOwner(input.database, input.auth, input.request.session_id);
-    await assertCurrent();
-    try {
-      const candidate = await readAgentSessionConversation(input.database, input.auth, input.request.session_id,
-        { personId: null, relationshipContextId: null }, { complete: true });
-      const dependencies = new Map([...(sessionConversation.sources ?? []), ...(candidate.sources ?? [])]
-        .map(source => [source.taskID, source]));
-      if (dependencies.size > SESSION_CHAT_SOURCE_LIMIT)
-        throw new ApiError(413, "SESSION_HISTORY_SNAPSHOT_UNAVAILABLE", "Earlier conversation history is unavailable for this run.");
-      completeConversation = candidate;
-    } catch (error) {
-      if (!(error instanceof ApiError) || error.code !== "SESSION_HISTORY_SNAPSHOT_UNAVAILABLE") throw error;
-      // Preserve ordinary bounded chat without advertising a partial host
-      // snapshot as complete. Authority/SQL failures are never downgraded.
-      sessionHistoryUnavailable = true;
+    const historyLoginAvailable = await admitSessionHistoryOwner({ database: input.database, auth: input.auth,
+      sessionID: input.request.session_id, taskID,
+      ...(input.request.message_id ? { messageID: input.request.message_id } : {}),
+      ...(input.hostAuthority ? { hostAuthority: input.hostAuthority } : {}) });
+    if (!historyLoginAvailable) sessionHistoryUnavailable = true;
+    else {
+      await assertCurrent();
+      try {
+        const candidate = await readAgentSessionConversation(input.database, input.auth, input.request.session_id,
+          { personId: null, relationshipContextId: null }, { complete: true });
+        const dependencies = new Map([...(sessionConversation.sources ?? []), ...(candidate.sources ?? [])]
+          .map(source => [source.taskID, source]));
+        if (dependencies.size > SESSION_CHAT_SOURCE_LIMIT)
+          throw new ApiError(413, "SESSION_HISTORY_SNAPSHOT_UNAVAILABLE", "Earlier conversation history is unavailable for this run.");
+        completeConversation = candidate;
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.code !== "SESSION_HISTORY_SNAPSHOT_UNAVAILABLE") throw error;
+        // Preserve ordinary bounded chat without advertising a partial host
+        // snapshot as complete. Authority/SQL failures are never downgraded.
+        sessionHistoryUnavailable = true;
+      }
     }
   }
   const conversationSources = [...new Map([

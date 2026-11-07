@@ -190,6 +190,43 @@ export async function assertSessionHistoryOwner(database: DatabaseClient, auth: 
   if (!live.rows.length) throw unavailable();
 }
 
+/** A host-only queue fence proves an existing task, never a browser login.
+ * A live NULL-login continuation may keep its existing inline path, but gains
+ * no complete-history snapshot/reader. Non-NULL claims retain live login checks.
+ * The legacy runner's sessionId string is deliberately irrelevant to this choice. */
+export async function admitSessionHistoryOwner(input: {
+  database: DatabaseClient; auth: AuthContext; sessionID: string; taskID: string; messageID?: string;
+  hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
+}): Promise<boolean> {
+  const { database, auth, sessionID, hostAuthority } = input;
+  if (hostAuthority) {
+    const fence = hostAuthority.fence;
+    if (fence.accountId !== auth.accountId || fence.sessionId !== sessionID || hostAuthority.sessionId !== sessionID
+      || hostAuthority.messageId !== input.messageID || fence.runId !== input.taskID) throw unavailable();
+    const row = (await database.query<{ history_queue_auth_session_id: string | null }>(`
+      SELECT queue.auth_session_id::text AS history_queue_auth_session_id FROM conversation_queue_entries queue
+      JOIN accounts ON accounts.id=queue.account_id
+      JOIN users actor ON actor.account_id=queue.account_id AND actor.id=queue.created_by_user_id
+      JOIN agent_sessions product ON product.account_id=queue.account_id AND product.id=queue.session_id
+        AND product.created_by_user_id=queue.created_by_user_id
+      WHERE queue.account_id=$1 AND queue.created_by_user_id=$2 AND queue.session_id=$3
+        AND queue.message_id=$4 AND queue.run_id=$5 AND queue.id=$6
+        AND queue.lease_owner=$7 AND queue.lease_generation=$8
+        AND queue.status='running' AND queue.cancel_requested=false AND queue.lease_expires_at>clock_timestamp()
+        AND queue.content_state='retained' AND queue.objective IS NOT NULL AND queue.result IS NULL
+        AND queue.expires_at>clock_timestamp() AND accounts.retired_at IS NULL AND actor.status='active'
+        AND product.deleted_at IS NULL AND product.expires_at>clock_timestamp()
+        AND product.payload->>'personID' IS NULL AND product.payload->>'relationshipContextID' IS NULL`,
+    [auth.accountId, auth.userId, sessionID, input.messageID, input.taskID, fence.entryId,
+      fence.leaseOwner, fence.leaseGeneration])).rows[0];
+    if (!row) throw unavailable();
+    if (row.history_queue_auth_session_id === null) return false;
+    if (row.history_queue_auth_session_id !== auth.sessionId) throw unavailable();
+  }
+  await assertSessionHistoryOwner(database, auth, sessionID);
+  return true;
+}
+
 function unavailable() {
   return new ApiError(409, "SESSION_HISTORY_UNAVAILABLE", "The conversation history is no longer available in this session.");
 }
