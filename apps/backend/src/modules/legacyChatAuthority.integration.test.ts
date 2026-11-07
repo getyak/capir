@@ -11,6 +11,7 @@ import { encodePasswordCredential } from "./passwordCredential.js";
 import { mutateAgentSession } from "./agentSessions.js";
 import type { SessionResponse } from "@talent-signal/contracts";
 import type { AuthContext } from "./auth.js";
+import { compileRelationshipWiki } from "./wiki.js";
 
 const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
 if (database) {
@@ -263,12 +264,6 @@ operation: (fixture: HttpFixture) => Promise<void>) {
       if (options.scoped) {
         await client.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Synthetic Person')", [personId, accountId]);
         await client.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label) VALUES($1::uuid,$2,$3,$1::text,'Synthetic context')", [contextId, accountId, personId]);
-        const snapshotId = randomUUID();
-        await client.query(`INSERT INTO knowledge_snapshots(id,account_id,subject_id,assignment_id,source_state_cursor,compiler_name,compiler_version,policy_version,status,quality,compiled_at)
-          VALUES($1,$2,$3,$4,0,'synthetic','1','synthetic','published','{"verdict":"gold"}',clock_timestamp())`, [snapshotId, accountId, personId, contextId]);
-        await client.query(`INSERT INTO knowledge_blocks(id,account_id,snapshot_id,block_key,block_type,status,structured_content,sensitivity,semantic_hash)
-          VALUES($1,$2,$3,'synthetic.no-action','no_action','confirmed','{"headline":"No action needed.","items":[]}','restricted',$4)`,
-        [randomUUID(), accountId, snapshotId, "a".repeat(64)]);
       }
     });
     app = await buildApp({ pool: productPool, config: { databaseUrl: database!, host: "127.0.0.1", port: 0,
@@ -284,12 +279,22 @@ operation: (fixture: HttpFixture) => Promise<void>) {
     const sessionId = signedIn.session_id;
     if (!sessionId) throw new Error("The synthetic password login omitted its session identity.");
     const headers = { authorization: `Bearer ${signedIn.access_token}` };
+    const auth: AuthContext = { accountId: signedIn.account.id, accountSlug: signedIn.account.slug,
+      userId: signedIn.user.id, userEmail: signedIn.user.email, userKind: signedIn.user.kind, sessionId };
+    if (options.scoped) {
+      // The real compiler owns identity/attention blocks and publication gates.
+      // A fixture's handwritten gold label cannot replace those invariants.
+      const compiled = await compileRelationshipWiki(pool, auth, personId, contextId,
+        { idempotency_key: randomUUID(), objective: "Prepare an empty synthetic relationship context." });
+      expect(compiled.body.status).toBe("published");
+      expect(compiled.body.quality.verdict).toBe("gold");
+      expect(Object.values(compiled.body.quality.gates).every(value => value === "pass")).toBe(true);
+      expect(compiled.body.blocks.some(block => block.type === "identity_context")).toBe(true);
+      expect(compiled.body.blocks.some(block => block.type === "no_action")).toBe(true);
+    }
     if (options.continuation) {
       // Seed a canonical empty ProductSession through its production owner,
       // using the actual login response's identity. No raw session-row insert.
-      const auth: AuthContext = { accountId: signedIn.account.id, accountSlug: signedIn.account.slug,
-        userId: signedIn.user.id, userEmail: signedIn.user.email, userKind: signedIn.user.kind,
-        sessionId };
       productSessionID = randomUUID();
       await mutateAgentSession(pool, auth, productSessionID, { expected_revision: 0, idempotency_key: randomUUID(), payload: {
         id: productSessionID, scopeKind: "unresolved_intent", personDisplayLabel: "New session", contextDisplayLabel: "Conversation",
@@ -336,6 +341,13 @@ function denied(result: LightMyRequestResponse) {
   expect(result.body.includes("Synthetic phase1 reply.")).toBe(false);
 }
 
+function safeFailureContext(result: LightMyRequestResponse, providerCalls: number): string {
+  let code: unknown;
+  try { code = result.json<{ error?: { code?: unknown } }>()?.error?.code; } catch { /* No response-body logging. */ }
+  return JSON.stringify({ error_code: typeof code === "string" && /^[A-Z][A-Z0-9_]{0,79}$/u.test(code) ? code : null,
+    provider_calls: providerCalls });
+}
+
 describe.skipIf(!database)("phase1 original credential publication (Hosted PostgreSQL only)", () => {
   it("does not deliver a real resumed continuation mirror after its original HTTP login is revoked", async () => {
     await withHttpFixture({ continuation: true }, async f => {
@@ -375,7 +387,7 @@ describe.skipIf(!database)("phase1 original credential publication (Hosted Postg
   it.each([{ scoped: true }, { agent: true }])("preserves lawful201 then rejects revoked original login: %j", async options => {
     await withHttpFixture(options, async f => {
       const positive = await f.post(randomUUID());
-      expect(positive.statusCode).toBe(201);
+      expect(positive.statusCode, safeFailureContext(positive, f.calls())).toBe(201);
       expect(positive.body.includes("Synthetic phase1 reply.")).toBe(true);
       f.hold(true);
       const key = randomUUID(), pending = f.post(key);
@@ -393,7 +405,7 @@ describe.skipIf(!database)("phase1 original credential publication (Hosted Postg
   it.each([false, true])("ordinary provider failure keeps the existing fallback201 (scoped=%s)", async scoped => {
     await withHttpFixture({ scoped, failure: true }, async f => {
       const result = await f.post(randomUUID());
-      expect(result.statusCode).toBe(201);
+      expect(result.statusCode, safeFailureContext(result, f.calls())).toBe(201);
       expect(f.calls()).toBe(scoped ? 1 : 2);
     });
   });

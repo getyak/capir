@@ -145,8 +145,17 @@ checks the locked store shape with existing peer dependencies, not a full
 installed pinned-dependency build; Hosted remains required. The added
 real HTTP/PG case requires a lawful committed mirror and resumed identity before
 revoking the actual login, then checks zero delivered rows before the final409.
-The full12-case phase1 PG suite has not yet executed at this source revision.
-Pure tests and static checks do not establish that PG checkpoint behavior.
+At37902a26 the explicit12-case PG suite ran:10passed,2failed. The actual
+continuation-mirror positive/resume/withdrawal/non-delivery case passed. Both
+scoped lawful201 controls returned409 before their provider; the new fixture
+had manually inserted only no_action, while the existing responseBlocks owner
+requires identity_context. That exact error code is source-derived, not printed
+by the original status-only failure. The fixture repair uses the production
+relationship compiler and requires naturally published/gold/all-pass gates and
+both blocks. No production authority, source verifier or positive assertion is
+relaxed. Two status assertions add only bounded error-code/provider-count
+diagnostics. The repaired fixture still requires a new exact-head12-case PG run;
+its14pure tests and one-root static check do not substitute for that result.
 
 ## Milestones
 
