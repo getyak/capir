@@ -36,6 +36,30 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("OpenRouterAgentProvider", () => {
+
+  it("rejects unsupported explicit reasoning before any provider request", () => {
+    const fetcher = vi.fn<typeof fetch>();
+    expect(() => new OpenRouterAgentProvider({ apiKey: "synthetic", model: "example/unverified-reasoning",
+      reasoningEffort: "high", fetcher })).toThrow();
+    expect(() => new OpenRouterAgentProvider({ apiKey: "synthetic", model: "z-ai/glm-5.3",
+      reasoningEffort: "invalid" as "low", fetcher })).toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "low", "high", "max"] as const)("preserves host reasoning intent %s in the actual request body", async effort => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({
+      model: "z-ai/glm-5.3", choices: [{ finish_reason: "stop", message: { role: "assistant", content: "{}" } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.000001 },
+    }));
+    const configured = new OpenRouterAgentProvider({ apiKey: "synthetic-test-key", model: "z-ai/glm-5.3",
+      ...(effort === undefined ? {} : { reasoningEffort: effort }), fetcher });
+    await configured.run(request(), vi.fn(), new AbortController().signal);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    if (effort === undefined) expect(Object.hasOwn(body, "reasoning_effort")).toBe(false);
+    else expect(body.reasoning_effort).toBe(effort);
+  });
+
   it("sends governed text and base64 images as one multimodal user message", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       response({
@@ -302,6 +326,7 @@ describe("OpenRouterAgentProvider", () => {
     const provider = new OpenRouterAgentProvider({
       apiKey: "test-key",
       model: "z-ai/glm-5.3",
+      reasoningEffort: "low",
       providerOrder: ["z-ai"],
       fetcher,
     });
