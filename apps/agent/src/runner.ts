@@ -1,4 +1,4 @@
-import { snapshotProviderRunConfiguration, type ProviderRunConfiguration } from "./providerRunConfiguration.js";
+import { snapshotProviderRunConfiguration } from "./providerRunConfiguration.js";
 import {
   PursuitAgentFinalOutputSchema,
   type PursuitNoActionOutput,
@@ -8,6 +8,7 @@ import {
   type StageProposalInput,
 } from "./schemas.js";
 import { fingerprint } from "./fingerprint.js";
+import { buildRunFingerprints } from "./runFingerprints.js";
 import { agentCapabilityManifest } from "./toolCatalog.js";
 import {
   AGENT_BUDGET_CEILING,
@@ -20,7 +21,6 @@ import {
   PURSUIT_AGENT_TOOL_NAMES,
   type AgentBudget,
   type AgentEvidence,
-  type AgentFingerprints,
   type AgentNoActionCandidate,
   type AgentProposalCandidate,
   type AgentRunRequest,
@@ -186,37 +186,6 @@ function assertConfiguration(request: AgentRunRequest): void {
   }
 }
 
-function buildFingerprints(request: AgentRunRequest, providerConfiguration: ProviderRunConfiguration): AgentFingerprints {
-  return {
-    definition: fingerprint({
-      name: request.definition.name,
-      version: request.definition.version,
-      policyVersion: request.definition.policyVersion,
-      contractVersion: request.definition.contractVersion,
-    }),
-    systemPrompt: fingerprint(request.definition.systemPrompt),
-    toolManifest: fingerprint(request.definition.toolManifest),
-    sdk: fingerprint({
-      provider: request.provider.id,
-      sdkVersion: request.provider.sdkVersion,
-      providerConfiguration,
-    }),
-    model: fingerprint(request.provider.model),
-    policy: fingerprint(request.definition.policyVersion),
-    contract: fingerprint(request.definition.contractVersion),
-    context: fingerprint({
-      workspaceID: request.scope.workspaceID,
-      userID: request.scope.userID,
-      pursuitID: request.scope.pursuitID,
-      pursuitRevision: request.scope.pursuitRevision,
-      captureID: request.scope.captureID,
-      objective: request.scope.objective,
-      evidenceManifest: request.scope.evidenceManifest,
-      inputArtifactManifest: request.scope.inputArtifactManifest ?? [],
-    }),
-  };
-}
-
 function proposalCandidate(input: StageProposalInput): AgentProposalCandidate {
   return {
     summary: input.summary,
@@ -347,7 +316,7 @@ export async function runBoundedAgent(
   const startedAtMs = runtime.nowMs();
   const startedAt = new Date(startedAtMs).toISOString();
   const providerConfiguration = snapshotProviderRunConfiguration(request.provider.runConfiguration);
-  const fingerprints = buildFingerprints(request, providerConfiguration);
+  const fingerprints = buildRunFingerprints(request, providerConfiguration);
   let sequence = 0;
   let toolCalls = 0;
   const runState: {
