@@ -35,6 +35,7 @@ import { executeUnscopedChatTask } from "./unscopedChat.js";
 import { getAgentSession, readAgentSessionConversation } from "./agentSessions.js";
 import { mutateAgentSession } from "./agentSessions.js";
 import { resolveSessionSourceAuthority } from "./memoryReviewStore.js";
+import { admitSessionHistoryOwner } from "./sessionHistorySnapshot.js";
 import { openMemoryReview } from "./memoryReviewRead.js";
 import { digestValue } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
@@ -98,6 +99,11 @@ async function seedSession(options: {
   await pool!.query(
     "INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'CQ proof','simulated_human')",
     [userId, accountId, auth.userEmail],
+  );
+  await pool!.query(
+    `INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at)
+     VALUES($1,$2,$3,$4,'Synthetic conversation queue proof',now()+interval '7 days')`,
+    [auth.sessionId, accountId, userId, createHash("sha256").update(randomUUID()).digest("hex")],
   );
   const now = new Date().toISOString();
   const payload = {
@@ -308,6 +314,51 @@ async function commitUnpublishedStop(sessionId: string, accountId: string): Prom
 }
 
 suite("durable conversation queue", () => {
+  it.each(["expired-entry", "expired-lease", "cancelled", "old-generation", "wrong-owner", "wrong-message",
+    "mismatched-login", "login-expired", "login-revoked-after-claim", "product-session-deleted"] as const)(
+    "GET-445 never treats a stale/foreign queue claim as null-login authority: %s", async (change) => {
+    const seeded = await seedSession(), messageID = randomUUID();
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, { session_id: seeded.sessionId, message_id: messageID,
+        idempotency_key: randomUUID(), objective: "Synthetic queue history admission" });
+      await pool!.query("UPDATE conversation_queue_entries SET auth_session_id=NULL WHERE account_id=$1 AND session_id=$2",
+        [seeded.accountId, seeded.sessionId]);
+      const claimed = await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: randomUUID(),
+      });
+      expect(claimed).not.toBeNull();
+      const authority = { sessionId: seeded.sessionId, messageId: messageID, fence: {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, entryId: claimed!.entryId, runId: claimed!.runId,
+        leaseOwner: claimed!.leaseOwner, leaseGeneration: claimed!.leaseGeneration } };
+      const admission = () => admitSessionHistoryOwner({ database: pool!, auth: seeded.auth, sessionID: seeded.sessionId,
+        taskID: claimed!.runId, messageID, hostAuthority: authority });
+      expect(await admission()).toBe(false); // A real live NULL claim grants inline only, never a reader.
+      switch (change) {
+        case "expired-entry":
+          await pool!.query("UPDATE conversation_queue_entries SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed!.entryId]); break;
+        case "expired-lease":
+          await pool!.query("UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed!.entryId]); break;
+        case "cancelled":
+          await pool!.query("UPDATE conversation_queue_entries SET cancel_requested=true WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed!.entryId]); break;
+        case "old-generation": authority.fence.leaseGeneration -= 1; break;
+        case "wrong-owner": authority.fence.leaseOwner = "different-synthetic-worker"; break;
+        case "wrong-message": authority.messageId = randomUUID(); break;
+        case "mismatched-login":
+          await pool!.query("UPDATE conversation_queue_entries SET auth_session_id=$3 WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed!.entryId, randomUUID()]); break;
+        case "login-expired":
+          await pool!.query("UPDATE conversation_queue_entries SET auth_session_id=$3 WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed!.entryId, seeded.auth.sessionId]);
+          await pool!.query("UPDATE sessions SET expires_at=now()-interval '1 second' WHERE id=$1", [seeded.auth.sessionId]); break;
+        case "login-revoked-after-claim":
+          await pool!.query("UPDATE conversation_queue_entries SET auth_session_id=$3 WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed!.entryId, seeded.auth.sessionId]);
+          expect(await admission()).toBe(true);
+          await pool!.query("UPDATE sessions SET revoked_at=now() WHERE id=$1", [seeded.auth.sessionId]); break;
+        case "product-session-deleted":
+          await pool!.query("UPDATE agent_sessions SET payload=NULL,deleted_at=now() WHERE account_id=$1 AND id=$2", [seeded.accountId, seeded.sessionId]); break;
+      }
+      await expect(admission()).rejects.toMatchObject({ code: "SESSION_HISTORY_UNAVAILABLE" });
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
   it("keeps a chosen title through first reply readback", async () => {
     const seeded = await seedSession();
     const before = await getAgentSession(pool!, seeded.auth, seeded.sessionId);
@@ -2174,6 +2225,27 @@ suite("conversation message images", () => {
       await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.status === "completed");
       expect(provider.calls).toHaveLength(2);
       expect((await getAgentSession(pool!, seeded.auth, seeded.sessionId)).payload?.turns[0]?.id).toBe(message);
+    } finally { await runner.close(); await removeProofAccount(seeded.accountId); }
+  });
+
+  it("GET-445 preserves null-login queue execution without offering a complete-history reader", async () => {
+    const seeded = await seedSession(), message = randomUUID();
+    const provider = new ScriptedConversationProvider();
+    Object.defineProperties(provider, { providerId: { value: "claude-agent-sdk" }, id: { value: "claude-agent-sdk" } });
+    provider.failWith = new Error("CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED");
+    const runner = new ConversationQueueRunner({ pool: pool!, provider, logger: silentLogger, pollIntervalMs: 10, heartbeatMs: 40 });
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, { session_id: seeded.sessionId, message_id: message,
+        idempotency_key: randomUUID(), objective: "Synthetic host-owned continuation" });
+      await pool!.query("UPDATE conversation_queue_entries SET auth_session_id=NULL WHERE account_id=$1 AND session_id=$2",
+        [seeded.accountId, seeded.sessionId]);
+      runner.start();
+      await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.status === "failed");
+      expect((await entryRow(seeded.sessionId, seeded.accountId))[0]).toMatchObject({
+        failure_code: "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED", content_state: "retained", result: null,
+      });
+      expect(provider.calls).toHaveLength(1);
+      expect(provider.lastSupplementalToolNames).not.toContain("read_session_history");
     } finally { await runner.close(); await removeProofAccount(seeded.accountId); }
   });
 

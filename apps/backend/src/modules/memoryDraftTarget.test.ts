@@ -92,6 +92,8 @@ describe("per-message Memory draft target", () => {
     const output = await executeWorkspaceConversationAgentCore({ objective: text, sourceText: text, messageID, sessionID,
       workspaceID: auth.accountId, memoryDraftTarget: target, contacts: { search: vi.fn(), read: vi.fn() },
       conversationHistory: [{ message_id: otherID, role: "assistant", text: "Earlier private saved Memory" }],
+      sessionHistory: { messages: [{ message_id: otherID, role: "user", text: "Earlier private message" }],
+        version: "synthetic-previous-version", assertCurrent: vi.fn(async () => {}) },
       messageSources: new Map([[otherID, "Earlier private message"]]),
       memory: { stage, recall }, inputParts: [{ kind: "image", artifactID: `conversation-image-${otherID}-0-old`,
         mimeType: "image/png", byteSize: 3, contentHash: "a".repeat(64), dataBase64: "AAAA" }],

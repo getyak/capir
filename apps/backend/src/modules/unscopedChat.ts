@@ -2,6 +2,7 @@ import { conversationRunDiagnostics } from "./conversationRunDiagnostics.js";
 import { recordProductEvent } from "@talent-signal/agent";
 import { calendarDraftContextForRequest } from "./calendarDraftContext.js";
 import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
+import { admitSessionHistoryOwner, createSessionHistorySnapshot } from "./sessionHistorySnapshot.js";
 import { loadAgentResponsePreference } from "./agentPreferences.js";
 import { claudeHarnessInterruptionCode, type AgentProviderInputPart, type RuntimeObservationContext } from "@talent-signal/agent";
 import type { HarnessContinuationFactory } from "@talent-signal/agent";
@@ -33,7 +34,7 @@ import { boundedConversationHistory } from "./chatAnswerProvider.js";
 import { readAgentSessionConversation } from "./agentSessions.js";
 import { firstTurnSessionTitle } from "./sessionTitles.js";
 import { productObservationContext } from "./runtimeObservationSources.js";
-import { assertSessionChatSourcesAvailable, assertSessionForChat, purgeUnavailableSessionChatSources, recordSessionChatSources, markSessionContextAnswer, type AgentSessionChatSource } from "./agentSessionSources.js";
+import { assertSessionChatSourcesAvailable, assertSessionForChat, purgeUnavailableSessionChatSources, recordSessionChatSources, markSessionContextAnswer, SESSION_CHAT_SOURCE_LIMIT, type AgentSessionChatSource } from "./agentSessionSources.js";
 import { recordMeetingDraftsForTask } from "./meetingDrafts.js";
 import {
   executeWorkspaceConversationAgent,
@@ -161,13 +162,20 @@ export async function executeUnscopedChatTask(input: {
   }
   const calendarContext = calendarDraftContextForRequest(taskID, input.request.time_zone, input.referenceTime ?? input.createdAt ?? new Date());
   let observation: RuntimeObservationContext | undefined;
+  let historyExpiresAt: Date | undefined;
+  const narrowHistoryExpiry = (expiresAt: Date) => {
+    historyExpiresAt = new Date(Math.min(historyExpiresAt?.valueOf() ?? Infinity, expiresAt.valueOf()));
+    const refs = observation?.source_refs;
+    if (refs?.kind === "product") refs.expires_at = new Date(Math.min(Date.parse(refs.expires_at), historyExpiresAt.valueOf())).toISOString();
+  };
   // Ephemeral contact reads also need authority, even without an observation
   // retention owner or a persisted product Session.
   const sourcePeople = new Set<string>();
   const runExpiresAt = new Date(Date.now() + 7 * 86_400_000);
   const sources = () => {
     const refs = observation?.source_refs;
-    return { expiresAt: refs?.kind === "product" ? new Date(refs.expires_at) : runExpiresAt,
+    return { expiresAt: new Date(Math.min(refs?.kind === "product" ? Date.parse(refs.expires_at) : runExpiresAt.valueOf(),
+      historyExpiresAt?.valueOf() ?? Infinity)),
       personIDs: [...new Set([...sourcePeople, ...(refs?.kind === "product" ? refs.person_ids : [])])] };
   };
   const assertCurrent = input.provider?.providerId === "claude-agent-sdk" && input.database && input.auth
@@ -182,11 +190,48 @@ export async function executeUnscopedChatTask(input: {
       )
     : { hasRecordedTurns: Boolean(input.memoryDraftTarget), messages: [] };
   const conversationHistory = boundedConversationHistory(sessionConversation.messages, input.request.message_id);
+  let completeConversation: Awaited<ReturnType<typeof readAgentSessionConversation>> | undefined;
+  let sessionHistoryUnavailable = false;
+  if (assertCurrent && !input.memoryDraftTarget && input.request.session_id && input.database && input.auth) {
+    const historyLoginAvailable = await admitSessionHistoryOwner({ database: input.database, auth: input.auth,
+      sessionID: input.request.session_id, taskID,
+      ...(input.request.message_id ? { messageID: input.request.message_id } : {}),
+      ...(input.hostAuthority ? { hostAuthority: input.hostAuthority } : {}) });
+    if (!historyLoginAvailable) sessionHistoryUnavailable = true;
+    else {
+      await assertCurrent();
+      try {
+        const candidate = await readAgentSessionConversation(input.database, input.auth, input.request.session_id,
+          { personId: null, relationshipContextId: null }, { complete: true });
+        const dependencies = new Map([...(sessionConversation.sources ?? []), ...(candidate.sources ?? [])]
+          .map(source => [source.taskID, source]));
+        if (dependencies.size > SESSION_CHAT_SOURCE_LIMIT)
+          throw new ApiError(413, "SESSION_HISTORY_SNAPSHOT_UNAVAILABLE", "Earlier conversation history is unavailable for this run.");
+        completeConversation = candidate;
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.code !== "SESSION_HISTORY_SNAPSHOT_UNAVAILABLE") throw error;
+        // Preserve ordinary bounded chat without advertising a partial host
+        // snapshot as complete. Authority/SQL failures are never downgraded.
+        sessionHistoryUnavailable = true;
+      }
+    }
+  }
+  const conversationSources = [...new Map([
+    ...(sessionConversation.sources ?? []), ...(completeConversation?.sources ?? []),
+  ].map(source => [source.taskID, source])).values()];
+  const sessionHistory = completeConversation && completeConversation.messages.length > 0 && assertCurrent && input.request.session_id && input.database && input.auth
+    ? createSessionHistorySnapshot({ database: input.database, auth: input.auth, sessionID: input.request.session_id,
+      messages: completeConversation.messages, ...(input.request.message_id ? { currentMessageID: input.request.message_id } : {}),
+      sources: conversationSources, taskIDs: completeConversation.historyTaskIDs ?? [],
+      sessionStamp: completeConversation.historyStamp ?? "", sourceGeneration: completeConversation.historyGeneration ?? "",
+      onExpiry: narrowHistoryExpiry, assertCurrent }) : undefined;
+  await sessionHistory?.assertCurrent();
   const sessionTitleRequested = !sessionConversation.hasRecordedTurns
     && !sessionConversation.sources?.length;
   observation = input.database && input.auth ? await productObservationContext(input.database, input.auth, taskID,
     "unscoped_conversation", { sessionID: input.request.session_id,
-      screenshotTaskIDs: sessionConversation.sources?.map((source) => source.taskID) ?? [] }) : undefined;
+      screenshotTaskIDs: conversationSources.map(source => source.taskID) }) : undefined;
+  if (historyExpiresAt) narrowHistoryExpiry(historyExpiresAt);
   if (sessionConversation.unavailableScreenshotContext && !sessionConversation.sources?.length)
     throw new ApiError(409, "AGENT_SESSION_CONTEXT_UNAVAILABLE", "The screenshot summary is not currently available. Review its current task before continuing from it.");
   const continuation = !input.memoryDraftTarget && input.provider?.providerId === "claude-agent-sdk" && observation?.source_refs?.kind === "product"
@@ -258,9 +303,11 @@ export async function executeUnscopedChatTask(input: {
           sessionTitleRequested,
           ...(input.request.message_id ? { messageID: input.request.message_id } : {}),
           conversationHistory,
+          ...(sessionHistory ? { sessionHistory } : {}),
+          ...(sessionHistoryUnavailable ? { sessionHistoryUnavailable: true } : {}),
           runID: taskID,
           ...(continuation ? { continuation } : {}),
-          ...(assertCurrent ? { assertCurrent } : {}),
+          ...(sessionHistory ? { assertCurrent: sessionHistory.assertCurrent } : assertCurrent ? { assertCurrent } : {}),
           ...(responsePreference ? { responsePreference } : {}),
           ...(calendarContext ? { calendarContext } : {}),
           ...(input.onVisibleText ? { onVisibleText: input.onVisibleText } : {}),
@@ -373,14 +420,18 @@ export async function executeUnscopedChatTask(input: {
     : null;
 
   return {
-    conversationMessageIDs: conversationHistory.map((message) => message.message_id),
-    previousTaskIDs: conversationHistory.filter((message) => message.role === "assistant").map((message) => message.message_id),
-    ...(sessionConversation.sources ? { conversationSources: sessionConversation.sources } : {}),
+    // The complete capability snapshot is a conservative dependency, even when
+    // the model elects not to read every page. Withdrawal cannot strand a reply
+    // whose earlier context was only available through the history tool.
+    conversationMessageIDs: (sessionHistory?.messages ?? conversationHistory).map(message => message.message_id),
+    previousTaskIDs: sessionHistory ? completeConversation?.historyTaskIDs ?? []
+      : conversationHistory.filter(message => message.role === "assistant").map(message => message.message_id),
+    ...(conversationSources.length ? { conversationSources } : {}),
     body: {
       contract_version: CONTRACT_VERSION,
       task_id: taskID,
       disposition: block.kind === "clarification" ? "clarify" : "answer",
-      blocks: [sessionConversation.sources?.length ? markSessionContextAnswer(block, input.request.objective) : block],
+      blocks: [conversationSources.length ? markSessionContextAnswer(block, input.request.objective) : block],
       agent_event: agentEvent,
       ...(memoryProposalRef ? { memory_proposal: memoryProposalRef } : {}),
       external_effects: [],
