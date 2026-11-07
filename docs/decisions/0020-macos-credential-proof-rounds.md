@@ -1,8 +1,23 @@
 # macOS credential proof rounds
 
-Status: accepted design for the next implementation slice, 2026-09-25. Not
-implemented or live-verified. Extends [system authentication](0019-macos-system-authentication-handoff.md)
-and preserves [unified-account authority](0018-unified-account-login-and-sync.md).
+Status: historical design, originally accepted for the next implementation
+slice on 2026-09-25 but not delivered as described. The subsequent
+[browser-owned macOS login decision](0022-browser-owned-macos-login.md),
+accepted on 2026-10-01, keeps account settings in the default browser and
+explicitly rejects a duplicate per-provider native linking protocol. This
+relay is not a pending prerequisite for current macOS account management.
+
+The browser uses its own authenticated account, which can differ from the
+Mac app's account; the native settings entry states that boundary before
+opening it. Opening the browser proves dispatch only. Credential changes
+still require the browser's current-identity step-up and
+[unified-account authority](0018-unified-account-login-and-sync.md). Current
+password-result recovery follows the
+[GET-350 plan](../../plans/2026-10-31-get-350-password-result-recovery.md).
+
+The remaining sections preserve the earlier relay design and its superseded
+implementation requirements. They do not override ADR0022 or authorize
+restoring the old transport, cookie/store machinery or migration history.
 
 ## Outcome
 
