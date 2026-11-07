@@ -278,6 +278,10 @@ export const MemoryProposalListResponseSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
     proposals: Type.Array(MemoryProposalRecordSchema, { maxItems: 50 }),
+    // Opt-in pagination preserves the original shape for legacy callers.
+    has_more: Type.Optional(Type.Boolean()),
+    next_cursor: optional(Type.String({ minLength: 1, maxLength: 1024 })),
+    snapshot_at: Type.Optional(stamp),
   },
   obj,
 );
