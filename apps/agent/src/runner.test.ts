@@ -237,6 +237,23 @@ describe("bounded Agent control plane", () => {
       .toBe(true);
   });
 
+  it("binds per-instance reasoning intent to the existing SDK fingerprint and reads it once", async () => {
+    const fingerprints: string[] = [];
+    for (const reasoning of [{ mode: "omitted" }, { mode: "explicit", effort: "high" }]) {
+      let reads = 0;
+      const provider = proposalProvider();
+      Object.defineProperty(provider, "runConfiguration", { get() {
+        reads += 1;
+        return { version: "agent-run-reasoning.v1", reasoning };
+      } });
+      const result = await runBoundedAgent(request(provider));
+      expect(result.status).toBe("proposal_staged");
+      expect(reads).toBe(1);
+      fingerprints.push(result.fingerprints.sdk);
+    }
+    expect(fingerprints[0]).not.toBe(fingerprints[1]);
+  });
+
   it("quarantines malformed final output without creating a Proposal", async () => {
     const gateway = new Gateway();
     const provider = new ScriptedAgentProvider(

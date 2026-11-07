@@ -1,3 +1,4 @@
+import { snapshotProviderRunConfiguration } from "./providerRunConfiguration.js";
 import { z } from "zod";
 import { AGENT_TOOL_CATALOG, candidateToolNames } from "./toolCatalog.js";
 import { PublicResearchAgentFinalOutputSchema, PursuitAgentFinalOutputSchema, PersonResearchAgentFinalOutputSchema } from "./schemas.js";
@@ -10,6 +11,7 @@ import type { AgentProvider, AgentProviderRequest, AgentProviderResult, AgentToo
 export class ClaudeAgentSDKProvider implements AgentProvider {
   readonly id = "claude-agent-sdk";
   readonly sdkVersion = CLAUDE_SDK_VERSION;
+  readonly runConfiguration = snapshotProviderRunConfiguration({ version: "agent-run-reasoning.v1", reasoning: { mode: "omitted" } });
   readonly inputCapabilities;
   private readonly configuration: ClaudeHarnessConfiguration;
 

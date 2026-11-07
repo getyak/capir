@@ -1,3 +1,4 @@
+import { snapshotProviderRunConfiguration } from "./providerRunConfiguration.js";
 import {runFileTools} from "./runFileTools.js";
 import { z } from "zod";
 import { responsePreferenceTool, responsePreferenceContext, RESPONSE_PREFERENCE_INSTRUCTIONS } from "./responsePreference.js";
@@ -104,6 +105,7 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
   readonly providerId = "claude-agent-sdk" as const;
   readonly id = "claude-agent-sdk";
   readonly sdkVersion = CLAUDE_SDK_VERSION;
+  readonly runConfiguration = snapshotProviderRunConfiguration({ version: "agent-run-reasoning.v1", reasoning: { mode: "explicit", effort: "low" } });
   readonly supportsPromptPresets = true;
   readonly effectivePrompt = configuredClaudeChatPrompt;
   matchesReportedModel(reported: string | null): boolean {

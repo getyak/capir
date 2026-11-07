@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import {
   fingerprint,
+  snapshotProviderRunConfiguration,
+  type ProviderRunConfiguration,
   PublicResearchNoActionOutputSchema,
   type AgentBudget,
   type AgentFetchedWebPage,
@@ -97,6 +99,7 @@ export interface LocalRunRecord {
   modelProviderID: string;
   model: string;
   sdkVersion: string;
+  providerConfiguration?: ProviderRunConfiguration;
   startedAt: string;
 }
 
@@ -120,6 +123,16 @@ export interface LocalResearchNoActionRecord {
   createdAt: string;
 }
 
+function parseStoredProviderConfiguration(value: Record<string, unknown>): { providerConfiguration?: ProviderRunConfiguration } {
+  // Legacy absence stays absent for lawful read-only replay. It is never a
+  // default and cannot prove the identity of another execution.
+  if (!Object.hasOwn(value, "providerConfiguration")) return {};
+  try {
+    if (value.providerConfiguration === undefined) throw new Error();
+    return { providerConfiguration: snapshotProviderRunConfiguration(value.providerConfiguration) };
+  } catch { throw localRecordCorruptError("run"); }
+}
+
 function stableRunIdentity(record: LocalRunRecord) {
   return fingerprint({
     scope: record.scope,
@@ -127,6 +140,7 @@ function stableRunIdentity(record: LocalRunRecord) {
     modelProviderID: record.modelProviderID,
     model: record.model,
     sdkVersion: record.sdkVersion,
+    providerConfiguration: record.providerConfiguration,
   });
 }
 
@@ -189,6 +203,7 @@ function parseRunRecord(
     modelProviderID,
     model,
     sdkVersion,
+    ...parseStoredProviderConfiguration(value),
     startedAt,
   };
 }
@@ -537,17 +552,22 @@ export class LocalResearchStore implements AgentPublicResearchJournal {
   }
 
   async start(input: LocalRunRecord): Promise<void> {
+    const requested = parseRunRecord(input.scope.runID, { ...input,
+      providerConfiguration: snapshotProviderRunConfiguration(input.providerConfiguration) });
     await this.ensureRunDirectories(input.scope.runID);
-    const requested = parseRunRecord(input.scope.runID, input);
     // Recorded evidence keeps its ORIGINAL immutable Run metadata: an
     // orphaned checkpoint, journal, or terminal receipt never receives
     // replacement metadata published from this incoming request.
     await this.requireRunMetadata(input.scope.runID);
     await publishImmutableJsonRecord(
       this.path(input.scope.runID, "run.json"),
-      input,
+      requested,
       (value) => {
         const existing = parseRunRecord(input.scope.runID, value);
+        if (!existing.providerConfiguration || existing.providerConfiguration.reasoning.mode === "unknown"
+          || requested.providerConfiguration?.reasoning.mode === "unknown") {
+          throw new Error("LOCAL_RUN_PROVIDER_CONFIGURATION_UNVERIFIED");
+        }
         if (stableRunIdentity(existing) !== stableRunIdentity(requested)) {
           throw new Error(
             "The run ID already belongs to a different objective, authorization, provider, or budget.",

@@ -53,6 +53,7 @@ function visionProvider(
     id: scripted.id,
     model: "synthetic-vision-tool-model",
     sdkVersion: scripted.sdkVersion,
+    runConfiguration: scripted.runConfiguration,
     inputCapabilities: {
       text: true,
       image: true,

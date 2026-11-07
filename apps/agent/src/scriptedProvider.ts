@@ -1,3 +1,4 @@
+import { snapshotProviderRunConfiguration } from "./providerRunConfiguration.js";
 import type {
   AgentProvider,
   AgentProviderRequest,
@@ -23,6 +24,7 @@ export class ScriptedAgentProvider implements AgentProvider {
   readonly id = "deterministic";
   readonly model = "talent-signal-scripted-v1";
   readonly sdkVersion = "deterministic-provider.v1";
+  readonly runConfiguration = snapshotProviderRunConfiguration({ version: "agent-run-reasoning.v1", reasoning: { mode: "not_applicable" } });
   readonly inputCapabilities = {
     text: true,
     image: true,

@@ -1,3 +1,4 @@
+import { snapshotProviderRunConfiguration } from "./providerRunConfiguration.js";
 import { resolveProductPrompt } from "./promptRegistry.js";
 import { fingerprint } from "./fingerprint.js";
 import {
@@ -181,12 +182,14 @@ export async function runPublicResearchAgent(
   });
   const startedAtMs = runtime.nowMs();
   const startedAt = new Date(startedAtMs).toISOString();
+  const providerConfiguration = snapshotProviderRunConfiguration(request.provider.runConfiguration);
   await request.journal.start({
     scope,
     budget: request.budget,
     modelProviderID: request.provider.id,
     model: request.provider.model,
     sdkVersion: request.provider.sdkVersion,
+    providerConfiguration,
     startedAt,
   });
   const restored = await request.journal.loadCheckpoint(scope.runID);
