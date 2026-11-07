@@ -45,6 +45,7 @@ import {
   type WorkspaceReviewResponse,
   type TelemetryContext,
   type MemoryProposalRecord,
+  type MemoryProposalListResponse,
   type MemoryRecallItem,
   type MemoryPursuitScope,
 } from "@talent-signal/contracts";
@@ -174,6 +175,7 @@ export async function loadPersonMemory(personId: string): Promise<{
   basicFields: PersonDetailResponse["basic_fields"];
   contactPoints: NonNullable<PersonDetailResponse["contact_points"]>;
   proposals: MemoryProposalRecord[];
+  proposalPage?: MemoryProposalListResponse;
   items: MemoryRecallItem[];
   hasMore: boolean;
   nextCursor: string | null;
@@ -182,7 +184,7 @@ export async function loadPersonMemory(personId: string): Promise<{
   const { client } = await authenticatedClient("web-person-memory");
   const [detail, proposals, recall] = await Promise.all([
     client.getPerson(personId),
-    client.listMemoryProposals({ purpose: "people", person_id: personId }),
+    client.listMemoryProposals({ purpose: "people", person_id: personId, paginate: true }),
     client.recallMemories({ surface: "people", person_id: personId, limit: 50 }),
   ]);
   if (detail.person.id !== personId || recall.surface !== "people" ||
@@ -200,6 +202,7 @@ export async function loadPersonMemory(personId: string): Promise<{
     basicFields: detail.basic_fields,
     contactPoints: detail.contact_points ?? [],
     proposals: proposals.proposals,
+    proposalPage: proposals,
     items: recall.items,
     hasMore,
     nextCursor,
@@ -211,20 +214,25 @@ export async function loadPursuitMemoryScopes(pursuitId: string): Promise<
   Array<
     MemoryPursuitScope & {
       proposals: MemoryProposalRecord[];
+      proposalPage?: MemoryProposalListResponse;
     }
   >
 > {
   if (!UUID.test(pursuitId)) throw new Error("寻访标识无效。");
   const { client } = await authenticatedClient("web-pursuit-memory");
   const resolved = await client.resolveMemoryPursuitScopes(pursuitId);
-  const scopes: Array<MemoryPursuitScope & { proposals: MemoryProposalRecord[] }> = [];
+  const scopes: Array<MemoryPursuitScope & { proposals: MemoryProposalRecord[]; proposalPage?: MemoryProposalListResponse }> = [];
   for (const scope of resolved.scopes) {
+    // An unresolved relationship is not a list authority. It must not turn
+    // one missing context into a broad request or hide other exact scopes.
+    if (!scope.relationship_context_id) continue;
     const proposals = await client.listMemoryProposals({
       purpose: "relationship",
       person_id: scope.person_id,
       relationship_context_id: scope.relationship_context_id ?? null,
+      paginate: true,
     });
-    scopes.push({ ...scope, proposals: proposals.proposals });
+    scopes.push({ ...scope, proposals: proposals.proposals, proposalPage: proposals });
   }
   return scopes;
 }

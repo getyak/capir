@@ -1,4 +1,8 @@
 {
+  "继续查看": "Continue to the next page",
+  "重新读取最新": "Read the latest",
+  "这是上次读取的提案快照。后续变化请重新读取最新。": "This is a proposal snapshot from the last read. Read the latest to check subsequent changes.",
+  "当前页没有可显示的提案。可重新读取最新内容。": "No proposals are available on this page. Read the latest to check current proposals.",
   "capri 工作台": "capri workspace",
   "显示侧边栏": "Show sidebar",
   "调整侧边栏宽度": "Resize sidebar",

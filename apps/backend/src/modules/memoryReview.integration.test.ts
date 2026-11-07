@@ -1,5 +1,5 @@
 import { sweepDueSourceRetention } from "./sourceRetention.js";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import type {
   MemoryCommitRequest,
@@ -11,7 +11,9 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { inTransaction } from "../database/pool.js";
-import type { AuthContext } from "./auth.js";
+import { createAuthGuard, currentSession, type AuthContext } from "./auth.js";
+import { ApiError } from "../lib/apiError.js";
+import type { LightMyRequestResponse } from "fastify";
 import { mutateAgentSession } from "./agentSessions.js";
 import { createChatTask } from "./chat.js";
 import { executeUnscopedChatTask } from "./unscopedChat.js";
@@ -48,6 +50,8 @@ import {
   type MemorySourceAuthority,
 } from "./memoryReview.js";
 import { verifyPendingSourceAuthority } from "./memorySourceVerification.js";
+import { loadProposal, loadProposalItems } from "./memoryReviewStore.js";
+import { MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_SQL } from "./memoryProposalSourceEligibility.js";
 import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
 import { loadAgentResponsePreference, saveAgentPreference } from "./agentPreferences.js";
 import { invalidateMemoriesForSessionIds } from "./memoryReview.js";
@@ -94,7 +98,7 @@ async function makeAuth(label: string): Promise<AuthContext> {
     "INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,$4,'simulated_human')",
     [userId, accountId, `${accountSlug}@synthetic.local`, "Synthetic Owner"],
   );
-  return {
+  const auth: AuthContext = {
     accountId,
     accountSlug,
     userId,
@@ -102,6 +106,8 @@ async function makeAuth(label: string): Promise<AuthContext> {
     userKind: "simulated_human",
     sessionId: randomUUID(),
   };
+  await installSyntheticPaginationSession(auth);
+  return auth;
 }
 
 async function makeContact(
@@ -393,6 +399,206 @@ async function stage(auth: AuthContext, options: StageOptions) {
   return inTransaction(pool!, (client) =>
     stageMemoryProposal(client, auth, request, authority),
   );
+}
+
+async function expectProposalSourceSQLMatchesVerifier(auth: AuthContext, proposalId: string, available: boolean) {
+  const proposal = await loadProposal(pool!, auth.accountId, proposalId);
+  expect(proposal).toBeTruthy();
+  const items = await loadProposalItems(pool!, auth.accountId, proposalId);
+  expect(items.length).toBeGreaterThan(0);
+  const checked = await verifyPendingSourceAuthority(pool!, auth, proposal!, items);
+  const qualified = await pool!.query<{ id: string; eligible: boolean }>(
+    `SELECT i.id, COALESCE(${MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_SQL},false) AS eligible
+     FROM memory_proposals p JOIN memory_proposal_items i
+       ON i.account_id=p.account_id AND i.proposal_id=p.id
+     WHERE p.account_id=$1 AND p.id=$3`, [auth.accountId, auth.userId, proposalId]);
+  expect(qualified.rows).toHaveLength(items.length);
+  for (const row of qualified.rows) {
+    expect(row.eligible, `SQL/source verifier mismatch for synthetic item ${row.id}`)
+      .toBe(!checked.unavailableItemIds.has(row.id));
+    expect(row.eligible).toBe(available);
+  }
+}
+
+async function copySyntheticProposal(auth: AuthContext, proposalId: string, count: number,
+  createdAt = new Date(Date.now() - 60_000).toISOString()): Promise<string[]> {
+  // Reuses only a synthetic, production-staged source binding. The database
+  // still owns complete persisted row shapes; no real user records are copied.
+  const copied = await pool!.query<{ proposal_id: string }>(`WITH copied AS (
+    INSERT INTO memory_proposals
+    SELECT (jsonb_populate_record(NULL::memory_proposals, to_jsonb(original)
+      || jsonb_build_object('id',gen_random_uuid(),'source_task_id',NULL,
+        'created_at',$3::timestamptz+(n/2)*interval '1 microsecond'))).*
+    FROM memory_proposals original CROSS JOIN generate_series(1,$4::integer) n
+    WHERE original.account_id=$1 AND original.id=$2 RETURNING id
+  ) INSERT INTO memory_proposal_items
+  SELECT (jsonb_populate_record(NULL::memory_proposal_items, to_jsonb(original)
+    || jsonb_build_object('id',gen_random_uuid(),'proposal_id',copied.id))).*
+  FROM memory_proposal_items original CROSS JOIN copied
+  WHERE original.account_id=$1 AND original.proposal_id=$2 RETURNING proposal_id`,
+  [auth.accountId, proposalId, createdAt, count]);
+  return [...new Set(copied.rows.map(row => row.proposal_id))];
+}
+
+async function installSyntheticPaginationSession(auth: AuthContext): Promise<void> {
+  await pool!.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'synthetic-pagination',now()+interval '1 hour') ON CONFLICT(id) DO NOTHING",
+    [auth.sessionId, auth.accountId, auth.userId,
+      createHash("sha256").update(`synthetic-pagination:${randomUUID()}`).digest("hex")]);
+  // Reusing a fixture must never rotate its digest or renew its deadline.
+  expect((await pool!.query("SELECT 1 FROM sessions WHERE id=$1 AND account_id=$2 AND user_id=$3",
+    [auth.sessionId, auth.accountId, auth.userId])).rowCount).toBe(1);
+}
+
+// The route uses the actual authenticator/current-session reader, not a forged
+// request.auth. All bearer bytes are generated in memory and never asserted,
+// printed or returned by these fixture controls.
+async function withAcceptedPreviousLogin(paginate: boolean | undefined,
+  operation: (controls: {
+    oldList(): Promise<LightMyRequestResponse>; oldStatus(): Promise<number>; currentStatus(): Promise<number>;
+    hold(): void; entered: Promise<void>; release(): void;
+    prepareWithdrawal(kind: "clear" | "deadline"): Promise<void>;
+    withdraw(kind: "clear" | "deadline"): Promise<void>;
+    proposalId: string;
+  }) => Promise<void>) {
+  const parsed = new URL(url!);
+  if (!["localhost", "127.0.0.1"].includes(parsed.hostname) || parsed.pathname !== "/lab_regression_ci")
+    throw new Error("Accepted-login controls require the owned disposable loopback lab_regression_ci database.");
+  const auth = await makeAuth("accepted-previous-http");
+  const contact = await makeContact(auth, "Accepted previous login contact");
+  const staged = await stage(auth, { contactDecision: "existing", personId: contact.personId,
+    items: [candidate({ scope: "person", display_text: "Authorized previous-login proposal" })] });
+  expect(staged).toBeTruthy();
+  const previous = randomBytes(32).toString("base64url"), current = randomBytes(32).toString("base64url");
+  const oldHeaders = { authorization: `Bearer ${previous}` }, currentHeaders = { authorization: `Bearer ${current}` };
+  const control = new Pool({ connectionString: url!, max: 1, connectionTimeoutMillis: 2_000,
+    statement_timeout: 5_000, query_timeout: 6_000 });
+  let hold = false;
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let pending: Promise<LightMyRequestResponse> | undefined;
+  const instrumented = new Proxy(pool!, { get(target, key) {
+    if (key === "query") return async (sql: string, values: unknown[]) => {
+      const result = await target.query(sql, values);
+      if (hold && sql.startsWith("SELECT * FROM memory_proposal_items")) {
+        enter();
+        await released; // A real serializer source read has already happened.
+      }
+      return result;
+    };
+    const value = Reflect.get(target, key, target);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+  const app = Fastify();
+  const authenticate = createAuthGuard(pool!);
+  registerMemoryReviewRoutes(app, instrumented, authenticate);
+  app.get("/v1/auth/session", { preHandler: authenticate }, request => currentSession(pool!, request.auth));
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ApiError) return reply.status(error.statusCode).send({ error: { code: error.code } });
+    return reply.status(500).send({ error: { code: "SYNTHETIC_UNEXPECTED_FAILURE" } });
+  });
+  try {
+    await control.query(`UPDATE sessions SET token_hash=$2,expires_at=clock_timestamp()+interval '1 hour',
+      previous_token_hash=$3,previous_token_expires_at=clock_timestamp()+interval '1 hour' WHERE id=$1`,
+    [auth.sessionId, createHash("sha256").update(current).digest("hex"), createHash("sha256").update(previous).digest("hex")]);
+    await app.ready();
+    const listURL = `/v1/memory/proposals?purpose=people&person_id=${contact.personId}`
+      + (paginate === undefined ? "" : `&paginate=${String(paginate)}`);
+    await operation({ proposalId: staged!.proposal.proposal_id, entered, release, hold: () => { hold = true; },
+      oldList: () => { pending = app.inject({ method: "GET", url: listURL, headers: oldHeaders }).then(response => response);
+        void pending.catch(() => {}); return pending; },
+      oldStatus: async () => (await app.inject({ method: "GET", url: "/v1/auth/session", headers: oldHeaders })).statusCode,
+      currentStatus: async () => (await app.inject({ method: "GET", url: "/v1/auth/session", headers: currentHeaders })).statusCode,
+      prepareWithdrawal: async kind => {
+        if (kind === "deadline") await control.query("UPDATE sessions SET previous_token_expires_at=clock_timestamp()+interval '0.800321 second' WHERE id=$1", [auth.sessionId]);
+      },
+      withdraw: async kind => {
+        if (kind === "clear") await control.query("UPDATE sessions SET previous_token_hash=NULL,previous_token_expires_at=NULL WHERE id=$1", [auth.sessionId]);
+        else {
+          // Wait for the original microsecond old-slot deadline established
+          // before admission. Current hash/expiry never changes in this read.
+          await control.query("SELECT pg_sleep(GREATEST(0,extract(epoch FROM (previous_token_expires_at-clock_timestamp())))+0.01) FROM sessions WHERE id=$1", [auth.sessionId]);
+        }
+      },
+    });
+  } finally {
+    release();
+    try { await pending?.catch(() => {}); }
+    finally { try { await app.close(); } finally { await control.end(); } }
+  }
+}
+
+describe.skipIf(!pool)("accepted previous bearer over the actual Memory HTTP/auth/PG boundary", () => {
+  it.each([undefined, false, true])("does not publish after previous-token withdrawal (paginate=%s)", async paginate => {
+    for (const kind of ["clear", "deadline"] as const) await withAcceptedPreviousLogin(paginate, async f => {
+      expect(await f.oldStatus()).toBe(200);
+      expect(await f.currentStatus()).toBe(200);
+      const positive = await f.oldList();
+      expect(positive.statusCode).toBe(200);
+      expect(positive.json<{ proposals: { proposal_id: string }[] }>().proposals.map(row => row.proposal_id)).toEqual([f.proposalId]);
+      await f.prepareWithdrawal(kind);
+      f.hold();
+      const pending = f.oldList();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([f.entered, new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("Synthetic Memory serializer did not enter its bounded hold.")), 2_000);
+        })]);
+      } finally { if (timer) clearTimeout(timer); }
+      await f.withdraw(kind);
+      expect(await f.oldStatus()).toBe(401);
+      expect(await f.currentStatus()).toBe(200);
+      f.release();
+      const result = await pending;
+      expect.soft(result.statusCode).toBe(409);
+      expect.soft(result.body.includes(f.proposalId)).toBe(false);
+      expect.soft(Object.hasOwn(result.json<object>(), "has_more")).toBe(false);
+      expect.soft(Object.hasOwn(result.json<object>(), "next_cursor")).toBe(false);
+    });
+  });
+});
+
+// Synthetic control rows match the existing Lab schema and authority branches;
+// they do not mint an HTTP credential or bypass the real route authenticator.
+async function installSyntheticPaginationLab(auth: AuthContext, kind: "operator" | "parent" | "grant") {
+  const workspaceId = randomUUID(), entryId = randomUUID(), principalId = randomUUID(), grantId = randomUUID();
+  const web = "https://memory-pagination-web.synthetic.invalid", backend = "https://memory-pagination-api.synthetic.invalid";
+  let parent: AuthContext | null = null;
+  await pool!.query("UPDATE users SET kind='lab_human' WHERE account_id=$1 AND id=$2", [auth.accountId, auth.userId]);
+  if (kind === "operator") {
+    await pool!.query(`INSERT INTO capir_test_provisioners(id,label,credential_hash,generation,web_origin,backend_origin)
+      VALUES($1,$2,$3,1,$4,$5)`, [principalId, `memory-pagination-${principalId}`,
+      createHash("sha256").update(`synthetic-principal:${randomUUID()}`).digest("hex"), web, backend]);
+  } else {
+    parent = await makeAuth(`lab-parent-${kind}`);
+    await installSyntheticPaginationSession(parent);
+    if (kind === "grant") {
+      await pool!.query(`INSERT INTO capir_user_test_entitlements(id,account_id,user_id,scopes,granted_by)
+        VALUES($1,$2,$3,ARRAY['test.handoff'],'Synthetic Memory pagination proof')`,
+      [randomUUID(), parent.accountId, parent.userId]);
+      await pool!.query(`INSERT INTO capir_auth_grants(id,account_id,user_id,backing_session_id,client_label,
+        web_origin,backend_origin,scopes,test_entitlement_generation,absolute_expires_at)
+        VALUES($1,$2,$3,$4,'Synthetic pagination parent',$5,$6,ARRAY['test.handoff'],1,now()+interval '1 hour')`,
+      [grantId, parent.accountId, parent.userId, parent.sessionId, web, backend]);
+    }
+  }
+  await pool!.query(`INSERT INTO lab_test_workspaces(id,owner_account_id,owner_user_id,owner_principal_id,
+    target_account_id,target_user_id,duration_hours,expires_at,media_scope_hash)
+    VALUES($1,$2,$3,$4,$5,$6,1,now()+interval '1 hour',$7)`,
+  [workspaceId, parent?.accountId ?? null, parent?.userId ?? null, kind === "operator" ? principalId : null,
+    auth.accountId, auth.userId, "a".repeat(64)]);
+  if (kind === "operator") await pool!.query(`INSERT INTO capir_test_runs(id,request_id,principal_id,principal_generation,
+    workspace_id,account_id,user_id,username,email,preset,preset_version,preset_digest,counts,web_origin,backend_origin)
+    VALUES($1,$2,$3,1,$1,$4,$5,$6,$7,'empty','synthetic-v1',$8,'{}'::jsonb,$9,$10)`,
+  [workspaceId, randomUUID(), principalId, auth.accountId, auth.userId, `memory-${workspaceId}`, auth.userEmail,
+    "b".repeat(64), web, backend]);
+  // Copy the synthetic login binding inside PG; no credential/hash is emitted.
+  await pool!.query(`INSERT INTO lab_test_workspace_entries(id,workspace_id,owner_session_id,owner_principal_id,
+    principal_generation,session_id,token_hash,expires_at)
+    SELECT $1,$2,$3,$4,$5,id,token_hash,expires_at FROM sessions WHERE id=$6 AND account_id=$7 AND user_id=$8`,
+  [entryId, workspaceId, parent?.sessionId ?? null, kind === "operator" ? principalId : null,
+    kind === "operator" ? 1 : null, auth.sessionId, auth.accountId, auth.userId]);
+  return { workspaceId, entryId, principalId, grantId, parent };
 }
 
 async function open(
@@ -1194,6 +1400,390 @@ describe.skipIf(!pool)("Memory review integration", () => {
       readMemoryReview(pool!, auth, opened.review.review_scope_id, "wrong-credential-value"),
     ).rejects.toThrow(/bound|purpose|credential/i);
   });
+
+  it.each(["self", "person", "context", "surface", "actor", "account", "source"] as const)(
+    "finds an older permitted proposal behind fifty hidden %s proposals before the bounded window", async hiddenKind => {
+      const auth = await makeAuth(`pagination-${hiddenKind}`);
+      await installSyntheticPaginationSession(auth);
+      const { personId, contextId } = await makeContact(auth, "Pagination contact");
+      const purpose = hiddenKind === "surface" ? "chat" : hiddenKind === "context" ? "relationship" : "people";
+      const visible = await stage(auth, {
+        items: [candidate({ scope: purpose === "chat" ? "self" : purpose === "relationship" ? "relationship" : "person",
+          display_text: "A permitted older pagination statement", source_excerpt: "A permitted older pagination statement" })],
+        contactDecision: purpose === "chat" ? "none" : "existing", personId: purpose === "chat" ? null : personId,
+        contextId: purpose === "relationship" ? contextId : null,
+      });
+      expect(visible).toBeTruthy();
+      await pool!.query("UPDATE memory_proposals SET created_at=now()-interval '1 hour' WHERE account_id=$1 AND id=$2",
+        [auth.accountId, visible!.proposal.proposal_id]);
+      let hiddenAuth = auth;
+      if (hiddenKind === "account") hiddenAuth = await makeAuth("pagination-foreign-account");
+      if (hiddenKind === "actor") {
+        const userId = randomUUID();
+        await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Other synthetic owner','simulated_human')",
+          [userId, auth.accountId, `${userId}@synthetic.local`]);
+        hiddenAuth = { ...auth, userId, sessionId: randomUUID() };
+      }
+      let hiddenPerson = personId, hiddenContext: string | null = null;
+      if (["person", "account", "actor"].includes(hiddenKind)) {
+        hiddenPerson = (await makeContact(hiddenAuth, "Another pagination contact")).personId;
+      }
+      if (hiddenKind === "context") {
+        hiddenContext = randomUUID();
+        await pool!.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label,status) VALUES($1,$2,$3,$4,'Other synthetic relationship','active')",
+          [hiddenContext, auth.accountId, personId, `pagination:${hiddenContext}`]);
+      }
+      const hiddenSession = hiddenKind === "source" ? randomUUID() : undefined;
+      const hidden = await stage(hiddenAuth, {
+        items: [candidate({ scope: hiddenKind === "self" ? "self" : hiddenKind === "context" ? "relationship" : "person",
+          display_text: "A distinct newer pagination statement", source_excerpt: "A distinct newer pagination statement" })],
+        contactDecision: hiddenKind === "self" ? "none" : "existing",
+        personId: hiddenKind === "self" ? null : hiddenPerson, contextId: hiddenContext,
+        surface: hiddenKind === "surface" ? "people" : "chat", ...(hiddenSession ? { sessionId: hiddenSession } : {}),
+      });
+      expect(hidden).toBeTruthy();
+      await copySyntheticProposal(hiddenAuth, hidden!.proposal.proposal_id, 50);
+      if (hiddenSession) await pool!.query("UPDATE agent_sessions SET expires_at=now()-interval '1 day' WHERE account_id=$1 AND id=$2", [auth.accountId, hiddenSession]);
+      const page = await listMemoryProposals(pool!, auth, purpose,
+        purpose === "chat" ? null : personId, purpose === "relationship" ? contextId : null);
+      expect(page.proposals.map(row => row.proposal_id)).toEqual([visible!.proposal.proposal_id]);
+      expect(page.proposals[0]?.item_count).toBe(1);
+      expect(page).not.toHaveProperty("next_cursor"); // Legacy shape remains additive/opt-in.
+      const paginated = await listMemoryProposals(pool!, auth, purpose,
+        purpose === "chat" ? null : personId, purpose === "relationship" ? contextId : null, null, { paginate: true });
+      expect(paginated.proposals.map(row => row.proposal_id)).toEqual([visible!.proposal.proposal_id]);
+      expect(paginated.has_more).toBe(false); expect(paginated.next_cursor).toBeNull();
+    });
+
+  it("pages every qualified proposal with exact microseconds, stable ties and independent tabs without admitting later insertions", async () => {
+    const auth = await makeAuth("proposal-stable-pages");
+    await installSyntheticPaginationSession(auth);
+    const contact = await makeContact(auth, "Paged contact");
+    const staged = await stage(auth, { items: [candidate({ scope: "person", display_text: "A stable pagination proposal" })],
+      contactDecision: "existing", personId: contact.personId });
+    expect(staged).toBeTruthy();
+    const base = staged!.proposal.proposal_id;
+    const stamp = "2026-09-22T10:00:00.123000Z";
+    await pool!.query("UPDATE memory_proposals SET created_at=$3 WHERE account_id=$1 AND id=$2", [auth.accountId, base, stamp]);
+    const copied = await copySyntheticProposal(auth, base, 50, stamp);
+    const read = (cursor?: string | null) => listMemoryProposals(pool!, auth, "people", contact.personId, null, null,
+      { paginate: true, cursor });
+    const first = await read(), otherTab = await read();
+    expect(first.proposals).toHaveLength(49);
+    expect(first.has_more).toBe(true);
+    expect(first.next_cursor).toBeTruthy();
+    expect(first.proposals.map(row => row.proposal_id)).toEqual(otherTab.proposals.map(row => row.proposal_id));
+    expect(first.next_cursor).not.toBe(otherTab.next_cursor);
+    const [inserted] = await copySyntheticProposal(auth, base, 1, new Date(Date.now() + 1_000).toISOString());
+    const second = await read(first.next_cursor), secondTab = await read(otherTab.next_cursor);
+    expect(second.proposals).toHaveLength(2);
+    expect(second.has_more).toBe(false); expect(second.next_cursor).toBeNull();
+    expect(second.snapshot_at).toBe(first.snapshot_at);
+    expect(second.proposals.map(row => row.proposal_id)).toEqual(secondTab.proposals.map(row => row.proposal_id));
+    const all = [...first.proposals, ...second.proposals].map(row => row.proposal_id);
+    expect(new Set(all).size).toBe(51);
+    expect(new Set(all)).toEqual(new Set([base, ...copied]));
+    expect(all).not.toContain(inserted);
+    // A new read starts a new cutoff. An insertion is not silently mixed into
+    // the old snapshot; the fixture waits on DB metadata instead of sleeping.
+    await pool!.query("UPDATE memory_proposals SET created_at=clock_timestamp() WHERE account_id=$1 AND id=$2", [auth.accountId, inserted]);
+    expect((await read()).proposals.some(row => row.proposal_id === inserted)).toBe(true);
+  });
+
+  it.each(["person", "purpose", "context", "source_session", "actor", "account", "login", "rotation", "expired", "revoked", "missing"] as const)(
+    "refuses a proposal continuation after its %s authority changes without changing legacy first-page shape", async change => {
+      const auth = await makeAuth(`proposal-cursor-${change}`);
+      await installSyntheticPaginationSession(auth);
+      const contact = await makeContact(auth, "Cursor scope contact");
+      const staged = await stage(auth, { items: [candidate({ scope: "person", display_text: "A current cursor source" })],
+        contactDecision: "existing", personId: contact.personId });
+      await copySyntheticProposal(auth, staged!.proposal.proposal_id, 50);
+      const first = await listMemoryProposals(pool!, auth, "people", contact.personId, null, null, { paginate: true });
+      expect(first.next_cursor).toBeTruthy();
+      let nextAuth = auth, personId = contact.personId;
+      if (change === "account") { nextAuth = await makeAuth("foreign-cursor-account"); await installSyntheticPaginationSession(nextAuth); }
+      if (change === "actor") {
+        const userId = randomUUID();
+        await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Other cursor actor','simulated_human')", [userId, auth.accountId, `${userId}@synthetic.local`]);
+        nextAuth = { ...auth, userId, sessionId: randomUUID() }; await installSyntheticPaginationSession(nextAuth);
+      }
+      if (change === "person") personId = (await makeContact(auth, "Different cursor contact")).personId;
+      if (change === "login") { nextAuth = { ...auth, sessionId: randomUUID() }; await installSyntheticPaginationSession(nextAuth); }
+      if (change === "rotation") await pool!.query("UPDATE sessions SET token_hash=$3 WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId, createHash("sha256").update(randomUUID()).digest("hex")]);
+      if (change === "expired") await pool!.query("UPDATE sessions SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+      if (change === "revoked") await pool!.query("UPDATE sessions SET revoked_at=now() WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+      if (change === "missing") await pool!.query("DELETE FROM sessions WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+      await expect(listMemoryProposals(pool!, nextAuth, change === "purpose" ? "chat" : "people", personId,
+        change === "context" ? contact.contextId : null, change === "source_session" ? randomUUID() : null,
+        { paginate: true, cursor: first.next_cursor })).rejects.toThrow(/fresh read/);
+      const legacy = () => listMemoryProposals(pool!, auth, "people", contact.personId, null);
+      if (["expired", "revoked", "missing"].includes(change)) await expect(legacy()).rejects.toThrow(/fresh read/);
+      else {
+        const page = await legacy();
+        expect(page.proposals).toHaveLength(50);
+        expect(Object.keys(page).sort()).toEqual(["contract_version", "proposals"]);
+      }
+    });
+
+  it.each(["person_deleted", "context_deleted", "foreign_context", "mismatched_context", "missing_context"] as const)(
+    "does not enumerate proposals in an inactive or invalid business scope: %s", async change => {
+      const auth = await makeAuth(`closed-list-scope-${change}`);
+      await installSyntheticPaginationSession(auth);
+      const contact = await makeContact(auth, "Closed scope contact");
+      const staged = await stage(auth, { contactDecision: "existing", personId: contact.personId, contextId: contact.contextId,
+        items: [candidate({ scope: "relationship", display_text: "A scoped business proposal" })] });
+      expect(staged).toBeTruthy();
+      let contextId: string | null = contact.contextId;
+      if (change === "person_deleted") await pool!.query("UPDATE subjects SET status='deleted',deleted_at=now() WHERE account_id=$1 AND id=$2", [auth.accountId, contact.personId]);
+      if (change === "context_deleted") await pool!.query("UPDATE assignments SET status='deleted',deleted_at=now() WHERE account_id=$1 AND id=$2", [auth.accountId, contact.contextId]);
+      if (change === "foreign_context") {
+        const other = await makeAuth("foreign-list-context"); contextId = (await makeContact(other, "Foreign context")).contextId;
+      }
+      if (change === "mismatched_context") contextId = (await makeContact(auth, "Mismatched context")).contextId;
+      if (change === "missing_context") contextId = null;
+      expect((await listMemoryProposals(pool!, auth, "relationship", contact.personId, contextId)).proposals).toEqual([]);
+      await expect(listMemoryProposals(pool!, auth, "relationship", contact.personId, contextId, null,
+        { paginate: true })).rejects.toThrow(/fresh read/);
+    });
+
+  it.each(["source_expired", "source_tombstone", "source_fingerprint", "login_expired", "login_rotated", "proposal_revision", "proposal_expired",
+    "scope_person_deleted", "scope_context_deleted"] as const)(
+    "rechecks actual SQL authority after all source awaits when %s changes", async change => {
+      const auth = await makeAuth(`final-envelope-${change}`);
+      await installSyntheticPaginationSession(auth);
+      const contact = await makeContact(auth, "Final envelope contact");
+      const sessionId = randomUUID();
+      const staged = await stage(auth, { sessionId, contactDecision: "existing", personId: contact.personId,
+        contextId: change === "scope_context_deleted" ? contact.contextId : null,
+        items: [candidate({ scope: change === "scope_context_deleted" ? "relationship" : "person", display_text: "A final authority proposal" })] });
+      const proposalId = staged!.proposal.proposal_id;
+      let finalReached = false;
+      const client = { query: async (sql: string, values: unknown[]) => {
+        if (sql.includes("qualified AS MATERIALIZED")) {
+          finalReached = true;
+          if (change === "source_expired") await pool!.query("UPDATE agent_sessions SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId]);
+          if (change === "source_tombstone") await pool!.query("INSERT INTO memory_source_revocations(id,account_id,source_kind,source_id,reason) VALUES($1,$2,'session',$3,'source_revoked')", [randomUUID(), auth.accountId, sessionId]);
+          if (change === "source_fingerprint") await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns,0,objective}','\"Changed after source awaits\"'::jsonb) WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId]);
+          if (change === "login_expired") await pool!.query("UPDATE sessions SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+          if (change === "login_rotated") await pool!.query("UPDATE sessions SET token_hash=$3 WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId, createHash("sha256").update(randomUUID()).digest("hex")]);
+          if (change === "proposal_revision") await pool!.query("UPDATE memory_proposals SET revision=revision+1 WHERE account_id=$1 AND id=$2", [auth.accountId, proposalId]);
+          if (change === "proposal_expired") await pool!.query("UPDATE memory_proposals SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2", [auth.accountId, proposalId]);
+          if (change === "scope_person_deleted") await pool!.query("UPDATE subjects SET status='deleted',deleted_at=now() WHERE account_id=$1 AND id=$2", [auth.accountId, contact.personId]);
+          if (change === "scope_context_deleted") await pool!.query("UPDATE assignments SET status='deleted',deleted_at=now() WHERE account_id=$1 AND id=$2", [auth.accountId, contact.contextId]);
+        }
+        return pool!.query(sql, values);
+      } } as unknown as import("../database/pool.js").DatabaseClient;
+      await expect(listMemoryProposals(client, auth, change === "scope_context_deleted" ? "relationship" : "people", contact.personId,
+        change === "scope_context_deleted" ? contact.contextId : null, null,
+        { paginate: true })).rejects.toThrow(/fresh read/);
+      expect(finalReached).toBe(true);
+    });
+
+  it.each(["principal_generation", "principal_revoked", "principal_origin", "entry_revoked", "entry_expired",
+    "workspace_expired", "workspace_closed", "parent_revoked", "parent_expired", "parent_membership",
+    "grant_revoked", "grant_expired", "grant_scope", "entitlement_revoked", "entitlement_generation", "entitlement_scope"] as const)(
+    "withdraws the whole page when live Lab lineage changes after source awaits: %s", async change => {
+      const auth = await makeAuth(`lab-final-${change}`);
+      await installSyntheticPaginationSession(auth);
+      const contact = await makeContact(auth, "Synthetic Lab pagination contact");
+      const staged = await stage(auth, { contactDecision: "existing", personId: contact.personId,
+        items: [candidate({ scope: "person", display_text: "A purpose-bound Lab proposal" })] });
+      const kind = change.startsWith("grant_") || change.startsWith("entitlement_") ? "grant"
+        : change.startsWith("parent_") ? "parent" : "operator";
+      const lab = await installSyntheticPaginationLab(auth, kind);
+      const labAuth = { ...auth, userKind: "lab_human" as const };
+      const before = await listMemoryProposals(pool!, labAuth, "people", contact.personId, null, null, { paginate: true });
+      expect(before.proposals.map(row => row.proposal_id)).toEqual([staged!.proposal.proposal_id]);
+      let finalReached = false;
+      const client = { query: async (sql: string, values: unknown[]) => {
+        if (sql.includes("qualified AS MATERIALIZED")) {
+          finalReached = true;
+          if (change === "principal_generation") await pool!.query("UPDATE capir_test_provisioners SET generation=generation+1 WHERE id=$1", [lab.principalId]);
+          if (change === "principal_revoked") await pool!.query("UPDATE capir_test_provisioners SET state='revoked',revoked_at=now() WHERE id=$1", [lab.principalId]);
+          if (change === "principal_origin") await pool!.query("UPDATE capir_test_provisioners SET web_origin='https://rotated.synthetic.invalid' WHERE id=$1", [lab.principalId]);
+          if (change === "entry_revoked") await pool!.query("UPDATE lab_test_workspace_entries SET revoked_at=now() WHERE id=$1", [lab.entryId]);
+          if (change === "entry_expired") await pool!.query("UPDATE lab_test_workspace_entries SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [lab.entryId]);
+          if (change === "workspace_expired") await pool!.query("UPDATE lab_test_workspaces SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [lab.workspaceId]);
+          if (change === "workspace_closed") await pool!.query("UPDATE lab_test_workspaces SET state='deleting',stop_id=$2,stopped_at=now() WHERE id=$1", [lab.workspaceId, randomUUID()]);
+          if (change === "parent_revoked") await pool!.query("UPDATE sessions SET revoked_at=now() WHERE id=$1", [lab.parent!.sessionId]);
+          if (change === "parent_expired") await pool!.query("UPDATE sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [lab.parent!.sessionId]);
+          if (change === "parent_membership") await pool!.query("UPDATE users SET status='revoked' WHERE account_id=$1 AND id=$2", [lab.parent!.accountId, lab.parent!.userId]);
+          if (change === "grant_revoked") await pool!.query("UPDATE capir_auth_grants SET state='revoked',revoked_at=now() WHERE id=$1", [lab.grantId]);
+          if (change === "grant_expired") await pool!.query("UPDATE capir_auth_grants SET absolute_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [lab.grantId]);
+          if (change === "grant_scope") await pool!.query("UPDATE capir_auth_grants SET scopes=ARRAY['grants.read'] WHERE id=$1", [lab.grantId]);
+          if (change === "entitlement_revoked") await pool!.query("UPDATE capir_user_test_entitlements SET state='revoked',revoked_at=now() WHERE account_id=$1 AND user_id=$2", [lab.parent!.accountId, lab.parent!.userId]);
+          if (change === "entitlement_generation") await pool!.query("UPDATE capir_user_test_entitlements SET generation=generation+1 WHERE account_id=$1 AND user_id=$2", [lab.parent!.accountId, lab.parent!.userId]);
+          if (change === "entitlement_scope") await pool!.query("UPDATE capir_user_test_entitlements SET scopes=ARRAY['test.status'] WHERE account_id=$1 AND user_id=$2", [lab.parent!.accountId, lab.parent!.userId]);
+        }
+        return pool!.query(sql, values);
+      } } as unknown as import("../database/pool.js").DatabaseClient;
+      await expect(listMemoryProposals(client, labAuth, "people", contact.personId, null, null,
+        { paginate: true })).rejects.toThrow(/fresh read/);
+      expect(finalReached).toBe(true);
+    });
+
+  it.each(["principal", "entry"] as const)("rejects withdrawn Lab %s before selecting any proposal metadata", async change => {
+    const auth = await makeAuth(`lab-initial-${change}`);
+    await installSyntheticPaginationSession(auth);
+    const contact = await makeContact(auth, "Lab initial authority contact");
+    await stage(auth, { contactDecision: "existing", personId: contact.personId,
+      items: [candidate({ scope: "person", display_text: "Initial Lab authority proposal" })] });
+    const lab = await installSyntheticPaginationLab(auth, "operator");
+    if (change === "principal") await pool!.query("UPDATE capir_test_provisioners SET state='revoked',revoked_at=now() WHERE id=$1", [lab.principalId]);
+    else await pool!.query("UPDATE lab_test_workspace_entries SET revoked_at=now() WHERE id=$1", [lab.entryId]);
+    let selected = false;
+    const client = { query: async (sql: string, values: unknown[]) => {
+      if (sql.startsWith("SELECT p.*")) selected = true;
+      return pool!.query(sql, values);
+    } } as unknown as import("../database/pool.js").DatabaseClient;
+    await expect(listMemoryProposals(client, { ...auth, userKind: "lab_human" }, "people", contact.personId, null, null,
+      { paginate: true })).rejects.toThrow(/fresh read/);
+    expect(selected).toBe(false);
+  });
+
+  it("preserves a live persistent CLI parent's Lab authority after its backing session deadline", async () => {
+    const auth = await makeAuth("lab-persistent-parent");
+    await installSyntheticPaginationSession(auth);
+    const contact = await makeContact(auth, "Persistent parent contact");
+    const staged = await stage(auth, { contactDecision: "existing", personId: contact.personId,
+      items: [candidate({ scope: "person", display_text: "Persistent parent proposal" })] });
+    const lab = await installSyntheticPaginationLab(auth, "grant");
+    await pool!.query("UPDATE capir_auth_grants SET protocol_version='capir-auth.v3',absolute_expires_at=NULL WHERE id=$1", [lab.grantId]);
+    await pool!.query("UPDATE sessions SET expires_at=clock_timestamp()-interval '1 day' WHERE id=$1", [lab.parent!.sessionId]);
+    const page = await listMemoryProposals(pool!, { ...auth, userKind: "lab_human" }, "people", contact.personId, null, null,
+      { paginate: true });
+    expect(page.proposals.map(row => row.proposal_id)).toEqual([staged!.proposal.proposal_id]);
+  });
+
+  it.each(["missing", "revoked", "expired"] as const)(
+    "does not let an empty legacy list bypass initial %s login authority", async change => {
+      const auth = await makeAuth(`legacy-empty-${change}`);
+      const contact = await makeContact(auth, "Empty legacy list contact");
+      expect((await listMemoryProposals(pool!, auth, "people", contact.personId, null)).proposals).toEqual([]);
+      if (change === "missing") await pool!.query("DELETE FROM sessions WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+      if (change === "revoked") await pool!.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+      if (change === "expired") await pool!.query("UPDATE sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+      let selected = false;
+      const client = { query: async (sql: string, values: unknown[]) => {
+        if (sql.startsWith("SELECT p.*")) selected = true;
+        return pool!.query(sql, values);
+      } } as unknown as import("../database/pool.js").DatabaseClient;
+      await expect(listMemoryProposals(client, auth, "people", contact.personId, null)).rejects.toThrow(/fresh read/);
+      expect(selected).toBe(false);
+    });
+
+  it.each(["revoked", "expired", "rotation"] as const)(
+    "does not let omitted pagination publish after a real %s login change across source awaits", async change => {
+      const auth = await makeAuth(`legacy-final-${change}`);
+      const contact = await makeContact(auth, "Legacy final authority contact");
+      const staged = await stage(auth, { contactDecision: "existing", personId: contact.personId,
+        items: [candidate({ scope: "person", display_text: "A legacy authority proposal" })] });
+      const before = await listMemoryProposals(pool!, auth, "people", contact.personId, null);
+      expect(before.proposals.map(row => row.proposal_id)).toEqual([staged!.proposal.proposal_id]);
+      expect(Object.keys(before).sort()).toEqual(["contract_version", "proposals"]);
+      let finalReached = false;
+      const client = { query: async (sql: string, values: unknown[]) => {
+        if (sql.includes("qualified AS MATERIALIZED")) {
+          finalReached = true;
+          if (change === "revoked") await pool!.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+          if (change === "expired") await pool!.query("UPDATE sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+          if (change === "rotation") await pool!.query("UPDATE sessions SET token_hash=$3 WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId, createHash("sha256").update(`synthetic-rotation:${randomUUID()}`).digest("hex")]);
+        }
+        return pool!.query(sql, values);
+      } } as unknown as import("../database/pool.js").DatabaseClient;
+      await expect(listMemoryProposals(client, auth, "people", contact.personId, null)).rejects.toThrow(/fresh read/);
+      expect(finalReached).toBe(true);
+    });
+
+  it.each(["principal_generation", "entry_revoked", "grant_revoked", "entitlement_generation"] as const)(
+    "does not let omitted pagination bypass a real Lab %s withdrawal after source awaits", async change => {
+      const auth = await makeAuth(`legacy-lab-${change}`);
+      const contact = await makeContact(auth, "Live legacy Lab contact");
+      const staged = await stage(auth, { contactDecision: "existing", personId: contact.personId,
+        items: [candidate({ scope: "person", display_text: "A live legacy Lab proposal" })] });
+      const lab = await installSyntheticPaginationLab(auth, change.startsWith("grant_") || change.startsWith("entitlement_") ? "grant" : "operator");
+      const labAuth = { ...auth, userKind: "lab_human" as const };
+      const before = await listMemoryProposals(pool!, labAuth, "people", contact.personId, null);
+      expect(before.proposals.map(row => row.proposal_id)).toEqual([staged!.proposal.proposal_id]);
+      expect(Object.keys(before).sort()).toEqual(["contract_version", "proposals"]);
+      let finalReached = false;
+      const client = { query: async (sql: string, values: unknown[]) => {
+        if (sql.includes("qualified AS MATERIALIZED")) {
+          finalReached = true;
+          if (change === "principal_generation") await pool!.query("UPDATE capir_test_provisioners SET generation=generation+1 WHERE id=$1", [lab.principalId]);
+          if (change === "entry_revoked") await pool!.query("UPDATE lab_test_workspace_entries SET revoked_at=clock_timestamp() WHERE id=$1", [lab.entryId]);
+          if (change === "grant_revoked") await pool!.query("UPDATE capir_auth_grants SET state='revoked',revoked_at=clock_timestamp() WHERE id=$1", [lab.grantId]);
+          if (change === "entitlement_generation") await pool!.query("UPDATE capir_user_test_entitlements SET generation=generation+1 WHERE account_id=$1 AND user_id=$2", [lab.parent!.accountId, lab.parent!.userId]);
+        }
+        return pool!.query(sql, values);
+      } } as unknown as import("../database/pool.js").DatabaseClient;
+      await expect(listMemoryProposals(client, labAuth, "people", contact.personId, null)).rejects.toThrow(/fresh read/);
+      expect(finalReached).toBe(true);
+    });
+
+  it("repeats final live authority even when a legacy page has no source awaits or rows", async () => {
+    const auth = await makeAuth("legacy-empty-final");
+    const contact = await makeContact(auth, "Empty final legacy contact");
+    let finalReached = false;
+    const client = { query: async (sql: string, values: unknown[]) => {
+      if (sql.includes("qualified AS MATERIALIZED")) {
+        finalReached = true;
+        await pool!.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE account_id=$1 AND id=$2", [auth.accountId, auth.sessionId]);
+      }
+      return pool!.query(sql, values);
+    } } as unknown as import("../database/pool.js").DatabaseClient;
+    await expect(listMemoryProposals(client, auth, "people", contact.personId, null)).rejects.toThrow(/fresh read/);
+    expect(finalReached).toBe(true);
+  });
+
+  it.each(["live_unicode", "deleted", "expired", "fingerprint_text", "fingerprint_hash",
+    "image_changed", "image_deleted", "image_order", "image_expired", "stored_manifest_extra",
+    "stored_manifest_null", "steered", "duplicate_first", "null_message_last", "session_tombstone",
+    "artifact_tombstone", "wrong_owner"] as const)(
+    "keeps proposal source SQL equivalent to the original Session verifier for %s", async change => {
+      const auth = await makeAuth(`source-sql-${change}`);
+      const sessionId = randomUUID(), messageId = randomUUID();
+      const images = change === "stored_manifest_null" ? []
+        : [{ attachmentId: randomUUID(), contentHash: "a".repeat(64) }, { attachmentId: randomUUID(), contentHash: "b".repeat(64) }];
+      const staged = await stage(auth, { items: [candidate({ display_text: "A bounded source parity statement" })],
+        contactDecision: "none", sessionId, messageId, images,
+        authorityText: "Unicode café é 😀 quote \" slash / backslash \\ tab\tbackspace\bline paragraph " });
+      expect(staged).toBeTruthy();
+      const proposalId = staged!.proposal.proposal_id;
+      await expectProposalSourceSQLMatchesVerifier(auth, proposalId, true);
+      const payload = (await pool!.query("SELECT payload FROM agent_sessions WHERE account_id=$1 AND id=$2",
+        [auth.accountId, sessionId])).rows[0]!.payload;
+      if (change === "deleted") await pool!.query("UPDATE agent_sessions SET deleted_at=now(),payload=NULL WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId]);
+      if (change === "expired") await pool!.query("UPDATE agent_sessions SET expires_at=now()-interval '1 day' WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId]);
+      if (change === "fingerprint_text") payload.turns[0].objective += " Changed after staging.";
+      if (change === "fingerprint_hash") await pool!.query("UPDATE memory_proposals SET source_revision_hash=$3 WHERE account_id=$1 AND id=$2", [auth.accountId, proposalId, "f".repeat(64)]);
+      if (change === "image_changed") payload.turns[0].images[0].content_hash = "c".repeat(64);
+      if (change === "image_order") payload.turns[0].images.reverse();
+      if (change === "image_deleted") await pool!.query("DELETE FROM conversation_message_images WHERE account_id=$1 AND session_id=$2 AND image_index=0", [auth.accountId, sessionId]);
+      if (change === "image_expired") await pool!.query("UPDATE conversation_message_images SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND session_id=$2 AND image_index=0", [auth.accountId, sessionId]);
+      if (change === "stored_manifest_extra") await pool!.query("UPDATE memory_proposals SET source_image_manifest=jsonb_set(source_image_manifest,'{0,ignored_metadata}','true'::jsonb) WHERE account_id=$1 AND id=$2", [auth.accountId, proposalId]);
+      if (change === "stored_manifest_null") await pool!.query("UPDATE memory_proposals SET source_image_manifest='null'::jsonb WHERE account_id=$1 AND id=$2", [auth.accountId, proposalId]);
+      if (change === "steered") payload.turns = [{ id: randomUUID(), objective: "Outer message", response: payload.turns[0].response, steeredMessages: [payload.turns[0]] }];
+      if (change === "duplicate_first") payload.turns.push({ ...payload.turns[0], objective: "A later duplicate must not replace the first exact message." });
+      if (change === "null_message_last") {
+        payload.turns.unshift({ id: randomUUID(), objective: "An earlier message", response: payload.turns[0].response });
+        await pool!.query("UPDATE memory_proposals SET source_message_id=NULL WHERE account_id=$1 AND id=$2", [auth.accountId, proposalId]);
+      }
+      if (["fingerprint_text", "image_changed", "image_order", "steered", "duplicate_first", "null_message_last"].includes(change)) {
+        await pool!.query("UPDATE agent_sessions SET payload=$3::jsonb WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId, JSON.stringify(payload)]);
+      }
+      if (change === "session_tombstone" || change === "artifact_tombstone") await pool!.query(
+        "INSERT INTO memory_source_revocations(id,account_id,source_kind,source_id,reason) VALUES($1,$2,$3,$4,'source_revoked')",
+        [randomUUID(), auth.accountId, change === "session_tombstone" ? "session" : "artifact",
+          change === "session_tombstone" ? sessionId : `conversation-image-${messageId}-0-${images[0]!.attachmentId}`]);
+      if (change === "wrong_owner") {
+        const other = randomUUID();
+        await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Other source owner','simulated_human')", [other, auth.accountId, `${other}@synthetic.local`]);
+        await pool!.query("UPDATE agent_sessions SET created_by_user_id=$3 WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId, other]);
+      }
+      await expectProposalSourceSQLMatchesVerifier(auth, proposalId,
+        ["live_unicode", "stored_manifest_extra", "stored_manifest_null", "steered", "duplicate_first", "null_message_last"].includes(change));
+    });
 
   it("preserves speaker, reporter, and a future plan's time status", async () => {
     const auth = await makeAuth("temporal");
@@ -2570,6 +3160,7 @@ describe.skipIf(!pool)("Memory review integration", () => {
     contextId: string,
     captureVersion: number,
     text = "陈宇负责设计系统",
+    scope: "person" | "relationship" = "person",
   ) {
     return inTransaction(pool!, (client) =>
       stageMemoryProposal(
@@ -2590,7 +3181,7 @@ describe.skipIf(!pool)("Memory review integration", () => {
           proposer: { kind: "human", name: "integration-test", version: "1" },
           items: [
             candidate({
-              scope: "person",
+              scope,
               statement_kind: "source_statement",
               speaker: "陈宇",
               display_text: text,
@@ -2607,6 +3198,89 @@ describe.skipIf(!pool)("Memory review integration", () => {
       ),
     );
   }
+
+  it.each(["active", "authorization_expired", "retention_expired", "authorization_revoked", "access_deleted",
+    "capture_epoch", "subject_rebound", "context_rebound", "resource_deleted", "fragment_deleted",
+    "capture_tombstone", "old_epoch_tombstone", "artifact_tombstone"] as const)(
+    "keeps proposal source SQL equivalent to the original capture verifier for %s", async change => {
+      const auth = await makeAuth(`capture-source-sql-${change}`);
+      const contact = await makeContact(auth, "SQL source contact");
+      const capture = await makeBoundCapture(auth, contact.personId, contact.contextId);
+      const staged = await stageCapture(auth, capture, contact.personId, contact.contextId, 1,
+        "陈宇负责设计系统", "relationship");
+      expect(staged).toBeTruthy();
+      const proposalId = staged!.proposal.proposal_id;
+      await expectProposalSourceSQLMatchesVerifier(auth, proposalId, true);
+      if (change === "authorization_expired") await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=now()-interval '1 second' WHERE account_id=$1 AND capture_id=$2", [auth.accountId, capture.captureId]);
+      if (change === "retention_expired") await pool!.query("UPDATE source_retention_receipts SET retention_until=now()-interval '1 second' WHERE account_id=$1 AND capture_id=$2", [auth.accountId, capture.captureId]);
+      if (change === "authorization_revoked") await pool!.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE account_id=$1 AND capture_id=$2", [auth.accountId, capture.captureId]);
+      if (change === "access_deleted") await pool!.query("UPDATE source_retention_receipts SET source_access_state='deleted' WHERE account_id=$1 AND capture_id=$2", [auth.accountId, capture.captureId]);
+      if (change === "capture_epoch") await pool!.query("UPDATE captures SET version=version+1 WHERE account_id=$1 AND id=$2", [auth.accountId, capture.captureId]);
+      if (change === "subject_rebound" || change === "context_rebound") {
+        if (change === "subject_rebound") {
+          const other = await makeContact(auth, "Another source contact");
+          await pool!.query("UPDATE captures SET subject_id=$3,assignment_id=$4 WHERE account_id=$1 AND id=$2",
+            [auth.accountId, capture.captureId, other.personId, other.contextId]);
+        } else {
+          const contextId = randomUUID();
+          await pool!.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label,status) VALUES($1,$2,$3,$4,'Changed source relationship','active')",
+            [contextId, auth.accountId, contact.personId, `source-sql:${contextId}`]);
+          await pool!.query("UPDATE captures SET assignment_id=$3 WHERE account_id=$1 AND id=$2",
+            [auth.accountId, capture.captureId, contextId]);
+        }
+      }
+      if (change === "resource_deleted") await pool!.query("UPDATE source_resources SET processing_state='deleted',deleted_at=now() WHERE account_id=$1 AND id=$2", [auth.accountId, capture.resourceId]);
+      if (change === "fragment_deleted") await pool!.query("UPDATE evidence_fragments SET status='deleted',deleted_at=now() WHERE account_id=$1 AND id=$2", [auth.accountId, capture.fragmentId]);
+      if (["capture_tombstone", "old_epoch_tombstone", "artifact_tombstone"].includes(change)) await pool!.query(
+        "INSERT INTO memory_source_revocations(id,account_id,source_kind,source_id,reason,source_version) VALUES($1,$2,$3,$4,'source_revoked',$5)",
+        [randomUUID(), auth.accountId, change === "artifact_tombstone" ? "artifact" : "capture",
+          change === "artifact_tombstone" ? `${capture.captureId}:message:0` : capture.captureId,
+          change === "old_epoch_tombstone" ? 0 : 1]);
+      await expectProposalSourceSQLMatchesVerifier(auth, proposalId,
+        change === "active" || change === "old_epoch_tombstone");
+    });
+
+  it.each(["ready", "no_session", "changed_message", "deleted_no_session", "session_expired",
+    "session_deleted", "wrong_session_owner", "artifact_tombstone"] as const)(
+    "keeps proposal source SQL equivalent to the original media verifier for %s", async change => {
+      const auth = await makeAuth(`media-source-sql-${change}`);
+      const contact = await makeContact(auth, "Media source contact");
+      const mediaId = randomUUID();
+      const sessionId = ["no_session", "deleted_no_session"].includes(change) ? null : randomUUID();
+      const messageId = sessionId ? randomUUID() : null;
+      const text = "A synthetic image contains the planned meeting place";
+      if (sessionId && messageId) await insertSourceSession(auth, sessionId, messageId, text);
+      await pool!.query(`INSERT INTO chat_media_assets(id,account_id,subject_id,assignment_id,created_by_user_id,
+        idempotency_key,file_name,media_type,byte_size,storage_provider,object_key,status)
+        VALUES($1,$2,$3,$4,$5,$6,'synthetic.png','image/png',4,'local',$7,'ready')`,
+      [mediaId, auth.accountId, contact.personId, contact.contextId, auth.userId, `media-${mediaId}`, `synthetic/${mediaId}.png`]);
+      // Same server-owned authority shape as chat.ts imageArtifacts. This is
+      // metadata/qualification evidence, not an image byte/OCR/provider probe.
+      const staged = await stage(auth, { sessionId, messageId, surface: "relationship", contactDecision: "existing",
+        personId: contact.personId, contextId: contact.contextId,
+        items: [candidate({ scope: "relationship", display_text: text, source_excerpt: text,
+          source_locator: { kind: "image_region", artifact_id: "image-0" } })],
+        manualAuthority: { text, sessionId, messageId, sourceTaskId: null, captureIds: [], imageManifest: [],
+          messageTextHash: createHash("sha256").update(text).digest("hex"), captureVersion: null,
+          captureSubjectId: null, captureContextId: null, artifacts: [{ artifactId: "image-0", sourceArtifactId: mediaId,
+            kind: "image", sessionId, messageId, captureId: null, sourceResourceId: null, evidenceFragmentId: null,
+            contentHash: null, captureVersion: null }] } });
+      expect(staged).toBeTruthy();
+      const proposalId = staged!.proposal.proposal_id;
+      await expectProposalSourceSQLMatchesVerifier(auth, proposalId, true);
+      if (change === "changed_message") await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns,0,objective}','\"Changed message; media still independently live\"'::jsonb) WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId]);
+      if (change === "deleted_no_session") await pool!.query("UPDATE chat_media_assets SET status='deleted',deleted_at=now() WHERE account_id=$1 AND id=$2", [auth.accountId, mediaId]);
+      if (change === "session_expired") await pool!.query("UPDATE agent_sessions SET expires_at=now()-interval '1 day' WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId]);
+      if (change === "session_deleted") await pool!.query("UPDATE agent_sessions SET deleted_at=now(),payload=NULL WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId]);
+      if (change === "wrong_session_owner") {
+        const other = randomUUID();
+        await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Other media owner','simulated_human')", [other, auth.accountId, `${other}@synthetic.local`]);
+        await pool!.query("UPDATE agent_sessions SET created_by_user_id=$3 WHERE account_id=$1 AND id=$2", [auth.accountId, sessionId, other]);
+      }
+      if (change === "artifact_tombstone") await pool!.query("INSERT INTO memory_source_revocations(id,account_id,source_kind,source_id,reason) VALUES($1,$2,'artifact',$3,'source_revoked')", [randomUUID(), auth.accountId, mediaId]);
+      await expectProposalSourceSQLMatchesVerifier(auth, proposalId,
+        ["ready", "no_session", "changed_message"].includes(change));
+    });
 
   it("permanently invalidates accepted Memory on explicit revoke and keeps it gone after restore", async () => {
     const auth = await makeAuth("revoke-restore");

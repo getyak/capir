@@ -18,12 +18,19 @@ vi.mock("@/components/memory-review/memory-review-card", () => ({
 vi.mock("@/lib/server/marketing-locale", () => ({ getMarketingLocale: async () => language.locale }));
 const language = { locale: "zh-CN" };
 import { LocaleProvider } from "@/components/locale-provider";
-import type { LocaleTag } from "@talent-signal/contracts";
+import type { LocaleTag, MemoryProposalRecord } from "@talent-signal/contracts";
 import PersonMemoryPage from "@/app/workspace/people/[id]/page";
 
 const personId = "11111111-1111-4111-8111-111111111111";
 const contextId = "22222222-2222-4222-8222-222222222222";
 const sessionId = "33333333-3333-4333-8333-333333333333";
+const proposalId = "44444444-4444-4444-8444-444444444444";
+function pendingProposal(): MemoryProposalRecord {
+  return { proposal_id: proposalId, revision: 7, status: "open", surface: "chat",
+    contact_decision: "existing", contact_status: "resolved", identity_authority: "human_selection",
+    person_id: personId, relationship_context_id: contextId, item_count: 1, default_selected_count: 1,
+    created_at: new Date(Date.now() - 60_000).toISOString(), expires_at: new Date(Date.now() + 60_000).toISOString() };
+}
 const fixture = () => ({
   person: { id: personId, display_label: "陈知远", avatar: null, identity_matches: [], profile: null,
     contexts: [{ id: contextId, display_label: "读书会认识" }] },
@@ -122,11 +129,22 @@ describe("saved Person destination", () => {
   });
 
   it("passes exact authority and revision to pending review, without rendering it as a saved fact", async () => {
-    loadPersonMemory.mockResolvedValue({ ...fixture(), items: [], proposals: [{ proposal_id: "pending-id", revision: 7, relationship_context_id: contextId }] });
+    loadPersonMemory.mockResolvedValue({ ...fixture(), items: [], proposals: [pendingProposal()] });
     const html = await render();
     expect(html).toContain("待审核的内容");
-    expect(review).toHaveBeenCalledWith(expect.objectContaining({ binding: "binding", entryCapability: "scoped-entry", personId, contextId, purpose: "people", proposal: { proposal_id: "pending-id", revision: 7 } }));
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ binding: "binding", entryCapability: "scoped-entry", personId, contextId, purpose: "people", proposal: { proposal_id: proposalId, revision: 7 } }));
     expect(html).not.toContain("我们通过读书会认识");
+  });
+
+  it.each(["expired", "missing_expiry"] as const)("does not render a %s pending proposal or promote it to a saved fact", async kind => {
+    const proposal: Partial<MemoryProposalRecord> = pendingProposal();
+    if (kind === "expired") proposal.expires_at = new Date(Date.now() - 1).toISOString();
+    else delete proposal.expires_at; // Deliberately malformed loader data must fail closed.
+    loadPersonMemory.mockResolvedValue({ ...fixture(), items: [], proposals: [proposal] });
+    const html = await render();
+    expect(html).not.toContain("待审核的内容");
+    expect(html).not.toContain("我们通过读书会认识");
+    expect(review).not.toHaveBeenCalled();
   });
 
   it("keeps a contextless person reachable without forcing relationship selection", async () => {
