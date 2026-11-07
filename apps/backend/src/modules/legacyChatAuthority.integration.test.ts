@@ -653,7 +653,7 @@ async function withLabHttpFixture(kind: LabWithdrawal, operation: (fixture: LabH
       },
       withdraw: () => {
         withdrawal = (kind === "grant"
-          ? observer.inject({ method: "POST", url: "/v1/capir/auth/grants/revoke", headers: parentHeaders, payload: { grant_id: grantId } })
+          ? observer.inject({ method: "POST", url: "/v1/capir/auth/grants/revoke", headers: parentHeaders, payload: { schema_version: "capir-auth.v2", grant_id: grantId } })
           : observer.inject({ method: "POST", url: `/v1/lab/workspaces/${workspaceId}/stop`, headers: parentHeaders, payload: { id: stopId } }))
           .then(result => result);
         void withdrawal.catch(() => {}); return withdrawal;
@@ -790,12 +790,15 @@ describe.skipIf(!database)("legacy Chat Lab lineage over real HTTP handlers and 
         expect(await f.currentChild()).toBe(401);
         const closed = await f.withdrawalState();
         expect(closed).toMatchObject({ workspace_state: "deleted", stop_id: f.stopId, child_session_live: false,
-          entry_live: false, child_user_status: null });
-        const removed = await f.control.query<{ sessions: number; users: number; credentials: number }>(`SELECT
+          entry_live: false, child_user_status: "revoked" });
+        const removed = await f.control.query<{ sessions: number; users: number; revoked_children: number; credentials: number }>(`SELECT
           (SELECT count(*)::int FROM sessions WHERE account_id=$1) AS sessions,
           (SELECT count(*)::int FROM users WHERE account_id=$1) AS users,
-          (SELECT count(*)::int FROM password_credentials WHERE account_id=$1) AS credentials`, [f.childAccountId]);
-        expect(removed.rows[0]).toEqual({ sessions: 0, users: 0, credentials: 0 });
+          (SELECT count(*)::int FROM users WHERE account_id=$1 AND id=$2 AND kind='lab_human' AND status='revoked') AS revoked_children,
+          (SELECT count(*)::int FROM password_credentials WHERE account_id=$1) AS credentials`, [f.childAccountId, f.childUserId]);
+        // Canonical cleanup retains exactly the revoked control identity;
+        // its account-scoped data, sessions and password credentials are gone.
+        expect(removed.rows[0]).toEqual({ sessions: 0, users: 1, revoked_children: 1, credentials: 0 });
       }
       expect(await f.currentParent()).toBe(200);
       const parent = await f.control.query<{ count: number }>(`SELECT count(*)::int AS count FROM accounts a

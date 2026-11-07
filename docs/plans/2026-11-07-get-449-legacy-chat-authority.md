@@ -200,6 +200,19 @@ explicit optional-ID presence assertion. Independent review found no remaining
 P0/P1 in the frozen three-path repair. The new14 real PG and later feedback
 contracts still require execution on the newly published head.
 
+At bf4976bd the original12 PG cases still passed. The human-stop case now
+actually reached409/no late answer/no success receipt, stop200 and fresh401;
+its final fixture wrongly expected the canonical revoked control user to be
+absent. Preserve the retained control identity and require total users1 plus
+the exact target lab_human/revoked row1, while sessions/password/data remain0.
+The grant reached the held-provider race but its revoke body omitted required
+schema_version and returned400; use the same negotiated capir-auth.v2 while
+retaining strict200. A cleanup-time201 after a rejected revoke is not evidence
+of a post-withdrawal leak. Both fixture corrections match the existing schema
+and cleanup owner; no runtime/schema/guard changes. Independent delta review
+has no confirmed P0/P1, and the one-root exact-SDK check has zero diagnostics.
+All14 cases and later feedback still require a fresh exact-head Hosted run.
+
 ## Milestones
 
 1. Active: implement and verify only the original-credential guard on both
