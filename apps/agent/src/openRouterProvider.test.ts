@@ -36,6 +36,16 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("OpenRouterAgentProvider", () => {
+
+  it("rejects unsupported explicit reasoning before any provider request", () => {
+    const fetcher = vi.fn<typeof fetch>();
+    expect(() => new OpenRouterAgentProvider({ apiKey: "synthetic", model: "example/unverified-reasoning",
+      reasoningEffort: "high", fetcher })).toThrow();
+    expect(() => new OpenRouterAgentProvider({ apiKey: "synthetic", model: "z-ai/glm-5.3",
+      reasoningEffort: "invalid" as "low", fetcher })).toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, "low", "high", "max"] as const)("preserves host reasoning intent %s in the actual request body", async effort => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({
       model: "z-ai/glm-5.3", choices: [{ finish_reason: "stop", message: { role: "assistant", content: "{}" } }],
@@ -316,6 +326,7 @@ describe("OpenRouterAgentProvider", () => {
     const provider = new OpenRouterAgentProvider({
       apiKey: "test-key",
       model: "z-ai/glm-5.3",
+      reasoningEffort: "low",
       providerOrder: ["z-ai"],
       fetcher,
     });

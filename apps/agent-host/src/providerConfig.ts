@@ -49,9 +49,13 @@ function configuredAgentProvider(
     return new ClaudeAgentSDKProvider(model, undefined,
       claudeHarnessConfiguration({ ...environment, TALENT_SIGNAL_AGENT_MODEL: model }), imageInputEnabled);
   }
+  const effort = environment.TALENT_SIGNAL_AGENT_REASONING_EFFORT?.trim();
+  if (effort && !["low", "high", "max"].includes(effort)) throw new Error("TALENT_SIGNAL_AGENT_REASONING_EFFORT must be low, high, or max.");
+  const reasoning = effort ? { reasoningEffort: effort as "low" | "high" | "max" } : {};
   if (provider === "openrouter") {
     return new OpenRouterAgentProvider({
       apiKey: required(environment, "OPENROUTER_API_KEY"),
+      ...reasoning,
       model,
       ...(environment.OPENROUTER_BASE_URL?.trim()
         ? { baseUrl: environment.OPENROUTER_BASE_URL.trim() }
@@ -65,6 +69,7 @@ function configuredAgentProvider(
   if (provider === "zhipu") {
     return new BigModelAgentProvider({
       apiKey: required(environment, "ZHIPU_API_KEY"),
+      ...reasoning,
       model,
       inputCnyPerMillion: positive(
         environment,

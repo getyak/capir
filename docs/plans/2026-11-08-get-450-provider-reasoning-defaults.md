@@ -63,13 +63,27 @@ implemented; a fingerprint alone does not display effective effort.
 
 ## Milestones and actual state
 
-1. Active: freeze constructor/configuration compatibility and add meaningful
+1. Freeze constructor/configuration compatibility and add meaningful
    actual-wire/fingerprint/resume/legacy tests before implementation.
    Eight new mocked wire cases executed against unchanged adapters:2 omission
    failures,6 explicit low/high/max passes;10 unrelated cases were filtered.
-   No real provider call. Runtime code is still unchanged.
-2. Implement the complete request, shared factory, fingerprint, strict local
-   journal and continuation path. Update the existing canonical Agent guide.
+   No real provider call. A39-source compatibility review distinguished the
+   two Claude run policies sharing one id, dynamic Zhipu routing and optional
+   fake descriptors. Runtime candidate now exists. Its six-file regression ran
+   27 failed/44 passed before implementation; the first expanded77 cases passed,
+   including actual factory wire capture, strict immutable stores, real-runner
+   pre-dispatch denial and completed unknown/legacy CLI replay. The first
+   typecheck harness lacked sparse Backend config; after restoring exact HEAD
+   config,23 changed roots passed against pinned SDK declarations. Independent
+   final33-path review found no P0/P1; its nested-accessor P2 was reproduced by
+   3 failing cases, then fixed by reading each nested field once and cloning
+   only the validated locals. Current7-file80 tests and29 changed-root checks
+   pass; immutable/runtime boundaries and both CLI replay paths remain intact.
+   These are
+   focused local results, not full pinned build or Hosted acceptance.
+2. Candidate implements the complete request, shared factory, fingerprint, strict local
+   journal and continuation path. The canonical Agent guide is updated; full
+   Hosted gates and resident delivery remain pending.
 3. Pass focused negative/recovery/safety checks and full applicable Hosted gates;
    independently review immutable configuration and recovery boundaries.
 4. Normal exact-head merge after applicable gates. Deploy affected existing
@@ -85,5 +99,6 @@ both immutable journal parsers and identity conflicts, legacy-incomplete denial,
 lawful completed replay with no new dispatch, and absent/high continuation
 distinction. Reuse the existing cumulative-budget/unknown-usage/tool-batch tests;
 do not increase limits to make a case pass. No new paid/native/release evidence
-exists. Provider configuration compatibility is the remaining first-milestone
-design detail, not a reason to manufacture a default or rewrite old records.
+exists. Configuration compatibility is implemented in the source-reviewed
+candidate; only the actual Hosted and resident results can close delivery.
+Historical records remain untouched.

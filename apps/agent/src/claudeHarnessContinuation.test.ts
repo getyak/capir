@@ -65,6 +65,7 @@ describe("host-issued SDK continuation", () => {
     expect(harnessContinuationFingerprint(configuration, { ...request, objective: "Next turn" })).toBe(fingerprint);
     expect(harnessContinuationFingerprint(configuration, { ...request, systemPrompt: "Changed policy" })).not.toBe(fingerprint);
     expect(harnessContinuationFingerprint(configuration, { ...request, effort: "medium" })).not.toBe(fingerprint);
+    expect(harnessContinuationFingerprint(configuration, { ...request, effort: "high" })).not.toBe(fingerprint);
     expect(harnessContinuationFingerprint({ ...configuration, credential: { ...configuration.credential, value: "rotated-synthetic-key" } }, request)).not.toBe(fingerprint);
     expect(fingerprint).not.toContain("synthetic-key");
   });

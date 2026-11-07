@@ -132,6 +132,7 @@ const record = {
   modelProviderID: "scripted",
   model: "scripted-model",
   sdkVersion: "scripted.v1",
+    providerConfiguration: { version: "agent-run-reasoning.v1", reasoning: { mode: "not_applicable" } },
   startedAt: "2026-08-30T00:00:00.000Z",
 };
 

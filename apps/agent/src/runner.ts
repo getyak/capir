@@ -1,3 +1,4 @@
+import { snapshotProviderRunConfiguration, type ProviderRunConfiguration } from "./providerRunConfiguration.js";
 import {
   PursuitAgentFinalOutputSchema,
   type PursuitNoActionOutput,
@@ -185,7 +186,7 @@ function assertConfiguration(request: AgentRunRequest): void {
   }
 }
 
-function buildFingerprints(request: AgentRunRequest): AgentFingerprints {
+function buildFingerprints(request: AgentRunRequest, providerConfiguration: ProviderRunConfiguration): AgentFingerprints {
   return {
     definition: fingerprint({
       name: request.definition.name,
@@ -198,6 +199,7 @@ function buildFingerprints(request: AgentRunRequest): AgentFingerprints {
     sdk: fingerprint({
       provider: request.provider.id,
       sdkVersion: request.provider.sdkVersion,
+      providerConfiguration,
     }),
     model: fingerprint(request.provider.model),
     policy: fingerprint(request.definition.policyVersion),
@@ -344,7 +346,8 @@ export async function runBoundedAgent(
   assertConfiguration(request);
   const startedAtMs = runtime.nowMs();
   const startedAt = new Date(startedAtMs).toISOString();
-  const fingerprints = buildFingerprints(request);
+  const providerConfiguration = snapshotProviderRunConfiguration(request.provider.runConfiguration);
+  const fingerprints = buildFingerprints(request, providerConfiguration);
   let sequence = 0;
   let toolCalls = 0;
   const runState: {

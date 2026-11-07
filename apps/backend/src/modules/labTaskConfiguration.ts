@@ -1,3 +1,4 @@
+import { snapshotProviderRunConfiguration } from "@talent-signal/agent";
 import { WorkspaceConversationFinalOutputSchema, type AgentProvider } from "@talent-signal/agent";
 import { bundledPrompt, promptRevision, promptReference, type PromptSnapshot } from "@talent-signal/agent/prompt-registry";
 import { configuredAgentPrompt, configuredChatPrompt, type AgentRunConfigurationEvidence, type ChatPromptPreset, type RemoteChatAnswerProviding,
@@ -143,7 +144,8 @@ export function trialProvider(entry: LabTaskModel, preset: ChatPromptPreset,
           status, error_code: status === "completed" ? null : "TRIAL_AGENT_FAILED_OR_UNVERIFIED" });
       }
     };
-    Object.assign(wrapped, { id: original.id, sdkVersion: original.sdkVersion, inputCapabilities: original.inputCapabilities, run });
+    Object.assign(wrapped, { id: original.id, sdkVersion: original.sdkVersion, inputCapabilities: original.inputCapabilities,
+      runConfiguration: snapshotProviderRunConfiguration(original.runConfiguration), run });
   }
   return wrapped;
 }

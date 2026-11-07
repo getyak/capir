@@ -1,3 +1,4 @@
+import { glmRunConfiguration, validatedGlmReasoningEffort, type ProviderRunConfiguration } from "./providerRunConfiguration.js";
 import {
   AGENT_TOOL_CATALOG,
   agentToolJsonSchema,
@@ -127,6 +128,7 @@ function validatedBaseUrl(value: string): string {
 export class OpenRouterAgentProvider implements AgentProvider {
   readonly id = "openrouter-chat-completions";
   readonly sdkVersion = SDK_VERSION;
+  readonly runConfiguration: ProviderRunConfiguration;
   readonly model: string;
   readonly inputCapabilities;
 
@@ -154,9 +156,8 @@ export class OpenRouterAgentProvider implements AgentProvider {
     }
     this.baseUrl = validatedBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL);
     this.referer = options.referer?.trim() || undefined;
-    this.reasoningEffort =
-      options.reasoningEffort ??
-      (this.model === "z-ai/glm-5.3" ? "low" : undefined);
+    this.reasoningEffort = validatedGlmReasoningEffort("openrouter", this.model, options.reasoningEffort);
+    this.runConfiguration = glmRunConfiguration(this.reasoningEffort);
     if (
       options.providerOrder?.some(
         (provider) => !/^[a-z0-9/-]+$/u.test(provider),

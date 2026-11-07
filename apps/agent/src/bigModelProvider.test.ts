@@ -39,6 +39,7 @@ function provider(fetcher: typeof fetch) {
   return new BigModelAgentProvider({
     apiKey: "test-key",
     model: "glm-5.3",
+    reasoningEffort: "low",
     inputCnyPerMillion: 8,
     outputCnyPerMillion: 28,
     cnyPerUsd: 7,
@@ -47,6 +48,16 @@ function provider(fetcher: typeof fetch) {
 }
 
 describe("BigModelAgentProvider", () => {
+
+  it("rejects unsupported explicit reasoning before any provider request", () => {
+    const fetcher = vi.fn<typeof fetch>();
+    expect(() => new BigModelAgentProvider({ apiKey: "synthetic", model: "glm-4.6v-flash", inputCnyPerMillion: 8, outputCnyPerMillion: 28, cnyPerUsd: 7,
+      reasoningEffort: "high", fetcher })).toThrow();
+    expect(() => new BigModelAgentProvider({ apiKey: "synthetic", model: "glm-5.3", inputCnyPerMillion: 8, outputCnyPerMillion: 28, cnyPerUsd: 7,
+      reasoningEffort: "invalid" as "low", fetcher })).toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, "low", "high", "max"] as const)("preserves host reasoning intent %s in the actual request body", async effort => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({
       model: "glm-5.3", choices: [{ finish_reason: "stop", message: { role: "assistant", content: "{}" } }],

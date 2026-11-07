@@ -14,6 +14,7 @@ export * from "./screenshotPreprocessExtraction.js";
 export * from "./screenshotPreparedViews.js";
 export * from "./arkScreenshotPreprocessor.js";
 export * from "./bigModelProvider.js";
+export * from "./providerRunConfiguration.js";
 export * from "./fingerprint.js";
 export * from "./memoryJournal.js";
 export * from "./openRouterProvider.js";
