@@ -2488,7 +2488,7 @@ export async function buildApp(
         request.body.media_ids?.length ? "relationship_image" : "relationship_text", request.body.idempotency_key) : null;
       let productOutcome: "accepted" | "fallback" | "product_failed" | "unverified" = "product_failed";
       const originalAuthority = await admitLegacyChatAuthority(pool, request.auth, request.headers.authorization,
-        config, deploymentExposure?.workspaceIds);
+        config, deploymentExposure?.workspaceIds, "CHAT_COMPLETION_SOURCE_CHANGED");
       const result = await createLegacyChatTask(
         originalAuthority, pool, request.auth, request.body, remoteChatProvider, chatMediaStorage, personResearchProvider, trial?.select,
         config.internalLabEnabled ? (client) => labFeatures.adoptionReceipt(client, request.auth) : undefined,

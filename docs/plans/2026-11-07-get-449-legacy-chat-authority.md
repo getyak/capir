@@ -157,6 +157,31 @@ relaxed. Two status assertions add only bounded error-code/provider-count
 diagnostics. The repaired fixture still requires a new exact-head12-case PG run;
 its14pure tests and one-root static check do not substitute for that result.
 
+At68b57b5c the canonical fixture passed all12 real PG cases. The broader
+feedback suite then found two existing scoped-source contracts returning the
+new generic authority code instead of CHAT_COMPLETION_SOURCE_CHANGED. Preserve
+that route-owned public code for the exact existing409/HARNESS_SOURCE_CHANGED
+source-owner rejection, while keeping LegacyChatTerminated, abort, first-failure
+latching and no fallback. Credential, database and unknown source failures
+retain the generic authority code; original error prose/details are not copied.
+Only the scoped HTTP route selects its fixed internal code. Four additional
+pure cases check known-source terminal behavior and unknown/auth/DB separation;
+independent review also caught dispose-first late source rejection replacing
+the already-aborted reason. Disposal now locks the first terminal instance
+without throwing, and both source-first/dispose-first same-instance cases pass.
+The full six-file197 cases and exact-SDK three changed-root check pass. The
+existing real feedback contracts must still rerun on the published repair.
+
+Two dedicated Lab HTTP cases are also source-reviewed: real grant withdrawal
+with individually live child credentials, and human workspace stop. The latter
+must first observe canonical advisory stop intent while workspace/child/auth
+are still live, then release the provider so its independent source probe
+rolls back the old transaction. Waiting for committed deleting/401 before
+release deadlocks against the original idempotency workspace SHARE lock.
+After release require stop completion, child401, exact cleanup and parent200.
+Original2s/15s budgets and all prior12 cases remain; the final14 PG cases have
+not yet executed and do not establish operator-principal race acceptance.
+
 ## Milestones
 
 1. Active: implement and verify only the original-credential guard on both

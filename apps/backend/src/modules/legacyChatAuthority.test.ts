@@ -13,7 +13,7 @@ const config = { internalLabEnabled: false } as BackendConfig;
 const admissions: LegacyChatAuthority[] = [];
 afterEach(() => { for (const item of admissions.splice(0)) item.dispose(); });
 
-async function fixture() {
+async function fixture(sourceFailureCode?: "CHAT_COMPLETION_SOURCE_CHANGED") {
   let live = true, admission = true, databaseFails = false;
   const commands: string[] = [];
   const pool = { query: async (sql: string) => {
@@ -27,7 +27,7 @@ async function fixture() {
     if (sql.includes("WITH tick")) return { rows: live ? [{ "?column?": 1 }] : [], rowCount: live ? 1 : 0 };
     return { rows: [{ id: auth.sessionId }], rowCount: 1 };
   } } as unknown as Pool;
-  const authority = await admitLegacyChatAuthority(pool, auth, "Bearer synthetic-unit-only", config);
+  const authority = await admitLegacyChatAuthority(pool, auth, "Bearer synthetic-unit-only", config, undefined, sourceFailureCode);
   admissions.push(authority);
   return { authority, pool, commands, revoke: () => { live = false; }, fail: () => { databaseFails = true; } };
 }
@@ -101,6 +101,56 @@ describe("legacy original-credential fences (synthetic database boundary)", () =
     await expect(f.authority.host(async () => { throw new ApiError(400, "INVALID_INPUT", "Synthetic input"); }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
     await expect(f.authority.assertCurrent()).resolves.toBeUndefined();
+  });
+
+  it("keeps the scoped source code terminal without exposing the original source error", async () => {
+    const f = await fixture("CHAT_COMPLETION_SOURCE_CHANGED");
+    let calls = 0;
+    const guarded = guardLegacyProvider({ answer: async (_request: object) => { calls++; return "must not run"; } },
+      f.authority, async () => { throw new ApiError(409, "HARNESS_SOURCE_CHANGED", "Synthetic private source detail"); });
+    await expect(guarded.answer({})).rejects.toMatchObject({ code: "CHAT_COMPLETION_SOURCE_CHANGED", statusCode: 409 });
+    await expect(guarded.answer({})).rejects.toBeInstanceOf(LegacyChatTerminated);
+    expect(calls).toBe(0);
+    expect(f.authority.signal.aborted).toBe(true);
+    expect(f.authority.signal.reason).toBeInstanceOf(LegacyChatTerminated);
+    expect(f.authority.signal.reason.message).not.toContain("Synthetic private source detail");
+    await expect(f.authority.assertCurrent()).rejects.toMatchObject({ code: "CHAT_COMPLETION_SOURCE_CHANGED" });
+  });
+
+  it("keeps disposal before a late known-source rejection on the same terminal instance", async () => {
+    const f = await fixture("CHAT_COMPLETION_SOURCE_CHANGED");
+    let rejectSource!: (error: Error) => void;
+    const pending = f.authority.source(() => new Promise<never>((_resolve, reject) => { rejectSource = reject; }));
+    f.authority.dispose();
+    const first = f.authority.signal.reason;
+    expect(first).toMatchObject({ code: "LEGACY_CHAT_AUTHORITY_UNAVAILABLE" });
+    const rejection = expect(pending).rejects.toBe(first);
+    rejectSource(new ApiError(409, "HARNESS_SOURCE_CHANGED", "Synthetic late source detail"));
+    await rejection;
+    await expect(f.authority.assertCurrent()).rejects.toBe(first);
+    expect(f.authority.signal.reason).toBe(first);
+  });
+
+  it("keeps source rejection before later disposal on the same terminal instance", async () => {
+    const f = await fixture("CHAT_COMPLETION_SOURCE_CHANGED");
+    await expect(f.authority.source(async () => { throw new ApiError(409, "HARNESS_SOURCE_CHANGED", "Synthetic source detail"); }))
+      .rejects.toMatchObject({ code: "CHAT_COMPLETION_SOURCE_CHANGED" });
+    const first = f.authority.signal.reason;
+    f.authority.dispose();
+    await expect(f.authority.assertCurrent()).rejects.toBe(first);
+    expect(f.authority.signal.reason).toBe(first);
+  });
+
+  it.each(["revoked", "database", "unknown-source"] as const)("does not label %s as a known scoped source change", async kind => {
+    const f = await fixture("CHAT_COMPLETION_SOURCE_CHANGED");
+    if (kind === "revoked") f.revoke();
+    if (kind === "database") f.fail();
+    const operation = kind === "unknown-source"
+      ? f.authority.source(async () => { throw new Error("Synthetic unknown source failure"); })
+      : f.authority.provider(async () => "must not return");
+    await expect(operation).rejects.toMatchObject({ code: "LEGACY_CHAT_AUTHORITY_UNAVAILABLE" });
+    expect(f.authority.signal.aborted).toBe(true);
+    await expect(f.authority.provider(async () => "must not return")).rejects.toBeInstanceOf(LegacyChatTerminated);
   });
 
   it("does not turn source or database failure into a reusable fallback capability", async () => {

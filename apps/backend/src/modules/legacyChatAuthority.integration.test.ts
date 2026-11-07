@@ -1,4 +1,8 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { LightMyRequestResponse } from "fastify";
 import { Pool, type PoolClient } from "pg";
@@ -12,6 +16,10 @@ import { mutateAgentSession } from "./agentSessions.js";
 import type { SessionResponse } from "@talent-signal/contracts";
 import type { AuthContext } from "./auth.js";
 import { compileRelationshipWiki } from "./wiki.js";
+import type { BackendConfig } from "../config.js";
+import { LocalChatMediaStorage } from "./chatMediaStorage.js";
+import { LabWorkspaceService } from "./labWorkspaces.js";
+import { labStopAuthorityKeySQL } from "./labStopAuthority.js";
 
 const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
 if (database) {
@@ -491,4 +499,300 @@ describe.skipIf(!database)("phase1 original credential publication (Hosted Postg
       expect(f.calls()).toBe(1); // A lawful new login reads, never reruns a completed provider attempt.
     });
   });
+});
+
+type LabWithdrawal = "grant" | "human-workspace-stop";
+type LabWithdrawalState = {
+  workspace_state: string; stop_id: string | null; child_session_live: boolean;
+  entry_live: boolean; child_user_status: string | null;
+  grant_state: string | null; grant_parent_revoked: boolean | null;
+};
+type LabHttpFixture = {
+  control: Pool; parentAccountId: string; parentUserId: string; parentSessionId: string;
+  childAccountId: string; childUserId: string; childSessionId: string; workspaceId: string; stopId: string;
+  entered: ReturnType<typeof barrier>; release: ReturnType<typeof barrier>;
+  calls(): number; heldCalls(): number; hold(): void;
+  post(key: string): Promise<LightMyRequestResponse>;
+  currentChild(): Promise<number>; currentParent(): Promise<number>;
+  withdraw(): Promise<LightMyRequestResponse>;
+  withdrawalState(): Promise<LabWithdrawalState>;
+};
+
+/** Actual parent login/provisioning/entry routes, with no fabricated child
+ * AuthContext/session. Only the entitlement is server-owned synthetic setup,
+ * following capirAuth.integration.test.ts. Credentials never leave closures. */
+async function withLabHttpFixture(kind: LabWithdrawal, operation: (fixture: LabHttpFixture) => Promise<void>) {
+  const pool = new Pool({ connectionString: database!, max: 4, connectionTimeoutMillis: 2_000,
+    statement_timeout: 5_000, query_timeout: 6_000 });
+  // A stop can await cleanup on one connection while fresh HTTP authentication
+  // and its exact synthetic-state observation use another control connection.
+  const control = new Pool({ connectionString: database!, max: 3, connectionTimeoutMillis: 2_000,
+    statement_timeout: 5_000, query_timeout: 6_000 });
+  const entered = barrier(), release = barrier();
+  const parentAccountId = randomUUID(), parentUserId = randomUUID(), stopId = randomUUID();
+  const email = `legacy-lab-${parentUserId}@example.invalid`, password = randomBytes(24).toString("base64url");
+  const web = "https://legacy-lab-web.test.invalid", backend = "https://legacy-lab-api.test.invalid";
+  let directory: string | undefined, storage: LocalChatMediaStorage | undefined;
+  let app: HttpFixture["app"] | undefined, controlApp: HttpFixture["app"] | undefined;
+  let pending: Promise<LightMyRequestResponse> | undefined, withdrawal: Promise<LightMyRequestResponse> | undefined;
+  let hold = false, calls = 0, heldCalls = 0;
+  const answer: RemoteChatAnswerResult = { kind: "answer", title: "Synthetic reply", body: "Synthetic phase1 reply.",
+    citation_ids: [], provider_id: "zhipu-chat-completions", model: "synthetic-lab-authority", provider_request_id: null,
+    input_tokens: 10, output_tokens: 5 };
+  const provider: RemoteChatAnswerProviding = { providerId: answer.provider_id, model: answer.model,
+    supportsImageInput: false, answer: async () => {
+      calls++;
+      if (hold) { heldCalls++; entered.resolve(); await release.promise; }
+      return answer;
+    } };
+  try {
+    directory = await mkdtemp(join(tmpdir(), "capir-legacy-lab-authority-"));
+    storage = new LocalChatMediaStorage(directory);
+    const config: BackendConfig = { databaseUrl: database!, host: "127.0.0.1", port: 0,
+      allowedOrigins: [web], appleSignInAudiences: [], appleSignInEnabled: false, simulatedAuthEnabled: false,
+      passwordAuthEnabled: true, passwordRegistrationEnabled: false, internalLabEnabled: true,
+      retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3_600,
+      chatMediaStorage: { provider: "local", directory },
+      capirAuth: { enabled: true, webOrigin: web, backendOrigin: backend, codeTtlSeconds: 60,
+        accessTtlSeconds: 60, refreshIdleTtlSeconds: 600, refreshAbsoluteTtlSeconds: 3_600 },
+      capirTests: { enabled: true, provisioningKey: randomBytes(32).toString("base64url"), provisioningGeneration: 1,
+        webOrigin: web, backendOrigin: backend, webConsumerKey: randomBytes(32).toString("base64url"), maxActiveRuns: 8 } };
+    await inTransaction(control, async client => {
+      await client.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic Lab parent')", [parentAccountId, `legacy-lab-${parentAccountId}`]);
+      await client.query("INSERT INTO account_email_reservations(normalized_email,state,account_id,user_id) VALUES($1,'owned',$2,$3)",
+        [email, parentAccountId, parentUserId]);
+      await client.query("INSERT INTO users(id,account_id,email,display_name,kind,username) VALUES($1,$2,$3,'Synthetic Lab parent','password_human',$3)",
+        [parentUserId, parentAccountId, email]);
+      await client.query("INSERT INTO password_credentials(account_id,user_id,password_scrypt) VALUES($1,$2,$3)",
+        [parentAccountId, parentUserId, await encodePasswordCredential(password)]);
+    });
+    const options = { config, chatMediaStorage: storage, personResearchProvider: null, privateConversationProvider: null,
+      labProviders: new Map(), labJobWorkerEnabled: false, conversationQueueWorkerEnabled: false, labCIVerifier: null, screenshotContact: null };
+    app = await buildApp({ ...options, pool, remoteChatProvider: provider });
+    controlApp = await buildApp({ ...options, pool: control, remoteChatProvider: null });
+    await app.ready(); await controlApp.ready();
+    const login = await controlApp.inject({ method: "POST", url: "/v1/auth/password/login",
+      payload: { identifier: email, password, client_label: "Synthetic Lab parent" } });
+    expect(login.statusCode).toBe(200);
+    const parent = login.json<SessionResponse>(), parentSessionId = parent.session_id;
+    if (!parentSessionId) throw new Error("The real synthetic parent login omitted its session identity.");
+    const parentHeaders = { authorization: `Bearer ${parent.access_token}` };
+    let child: SessionResponse, workspaceId: string, grantId: string | null = null;
+    if (kind === "grant") {
+      await control.query(`INSERT INTO capir_user_test_entitlements(id,account_id,user_id,scopes,state,granted_by)
+        VALUES($1,$2,$3,ARRAY['test.create','test.status','test.stop','test.handoff'],'active','Synthetic GET449 Lab proof')`,
+      [randomUUID(), parentAccountId, parentUserId]);
+      const verifier = randomBytes(32).toString("base64url"), state = randomBytes(32).toString("base64url");
+      const redirect = "http://127.0.0.1:49381/capir/callback";
+      const authorized = await controlApp.inject({ method: "POST", url: "/v1/capir/auth/authorize", headers: parentHeaders,
+        payload: { schema_version: "capir-auth.v2", redirect_uri: redirect, state,
+          code_challenge: createHash("sha256").update(verifier, "ascii").digest("base64url"), code_challenge_method: "S256",
+          web_origin: web, backend_origin: backend, scopes: ["grants.read", "grants.revoke", "test.create", "test.status", "test.stop", "test.handoff"],
+          consent: true, client_label: "Synthetic Lab authority proof" } });
+      expect(authorized.statusCode).toBe(200);
+      const exchanged = await controlApp.inject({ method: "POST", url: "/v1/capir/auth/exchange",
+        payload: { schema_version: "capir-auth.v2", code: authorized.json<{ code: string }>().code,
+          code_verifier: verifier, state, redirect_uri: redirect, web_origin: web, backend_origin: backend } });
+      expect(exchanged.statusCode).toBe(200);
+      const grant = exchanged.json<{ access_token: string; grant: { id: string } }>();
+      grantId = grant.grant.id;
+      const childPassword = randomBytes(32).toString("base64url");
+      const created = await controlApp.inject({ method: "POST", url: "/v1/capir/tests",
+        headers: { authorization: `Bearer ${grant.access_token}`, "x-capir-backend-origin": backend },
+        payload: { request_id: randomUUID(), password: childPassword, preset: "empty", duration_hours: 1, web_origin: web, backend_origin: backend } });
+      expect(created.statusCode).toBe(200);
+      const run = created.json<{ run: { id: string; username: string; state: string } }>().run;
+      expect(run.state).toBe("ready");
+      workspaceId = run.id; // The owning create path binds run.id = workspace_id.
+      const admitted = await controlApp.inject({ method: "POST", url: "/v1/auth/password/login",
+        payload: { identifier: run.username, password: childPassword, client_label: "Synthetic grant child" } });
+      expect(admitted.statusCode).toBe(200);
+      child = admitted.json<SessionResponse>();
+    } else {
+      workspaceId = randomUUID();
+      const created = await controlApp.inject({ method: "POST", url: "/v1/lab/workspaces", headers: parentHeaders,
+        payload: { id: workspaceId, duration_hours: 1 } });
+      expect(created.statusCode).toBe(200);
+      expect(created.json<{ workspace: { state: string } }>().workspace.state).toBe("active");
+      const entryToken = randomBytes(32).toString("base64url");
+      const entered = await controlApp.inject({ method: "POST", url: `/v1/lab/workspaces/${workspaceId}/entries`, headers: parentHeaders,
+        payload: { id: randomUUID(), access_token: entryToken } });
+      expect(entered.statusCode).toBe(200);
+      const entry = entered.json<{ entry: { state: string; session_id: string } }>().entry;
+      expect(entry.state).toBe("active");
+      const current = await controlApp.inject({ method: "GET", url: "/v1/auth/session", headers: { authorization: `Bearer ${entryToken}` } });
+      expect(current.statusCode).toBe(200);
+      // The session was issued by /entries; the token is the caller-held real
+      // entry protocol value, not an invented row or req.auth override.
+      child = { ...current.json<SessionResponse>(), access_token: entryToken, session_id: entry.session_id };
+    }
+    const childSessionId = child.session_id;
+    if (!childSessionId) throw new Error("The real synthetic Lab entry omitted its session identity.");
+    expect(child.user.kind).toBe("lab_human");
+    const childHeaders = { authorization: `Bearer ${child.access_token}` };
+    const product = app, observer = controlApp;
+    await operation({ control, parentAccountId, parentUserId, parentSessionId,
+      childAccountId: child.account.id, childUserId: child.user.id, childSessionId, workspaceId, stopId,
+      entered, release, calls: () => calls, heldCalls: () => heldCalls, hold: () => { hold = true; },
+      currentChild: async () => (await observer.inject({ method: "GET", url: "/v1/auth/session", headers: childHeaders })).statusCode,
+      currentParent: async () => (await observer.inject({ method: "GET", url: "/v1/auth/session", headers: parentHeaders })).statusCode,
+      post: key => {
+        pending = product.inject({ method: "POST", url: "/v1/chat/unscoped-tasks", headers: childHeaders,
+          payload: { idempotency_key: key, objective: "Reply with a short synthetic greeting." } }).then(result => result);
+        void pending.catch(() => {}); return pending;
+      },
+      withdraw: () => {
+        withdrawal = (kind === "grant"
+          ? observer.inject({ method: "POST", url: "/v1/capir/auth/grants/revoke", headers: parentHeaders, payload: { grant_id: grantId } })
+          : observer.inject({ method: "POST", url: `/v1/lab/workspaces/${workspaceId}/stop`, headers: parentHeaders, payload: { id: stopId } }))
+          .then(result => result);
+        void withdrawal.catch(() => {}); return withdrawal;
+      },
+      withdrawalState: async () => {
+        const row = (await control.query<LabWithdrawalState>(`SELECT w.state AS workspace_state,w.stop_id,
+          EXISTS(SELECT 1 FROM sessions s WHERE s.id=$2 AND s.account_id=w.target_account_id AND s.user_id=w.target_user_id
+            AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()) AS child_session_live,
+          EXISTS(SELECT 1 FROM lab_test_workspace_entries e WHERE e.workspace_id=w.id AND e.session_id=$2
+            AND e.revoked_at IS NULL AND e.expires_at>clock_timestamp()) AS entry_live,
+          (SELECT u.status FROM users u WHERE u.account_id=w.target_account_id AND u.id=w.target_user_id) AS child_user_status,
+          (SELECT g.state FROM capir_auth_grants g WHERE g.id=$3 AND g.account_id=$4 AND g.user_id=$5) AS grant_state,
+          (SELECT s.revoked_at IS NOT NULL FROM capir_auth_grants g JOIN sessions s ON s.id=g.backing_session_id
+            WHERE g.id=$3 AND g.account_id=$4 AND g.user_id=$5) AS grant_parent_revoked
+          FROM lab_test_workspaces w WHERE w.id=$1 AND w.owner_account_id=$4 AND w.owner_user_id=$5`,
+        [workspaceId, childSessionId, grantId, parentAccountId, parentUserId])).rows[0];
+        if (!row) throw new Error("The exact synthetic Lab workspace was not available for authority readback.");
+        return row;
+      },
+    });
+  } finally {
+    release.resolve();
+    try { await pending?.catch(() => {}); }
+    finally {
+      try { await withdrawal?.catch(() => {}); }
+      finally {
+        try {
+          if (storage) {
+            // Canonical exact-owner cleanup also works after grant revocation.
+            // The proof uses HTTP only; this is finally-only fixture cleanup.
+            const service = new LabWorkspaceService(control, storage, 3_600);
+            const owned = await control.query<{ id: string }>("SELECT id FROM lab_test_workspaces WHERE owner_account_id=$1 AND owner_user_id=$2 AND state<>'deleted'",
+              [parentAccountId, parentUserId]);
+            for (const row of owned.rows) await service.stopOperatorRun(row.id, randomUUID());
+          }
+        } finally {
+          try { await app?.close(); }
+          finally {
+            try { await controlApp?.close(); }
+            finally {
+              try { await Promise.all([pool.end(), control.end()]); }
+              finally { if (directory) await rm(directory, { recursive: true, force: true }); }
+            }
+          }
+        }
+      }
+    }
+    // Parent rows remain intact throughout the proof. Like the original
+    // ordinary-login fixture, their generated-only database is job-owned and
+    // discarded by Hosted, never removed by an overbroad account-delete helper.
+  }
+}
+
+async function observeLabWithdrawal(kind: LabWithdrawal, f: LabHttpFixture): Promise<LabWithdrawalState> {
+  const until = performance.now() + 2_000;
+  do {
+    const state = await f.withdrawalState();
+    const withdrawn = kind === "grant"
+      ? state.workspace_state === "active" && state.child_session_live && state.entry_live
+        && state.child_user_status === "active" && state.grant_state === "revoked" && state.grant_parent_revoked === true
+      : ["deleting", "deleted"].includes(state.workspace_state) && state.stop_id === f.stopId
+        && !state.child_session_live && !state.entry_live && [null, "revoked"].includes(state.child_user_status);
+    if (withdrawn && await f.currentChild() === 401) return state;
+    await delay(10);
+  } while (performance.now() < until);
+  throw new Error("Canonical Lab withdrawal and fresh child authentication denial were not observed within the test budget.");
+}
+
+async function observeLabStopIntent(f: LabHttpFixture): Promise<LabWithdrawalState> {
+  const until = performance.now() + 2_000;
+  do {
+    // pool.query is its own short autocommit transaction. If the shared trylock
+    // succeeds it is released before this await returns; never retain it over
+    // another await or use the held product transaction for the probe.
+    const intent = await f.control.query<{ stop_clear: boolean }>(
+      `SELECT pg_try_advisory_xact_lock_shared(${labStopAuthorityKeySQL}) AS stop_clear`, [f.childAccountId]);
+    if (intent.rows[0]?.stop_clear === false) return f.withdrawalState();
+    await delay(10);
+  } while (performance.now() < until);
+  throw new Error("The canonical Lab stop intent was not observed within the test budget.");
+}
+
+describe.skipIf(!database)("legacy Chat Lab lineage over real HTTP handlers and PostgreSQL", () => {
+  it.each(["grant", "human-workspace-stop"] as const)("rejects a late answer after canonical %s withdrawal and preserves its real parent", async kind => {
+    await withLabHttpFixture(kind, async f => {
+      expect(await f.currentChild()).toBe(200);
+      expect(await f.currentParent()).toBe(200);
+      const positiveKey = randomUUID(), key = randomUUID();
+      const positive = await f.post(positiveKey);
+      expect(positive.statusCode, safeFailureContext(positive, f.calls())).toBe(201);
+      expect(positive.body.includes("Synthetic phase1 reply.")).toBe(true);
+      expect(f.calls()).toBe(1);
+      f.hold();
+      const pending = f.post(key);
+      await waitForDispatch(f.entered.promise);
+      expect(f.calls()).toBe(2); expect(f.heldCalls()).toBe(1);
+      const withdrawal = f.withdraw();
+      // A grant withdrawal must finish independently while the model is held.
+      // claimIdempotency's write guard holds workspace SHARE over the provider
+      // await. Stop first publishes exclusive advisory intent, then waits for
+      // workspace UPDATE; neither deleting state nor fresh401 can precede release.
+      if (kind === "grant") expect((await withdrawal).statusCode).toBe(200);
+      const state = kind === "grant" ? await observeLabWithdrawal(kind, f) : await observeLabStopIntent(f);
+      if (kind === "grant") {
+        expect(state.child_session_live).toBe(true); expect(state.entry_live).toBe(true);
+        expect(state.workspace_state).toBe("active"); expect(state.child_user_status).toBe("active");
+        expect(state.grant_state).toBe("revoked"); expect(state.grant_parent_revoked).toBe(true);
+      } else {
+        expect(state).toMatchObject({ workspace_state: "active", stop_id: null, child_session_live: true,
+          entry_live: true, child_user_status: "active", grant_state: null, grant_parent_revoked: null });
+        // Auth reads committed lineage, not pending stop intent. The existing
+        // independent harness source probe must reject that intent after return.
+        expect(await f.currentChild()).toBe(200);
+      }
+      expect(await f.currentParent()).toBe(200);
+      f.release.resolve();
+      denied(await pending);
+      expect(f.calls()).toBe(2); expect(f.heldCalls()).toBe(1); // No fallback/replay/model call.
+      const completed = await f.control.query<{ count: number }>(`SELECT count(*)::int AS count FROM idempotency_records
+        WHERE account_id=$1 AND actor_user_id=$2 AND idempotency_key=$3 AND status='completed' AND response_status<400`,
+      [f.childAccountId, f.childUserId, key]);
+      expect(completed.rows[0]?.count).toBe(0);
+      if (kind === "grant") {
+        const prior = await f.control.query<{ count: number }>(`SELECT count(*)::int AS count FROM idempotency_records
+          WHERE account_id=$1 AND actor_user_id=$2 AND idempotency_key=$3 AND status='completed' AND response_status=201`,
+        [f.childAccountId, f.childUserId, positiveKey]);
+        expect(prior.rows[0]?.count).toBe(1); // Withdrawal does not erase a lawful prior child result.
+      } else {
+        const stopped = await withdrawal;
+        expect(stopped.statusCode).toBe(200);
+        const workspace = stopped.json<{ workspace: { state: string; data_rows: number | null; active_sessions: number;
+          cleanup_error: string | null; pending_media_writes: number } }>().workspace;
+        expect(workspace).toMatchObject({ state: "deleted", data_rows: 0, active_sessions: 0, cleanup_error: null, pending_media_writes: 0 });
+        expect(await f.currentChild()).toBe(401);
+        const closed = await f.withdrawalState();
+        expect(closed).toMatchObject({ workspace_state: "deleted", stop_id: f.stopId, child_session_live: false,
+          entry_live: false, child_user_status: null });
+        const removed = await f.control.query<{ sessions: number; users: number; credentials: number }>(`SELECT
+          (SELECT count(*)::int FROM sessions WHERE account_id=$1) AS sessions,
+          (SELECT count(*)::int FROM users WHERE account_id=$1) AS users,
+          (SELECT count(*)::int FROM password_credentials WHERE account_id=$1) AS credentials`, [f.childAccountId]);
+        expect(removed.rows[0]).toEqual({ sessions: 0, users: 0, credentials: 0 });
+      }
+      expect(await f.currentParent()).toBe(200);
+      const parent = await f.control.query<{ count: number }>(`SELECT count(*)::int AS count FROM accounts a
+        JOIN users u ON u.account_id=a.id AND u.id=$2 JOIN sessions s ON s.account_id=a.id AND s.user_id=u.id AND s.id=$3
+        WHERE a.id=$1 AND a.retired_at IS NULL AND u.status='active' AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()`,
+      [f.parentAccountId, f.parentUserId, f.parentSessionId]);
+      expect(parent.rows[0]?.count).toBe(1);
+    });
+  }, 15_000);
 });

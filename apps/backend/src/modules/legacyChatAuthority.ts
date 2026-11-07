@@ -7,10 +7,12 @@ import type { AuthContext } from "./auth.js";
 import { labWorkspaceSessionActiveSQL, operatorLabDeploymentActiveSQL,
   operatorTestDeployment } from "./labWorkspaceAccess.js";
 
+type LegacyChatFailureCode = "LEGACY_CHAT_AUTHORITY_UNAVAILABLE" | "CHAT_COMPLETION_SOURCE_CHANGED";
 export class LegacyChatTerminated extends ApiError {
-  constructor() {
-    super(409, "LEGACY_CHAT_AUTHORITY_UNAVAILABLE",
-      "This request is no longer authorized. Nothing from this attempt was saved. Read the current state before starting again.");
+  constructor(code: LegacyChatFailureCode = "LEGACY_CHAT_AUTHORITY_UNAVAILABLE") {
+    super(409, code, code === "CHAT_COMPLETION_SOURCE_CHANGED"
+      ? "The source changed while this answer was being prepared. Reload its current state before trying again."
+      : "This request is no longer authorized. Nothing from this attempt was saved. Read the current state before starting again.");
   }
 }
 
@@ -64,8 +66,12 @@ export interface LegacyChatAuthority {
  */
 export async function admitLegacyChatAuthority(pool: Pool, auth: AuthContext,
   authorization: string | undefined, config: BackendConfig,
-  audience?: readonly string[]): Promise<LegacyChatAuthority> {
+  audience?: readonly string[],
+  sourceFailureCode: LegacyChatFailureCode = "LEGACY_CHAT_AUTHORITY_UNAVAILABLE"): Promise<LegacyChatAuthority> {
   const stop = new LegacyChatTerminated();
+  // A route-owned public code does not change the terminal authority fence.
+  // Only a known source-owner rejection can select it; never copy error prose.
+  const sourceStop = new LegacyChatTerminated(sourceFailureCode);
   if (!authorization?.startsWith("Bearer ") || !authorization.slice(7)
     || (audience && !audience.includes(auth.accountId))) throw stop;
   const deployment = operatorTestDeployment(config);
@@ -93,13 +99,15 @@ export async function admitLegacyChatAuthority(pool: Pool, auth: AuthContext,
   if (!Number.isSafeInteger(Number(admitted.remaining_ms))) throw stop;
   const controller = new AbortController();
   let terminated = false, disposed = false;
+  let terminalFailure = stop;
   let active: PoolClient | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const sourceChecks = new Set<() => Promise<void>>();
-  const fail = (): never => {
+  const fail = (failure = stop): never => {
+    if (!terminated) terminalFailure = failure;
     terminated = true;
-    if (!controller.signal.aborted) controller.abort(stop);
-    throw stop;
+    if (!controller.signal.aborted) controller.abort(terminalFailure);
+    throw terminalFailure;
   };
   const alive = () => { if (terminated || disposed) fail(); };
   const arm = () => {
@@ -121,7 +129,11 @@ export async function admitLegacyChatAuthority(pool: Pool, auth: AuthContext,
   };
   const source = async <T>(operation: () => Promise<T>): Promise<T> => {
     alive();
-    try { const value = await operation(); alive(); return value; } catch { return fail(); }
+    try { const value = await operation(); alive(); return value; }
+    catch (error) {
+      return fail(error instanceof ApiError && error.statusCode === 409 && error.code === "HARNESS_SOURCE_CHANGED"
+        ? sourceStop : stop);
+    }
   };
   const checked = async <T>(operation: () => Promise<T>, sourceCheck: (() => Promise<void>) | undefined,
     hostOperation: boolean): Promise<T> => {
@@ -210,6 +222,11 @@ export async function admitLegacyChatAuthority(pool: Pool, auth: AuthContext,
         return value;
       } finally { clientOpen = false; active = null; }
     },
-    dispose: () => { disposed = true; if (timer) clearTimeout(timer); if (!controller.signal.aborted) controller.abort(stop); },
+    dispose: () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      if (!terminated) { terminalFailure = stop; terminated = true; }
+      if (!controller.signal.aborted) controller.abort(terminalFailure);
+    },
   };
 }
