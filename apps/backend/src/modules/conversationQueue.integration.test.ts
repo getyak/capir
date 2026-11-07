@@ -353,7 +353,7 @@ suite("durable conversation queue", () => {
           expect(await admission()).toBe(true);
           await pool!.query("UPDATE sessions SET revoked_at=now() WHERE id=$1", [seeded.auth.sessionId]); break;
         case "product-session-deleted":
-          await pool!.query("UPDATE agent_sessions SET deleted_at=now() WHERE account_id=$1 AND id=$2", [seeded.accountId, seeded.sessionId]); break;
+          await pool!.query("UPDATE agent_sessions SET payload=NULL,deleted_at=now() WHERE account_id=$1 AND id=$2", [seeded.accountId, seeded.sessionId]); break;
       }
       await expect(admission()).rejects.toMatchObject({ code: "SESSION_HISTORY_UNAVAILABLE" });
     } finally { await removeProofAccount(seeded.accountId); }
