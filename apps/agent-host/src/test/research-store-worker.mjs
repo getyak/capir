@@ -541,6 +541,7 @@ async function runResearchCommandJob(job) {
     id: scripted.id,
     model: scripted.model,
     sdkVersion: scripted.sdkVersion,
+    runConfiguration: scripted.runConfiguration,
     inputCapabilities: scripted.inputCapabilities,
     async run(request, invokeTool, signal) {
       notify("provider-invoked");
@@ -776,6 +777,7 @@ async function runPersonCommandJob(job) {
     id: scripted.id,
     model: "synthetic-vision-tool-model",
     sdkVersion: scripted.sdkVersion,
+    runConfiguration: scripted.runConfiguration,
     inputCapabilities: {
       text: true,
       image: true,

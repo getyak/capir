@@ -409,6 +409,12 @@ jobs:
       - name: Typecheck, test, and build
         run: pnpm backend:ci
 
+      - name: Verify local research configuration and recovery
+        run: |
+          pnpm --filter @talent-signal/agent-host typecheck
+          pnpm --filter @talent-signal/agent-host build
+          pnpm --filter @talent-signal/agent-host test
+
       - name: Verify AI entry and isolated default fixture
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci

@@ -1,3 +1,4 @@
+import { snapshotProviderRunConfiguration } from "./providerRunConfiguration.js";
 import { resolveProductPrompt } from "./promptRegistry.js";
 import { fingerprint } from "./fingerprint.js";
 import {
@@ -208,12 +209,14 @@ export async function runPersonResearchAgent(
   const authorization = assertPersonResearchAuthorization(request.scope.authorization);
   const scope = Object.freeze({ ...request.scope, authorization });
   const startedAtMs = runtime.nowMs();
+  const providerConfiguration = snapshotProviderRunConfiguration(request.provider.runConfiguration);
   await request.journal.start({
     scope,
     budget: request.budget,
     modelProviderID: request.provider.id,
     model: request.provider.model,
     sdkVersion: request.provider.sdkVersion,
+    providerConfiguration,
     startedAt: new Date(startedAtMs).toISOString(),
   });
   const restored = await request.journal.loadCheckpoint(scope.runID);

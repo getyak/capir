@@ -1,3 +1,4 @@
+import { glmRunConfiguration, validatedGlmReasoningEffort, type ProviderRunConfiguration } from "./providerRunConfiguration.js";
 import {
   AGENT_TOOL_CATALOG,
   agentToolJsonSchema,
@@ -127,12 +128,13 @@ function validatedBaseUrl(value: string): string {
 export class BigModelAgentProvider implements AgentProvider {
   readonly id = "bigmodel-chat-completions";
   readonly sdkVersion = SDK_VERSION;
+  readonly runConfiguration: ProviderRunConfiguration;
   readonly model: string;
   readonly inputCapabilities;
 
   private readonly apiKey: string;
   private readonly baseUrl: string;
-  private readonly reasoningEffort: "low" | "high" | "max";
+  private readonly reasoningEffort: "low" | "high" | "max" | undefined;
   private readonly inputCnyPerMillion: number;
   private readonly outputCnyPerMillion: number;
   private readonly cnyPerUsd: number;
@@ -155,7 +157,8 @@ export class BigModelAgentProvider implements AgentProvider {
       throw new Error("Configure one explicitly pinned GLM model.");
     }
     this.baseUrl = validatedBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL);
-    this.reasoningEffort = options.reasoningEffort ?? "low";
+    this.reasoningEffort = validatedGlmReasoningEffort("zhipu", this.model, options.reasoningEffort);
+    this.runConfiguration = glmRunConfiguration(this.reasoningEffort);
     this.inputCnyPerMillion = positiveNumber(
       options.inputCnyPerMillion,
       "BigModel input price",
@@ -260,7 +263,7 @@ export class BigModelAgentProvider implements AgentProvider {
               ? { response_format: { type: "json_object" } }
               : { tools: availableTools, tool_choice: "auto" }),
             thinking: { type: "enabled" },
-            reasoning_effort: this.reasoningEffort,
+            ...(this.reasoningEffort === undefined ? {} : { reasoning_effort: this.reasoningEffort }),
             temperature: 0,
             max_tokens: Math.min(2_048, remainingTokens),
           }),
