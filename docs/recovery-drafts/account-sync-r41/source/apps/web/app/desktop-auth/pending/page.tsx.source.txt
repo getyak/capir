@@ -1,0 +1,57 @@
+import Link from "next/link";
+
+export const dynamic = "force-dynamic";
+
+export const metadata = {
+  title: "正在继续登录",
+  robots: { follow: false, index: false },
+};
+
+/**
+ * Fixed pending path for the native handoff. Native accepts this navigation
+ * only for its own active generation and state and then starts the system
+ * authentication browser; the page itself is display-only.
+ */
+export default async function DesktopAuthPendingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ attempt?: string; state?: string }>;
+}) {
+  const parameters = await searchParams;
+  const valid =
+    /^[A-Za-z0-9-]{8,200}$/.test(parameters.attempt ?? "") &&
+    /^[A-Za-z0-9_-]{16,200}$/.test(parameters.state ?? "");
+  return (
+    <main
+      id="main-content"
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 16,
+        padding: 32,
+        textAlign: "center",
+      }}
+      tabIndex={-1}
+    >
+      {valid ? (
+        <>
+          <h1 style={{ fontSize: 20, fontWeight: 600 }}>正在继续登录…</h1>
+          <p role="status" style={{ color: "#666" }}>
+            登录会在系统浏览器中完成。完成后，这里会自动回到你的工作区。
+          </p>
+        </>
+      ) : (
+        <>
+          <h1 style={{ fontSize: 20, fontWeight: 600 }}>这次登录没有完成</h1>
+          <p role="status" style={{ color: "#666" }}>
+            请回到应用，重新开始登录。没有输入会被保存。
+          </p>
+          <Link href="/login">返回登录</Link>
+        </>
+      )}
+    </main>
+  );
+}

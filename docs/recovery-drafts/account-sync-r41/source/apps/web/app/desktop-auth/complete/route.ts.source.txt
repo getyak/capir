@@ -1,0 +1,97 @@
+import { TalentSignalHttpError } from "@talent-signal/contracts";
+
+import {
+  clearDesktopBrowserAttempt,
+  desktopAttemptFromCallback,
+  desktopBackendClient,
+  desktopCallbackURL,
+  desktopReturnPath,
+  formMatchesCurrentRound,
+  readDesktopBrowserAttempt,
+  readSubmittedAttemptRef,
+  requestWebOrigin,
+} from "@/lib/server/desktopAuth";
+
+export const dynamic = "force-dynamic";
+
+function rejected(status: number, code: string, message: string): Response {
+  return Response.json({ error: { code, message } }, { status });
+}
+
+/**
+ * Explicit system-browser confirmation completes the attempt (ADR 0020): the
+ * backend mints its one-use, one-minute code and the fixed native callback
+ * carries only attempt, code and state. The rendered form carries an immutable
+ * attempt reference which must match the CURRENT sealed round exactly; a stale
+ * A form with a newer B sealed round is refused and B's cookies and usable
+ * form are preserved. Owner-specific cleanup never touches another round.
+ */
+export async function POST(request: Request): Promise<Response> {
+  const webOrigin = await requestWebOrigin();
+  if (request.headers.get("origin") !== webOrigin) {
+    return rejected(403, "DESKTOP_AUTH_ORIGIN_REQUIRED", "This request origin is not allowed.");
+  }
+  const destination = request.headers.get("sec-fetch-dest");
+  if (destination && destination !== "document") {
+    return rejected(403, "DESKTOP_AUTH_FRAME_REJECTED", "This sign-in flow must start in the main window.");
+  }
+
+  let submitted: string[] = [];
+  try {
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const body = await request.json();
+      submitted = typeof body?.attempt_id === "string" ? [body.attempt_id] : [];
+    } else {
+      const form = await request.formData();
+      submitted = form.getAll("attempt_id").map((value) => String(value));
+    }
+  } catch {
+    submitted = [];
+  }
+  const ref = readSubmittedAttemptRef(submitted);
+  if (ref.kind === "invalid") {
+    return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+  }
+
+  // The CURRENT sealed round is the attempt named by this jar's Auth.js
+  // callback cookie. A rendered form may act only on that round.
+  const currentAttemptId = await desktopAttemptFromCallback();
+  if (!formMatchesCurrentRound(ref, currentAttemptId)) {
+    // Stale A form with current B: refuse without minting or clearing B.
+    return rejected(409, "DESKTOP_AUTH_STALE_FORM", "This form is out of date. Reload and try again.");
+  }
+  const attempt = currentAttemptId ? await readDesktopBrowserAttempt(currentAttemptId) : null;
+
+  const fail = async (status: string, purpose: "login" | "credential_round") => {
+    if (attempt) await clearDesktopBrowserAttempt(attempt.attempt_id);
+    return new Response(null, {
+      status: 303,
+      headers: {
+        location: `${desktopReturnPath(purpose)}?desktop-auth=${encodeURIComponent(status)}`,
+        "cache-control": "private, no-store",
+      },
+    });
+  };
+  if (!attempt || attempt.web_origin !== webOrigin) return fail("error", "login");
+  try {
+    const completed = await desktopBackendClient().completeDesktopAuth(
+      { attempt_id: attempt.attempt_id, state: attempt.state },
+      { origin: webOrigin },
+    );
+    await clearDesktopBrowserAttempt(attempt.attempt_id);
+    return new Response(null, {
+      status: 303,
+      headers: {
+        location: desktopCallbackURL(attempt.attempt_id, completed.code, attempt.state),
+        "cache-control": "private, no-store",
+      },
+    });
+  } catch (error) {
+    if (!(error instanceof TalentSignalHttpError)) throw error;
+    return fail(
+      error.code === "DESKTOP_AUTH_ATTEMPT_EXPIRED" ? "expired" : "error",
+      attempt.purpose,
+    );
+  }
+}

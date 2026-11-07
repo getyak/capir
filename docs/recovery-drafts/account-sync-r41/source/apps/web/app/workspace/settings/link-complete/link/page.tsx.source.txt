@@ -1,0 +1,35 @@
+import { redirect } from "next/navigation";
+
+import { presentCredentialContinuation } from "@/lib/server/desktopCredentialPresentation";
+import { StagedTargetLinkForm } from "../staged-forms";
+
+export const dynamic = "force-dynamic";
+export const metadata = { title: "连接登录方式", robots: { index: false, follow: false } };
+
+/**
+ * The single target continuation (ADR 0020): the active flow-owned sealed
+ * relay grant — or the ordinary Web sealed attempt — is resolved with the
+ * current account/user/session fingerprint, revisions and absolute deadlines
+ * BEFORE rendering. The sealed attempt and its challenge stay server-side; the
+ * form carries only the frozen operation reference and rendered scope. A
+ * stale, expired or foreign flow fails closed to Settings.
+ */
+export default async function StagedTargetLinkPage() {
+  const view = await presentCredentialContinuation("target");
+  if (!view || view.intent !== "link_provider" || !view.targetProvider) {
+    redirect("/workspace/settings?link=error");
+  }
+  return (
+    <StagedTargetLinkForm
+      targetProvider={view.targetProvider}
+      note="当前身份已验证。继续连接新的登录方式；完成后仍是你现在的账户。"
+      scope={{
+        operationRef: view.operationRef,
+        accountId: view.accountId,
+        userId: view.userId,
+        accountRevision: view.accountRevision,
+        userRevision: view.userRevision,
+      }}
+    />
+  );
+}

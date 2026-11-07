@@ -1,0 +1,34 @@
+import { redirect } from "next/navigation";
+
+import { presentCredentialContinuation } from "@/lib/server/desktopCredentialPresentation";
+import { StagedPasswordForm } from "../staged-forms";
+
+export const dynamic = "force-dynamic";
+export const metadata = { title: "设置新密码", robots: { index: false, follow: false } };
+
+/**
+ * The single new-password continuation (ADR 0020): the active flow-owned
+ * sealed relay grant — or the ordinary Web sealed attempt — is resolved with
+ * the current account/user/session fingerprint, revisions and absolute
+ * deadlines BEFORE rendering. The sealed attempt and its secret stay
+ * server-side; only the new password crosses the form, submitted through a
+ * server action. A stale, expired or foreign flow fails closed to Settings.
+ */
+export default async function StagedPasswordPage() {
+  const view = await presentCredentialContinuation("password");
+  if (!view || (view.intent !== "set_password" && view.intent !== "change_password")) {
+    redirect("/workspace/settings?link=error");
+  }
+  return (
+    <StagedPasswordForm
+      intent={view.intent}
+      scope={{
+        operationRef: view.operationRef,
+        accountId: view.accountId,
+        userId: view.userId,
+        accountRevision: view.accountRevision,
+        userRevision: view.userRevision,
+      }}
+    />
+  );
+}

@@ -1,0 +1,133 @@
+-- macOS system authentication handoff (ADR 0019) and credential proof rounds
+-- (ADR 0020). One backend state machine owns the durable protocol:
+-- `prepared -> authorizing -> approved -> consumed` with terminal `cancelled`
+-- and `expired`. Opaque secrets are hashed at rest; the raw native state lives
+-- only in native memory and in short-lived sealed browser/WK cookies.
+--
+-- Purpose `login` keeps the v1 login handoff. Purpose `credential_round` with
+-- role `current`/`target` relays one existing phase-one credential operation
+-- round; the unreleased v1 direct-link purpose is intentionally not present.
+
+CREATE TABLE desktop_auth_attempts (
+  id uuid PRIMARY KEY,
+  provider text NOT NULL CHECK (provider IN ('apple', 'google')),
+  purpose text NOT NULL CHECK (purpose IN ('login', 'credential_round')),
+  role text NOT NULL CHECK (role IN ('login', 'current', 'target')),
+  protocol_version integer NOT NULL CHECK (protocol_version IN (1, 2)),
+  -- Exact Web origin and backend environment this attempt is bound to.
+  web_origin text NOT NULL CHECK (length(web_origin) BETWEEN 1 AND 500),
+  backend_environment text NOT NULL CHECK (length(backend_environment) BETWEEN 1 AND 500),
+  client_label text NOT NULL CHECK (length(client_label) BETWEEN 1 AND 80),
+  status text NOT NULL CHECK (
+    status IN ('prepared', 'authorizing', 'approved', 'consumed', 'cancelled', 'expired')
+  ),
+  -- S256 (base64url) of the native one-time-code verifier.
+  code_challenge text NOT NULL CHECK (code_challenge ~ '^[A-Za-z0-9_-]{43,128}$'),
+  -- sha256 hex of the raw native state. The raw state is never recoverable here.
+  state_hash text NOT NULL CHECK (state_hash ~ '^[a-f0-9]{64}$'),
+  -- sha256 hex of the attempt-specific HttpOnly WK pairing secret (random 32
+  -- bytes, returned exactly once to the WK prepare response, hash-only here).
+  pairing_secret_hash text NOT NULL UNIQUE CHECK (pairing_secret_hash ~ '^[a-f0-9]{64}$'),
+  -- Initiating authentication fingerprint: explicit 'anonymous' for a
+  -- signed-out login start, otherwise a one-way hash of the presented session
+  -- token. An intervening login or account switch is a mismatch and can never
+  -- be overwritten by a delayed prepare/consume/cancel response.
+  auth_fingerprint text NOT NULL CHECK (
+    auth_fingerprint = 'anonymous' OR auth_fingerprint ~ '^[a-f0-9]{64}$'
+  ),
+  auth_scope text NOT NULL CHECK (auth_scope IN ('anonymous', 'authenticated')),
+  -- Frozen initiating scope read from the server session and the WK sealed
+  -- operation state. Client-supplied IDs are comparison constraints only.
+  account_id uuid,
+  user_id uuid,
+  session_id uuid,
+  expected_account_revision integer CHECK (expected_account_revision IS NULL OR expected_account_revision > 0),
+  expected_user_revision integer CHECK (expected_user_revision IS NULL OR expected_user_revision > 0),
+  credential_fingerprint text CHECK (credential_fingerprint IS NULL OR credential_fingerprint ~ '^[a-f0-9]{64}$'),
+  -- Credential-round frozen operation (ADR 0020): opaque sealed flow/round
+  -- references, exact intent and the absolute original deadline. Resealing,
+  -- target start, return or result read can never extend these.
+  flow_ref text CHECK (flow_ref IS NULL OR length(flow_ref) BETWEEN 8 AND 200),
+  round_ref text CHECK (round_ref IS NULL OR length(round_ref) BETWEEN 8 AND 200),
+  intent text CHECK (
+    intent IS NULL OR intent IN ('link_provider', 'unlink_provider', 'set_password', 'change_password')
+  ),
+  target_provider text CHECK (
+    target_provider IS NULL OR target_provider IN ('apple', 'google', 'password')
+  ),
+  flow_deadline_at timestamptz,
+  original_proof_at timestamptz,
+  -- Target rounds bind the existing credential attempt's exact challenge; the
+  -- current round mints exactly one attempt and records it here.
+  credential_attempt_id uuid REFERENCES credential_change_attempts(id),
+  -- Approved verified proof reference (never a provider token).
+  provider_challenge_id uuid,
+  approved_subject_hash text CHECK (approved_subject_hash IS NULL OR approved_subject_hash ~ '^[a-f0-9]{64}$'),
+  approved_email text,
+  approved_email_verified boolean,
+  approved_display_name text CHECK (approved_display_name IS NULL OR length(approved_display_name) <= 200),
+  approved_at timestamptz,
+  approved_redeemed_at timestamptz,
+  -- One-use short code (at most one minute), stored hashed.
+  code_hash text CHECK (code_hash IS NULL OR code_hash ~ '^[a-f0-9]{64}$'),
+  code_expires_at timestamptz,
+  -- Durable paired result for lost-response recovery. Read-only afterwards.
+  result jsonb,
+  result_committed_at timestamptz,
+  acknowledged_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  prepared_at timestamptz NOT NULL DEFAULT now(),
+  authorizing_at timestamptz,
+  consumed_at timestamptz,
+  cancelled_at timestamptz,
+  expires_at timestamptz NOT NULL,
+  CHECK (status <> 'approved' OR approved_at IS NOT NULL),
+  CHECK ((code_hash IS NULL) = (code_expires_at IS NULL)),
+  CHECK (NOT (status = 'consumed' AND consumed_at IS NULL)),
+  CHECK (NOT (status = 'cancelled' AND cancelled_at IS NULL)),
+  CHECK ((account_id IS NULL) = (user_id IS NULL)),
+  -- Credential rounds are always an authenticated, fully frozen operation.
+  CHECK (purpose <> 'credential_round' OR (
+    role IN ('current', 'target') AND auth_scope = 'authenticated'
+      AND account_id IS NOT NULL AND session_id IS NOT NULL
+      AND flow_ref IS NOT NULL AND round_ref IS NOT NULL
+      AND intent IS NOT NULL AND flow_deadline_at IS NOT NULL
+      AND expected_account_revision IS NOT NULL AND expected_user_revision IS NOT NULL
+  )),
+  CHECK (purpose <> 'login' OR (role = 'login' AND flow_ref IS NULL AND intent IS NULL)),
+  CHECK (NOT (role = 'target' AND credential_attempt_id IS NULL)),
+  CHECK (NOT (intent = 'link_provider' AND target_provider IS NULL)),
+  CHECK (NOT (intent = 'unlink_provider' AND target_provider IS NULL)),
+  CHECK (NOT (intent IN ('set_password', 'change_password') AND target_provider IS NOT NULL AND target_provider <> 'password')),
+  CHECK (auth_scope = 'anonymous' OR session_id IS NOT NULL),
+  FOREIGN KEY (account_id, user_id) REFERENCES users(account_id, id)
+);
+
+CREATE INDEX desktop_auth_attempts_account_idx
+  ON desktop_auth_attempts(account_id, user_id, created_at);
+CREATE INDEX desktop_auth_attempts_open_idx
+  ON desktop_auth_attempts(expires_at)
+  WHERE status IN ('prepared', 'authorizing', 'approved');
+CREATE INDEX desktop_auth_attempts_flow_idx
+  ON desktop_auth_attempts(flow_ref, round_ref);
+
+-- Classified cleanup and data-inventory coverage: the table is account-scoped
+-- identity history and carries the Lab write guard like every account table.
+INSERT INTO lab_test_workspace_table_manifest(table_name, scope)
+  VALUES ('desktop_auth_attempts', 'account');
+
+-- Cancellation of an uncommitted target revokes exactly that operation's
+-- unused credential grant (ADR 0020 recovery) and records the revocation in
+-- the account audit trail under its own explicit kind.
+ALTER TABLE account_access_events DROP CONSTRAINT account_access_events_kind_check;
+ALTER TABLE account_access_events ADD CONSTRAINT account_access_events_kind_check
+  CHECK (kind IN (
+    'profile', 'workspace', 'member', 'transfer', 'revoke_session', 'onboarding',
+    'link_provider', 'unlink_provider', 'set_password', 'change_password',
+    'reconciliation', 'desktop_grant_revoked'
+  ));
+
+CREATE TRIGGER lab_test_workspace_write_guard BEFORE INSERT OR UPDATE ON desktop_auth_attempts
+  FOR EACH ROW EXECUTE FUNCTION lab_test_workspace_write_guard();
+CREATE TRIGGER account_retirement_fence BEFORE INSERT OR UPDATE ON desktop_auth_attempts
+  FOR EACH ROW EXECUTE FUNCTION enforce_account_retirement_fence('account_id');

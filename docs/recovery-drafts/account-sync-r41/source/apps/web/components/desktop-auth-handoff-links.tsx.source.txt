@@ -1,0 +1,77 @@
+"use client";
+
+import { useEffect, useState, type ReactNode } from "react";
+
+/**
+ * Capability-gated provider handoff links (ADR 0019).
+ *
+ * A capable native host publishes display-only `authProtocolVersion` metadata
+ * into the page. Only then do the provider controls become plain same-origin
+ * `/desktop-auth/request` links for the native handoff; every other host keeps
+ * the existing Web OAuth buttons. The capability is display-only and never
+ * authority: the server rechecks origin, session, pairing and state.
+ */
+export function DesktopAuthHandoffLinks({
+  purpose,
+  providers,
+  fallback,
+}: {
+  purpose: "login" | "link";
+  providers: Array<{
+    id: "apple" | "google";
+    label: string;
+    disabled?: boolean;
+    className?: string;
+  }>;
+  fallback: ReactNode;
+}) {
+  const [capable, setCapable] = useState(false);
+  useEffect(() => {
+    const capability = (
+      window as Window & {
+        talentSignalDesktop?: { authProtocolVersion?: number };
+      }
+    ).talentSignalDesktop;
+    setCapable(
+      typeof capability?.authProtocolVersion === "number" &&
+        capability.authProtocolVersion >= 1,
+    );
+  }, []);
+  if (!capable) return <>{fallback}</>;
+  return (
+    <div>
+      {providers.map((provider) =>
+        provider.disabled ? (
+          <button key={provider.id} type="button" disabled className={provider.className}>
+            {provider.label} <small>暂不可用</small>
+          </button>
+        ) : (
+          <a
+            key={provider.id}
+            className={provider.className}
+            href={`/desktop-auth/request?provider=${provider.id}&purpose=${purpose}`}
+          >
+            {provider.label}
+          </a>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** True when the visible host publishes the display-only handoff capability. */
+export function useDesktopHandoffCapability(): boolean {
+  const [capable, setCapable] = useState(false);
+  useEffect(() => {
+    const capability = (
+      window as Window & {
+        talentSignalDesktop?: { authProtocolVersion?: number };
+      }
+    ).talentSignalDesktop;
+    setCapable(
+      typeof capability?.authProtocolVersion === "number" &&
+        capability.authProtocolVersion >= 1,
+    );
+  }, []);
+  return capable;
+}

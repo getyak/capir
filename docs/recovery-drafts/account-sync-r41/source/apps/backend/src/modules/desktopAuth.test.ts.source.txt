@@ -1,0 +1,53 @@
+import { describe, expect, it } from "vitest";
+
+import type { FastifyRequest } from "fastify";
+
+import {
+  assertMainFrameNavigation,
+  desktopAuthFingerprint,
+  desktopCodeChallenge,
+  desktopWebOrigin,
+} from "./desktopAuth.js";
+import { sha256 } from "../lib/hash.js";
+
+/**
+ * Pure handoff helpers. State-machine, endpoint and tampering coverage lives in
+ * desktopAuth.integration.test.ts against real PostgreSQL; provider proofs
+ * there are injected verifier fixtures and are never described as live OAuth.
+ */
+
+function requestWith(headers: Record<string, string | undefined>): FastifyRequest {
+  return { headers } as unknown as FastifyRequest;
+}
+
+describe("desktop handoff helpers", () => {
+  it("computes the RFC 7636 S256 code challenge", () => {
+    // Test vector from RFC 7636 appendix B.
+    expect(desktopCodeChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")).toBe(
+      "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    );
+  });
+
+  it("binds an explicit anonymous fingerprint and one-way session fingerprints", () => {
+    expect(desktopAuthFingerprint(null)).toBe("anonymous");
+    expect(desktopAuthFingerprint(undefined)).toBe("anonymous");
+    const fingerprint = desktopAuthFingerprint("session-token-value");
+    expect(fingerprint).toBe(sha256("session-token-value"));
+    expect(fingerprint).not.toContain("session-token-value");
+  });
+
+  it("requires an exact Origin header", () => {
+    expect(desktopWebOrigin(requestWith({ origin: "http://127.0.0.1:4608" }))).toBe(
+      "http://127.0.0.1:4608",
+    );
+    expect(() => desktopWebOrigin(requestWith({}))).toThrow(/origin/i);
+    expect(() => desktopWebOrigin(requestWith({ origin: "" }))).toThrow(/origin/i);
+  });
+
+  it("refuses embedded (iframe) and foreign-frame entries", () => {
+    expect(() => assertMainFrameNavigation(requestWith({ "sec-fetch-dest": "document" }))).not.toThrow();
+    expect(() => assertMainFrameNavigation(requestWith({}))).not.toThrow();
+    expect(() => assertMainFrameNavigation(requestWith({ "sec-fetch-dest": "iframe" }))).toThrow(/main window/i);
+    expect(() => assertMainFrameNavigation(requestWith({ "sec-fetch-dest": "nested-document" }))).toThrow(/main window/i);
+  });
+});

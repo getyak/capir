@@ -1,0 +1,264 @@
+import {
+  TalentSignalHttpError,
+  type DesktopAuthConsumeResponse,
+} from "@talent-signal/contracts";
+import { cookies } from "next/headers";
+import { encode } from "next-auth/jwt";
+
+import { authCookieSecure } from "@/lib/auth-cookie-policy";
+import { AUTH_SESSION_COOKIE, authSecret } from "@/lib/server/backendAuth";
+import {
+  clearDesktopContinuation,
+  desktopBackendClient,
+  desktopSessionToken,
+  pairingCookieName,
+  requestWebOrigin,
+  resolveCredentialFlow,
+  sealDesktopContinuation,
+  sealDesktopCommittedReceipt,
+} from "@/lib/server/desktopAuth";
+import {
+  desktopReceiptResponse,
+  isDesktopTransportRequest,
+  requireDesktopRequestRef,
+} from "@/lib/server/desktopReceipt";
+import { TEST_WORKSPACE_COOKIE } from "@/lib/server/testWorkspaceSession";
+
+export const dynamic = "force-dynamic";
+
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 8;
+
+function rejected(status: number, code: string, message: string): Response {
+  return Response.json({ error: { code, message } }, { status });
+}
+
+function seeOther(location: string): Response {
+  return new Response(null, {
+    status: 303,
+    headers: { location, "cache-control": "private, no-store" },
+  });
+}
+
+/**
+ * Same-origin consume inside the ORIGINAL WKWebView (ADR 0019 / ADR 0020).
+ * The pairing cookie, one-use code and native PKCE verifier are all required;
+ * the backend atomically rechecks the unchanged initiating authentication
+ * fingerprint, the live session and every frozen binding before creating an
+ * independent device session (login) or committing one credential-round step.
+ * Only this attempt's pairing cookie is ever cleared by the response; an
+ * ambiguous transport failure reports `unknown` and never replays the one-use
+ * mutation.
+ */
+export async function POST(request: Request): Promise<Response> {
+  const webOrigin = await requestWebOrigin();
+  if (request.headers.get("origin") !== webOrigin) {
+    return rejected(403, "DESKTOP_AUTH_ORIGIN_REQUIRED", "This request origin is not allowed.");
+  }
+  const destination = request.headers.get("sec-fetch-dest");
+  if (destination && destination !== "document") {
+    return rejected(403, "DESKTOP_AUTH_FRAME_REJECTED", "This sign-in flow must start in the main window.");
+  }
+
+  let body: {
+    attempt_id?: string;
+    code?: string;
+    verifier?: string;
+    attempt_secret?: string;
+    credential_attempt_id?: string;
+    role?: string;
+    purpose?: string;
+    intent?: string;
+    target_provider?: string;
+  };
+  try {
+    body = await request.json();
+  } catch {
+    return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+  }
+  const attemptId = typeof body.attempt_id === "string" ? body.attempt_id : "";
+  const code = typeof body.code === "string" ? body.code : "";
+  const verifier = typeof body.verifier === "string" ? body.verifier : "";
+  if (
+    !/^[A-Za-z0-9-]{8,200}$/.test(attemptId) ||
+    !/^[A-Za-z0-9_-]{32,200}$/.test(code) ||
+    !/^[A-Za-z0-9_-]{32,200}$/.test(verifier)
+  ) {
+    return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+  }
+
+  // Capable-host request references are strict correlation only and are
+  // validated BEFORE any backend transition or cookie mutation.
+  let transportRef: string | null = null;
+  if (isDesktopTransportRequest(request)) {
+    const required = requireDesktopRequestRef(request, body as Record<string, unknown>);
+    if (typeof required !== "string") return required.error;
+    transportRef = required;
+  }
+
+  const jar = await cookies();
+  const pairingName = pairingCookieName(attemptId);
+  const pairingSecret = jar.get(pairingName)?.value ?? "";
+  // The attempt's pairing/verifier correlation and original deadline are
+  // retained until the REAL server acknowledgment or an honest terminal
+  // cancellation: a successful WK navigation or a native callback is not an
+  // acknowledgment, and an uncertain outcome must stay recoverable through the
+  // paired result read instead of losing its authority here.
+  const failure = (status: string, purpose: "login" | "credential_round") =>
+    seeOther(
+      purpose === "credential_round"
+        ? `/workspace/settings?desktop-auth=${encodeURIComponent(status)}&attempt=${encodeURIComponent(attemptId)}`
+        : `/login?desktop-auth=${encodeURIComponent(status)}`,
+    );
+  if (!pairingSecret) return failure("error", "login");
+
+  const client = desktopBackendClient();
+  const token = await desktopSessionToken();
+  // The HttpOnly grant secret stays SERVER-SIDE: it is resolved from the
+  // sealed flow/continuation matching the current sealed operation and
+  // injected server-to-server. A client- or native-supplied secret is never
+  // trusted and never enters a URL, page state or the native bridge.
+  let serverAttemptSecret: string | undefined;
+  let semanticFlowRef: string | undefined;
+  let semanticGrantRef: string | undefined;
+  let semanticDeadline: string | undefined;
+  if (body.role === "target" || body.purpose === "credential_round") {
+    const flow = await resolveCredentialFlow(body.role === "target" ? "target" : "current");
+    // Any client comparator is checked against the sealed flow; comparators
+    // are immutable expectations, never authority.
+    const comparatorMismatch =
+      (body.intent && flow && body.intent !== flow.expected.intent) ||
+      (body.target_provider && flow && flow.expected.target_provider &&
+        body.target_provider !== flow.expected.target_provider);
+    if (comparatorMismatch) {
+      return rejected(409, "DESKTOP_AUTH_STALE_SCOPE", "This page is out of date. Refresh Settings and start again.");
+    }
+    serverAttemptSecret = flow?.expected.attempt_secret;
+    semanticFlowRef = flow?.expected.flow_ref;
+    semanticGrantRef = flow?.expected.credential_attempt_id;
+    semanticDeadline = flow?.expected.flow_deadline_at;
+  }
+  let result: DesktopAuthConsumeResponse;
+  try {
+    result = await client.consumeDesktopAuth(
+      {
+        attempt_id: attemptId,
+        code,
+        verifier,
+        pairing_secret: pairingSecret,
+        ...(serverAttemptSecret ? { attempt_secret: serverAttemptSecret } : {}),
+      },
+      { origin: webOrigin, accessToken: token ?? undefined },
+    );
+  } catch (error) {
+    // A transport failure has an AMBIGUOUS outcome: report it truthfully and
+    // recover through the read-only paired result, never by replaying this
+    // one-use mutation. Pairing is KEPT for that recovery.
+    if (!(error instanceof TalentSignalHttpError)) return failure("unknown", "credential_round");
+    return failure(
+      error.code === "DESKTOP_AUTH_ATTEMPT_EXPIRED"
+        ? "expired"
+        : error.code === "SESSION_INVALID" || error.code === "DESKTOP_AUTH_FINGERPRINT_CHANGED"
+          ? "changed"
+          : "error",
+      "credential_round",
+    );
+  }
+
+  if (result.status === "logged_in") {
+    // Ordinary login is terminal: this window's session is established and no
+    // credential continuation exists.
+    jar.delete(pairingName);
+    const session = result.session;
+    const tokenValue = await encode({
+      secret: authSecret(),
+      salt: AUTH_SESSION_COOKIE,
+      maxAge: SESSION_MAX_AGE_SECONDS,
+      token: {
+        sub: session.user.id,
+        email: session.user.email,
+        name: session.user.display_name,
+        backendAccessToken: session.access_token,
+        backendAccountId: session.account.id,
+        backendAccountName: session.account.name,
+        backendAccountSlug: session.account.slug,
+        backendExpiresAt: session.expires_at,
+        backendRole: session.user.role,
+        backendUserId: session.user.id,
+        backendUsername: session.user.username,
+      },
+    });
+    jar.set(AUTH_SESSION_COOKIE, tokenValue, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      secure: authCookieSecure(),
+      maxAge: SESSION_MAX_AGE_SECONDS,
+    });
+    // Ordinary primary-login boundary: retire any stale test-workspace selection.
+    jar.delete(TEST_WORKSPACE_COOKIE);
+    if (transportRef) {
+      // Capable host: the real session cookie travels on THIS response; the
+      // receipt names the fixed return and invents no credential ACK.
+      return desktopReceiptResponse({
+        ref: transportRef,
+        attemptID: attemptId,
+        purpose: "login",
+        role: "login",
+        outcome: "session-established",
+      });
+    }
+    return seeOther("/workspace");
+  }
+
+  if (result.status === "completed") {
+    if (result.context) await sealDesktopCommittedReceipt(attemptId, result.context);
+    if (transportRef) {
+      return desktopReceiptResponse({
+        ref: transportRef,
+        attemptID: attemptId,
+        purpose: "credential_round",
+        role: result.context?.role ?? (body.role === "target" ? "target" : "current"),
+        outcome: "committed",
+        intent: result.context?.intent ?? undefined,
+        flowRef: result.context?.flow_ref ?? semanticFlowRef,
+        grantRef: result.context?.credential_attempt_id ?? semanticGrantRef,
+        deadline: result.context?.expires_at ?? semanticDeadline,
+      });
+    }
+    await clearDesktopContinuation(attemptId);
+    // A committed immediate effect is terminal; the pairing authority is no
+    // longer needed for this round.
+    jar.delete(pairingName);
+    const method =
+      result.result && typeof result.result === "object" && "status" in result.result
+        ? String((result.result as { status?: string }).status ?? "")
+        : "";
+    return seeOther(
+      `/workspace/settings?desktop-auth=done&method=${encodeURIComponent(method || "completed")}`,
+    );
+  }
+
+  // awaiting_password | awaiting_target: the server-sealed WK continuation is
+  // the only carrier of the one-use credential-attempt secret.
+  await sealDesktopContinuation(attemptId, result.continuation);
+  if (transportRef) {
+    return desktopReceiptResponse({
+      ref: transportRef,
+      attemptID: attemptId,
+      purpose: "credential_round",
+      role: result.continuation.role,
+      outcome: result.status === "awaiting_password" ? "continue-password" : "continue-target",
+      intent: result.continuation.intent,
+      flowRef: result.continuation.flow_ref ?? semanticFlowRef,
+      grantRef: result.continuation.credential_attempt_id ?? semanticGrantRef,
+      deadline: result.continuation.expires_at && semanticDeadline
+        ? new Date(Math.min(Date.parse(result.continuation.expires_at), Date.parse(semanticDeadline))).toISOString()
+        : result.continuation.expires_at ?? semanticDeadline,
+    });
+  }
+  return seeOther(
+    result.status === "awaiting_password"
+      ? `/workspace/settings?desktop-auth=password&attempt=${encodeURIComponent(attemptId)}&flow=${encodeURIComponent(result.continuation.flow_ref)}`
+      : `/workspace/settings?desktop-auth=target&attempt=${encodeURIComponent(attemptId)}&flow=${encodeURIComponent(result.continuation.flow_ref)}&provider=${encodeURIComponent(result.continuation.target_provider ?? "")}`,
+  );
+}

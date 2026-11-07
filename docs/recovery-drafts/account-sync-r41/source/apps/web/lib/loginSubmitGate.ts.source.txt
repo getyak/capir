@@ -1,0 +1,33 @@
+"use client";
+
+/**
+ * Synchronous single-flight gate shared by EVERY interactive primary-login
+ * control (password submit, Enter, provider buttons, alternate-method clicks
+ * and rapid retries) — ADR 0021. A render-time disabled flag alone is not
+ * sufficient: the gate is acquired synchronously at submit time, before any
+ * request leaves, and an uncertain outcome keeps it closed until the user
+ * takes the explicit new first-party login entry.
+ */
+
+const blocked = new Set<string>();
+const uncertain = new Set<string>();
+
+export function beginLoginSubmission(key: string): boolean {
+  if (blocked.has(key) || uncertain.has(key)) return false;
+  blocked.add(key);
+  return true;
+}
+
+export function endLoginSubmission(key: string, outcome: "done" | "uncertain"): void {
+  blocked.delete(key);
+  if (outcome === "uncertain") uncertain.add(key);
+}
+
+/** A real read-only status check or an explicit new entry releases the key. */
+export function clearLoginUncertainty(key: string): void {
+  uncertain.delete(key);
+}
+
+export function loginSubmissionBlocked(key: string): boolean {
+  return blocked.has(key) || uncertain.has(key);
+}

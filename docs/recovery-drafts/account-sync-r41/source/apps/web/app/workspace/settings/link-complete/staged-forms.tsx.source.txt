@@ -1,0 +1,192 @@
+"use client";
+
+import { useState } from "react";
+
+import {
+  completeStagedPassword,
+  continueTargetLink,
+  type DesktopHandoff,
+  type LoginMethodActionState,
+} from "@/app/workspace/settings/login-methods/actions";
+import { useDesktopHandoffCapability } from "@/components/desktop-auth-handoff-links";
+import styles from "@/components/account-sign-in-methods.module.css";
+
+export type RenderedOperationScope = {
+  operationRef: string;
+  accountId: string;
+  userId: string;
+  accountRevision: number;
+  userRevision: number;
+};
+
+function ScopeFields({ scope }: { scope: RenderedOperationScope }) {
+  return (
+    <>
+      <input type="hidden" name="operationRef" value={scope.operationRef} />
+      <input type="hidden" name="accountId" value={scope.accountId} />
+      <input type="hidden" name="userId" value={scope.userId} />
+      <input type="hidden" name="accountRevision" value={String(scope.accountRevision)} />
+      <input type="hidden" name="userRevision" value={scope.userRevision} />
+    </>
+  );
+}
+
+/**
+ * Display-only host capability flag (ADR 0020): a capable native host routes
+ * this operation's proof/completion through its own transport; an ordinary
+ * browser keeps the existing Web flow. The flag is never authority — every
+ * binding is revalidated server-side against the sealed operation.
+ */
+function NativeHostField() {
+  const nativeHandoff = useDesktopHandoffCapability();
+  return <input type="hidden" name="nativeHost" value={nativeHandoff ? "1" : "0"} />;
+}
+
+/** The fixed first-party result path; no query, body or secret, ever. */
+export const DESKTOP_CHECK_RESULT_HREF = "/desktop-auth/check-result";
+
+/**
+ * Bounded navigation allowlist for native handoffs (ADR 0020): only the fixed
+ * result path or the server-computed credential-round request link, opened as
+ * a FULL-DOCUMENT GET (window.location.assign) so the native host can
+ * intercept the exact main-frame URL. A Next Server Action redirect travels as
+ * an RSC fetch and is never interceptable. Anything outside the two fixed
+ * shapes is dropped — this is never a generalized URL bridge. The host still
+ * independently validates the fixed routes and authority; a server UI result
+ * is not authentication proof.
+ */
+export function applyDesktopHandoff(handoff: DesktopHandoff): void {
+  const path = handoff.kind === "check-result" ? DESKTOP_CHECK_RESULT_HREF : handoff.requestPath;
+  if (path === DESKTOP_CHECK_RESULT_HREF || path.startsWith("/desktop-auth/request?")) {
+    window.location.assign(path);
+  }
+}
+
+/**
+ * One client dispatch for a staged form: apply a native handoff result as a
+ * full-document GET, render any returned UI state, and keep ordinary Web's
+ * real Next/Auth.js redirects (the server-action boundary already performs
+ * those navigations and rejects with the redirect control-flow error).
+ */
+export async function runHandoffAction(
+  run: () => Promise<LoginMethodActionState | void>,
+  onState: (state: LoginMethodActionState) => void,
+): Promise<void> {
+  try {
+    const result = await run();
+    if (result && result.handoff) {
+      applyDesktopHandoff(result.handoff);
+      return;
+    }
+    if (result) onState(result);
+  } catch (error) {
+    const digest =
+      typeof error === "object" && error !== null && "digest" in error
+        ? String((error as { digest?: unknown }).digest)
+        : "";
+    if (!digest.startsWith("NEXT_REDIRECT")) throw error;
+  }
+}
+
+/** Collect the NEW password after provider reauthentication. */
+export function StagedPasswordForm({ intent, scope, initialState }: {
+  intent: "set_password" | "change_password";
+  scope: RenderedOperationScope;
+  /** Restorable UI state (tests and recovery); never authority. */
+  initialState?: LoginMethodActionState;
+}) {
+  const [state, setState] = useState<LoginMethodActionState>(initialState ?? {});
+  const [pending, setPending] = useState(false);
+  // An UNKNOWN completion blocks every resubmission: a blind duplicate write
+  // could double-apply a change that may already be committed. Known input and
+  // credential errors stay retryable in place.
+  const blocked = Boolean(state.unknown);
+  return (
+    <section className={styles.section} aria-labelledby="staged-password-title">
+      <h2 id="staged-password-title">{intent === "change_password" ? "设置新密码" : "设置密码"}</h2>
+      <p className={styles.secondary}>当前身份已验证。新密码只在这一步输入，不会经过链接或网址。</p>
+      <form
+        className={styles.stepUp}
+        action={async (formData: FormData) => {
+          if (blocked) return;
+          setPending(true);
+          try {
+            await runHandoffAction(
+              () => completeStagedPassword({}, formData),
+              setState,
+            );
+          } finally {
+            setPending(false);
+          }
+        }}
+      >
+        <ScopeFields scope={scope} />
+        <NativeHostField />
+        <label className={styles.field}>
+          <span>新密码</span>
+          <input name="newPassword" type="password" autoComplete="new-password" required minLength={8} maxLength={128} disabled={blocked} />
+        </label>
+        <div className={styles.actions}>
+          <button type="submit" className={styles.primary} disabled={pending || blocked} aria-busy={pending}>
+            {pending ? "正在保存…" : "保存密码"}
+          </button>
+        </div>
+        {blocked ? (
+          // Uncertain outcome: no claimed success, no blind retry, and an
+          // ACTUAL plain fixed check-result action (full-document GET) — the
+          // native host runs its paired read-only result and final ACK only
+          // when that read shows committed. A plain link is presentation and
+          // never authority.
+          <>
+            <p role="status" className={styles.error}>
+              暂时无法确认这次更改的结果。不要重复提交；更改可能已经生效。
+            </p>
+            <p>
+              <a href={DESKTOP_CHECK_RESULT_HREF}>核对结果</a>
+            </p>
+          </>
+        ) : (
+          <p aria-live="polite" className={state.error ? styles.error : styles.notice}>
+            {state.error ?? (state.saved ? "已保存并核验。" : "")}
+          </p>
+        )}
+      </form>
+    </section>
+  );
+}
+
+/** Continue the second (new-provider) proof of a staged linking operation. */
+export function StagedTargetLinkForm({ targetProvider, note, scope }: {
+  targetProvider: "apple" | "google";
+  note: string;
+  scope: RenderedOperationScope;
+}) {
+  const [pending, setPending] = useState(false);
+  return (
+    <section className={styles.section} aria-labelledby="staged-link-title">
+      <h2 id="staged-link-title">{`将 ${targetProvider === "google" ? "Google" : "Apple"} 绑定到这个账户`}</h2>
+      <p className={styles.secondary}>{note}</p>
+      <form
+        action={async (formData: FormData) => {
+          setPending(true);
+          try {
+            await runHandoffAction(
+              () => continueTargetLink(formData),
+              () => {},
+            );
+          } finally {
+            setPending(false);
+          }
+        }}
+      >
+        <ScopeFields scope={scope} />
+        <NativeHostField />
+        <div className={styles.actions}>
+          <button type="submit" className={styles.primary} disabled={pending} aria-busy={pending}>
+            {pending ? "正在连接…" : "继续绑定"}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}

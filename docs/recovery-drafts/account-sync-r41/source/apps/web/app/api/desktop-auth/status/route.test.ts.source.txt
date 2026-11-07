@@ -1,0 +1,121 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { encode } from "next-auth/jwt";
+
+const jar = vi.hoisted(() => new Map<string, string>());
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) => jar.has(name) ? { name, value: jar.get(name)! } : undefined,
+    set: (name: string, value: string) => jar.set(name, value),
+    delete: (name: string) => jar.delete(name),
+  }),
+  headers: async () => new Headers({
+    host: "status.example.invalid",
+    cookie: [...jar].map(([name, value]) => `${name}=${value}`).join("; "),
+  }),
+}));
+
+import { AUTH_SESSION_COOKIE, type BackendSessionClaims } from "@/lib/server/backendAuth";
+import { setTestWorkspaceSession, TEST_WORKSPACE_COOKIE } from "@/lib/server/testWorkspaceSession";
+import { GET } from "./route";
+
+const primary: BackendSessionClaims = {
+  backendAccessToken: "primary-status-test-token",
+  backendAccountId: "10000000-0000-4000-8000-000000000001",
+  backendAccountName: "Primary account",
+  backendAccountSlug: "primary-status-test",
+  backendExpiresAt: "2099-01-01T00:00:00.000Z",
+  backendRole: "admin",
+  backendUserId: "10000000-0000-4000-8000-000000000002",
+  backendUsername: "primary-status-test",
+};
+const secondary: BackendSessionClaims = {
+  ...primary,
+  backendAccessToken: "secondary-status-test-token",
+  backendAccountId: "20000000-0000-4000-8000-000000000001",
+  backendAccountName: "Secondary workspace",
+  backendUserId: "20000000-0000-4000-8000-000000000002",
+};
+let revoked = false;
+const calls: string[] = [];
+const expectedPrimary = {
+  authenticated: true,
+  actor: {
+    account_id: primary.backendAccountId,
+    account_name: primary.backendAccountName,
+    user_id: primary.backendUserId,
+  },
+};
+
+beforeEach(async () => {
+  jar.clear(); calls.length = 0; revoked = false;
+  vi.stubEnv("AUTH_SECRET", "primary-status-test-sealing-secret");
+  vi.stubEnv("TALENT_SIGNAL_BACKEND_URL", "http://127.0.0.1:44399");
+  jar.set(AUTH_SESSION_COOKIE, await encode({
+    secret: process.env.AUTH_SECRET!, salt: AUTH_SESSION_COOKIE,
+    maxAge: 3600, token: { ...primary },
+  }));
+  // Only network responses are controlled. Cookie encryption, primary-vs-test
+  // selection, the contract client and the status route are production code.
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+    expect(url).toBe("http://127.0.0.1:44399/v1/account/settings");
+    const authorization = new Headers(init.headers).get("authorization")!;
+    calls.push(authorization);
+    if (authorization === `Bearer ${primary.backendAccessToken}` && revoked) {
+      return Response.json({ error: { code: "SESSION_INVALID", message: "Revoked fixture session" } }, { status: 401 });
+    }
+    const actor = authorization === `Bearer ${primary.backendAccessToken}` ? primary : secondary;
+    return Response.json({ workspace: { id: actor.backendAccountId, name: actor.backendAccountName }, user: { id: actor.backendUserId } });
+  }));
+});
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+async function selectSecondary() {
+  await setTestWorkspaceSession(primary, {
+    workspaceId: secondary.backendAccountId,
+    entryId: "20000000-0000-4000-8000-000000000003",
+    name: "Synthetic secondary workspace",
+    claims: secondary,
+  });
+}
+async function readStatus() {
+  const before = [...jar];
+  const response = await GET();
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("private, no-store");
+  expect(response.headers.get("set-cookie")).toBeNull();
+  expect([...jar]).toEqual(before);
+  return response.json();
+}
+
+it("reports only safe live primary identity without refreshing cookies", async () => {
+  expect(await readStatus()).toEqual(expectedPrimary);
+  expect(calls).toEqual([`Bearer ${primary.backendAccessToken}`]);
+});
+it("ignores a valid primary-bound secondary workspace for primary status", async () => {
+  await selectSecondary();
+  expect(await readStatus()).toEqual(expectedPrimary);
+  expect(calls).toEqual([`Bearer ${primary.backendAccessToken}`]);
+});
+it("cannot use a live secondary session to validate a revoked primary", async () => {
+  await selectSecondary(); revoked = true;
+  expect(await readStatus()).toEqual({ authenticated: false, actor: null });
+  expect(calls).toEqual([`Bearer ${primary.backendAccessToken}`]);
+});
+it("a damaged secondary cookie cannot break primary identity readback", async () => {
+  jar.set(TEST_WORKSPACE_COOKIE, "damaged-secondary-fixture");
+  expect(await readStatus()).toEqual(expectedPrimary);
+  expect(calls).toEqual([`Bearer ${primary.backendAccessToken}`]);
+});
+for (const state of ["missing", "malformed"] as const) {
+  it(`a ${state} primary cookie cannot authenticate through a secondary cookie`, async () => {
+    await selectSecondary();
+    if (state === "missing") jar.delete(AUTH_SESSION_COOKIE);
+    else jar.set(AUTH_SESSION_COOKIE, "malformed-primary-fixture");
+    expect(await readStatus()).toEqual({ authenticated: false, actor: null });
+    expect(calls).toEqual([]);
+  });
+}
+it("an unavailable primary backend never reports an authenticated actor", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Controlled network loss"); }));
+  expect(await readStatus()).toEqual({ authenticated: false, actor: null });
+});

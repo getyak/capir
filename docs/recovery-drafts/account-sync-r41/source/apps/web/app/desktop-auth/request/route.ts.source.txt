@@ -1,0 +1,21 @@
+import { DESKTOP_AUTH_REQUEST_PATH, type DesktopAuthPurpose } from "@talent-signal/contracts";
+import { redirect } from "next/navigation";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Plain same-origin request link for capable native hosts. Native intercepts
+ * this exact configured-origin main-frame request path before it loads; an
+ * ordinary browser (or an older host) falls back to the existing Web flow and
+ * never enters an unsupported protocol. Older hosts also get a truthful
+ * update/recovery route, never embedded Google or an unsupported role.
+ */
+export async function GET(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  if (url.pathname !== DESKTOP_AUTH_REQUEST_PATH) {
+    return new Response("Not found", { status: 404 });
+  }
+  const purpose: DesktopAuthPurpose =
+    url.searchParams.get("purpose") === "credential_round" ? "credential_round" : "login";
+  redirect(purpose === "credential_round" ? "/workspace/settings" : "/login");
+}

@@ -1,0 +1,110 @@
+import {
+  DESKTOP_AUTH_CONFIRM_PATH,
+  TalentSignalHttpError,
+  type DesktopAuthProvider,
+} from "@talent-signal/contracts";
+import { redirect } from "next/navigation";
+
+import { signIn } from "@/auth";
+import { bindAppleNonce } from "@/lib/server/apple-session";
+import { bindGoogleNonce } from "@/lib/server/google-session";
+import {
+  clearDesktopBrowserAttempt,
+  desktopBackendClient,
+  desktopReturnPath,
+  readDesktopBrowserAttempt,
+  requestWebOrigin,
+  sealDesktopBrowserAttempt,
+} from "@/lib/server/desktopAuth";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * First-party authorization entry for the system authentication browser
+ * (ASWebAuthenticationSession). The backend verifies the native state against
+ * its stored hash; the raw state is retained only in this jar's short-lived
+ * ATTEMPT-SPECIFIC sealed browser-attempt cookie for the fixed callback.
+ * Provider state/nonce/PKCE cookies are created here, in this browser — never
+ * inside WKWebView and never by copying any cookie jar. Credential rounds use
+ * the frozen phase-one challenge and its exact `oidc_nonce` value; it is fed
+ * to the provider directly and never hashed a second time.
+ */
+export async function GET(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const attemptId = url.searchParams.get("attempt") ?? "";
+  const state = url.searchParams.get("state") ?? "";
+  const webOrigin = await requestWebOrigin();
+  const failure = (status: string) =>
+    new Response(null, {
+      status: 303,
+      headers: {
+        location: `${desktopReturnPath("login")}?desktop-auth=${encodeURIComponent(status)}`,
+        "cache-control": "private, no-store",
+      },
+    });
+  if (
+    !/^[A-Za-z0-9-]{8,200}$/.test(attemptId) ||
+    !/^[A-Za-z0-9_-]{16,200}$/.test(state)
+  ) {
+    return failure("error");
+  }
+
+  const client = desktopBackendClient();
+  let authorized: Awaited<ReturnType<typeof client.authorizeDesktopAuth>>;
+  try {
+    authorized = await client.authorizeDesktopAuth(
+      { attempt_id: attemptId, state },
+      { origin: webOrigin },
+    );
+  } catch (error) {
+    // Owner-specific cleanup: only this attempt's own sealed cookie.
+    await clearDesktopBrowserAttempt(attemptId);
+    if (!(error instanceof TalentSignalHttpError)) throw error;
+    return failure(error.code === "DESKTOP_AUTH_ATTEMPT_EXPIRED" ? "expired" : "error");
+  }
+
+  const existing = await readDesktopBrowserAttempt(attemptId);
+  void existing;
+  await sealDesktopBrowserAttempt({
+    attempt_id: authorized.attempt_id,
+    provider: authorized.provider,
+    purpose: authorized.purpose,
+    role: authorized.role,
+    state,
+    challenge_id: authorized.provider_challenge.challenge_id,
+    web_origin: webOrigin,
+    ...(authorized.flow_ref ? { flow_ref: authorized.flow_ref } : {}),
+    ...(authorized.round_ref ? { round_ref: authorized.round_ref } : {}),
+    ...(authorized.intent ? { intent: authorized.intent } : {}),
+    ...(authorized.target_provider ? { target_provider: authorized.target_provider } : {}),
+    createdAt: new Date().toISOString(),
+  });
+
+  const provider: DesktopAuthProvider = authorized.provider;
+  // `oidc_nonce` is the exact expected value from the bound challenge.
+  const nonce = authorized.oidc_nonce;
+  const redirectTo = `${DESKTOP_AUTH_CONFIRM_PATH}?attempt=${encodeURIComponent(authorized.attempt_id)}`;
+  try {
+    const authorizationURL = await signIn(provider, { redirect: false, redirectTo });
+    if (!authorizationURL) return failure("error");
+    const bound =
+      provider === "google"
+        ? await bindGoogleNonce(authorizationURL, nonce)
+        : await bindAppleNonce(authorizationURL, nonce);
+    return new Response(null, {
+      status: 303,
+      headers: { location: bound, "cache-control": "private, no-store" },
+    });
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "digest" in error &&
+      String((error as { digest?: unknown }).digest).startsWith("NEXT_REDIRECT")
+    ) {
+      throw error;
+    }
+    await clearDesktopBrowserAttempt(attemptId);
+    return failure("error");
+  }
+}
