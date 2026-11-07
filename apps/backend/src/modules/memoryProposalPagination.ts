@@ -85,23 +85,22 @@ export async function readMemoryProposalPage(
   const paginated = request.paginate === true || Boolean(request.cursor);
   const cursorScope: MemoryProposalCursorScope = { ...scope, accountId: auth.accountId,
     userId: auth.userId, loginSessionId: auth.sessionId };
-  let authority: AuthorityRow | undefined;
+  // Every list form repeats the same live authority. Pagination is only a
+  // representation choice, never a caller-controlled permission switch.
+  // token_hash is SHA256(bearer), not a server secret or issuer credential;
+  // reading it here only binds both observations to the same generation.
+  const authority = (await client.query<AuthorityRow>(
+    `WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at) ${authoritySQL(3)}`,
+    [auth.accountId, auth.userId, auth.sessionId],
+  )).rows[0];
+  if (!authority) return changed();
+  const originalBounds = bounds(authority);
   let state: MemoryProposalCursorState | null = null;
   if (paginated) {
-    // Only the exact currently authenticated live session supplies this codec's
-    // material. Its token_hash is SHA256(bearer), derivable by that holder, not
-    // a server secret or proof of cursor issuance. SQL/source gates authorize
-    // every page independently; no hash/key is returned or logged here.
-    authority = (await client.query<AuthorityRow>(
-      `WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at) ${authoritySQL(3)}`,
-      [auth.accountId, auth.userId, auth.sessionId],
-    )).rows[0];
-    if (!authority) return changed();
-    const limits = bounds(authority);
-    if (request.cursor) state = openMemoryProposalCursor(request.cursor, authority.token_hash, cursorScope, limits);
+    if (request.cursor) state = openMemoryProposalCursor(request.cursor, authority.token_hash, cursorScope, originalBounds);
     else state = { snapshotAt: authority.snapshot_at, beforeCreatedAt: authority.snapshot_at,
       beforeId: "00000000-0000-0000-0000-000000000000",
-      validUntilMs: Math.min(limits.sessionExpiresAtMs,
+      validUntilMs: Math.min(originalBounds.sessionExpiresAtMs,
         Date.parse(authority.snapshot_at) + MEMORY_PROPOSAL_CURSOR_TTL_MS) };
   }
   const cursorClause = state
@@ -132,28 +131,14 @@ export async function readMemoryProposalPage(
   }
   const expected = rows.map((row, index) => ({ id: row.id, revision: row.revision, created_at: row.cursor_time,
     item_count: records[index]!.item_count, default_selected_count: records[index]!.default_selected_count }));
-  if (!paginated) {
-    // The legacy first page needs no cursor key, but its already selected
-    // metadata still loses availability on a source/scope/revision withdrawal.
-    if (expected.length) {
-      const complete = (await client.query<{ revalidated: boolean }>(
-        `WITH ${requalifiedSQL(7)} SELECT ${activeScopeSQL}
-          AND (SELECT count(*) FROM qualified) = $8 AS revalidated`,
-        [...params.slice(0, 6), JSON.stringify(expected), expected.length],
-      )).rows[0]?.revalidated;
-      if (complete !== true) return changed();
-    }
-    return { contract_version: CONTRACT_VERSION, proposals: records };
-  }
-  if (!authority || !state) return changed();
-
   // One final SQL snapshot checks both the login and every selected/probe row.
   // Any expiry, source withdrawal, mutation or rotation fails before publishing
   // page metadata. Source eligibility is read directly, with no cached index.
   const envelopeStarted = performance.now();
-  const envelope = (await client.query<AuthorityRow>(
+  const envelope = (await client.query<AuthorityRow & { scope_active: boolean }>(
     `WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at),
-     ${requalifiedSQL(8)} ${authoritySQL(7)} AND ${activeScopeSQL} AND (SELECT count(*) FROM qualified) = $9`,
+     ${requalifiedSQL(8)} SELECT current_auth.*, ${activeScopeSQL} AS scope_active
+     FROM (${authoritySQL(7)}) current_auth WHERE (SELECT count(*) FROM qualified) = $9`,
     [...params, JSON.stringify(expected), expected.length],
   )).rows[0];
   if (!envelope || envelope.token_hash !== authority.token_hash) return changed();
@@ -161,6 +146,12 @@ export async function readMemoryProposalPage(
   // Include the whole round trip as a conservative upper bound on elapsed DB
   // time, without trusting host/DB wall-clock synchronization or renewing TTL.
   finalBounds.nowMs += Math.ceil(performance.now() - envelopeStarted);
+  if (finalBounds.nowMs >= Math.min(originalBounds.sessionExpiresAtMs, finalBounds.sessionExpiresAtMs)) return changed();
+  // Closed/foreign business scopes retain the legacy empty-array shape. Their
+  // candidates were filtered before LIMIT; even an empty page still passed
+  // the same live login/Lab/generation/deadline envelope above.
+  if (!paginated) return { contract_version: CONTRACT_VERSION, proposals: records };
+  if (!state || envelope.scope_active !== true) return changed();
   if (state.validUntilMs <= finalBounds.nowMs || state.validUntilMs > finalBounds.sessionExpiresAtMs) return changed();
   const hasMore = rows.length === MEMORY_PROPOSAL_PAGE_SIZE;
   // At most49 visible records + one verified lookahead stays within50. The

@@ -29,10 +29,14 @@ describe("Memory proposal list admission before its bounded window", () => {
     } as ProposalRow));
     const older = rows[50]!;
     const queries: string[] = [];
+    const now = Date.now();
+    const liveLogin = { token_hash: "a".repeat(64), expires_at: new Date(now + 3_600_000),
+      checked_ms: String(now), snapshot_at: new Date(now).toISOString().replace(/(\.\d{3})Z$/u, "$1000Z"), scope_active: true };
     // This narrow query double models the ordering regression, not PostgreSQL
     // semantics. Real mixed-scope SQL execution is covered by the Hosted PG case.
     const client = { query: vi.fn(async (sql: string, params: unknown[]) => {
       queries.push(sql);
+      if (sql.includes("FROM sessions")) return { rows: [liveLogin] };
       if (sql.includes("AS revalidated")) return { rows: [{ revalidated: true }] };
       if (sql.includes("FROM memory_proposals")) {
         const prefiltered = sql.includes("EXISTS") && sql.includes("memory_proposal_items");
@@ -66,10 +70,11 @@ describe("bounded proposal page publication", () => {
       created_at: new Date("2026-09-22T10:00:00.123Z"), cursor_time: `2026-09-22T10:00:00.123${String(999 - index).padStart(3, "0")}Z`,
       qualified_count: 1, qualified_default_count: 1 } as unknown as ProposalRow & { cursor_time: string }));
     let current = { ...authority };
-    let finalAvailable = true, initialAvailable = true;
+    let finalAvailable = true, initialAvailable = true, finalLoginAvailable = true;
     const query = vi.fn(async (sql: string, _params: unknown[]) => {
       if (sql.includes("AS revalidated")) return { rows: [{ revalidated: finalAvailable }] };
-      if (sql.includes("qualified AS MATERIALIZED")) return { rows: finalAvailable ? [current] : [] };
+      if (sql.includes("qualified AS MATERIALIZED")) return { rows: finalAvailable && finalLoginAvailable
+        ? [{ ...current, scope_active: true }] : [] };
       if (sql.includes("FROM sessions")) return { rows: initialAvailable ? [current] : [] };
       if (sql.includes("FROM memory_proposals p")) return { rows };
       throw new Error("Unexpected bounded page query");
@@ -81,7 +86,10 @@ describe("bounded proposal page publication", () => {
       readMemoryProposalPage(client, auth, scope, request, serialize);
     return { auth, scope, rows, authority, query, read, serialize,
       unavailableInitial: () => { initialAvailable = false; }, unavailableFinal: () => { finalAvailable = false; },
+      revokeLogin: () => { finalLoginAvailable = false; },
       rotate: () => { current = { ...current, token_hash: "b".repeat(64) }; },
+      extendBeyondOriginalDeadline: () => { current = { ...current, checked_ms: String(now + 3_600_000),
+        expires_at: new Date(now + 7_200_000) }; },
       advance: () => { current = { ...current, checked_ms: String(now + 10_000) }; } };
   }
 
@@ -104,13 +112,13 @@ describe("bounded proposal page publication", () => {
     expect(JSON.parse(envelope[1][7] as string)).toHaveLength(50);
   });
 
-  it("keeps the old first-page shape and50-row budget without reading key material", async () => {
-    const f = fixture(); f.unavailableInitial();
+  it("keeps the legacy first-page shape and50-row budget while repeating the same live authority", async () => {
+    const f = fixture();
     const page = await f.read({});
     expect(page.proposals).toHaveLength(50);
     expect(Object.keys(page).sort()).toEqual(["contract_version", "proposals"]);
-    expect(f.query).toHaveBeenCalledTimes(2);
-    expect(f.query.mock.calls.every(([sql]) => !sql.includes("FROM sessions"))).toBe(true);
+    expect(f.query).toHaveBeenCalledTimes(3);
+    expect(f.query.mock.calls.filter(([sql]) => sql.includes("FROM sessions"))).toHaveLength(2);
   });
 
   it("returns a truthful final page without cursor when fewer than50 qualified rows remain", async () => {
@@ -118,9 +126,9 @@ describe("bounded proposal page publication", () => {
     expect(page.proposals).toHaveLength(2); expect(page.has_more).toBe(false); expect(page.next_cursor).toBeNull();
   });
 
-  it("uses the original live Lab lineage gate before selection and after all source awaits", async () => {
+  it.each([true, false])("uses the original live Lab lineage before selection and after all source awaits with paginate=%s", async paginate => {
     const f = fixture(1);
-    await f.read();
+    await f.read({ paginate });
     const initial = f.query.mock.calls.find(([sql]) => sql.includes("FROM sessions"))!;
     const final = f.query.mock.calls.find(([sql]) => sql.includes("qualified AS MATERIALIZED"))!;
     for (const [sql] of [initial, final]) {
@@ -129,6 +137,26 @@ describe("bounded proposal page publication", () => {
       expect(sql).toMatch(/FROM sessions\s+JOIN accounts/u);
       expect(sql).toContain("JOIN users ON users.account_id = sessions.account_id");
     }
+  });
+
+  it.each(["missing_initial", "revoked_after_await", "rotation_after_await", "original_deadline"])(
+    "does not let omitted pagination bypass %s", async mode => {
+      const f = fixture(1);
+      if (mode === "missing_initial") f.unavailableInitial();
+      else f.serialize.mockImplementationOnce(async row => {
+        if (mode === "revoked_after_await") f.revokeLogin();
+        if (mode === "rotation_after_await") f.rotate();
+        if (mode === "original_deadline") f.extendBeyondOriginalDeadline();
+        return { proposal_id: row.id, revision: row.revision, item_count: 1, default_selected_count: 1 } as MemoryProposalRecord;
+      });
+      await expect(f.read({})).rejects.toThrow("The proposal list changed. Start a fresh read.");
+      if (mode === "missing_initial") expect(f.serialize).not.toHaveBeenCalled();
+    });
+
+  it.each(["initial", "final"])("does not let an empty legacy page bypass its %s live-authority observation", async phase => {
+    const f = fixture(0);
+    if (phase === "initial") f.unavailableInitial(); else f.revokeLogin();
+    await expect(f.read({})).rejects.toThrow(/fresh read/);
   });
 
   it("rejects an unexpected driver result above the fixed candidate budget before verification", async () => {

@@ -30,6 +30,12 @@ change belongs to this slice.
 - Cursor encoding grants no permission. Its material derives from the holder's
   bearer digest, so the holder can derive it and mint encodings. Do not treat
   encryption as server-issued authenticity or confidentiality against that holder.
+- Every list form must perform the same initial and final live reader checks;
+  the caller cannot disable them by omitting pagination. Preserve legacy JSON
+  shape and its fifty-row budget, while using the same server-side login digest
+  as a credential-generation fence. Only cursor encoding and page metadata are
+  optional. The earlier legacy no-digest-query approach was rejected when
+  CodeQL exposed this bypass of the additional reader check.
 - Reuse the existing Lab session predicate at both initial and final authority
   checks. Entry, parent, principal generation, grant and entitlement can cease
   to be valid while the ordinary session row remains active. Executable
@@ -49,22 +55,24 @@ claim the final query reproduces every deployment predicate.
 
 1. Completed: current-source reproduction, bounded implementation, independent
    scope/source/cursor/Web review, and the two review corrections above.
-2. Active: submit the reviewed candidate and execute applicable exact-head
-   Hosted gates. At c48e9e60, the full backend typecheck/test/build and187 real
-   PostgreSQL Memory cases passed, including all ninety added cases with no
-   skips. Web lint/typecheck and password protocol passed; the full Web suite
-   exposed one incomplete old mock, now repaired without changing the product
-   expiry guard. New-head full gates remain required. Thirty-four backend and
-   sixty-three relevant Web host checks are separate earlier bounded evidence.
+2. Active: execute exact-head Hosted gates for the common authorization repair,
+   including198 Memory PostgreSQL cases and closure of the two CodeQL findings.
+   At a780fa6d, the full backend,187 real PG cases with no skips,3864 Web tests
+   and production build passed; CodeQL correctly blocked the conditional reader
+   check. The repair has41 affected pure tests and three changed-root semantic
+   checks passing. Its PG and security scans have not executed yet; prior-head
+   results do not substitute for those gates.
 3. Pending: real browser acceptance, affected resident deployment from clean
    committed source, live revision/behavior readback, and normal merge after
    gates. Keep Linear In Progress until the requested acceptance is complete.
 
 PostgreSQL cases cover mixed/hidden proposals, stable microsecond pages,
-cross-scope cursors, live mutations, original source-verifier equivalence and
-nineteen Lab lineage cases. They ran in Hosted, not locally. Detailed synthetic
+cross-scope cursors, live mutations and original source-verifier equivalence.
+The original ninety additions include nineteen Lab cases and passed in Hosted.
+Eleven new legacy-form authority cases bring additions to101 and the full suite
+to198; those additions remain unexecuted. Detailed synthetic
 evidence and temporary artifact recovery references are kept in the host's
-GET-439 operational run, outside tracked source. No live database, account,
+GET-439 operational run, outside tracked source. No production data, account,
 provider or resident process was changed during implementation.
 
 Reconsider the approach if real PG differential checks disagree, query cost
