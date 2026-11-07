@@ -1,5 +1,5 @@
 import { sweepDueSourceRetention } from "./sourceRetention.js";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import type {
   MemoryCommitRequest,
@@ -11,7 +11,9 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { inTransaction } from "../database/pool.js";
-import type { AuthContext } from "./auth.js";
+import { createAuthGuard, currentSession, type AuthContext } from "./auth.js";
+import { ApiError } from "../lib/apiError.js";
+import type { LightMyRequestResponse } from "fastify";
 import { mutateAgentSession } from "./agentSessions.js";
 import { createChatTask } from "./chat.js";
 import { executeUnscopedChatTask } from "./unscopedChat.js";
@@ -446,6 +448,115 @@ async function installSyntheticPaginationSession(auth: AuthContext): Promise<voi
   expect((await pool!.query("SELECT 1 FROM sessions WHERE id=$1 AND account_id=$2 AND user_id=$3",
     [auth.sessionId, auth.accountId, auth.userId])).rowCount).toBe(1);
 }
+
+// The route uses the actual authenticator/current-session reader, not a forged
+// request.auth. All bearer bytes are generated in memory and never asserted,
+// printed or returned by these fixture controls.
+async function withAcceptedPreviousLogin(paginate: boolean | undefined,
+  operation: (controls: {
+    oldList(): Promise<LightMyRequestResponse>; oldStatus(): Promise<number>; currentStatus(): Promise<number>;
+    hold(): void; entered: Promise<void>; release(): void;
+    prepareWithdrawal(kind: "clear" | "deadline"): Promise<void>;
+    withdraw(kind: "clear" | "deadline"): Promise<void>;
+    proposalId: string;
+  }) => Promise<void>) {
+  const parsed = new URL(url!);
+  if (!["localhost", "127.0.0.1"].includes(parsed.hostname) || parsed.pathname !== "/lab_regression_ci")
+    throw new Error("Accepted-login controls require the owned disposable loopback lab_regression_ci database.");
+  const auth = await makeAuth("accepted-previous-http");
+  const contact = await makeContact(auth, "Accepted previous login contact");
+  const staged = await stage(auth, { contactDecision: "existing", personId: contact.personId,
+    items: [candidate({ scope: "person", display_text: "Authorized previous-login proposal" })] });
+  expect(staged).toBeTruthy();
+  const previous = randomBytes(32).toString("base64url"), current = randomBytes(32).toString("base64url");
+  const oldHeaders = { authorization: `Bearer ${previous}` }, currentHeaders = { authorization: `Bearer ${current}` };
+  const control = new Pool({ connectionString: url!, max: 1, connectionTimeoutMillis: 2_000,
+    statement_timeout: 5_000, query_timeout: 6_000 });
+  let hold = false;
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let pending: Promise<LightMyRequestResponse> | undefined;
+  const instrumented = new Proxy(pool!, { get(target, key) {
+    if (key === "query") return async (sql: string, values: unknown[]) => {
+      const result = await target.query(sql, values);
+      if (hold && sql.startsWith("SELECT * FROM memory_proposal_items")) {
+        enter();
+        await released; // A real serializer source read has already happened.
+      }
+      return result;
+    };
+    const value = Reflect.get(target, key, target);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+  const app = Fastify();
+  const authenticate = createAuthGuard(pool!);
+  registerMemoryReviewRoutes(app, instrumented, authenticate);
+  app.get("/v1/auth/session", { preHandler: authenticate }, request => currentSession(pool!, request.auth));
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ApiError) return reply.status(error.statusCode).send({ error: { code: error.code } });
+    return reply.status(500).send({ error: { code: "SYNTHETIC_UNEXPECTED_FAILURE" } });
+  });
+  try {
+    await control.query(`UPDATE sessions SET token_hash=$2,expires_at=clock_timestamp()+interval '1 hour',
+      previous_token_hash=$3,previous_token_expires_at=clock_timestamp()+interval '1 hour' WHERE id=$1`,
+    [auth.sessionId, createHash("sha256").update(current).digest("hex"), createHash("sha256").update(previous).digest("hex")]);
+    await app.ready();
+    const listURL = `/v1/memory/proposals?purpose=people&person_id=${contact.personId}`
+      + (paginate === undefined ? "" : `&paginate=${String(paginate)}`);
+    await operation({ proposalId: staged!.proposal.proposal_id, entered, release, hold: () => { hold = true; },
+      oldList: () => { pending = app.inject({ method: "GET", url: listURL, headers: oldHeaders }).then(response => response);
+        void pending.catch(() => {}); return pending; },
+      oldStatus: async () => (await app.inject({ method: "GET", url: "/v1/auth/session", headers: oldHeaders })).statusCode,
+      currentStatus: async () => (await app.inject({ method: "GET", url: "/v1/auth/session", headers: currentHeaders })).statusCode,
+      prepareWithdrawal: async kind => {
+        if (kind === "deadline") await control.query("UPDATE sessions SET previous_token_expires_at=clock_timestamp()+interval '0.800321 second' WHERE id=$1", [auth.sessionId]);
+      },
+      withdraw: async kind => {
+        if (kind === "clear") await control.query("UPDATE sessions SET previous_token_hash=NULL,previous_token_expires_at=NULL WHERE id=$1", [auth.sessionId]);
+        else {
+          // Wait for the original microsecond old-slot deadline established
+          // before admission. Current hash/expiry never changes in this read.
+          await control.query("SELECT pg_sleep(GREATEST(0,extract(epoch FROM (previous_token_expires_at-clock_timestamp())))+0.01) FROM sessions WHERE id=$1", [auth.sessionId]);
+        }
+      },
+    });
+  } finally {
+    release();
+    try { await pending?.catch(() => {}); }
+    finally { try { await app.close(); } finally { await control.end(); } }
+  }
+}
+
+describe.skipIf(!pool)("accepted previous bearer over the actual Memory HTTP/auth/PG boundary", () => {
+  it.each([undefined, false, true])("does not publish after previous-token withdrawal (paginate=%s)", async paginate => {
+    for (const kind of ["clear", "deadline"] as const) await withAcceptedPreviousLogin(paginate, async f => {
+      expect(await f.oldStatus()).toBe(200);
+      expect(await f.currentStatus()).toBe(200);
+      const positive = await f.oldList();
+      expect(positive.statusCode).toBe(200);
+      expect(positive.json<{ proposals: { proposal_id: string }[] }>().proposals.map(row => row.proposal_id)).toEqual([f.proposalId]);
+      await f.prepareWithdrawal(kind);
+      f.hold();
+      const pending = f.oldList();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([f.entered, new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("Synthetic Memory serializer did not enter its bounded hold.")), 2_000);
+        })]);
+      } finally { if (timer) clearTimeout(timer); }
+      await f.withdraw(kind);
+      expect(await f.oldStatus()).toBe(401);
+      expect(await f.currentStatus()).toBe(200);
+      f.release();
+      const result = await pending;
+      expect.soft(result.statusCode).toBe(409);
+      expect.soft(result.body.includes(f.proposalId)).toBe(false);
+      expect.soft(Object.hasOwn(result.json<object>(), "has_more")).toBe(false);
+      expect.soft(Object.hasOwn(result.json<object>(), "next_cursor")).toBe(false);
+    });
+  });
+});
 
 // Synthetic control rows match the existing Lab schema and authority branches;
 // they do not mint an HTTP credential or bypass the real route authenticator.

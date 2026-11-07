@@ -27,15 +27,20 @@ change belongs to this slice.
   budget. Keep PostgreSQL microseconds, the last returned keyset anchor, original
   creation cutoff and deadline. This is live filtered traversal, not a retained
   historical snapshot or a promise of an immutable total.
-- Cursor encoding grants no permission. Its material derives from the holder's
-  bearer digest, so the holder can derive it and mint encodings. Do not treat
-  encryption as server-issued authenticity or confidentiality against that holder.
+- Cursor encoding grants no permission. Its material derives from the current
+  bearer digest; current-bearer holders can derive it and mint encodings. Do not
+  treat encryption as server-issued authenticity or confidentiality against them.
 - Every list form must perform the same initial and final live reader checks;
   the caller cannot disable them by omitting pagination. Preserve legacy JSON
   shape and its fifty-row budget, while using the same server-side login digest
   as a credential-generation fence. Only cursor encoding and page metadata are
   optional. The earlier legacy no-digest-query approach was rejected when
   CodeQL exposed this bypass of the additional reader check.
+- Bind the HTTP reader to the credential branch actually accepted. A still-live
+  renewed current session does not renew its previous token's original deadline.
+  Current row generation and accepted current/previous credential expiry are
+  separate fences; preserve both, including empty/unpaginated/explicit-false
+  lists, without a body/query opt-out or new authority from a cursor.
 - Reuse the existing Lab session predicate at both initial and final authority
   checks. Entry, parent, principal generation, grant and entitlement can cease
   to be valid while the ordinary session row remains active. Executable
@@ -55,22 +60,29 @@ claim the final query reproduces every deployment predicate.
 
 1. Completed: current-source reproduction, bounded implementation, independent
    scope/source/cursor/Web review, and the two review corrections above.
-2. Active: execute exact-head Hosted gates for the common authorization repair,
-   including198 Memory PostgreSQL cases and closure of the two CodeQL findings.
-   At a780fa6d, the full backend,187 real PG cases with no skips,3864 Web tests
-   and production build passed; CodeQL correctly blocked the conditional reader
-   check. The repair has41 affected pure tests and three changed-root semantic
-   checks passing. Its PG and security scans have not executed yet; prior-head
-   results do not substitute for those gates.
-3. Pending: real browser acceptance, affected resident deployment from clean
-   committed source, live revision/behavior readback, and normal merge after
-   gates. Keep Linear In Progress until the requested acceptance is complete.
+2. Completed at03344b97:198/198 real Memory PG cases (101 added,0 skipped),
+   full Backend/Web/docs/CLI quality,3864 Web tests,13SDK cases, full Next build
+   and all four portable package jobs. Latest JS/TS CodeQL analysis has0 findings;
+   both earlier PR findings report fixed, without suppression. The aggregate's
+   absent-Swift configuration warning is separate from the successful JS scan.
+3. Active before merge: reproduce the previous-token acceptance boundary over
+   actual HTTP AuthGuard/currentSession and real disposable PostgreSQL. Three
+   list-form cases each cover slot withdrawal and natural original microsecond
+   expiry, with legal list200 and fresh old401/current200 controls. These six
+   flows are test source only, not an observed red. Then bind the actual accepted
+   branch/deadline while preserving current generation/cursor and existing
+   source verifier; independently review and rerun exact-head gates.03344 remains
+   draft despite its earlier green gates.
+4. Pending: real browser acceptance, affected resident deployment from clean
+   committed source, live revision/behavior readback, and normal source merge
+   after all applicable current checks. Keep Linear In Progress until acceptance.
 
 PostgreSQL cases cover mixed/hidden proposals, stable microsecond pages,
 cross-scope cursors, live mutations and original source-verifier equivalence.
 The original ninety additions include nineteen Lab cases and passed in Hosted.
 Eleven new legacy-form authority cases bring additions to101 and the full suite
-to198; those additions remain unexecuted. Detailed synthetic
+to198; all ran successfully at03344. The additional accepted-previous HTTP
+flows remain unexecuted and must actually run in the explicit PG lane. Detailed synthetic
 evidence and temporary artifact recovery references are kept in the host's
 GET-439 operational run, outside tracked source. No production data, account,
 provider or resident process was changed during implementation.
