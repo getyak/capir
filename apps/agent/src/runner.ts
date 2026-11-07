@@ -13,6 +13,7 @@ import {
   AgentCapabilityError,
 } from "./runtimePolicy.js";
 import { agentUsage, assertAgentBudget, exceededBudget } from "./runBudget.js";
+import { providerCompletionQuarantineReason } from "./providerCompletion.js";
 import { SYSTEM_AGENT_RUNTIME } from "./runtimeDependencies.js";
 import {
   PURSUIT_AGENT_TOOL_NAMES,
@@ -635,6 +636,8 @@ export async function runBoundedAgent(
           : "PROVIDER_BUDGET_EXHAUSTED",
       );
     }
+    const completionFailure = providerCompletionQuarantineReason(providerResult.terminalReason);
+    if (completionFailure) return complete("quarantined", completionFailure);
     if (providerResult.terminalReason === "structured_output_retry_exhausted") {
       return complete("quarantined", "STRUCTURED_OUTPUT_RETRY_EXHAUSTED");
     }

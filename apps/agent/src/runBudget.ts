@@ -36,7 +36,7 @@ export function agentUsage(
   return {
     inputTokens,
     outputTokens,
-    totalTokens:
+    totalTokens: provider?.totalTokens !== undefined ? provider.totalTokens :
       inputTokens === null || outputTokens === null
         ? null
         : inputTokens + outputTokens,

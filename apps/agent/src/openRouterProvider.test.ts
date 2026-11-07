@@ -183,6 +183,7 @@ describe("OpenRouterAgentProvider", () => {
         model: "cohere/north-mini-code:free",
         choices: [
           {
+            finish_reason: "tool_calls",
             message: {
               role: "assistant",
               content: null,
@@ -199,6 +200,7 @@ describe("OpenRouterAgentProvider", () => {
             },
           },
         ],
+        usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13, cost: 0 },
       }),
     );
     const provider = new OpenRouterAgentProvider({

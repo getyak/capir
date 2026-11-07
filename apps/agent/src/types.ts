@@ -452,9 +452,11 @@ export interface AgentProviderResult {
   sessionTitle?: string;
   prompt?: import("./promptRegistry.js").PromptReference;
   structuredOutput: unknown;
-  inputTokens: number;
-  outputTokens: number;
-  estimatedUsd: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** Explicit cumulative provider total, or a sum of completely known parts. */
+  totalTokens?: number | null;
+  estimatedUsd: number | null;
   turns: number;
   permissionDenials: string[];
   /** Genuine tool-completion receipts: name and time only. */
