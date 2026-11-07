@@ -1,0 +1,52 @@
+import type { FastifyInstance } from "fastify";
+
+export interface RecurringJobOptions {
+  name: string;
+  intervalMs: number;
+  run: () => void | Promise<void>;
+  /** Metadata maintenance may need to drain before waiting for HTTP requests. */
+  closePhase?: "preClose" | "onClose";
+}
+
+/**
+ * Register a process-local maintenance job with one shared lifecycle contract:
+ * ticks never overlap, failures remain observable, and shutdown waits for the
+ * active tick without starting another one.
+ */
+export function registerRecurringJob(
+  app: FastifyInstance,
+  options: RecurringJobOptions,
+): void {
+  if (!options.name.trim()) {
+    throw new Error("A recurring job requires a name.");
+  }
+  if (!Number.isFinite(options.intervalMs) || options.intervalMs <= 0) {
+    throw new Error("A recurring job interval must be positive.");
+  }
+
+  let active: Promise<void> | undefined;
+  let stopped = false;
+
+  const tick = (): void => {
+    if (stopped || active) return;
+    active = Promise.resolve()
+      .then(options.run)
+      .catch((error: unknown) => {
+        app.log.error(
+          { err: error, recurringJob: options.name },
+          "Recurring backend job failed",
+        );
+      })
+      .finally(() => {
+        active = undefined;
+      });
+  };
+
+  const timer = setInterval(tick, options.intervalMs);
+  timer.unref();
+  app.addHook(options.closePhase ?? "onClose", async () => {
+    stopped = true;
+    clearInterval(timer);
+    await active;
+  });
+}

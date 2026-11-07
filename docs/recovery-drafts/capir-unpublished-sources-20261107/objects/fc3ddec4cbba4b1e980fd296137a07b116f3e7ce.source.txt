@@ -1,0 +1,133 @@
+import { TalentSignalHttpError, type DesktopAuthPurpose } from "@talent-signal/contracts";
+import { cookies } from "next/headers";
+
+import {
+  clearDesktopBrowserAttempt,
+  clearDesktopContinuation,
+  desktopAttemptFromCallback,
+  desktopBackendClient,
+  desktopCancelCallbackURL,
+  desktopReturnPath,
+  desktopSessionToken,
+  readDesktopBrowserAttempt,
+  readSubmittedAttemptRef,
+  formMatchesCurrentRound,
+  pairingCookieName,
+  requestWebOrigin,
+} from "@/lib/server/desktopAuth";
+
+export const dynamic = "force-dynamic";
+
+function rejected(status: number, code: string, message: string): Response {
+  return Response.json({ error: { code, message } }, { status });
+}
+
+function seeOther(location: string): Response {
+  return new Response(null, {
+    status: 303,
+    headers: { location, "cache-control": "private, no-store" },
+  });
+}
+
+/**
+ * Cancel one attempt with its OWN authority (ADR 0020 recovery).
+ *
+ * Two discriminated authorities: the WK window cancels with its
+ * attempt-specific pairing cookie; the system authentication browser cancels
+ * only with its own sealed attempt's raw state and the exact immutable form
+ * reference. No pairing secret is ever exported to the system browser. A
+ * consumed result is reported truthfully and never relabelled cancelled; only
+ * a truthful backend cancellation emits the fixed `outcome=cancelled` native
+ * callback. Stale A forms never clear or navigate B.
+ */
+export async function POST(request: Request): Promise<Response> {
+  const webOrigin = await requestWebOrigin();
+  if (request.headers.get("origin") !== webOrigin) {
+    return rejected(403, "DESKTOP_AUTH_ORIGIN_REQUIRED", "This request origin is not allowed.");
+  }
+  const destination = request.headers.get("sec-fetch-dest");
+  if (destination && destination !== "document") {
+    return rejected(403, "DESKTOP_AUTH_FRAME_REJECTED", "This sign-in flow must start in the main window.");
+  }
+
+  let submitted: string[];
+  let submittedState: string[] = [];
+  try {
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const body = await request.json();
+      submitted = typeof body?.attempt_id === "string" ? [body.attempt_id] : [];
+      submittedState = typeof body?.state === "string" ? [body.state] : [];
+    } else {
+      const form = await request.formData();
+      submitted = form.getAll("attempt_id").map((value) => String(value));
+      submittedState = form.getAll("state").map((value) => String(value));
+    }
+  } catch {
+    return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+  }
+  const ref = readSubmittedAttemptRef(submitted);
+  if (ref.kind === "invalid") {
+    return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+  }
+
+  const jar = await cookies();
+  // WK pairing authority: the pairing cookie of the SAME WKWebView jar.
+  const attemptId = ref.kind === "single" ? ref.attemptId : null;
+  const pairingSecret = attemptId ? (jar.get(pairingCookieName(attemptId))?.value ?? "") : "";
+  // System authority: the CURRENT sealed round is the attempt named by this
+  // jar's Auth.js callback cookie. A rendered form may act only on that round.
+  const currentAttemptId = (await desktopAttemptFromCallback()) ?? (pairingSecret ? attemptId : null);
+  if (!formMatchesCurrentRound(ref, currentAttemptId)) {
+    // A stale A form with a newer B sealed round: refuse without touching B.
+    return rejected(409, "DESKTOP_AUTH_STALE_FORM", "This form is out of date. Reload and try again.");
+  }
+  const sealed = currentAttemptId ? await readDesktopBrowserAttempt(currentAttemptId) : null;
+
+  let purpose: DesktopAuthPurpose = "login";
+  if (pairingSecret && attemptId) {
+    // WK pairing cancellation: fixed login/settings return in the WKWebView.
+    try {
+      const cancelled = await desktopBackendClient().cancelDesktopAuth(
+        { attempt_id: attemptId, mode: "wk", pairing_secret: pairingSecret },
+        { origin: webOrigin, accessToken: (await desktopSessionToken()) ?? undefined },
+      );
+      purpose = cancelled.purpose;
+    } catch (error) {
+      if (!(error instanceof TalentSignalHttpError)) throw error;
+    }
+    await clearDesktopContinuation(attemptId);
+    return seeOther(
+      `${desktopReturnPath(purpose)}${purpose === "credential_round" ? "?desktop-auth=cancelled" : "?desktop-auth=cancelled"}`,
+    );
+  }
+
+  if (!sealed) {
+    return rejected(409, "DESKTOP_AUTH_ATTEMPT_INVALID", "This sign-in attempt does not exist.");
+  }
+  // System-browser cancellation uses its bound raw state (never a pairing
+  // secret). A truthful `consumed`/`expired` result never emits success.
+  let status: "cancelled" | "consumed" | "expired" | "unknown" = "unknown";
+  try {
+    const cancelled = await desktopBackendClient().cancelDesktopAuth(
+      { attempt_id: sealed.attempt_id, mode: "system", state: sealed.state },
+      { origin: webOrigin },
+    );
+    status = cancelled.status;
+    purpose = cancelled.purpose;
+  } catch (error) {
+    if (!(error instanceof TalentSignalHttpError)) throw error;
+    status = "unknown";
+  }
+  if (status === "cancelled") {
+    await clearDesktopBrowserAttempt(sealed.attempt_id);
+    // The fixed native cancel callback returns to the original WK session;
+    // native then performs only its own best-effort paired cleanup.
+    return seeOther(desktopCancelCallbackURL(sealed.attempt_id, sealed.state));
+  }
+  // consumed/unknown/expired: no success-cancel outcome; truthful fixed route.
+  void submittedState;
+  return seeOther(
+    `${desktopReturnPath(purpose)}?desktop-auth=${encodeURIComponent(status === "consumed" ? "completed" : "cancel-failed")}`,
+  );
+}

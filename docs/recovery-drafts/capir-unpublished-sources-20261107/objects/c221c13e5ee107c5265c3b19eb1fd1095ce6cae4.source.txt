@@ -1,0 +1,25 @@
+import { z } from "zod";
+
+/** Proposed literal extraction from pixels admitted to the current Claude Run. */
+export const AuthoredImageInputSchema = z.strictObject({
+  artifact_id: z.string().min(1).max(300),
+  author_label: z.string().trim().min(1).max(80),
+  platform: z.string().trim().min(1).max(80),
+  blocks: z.array(z.strictObject({
+    text: z.string().min(1).max(4000),
+    time_text: z.string().max(120).nullable(),
+  })).min(1).max(100),
+  identity_clues: z.array(z.strictObject({
+    kind: z.enum(["handle", "profile_url"]),
+    value: z.string().min(1).max(300),
+    source_excerpt: z.string().min(1).max(600),
+  })).max(5).default([]),
+});
+export type AuthoredImageInput = z.infer<typeof AuthoredImageInputSchema>;
+
+/** An author nickname is a bounded source label, never a real-world identity. */
+export function isBoundedAuthorLabel(label: string): boolean {
+  return /^@?[\p{L}\p{N}][\p{L}\p{N} ._!'’—-]{0,79}$/u.test(label)
+    && label.trim().split(/\s+/u).length <= 4
+    && !/(?:ignore|execute|instructions?|system|prompt|password|token|忽略|执行|指令|密码)/iu.test(label);
+}

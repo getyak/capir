@@ -1,0 +1,114 @@
+import type { DatabaseClient } from "../database/pool.js";
+import type { AuthContext } from "./auth.js";
+import { ApiError } from "../lib/apiError.js";
+import type { LifecycleIdentity } from "./legacyChatLifecycle.js";
+
+/** A source mutation wins over a late model result. Locks survive to transaction commit. */
+export async function lockChatCompletionSourceRows(client: DatabaseClient, auth: AuthContext, value: {
+  task_id: string; session_id?: string | undefined; manifest_id: string; person_id: string; relationship_context_id: string; capture?: boolean;
+}): Promise<boolean> {
+  await client.query("SAVEPOINT chat_completion_sources");
+  try {
+    // Lock each selected direct origin before block/manifest locks. NOWAIT
+    // avoids waiting on source-first withdrawal while holding derived lineage.
+    for (const relation of ["confirmed_states", "proposed_assertions", "source_resources", "captures", "source_retention_receipts"] as const) {
+      const key = relation === "source_retention_receipts" ? "receipt_id" : "id";
+      await client.query(`SELECT source.${key} FROM ${relation} source WHERE source.account_id=$1
+        AND source.${key} IN (SELECT id FROM legacy_chat_manifest_direct_sources($1,$2) WHERE relation=$3)
+        ORDER BY source.${key} FOR SHARE OF source NOWAIT`, [auth.accountId, value.manifest_id, relation]);
+    }
+    await client.query(`SELECT f.id FROM context_manifest_evidence me
+      JOIN evidence_fragments f ON f.account_id=me.account_id AND f.id=me.evidence_fragment_id
+      JOIN source_resources r ON r.account_id=f.account_id AND r.id=f.resource_id
+      JOIN captures c ON c.account_id=r.account_id AND c.id=r.capture_id
+      JOIN source_retention_receipts sr ON sr.account_id=c.account_id AND sr.capture_id=c.id
+      WHERE me.account_id=$1 AND me.manifest_id=$2 ORDER BY f.id FOR SHARE OF me,f,r,c,sr NOWAIT`,
+    [auth.accountId, value.manifest_id]);
+    await client.query(`SELECT m.id FROM context_manifest_media mm JOIN chat_media_assets m ON m.account_id=mm.account_id AND m.id=mm.media_id
+      WHERE mm.account_id=$1 AND mm.manifest_id=$2 ORDER BY m.id FOR SHARE OF mm,m NOWAIT`, [auth.accountId, value.manifest_id]);
+    await client.query(`SELECT b.id FROM context_manifest_blocks mb JOIN knowledge_blocks b
+      ON b.account_id=mb.account_id AND b.id=mb.block_id WHERE mb.account_id=$1 AND mb.manifest_id=$2
+      ORDER BY b.id FOR ${value.capture ? "UPDATE" : "SHARE"} OF mb,b NOWAIT`, [auth.accountId, value.manifest_id]);
+    await client.query(`SELECT d.id FROM context_manifest_blocks mb JOIN knowledge_dependencies d
+      ON d.account_id=mb.account_id AND d.block_id=mb.block_id WHERE mb.account_id=$1 AND mb.manifest_id=$2
+      ORDER BY d.id FOR SHARE OF d NOWAIT`, [auth.accountId, value.manifest_id]);
+    await client.query(`SELECT m.id FROM context_manifests m JOIN knowledge_snapshots s ON s.account_id=m.account_id AND s.id=m.knowledge_snapshot_id
+      WHERE m.account_id=$1 AND m.id=$2 FOR SHARE OF m,s NOWAIT`, [auth.accountId, value.manifest_id]);
+    await client.query(`SELECT s.id FROM subjects s JOIN assignments a ON a.account_id=s.account_id AND a.subject_id=s.id
+      WHERE s.account_id=$1 AND s.id=$2 AND a.id=$3 FOR SHARE OF s,a NOWAIT`,
+    [auth.accountId, value.person_id, value.relationship_context_id]);
+    if (value.session_id) await client.query(`SELECT id FROM agent_sessions WHERE account_id=$1 AND created_by_user_id=$2 AND id=$3 FOR SHARE NOWAIT`,
+      [auth.accountId, auth.userId, value.session_id]);
+    await client.query("RELEASE SAVEPOINT chat_completion_sources");
+  } catch (error) {
+    await client.query("ROLLBACK TO SAVEPOINT chat_completion_sources");
+    await client.query("RELEASE SAVEPOINT chat_completion_sources");
+    if ((error as { code?: string }).code === "55P03") return false;
+    throw error;
+  }
+  return true;
+}
+
+export async function lockChatCompletionSources(client: DatabaseClient, auth: AuthContext, value: {
+  task_id: string; session_id?: string | undefined; manifest_id: string; person_id: string; relationship_context_id: string; capture?: boolean;
+}): Promise<boolean> {
+  if (!await lockChatCompletionSourceRows(client, auth, value)) return false;
+  return (await client.query<{ available: boolean }>(`SELECT
+    agent_session_task_available($1,$2,$3,$4) AND agent_session_chat_sources_available($1,$2)
+    AND ($6::uuid IS NULL OR EXISTS(SELECT 1 FROM agent_sessions s WHERE s.account_id=$1 AND s.id=$6
+      AND s.created_by_user_id=$7 AND s.deleted_at IS NULL AND s.expires_at>statement_timestamp()))
+    AND NOT EXISTS(SELECT 1 FROM context_manifest_media mm LEFT JOIN chat_media_assets m ON m.account_id=mm.account_id AND m.id=mm.media_id
+      WHERE mm.account_id=$1 AND mm.manifest_id=$5 AND (m.id IS NULL OR m.status<>'ready' OR m.deleted_at IS NOT NULL)) AS available`,
+  [auth.accountId, value.task_id, value.person_id, value.relationship_context_id, value.manifest_id, value.session_id ?? null, auth.userId])).rows[0]?.available === true;
+}
+
+/** Private pending-writer guard; public completion predicates remain unchanged. */
+export async function assertChatManifestSelectionCurrent(client: DatabaseClient, auth: AuthContext,
+  manifestID: string, identity: LifecycleIdentity): Promise<void> {
+  const current = (await client.query<{ available: boolean }>(`SELECT EXISTS (
+    SELECT 1 FROM context_manifests m JOIN legacy_chat_task_intents i
+      ON i.account_id=m.account_id AND i.id=m.lifecycle_intent_id
+    WHERE m.account_id=$1 AND m.id=$2 AND m.lifecycle_attempt_id=$3 AND m.lifecycle_intent_id=$4
+      AND m.lifecycle_actor_user_id=$5 AND m.task_id=$6 AND m.lifecycle_fencing_generation=$7
+      AND i.current_attempt_id=m.lifecycle_attempt_id AND i.fencing_generation=m.lifecycle_fencing_generation
+      AND legacy_chat_manifest_seal_valid(m.source_selection) AND m.source_loss_at IS NULL
+      AND m.source_selection->'sources'=legacy_chat_manifest_source_witnesses(m.account_id,m.id)
+      AND jsonb_array_length(m.source_selection->'blocks')=(SELECT count(*) FROM context_manifest_blocks mb WHERE mb.account_id=m.account_id AND mb.manifest_id=m.id)
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(m.source_selection->'blocks') block WHERE NOT EXISTS (
+        SELECT 1 FROM context_manifest_blocks mb WHERE mb.account_id=m.account_id AND mb.manifest_id=m.id AND mb.block_id::text=block->>'id'))
+      AND m.source_selection->'media'=COALESCE((SELECT jsonb_agg(mm.media_id ORDER BY mm.sequence) FROM context_manifest_media mm WHERE mm.account_id=m.account_id AND mm.manifest_id=m.id),'[]'::jsonb)
+      AND (m.selected_source_expires_at IS NULL OR m.selected_source_expires_at>clock_timestamp())
+      AND legacy_chat_manifest_selected_sources_available(m.account_id,m.task_id::text,m.subject_id::text,m.assignment_id::text)
+      AND NOT EXISTS (SELECT 1 FROM context_manifest_media mm LEFT JOIN chat_media_assets media
+        ON media.account_id=mm.account_id AND media.id=mm.media_id WHERE mm.account_id=m.account_id AND mm.manifest_id=m.id
+        AND (media.id IS NULL OR media.status<>'ready' OR media.deleted_at IS NOT NULL))
+  ) AS available`, [auth.accountId,manifestID,identity.attemptID,identity.intentID,auth.userId,identity.taskID,identity.fencingGeneration])).rows[0]?.available;
+  if (current !== true) throw chatSelectionChanged();
+}
+
+export function chatSelectionChanged(): ApiError {
+  return new ApiError(409, "CHAT_COMPLETION_SOURCE_CHANGED",
+    "The selected source changed while this answer was being prepared. Reload its current state before trying again.");
+}
+
+/** Called only while the selected rows and copied context remain locked in Phase A. */
+export async function sealChatManifestSelection(client: DatabaseClient, accountID: string, manifestID: string,
+  blocks: Array<{ id: string; hash: string }>, snapshotHash: string, mediaIDs: string[]): Promise<Date | null> {
+  const selected = (await client.query<{ sources: Array<{ table: string; id: string }>; expires_at: Date | null }>(`
+    WITH manifest AS (SELECT * FROM context_manifests WHERE account_id=$1 AND id=$2),
+    selected_sources AS (SELECT * FROM legacy_chat_manifest_direct_sources($1,$2)),
+    selected_captures AS (SELECT c.* FROM selected_sources source JOIN captures c
+      ON c.account_id=$1 AND c.id=source.id WHERE source.relation='captures'),
+    selected_receipts AS (SELECT sr.* FROM selected_sources source JOIN source_retention_receipts sr
+      ON sr.account_id=$1 AND sr.receipt_id=source.id WHERE source.relation='source_retention_receipts'),
+    selection_witnesses AS (SELECT legacy_chat_manifest_source_witnesses($1,$2) AS sources)
+    SELECT (SELECT sources FROM selection_witnesses) AS sources,
+      LEAST((SELECT min(retention_until) FROM selected_captures),(SELECT min(authorization_expires_at) FROM selected_receipts),
+        (SELECT min(media.created_at+interval '30 days') FROM context_manifest_media mm JOIN chat_media_assets media
+          ON media.account_id=mm.account_id AND media.id=mm.media_id WHERE mm.account_id=$1 AND mm.manifest_id=$2)) AS expires_at`, [accountID,manifestID])).rows[0]!;
+  const sealed = await client.query(`UPDATE context_manifests SET source_selection=$3::jsonb,selected_source_expires_at=$4
+    WHERE account_id=$1 AND id=$2 AND source_selection IS NULL AND lifecycle_attempt_id IS NOT NULL AND source_loss_at IS NULL`,
+    [accountID,manifestID,JSON.stringify({version:1,blocks,snapshot_hash:snapshotHash,media:mediaIDs,sources:selected.sources}),selected.expires_at]);
+  if (sealed.rowCount !== 1) throw chatSelectionChanged();
+  return selected.expires_at;
+}

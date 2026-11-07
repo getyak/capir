@@ -1,0 +1,1502 @@
+import { randomUUID } from "node:crypto";
+
+import { ScriptedAgentProvider } from "@talent-signal/agent";
+import type {
+  AgentProvider,
+  AgentProviderRequest,
+  AgentProviderResult,
+} from "@talent-signal/agent";
+import type {
+  MemoryCommitRequest,
+  MemoryProposalCandidate,
+  MemoryProposalStageRequest,
+} from "@talent-signal/contracts";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { inTransaction } from "../database/pool.js";
+import type { AuthContext } from "./auth.js";
+import { getAgentSession, mutateAgentSession, readAgentSessionConversation, sweepAgentSessions } from "./agentSessions.js";
+import { assertSessionChatSourcesAvailable } from "./agentSessionSources.js";
+import {
+  admitConversationQueueEntry,
+  claimNextConversationQueueEntry,
+  finalizeConversationQueueEntry,
+  recordConversationQueueResult,
+} from "./conversationQueue.js";
+import {
+  persistConversationQueueCompletion,
+  type ConversationQueueExecutionResult,
+} from "./conversationQueueCompletion.js";
+import { readStoredConversationQueueResult } from "./conversationQueueResult.js";
+import {
+  commitMemoryReview,
+  mutateMemoryItem,
+  openMemoryReview,
+  resolveSessionSourceAuthority,
+  stageMemoryProposal,
+} from "./memoryReview.js";
+import { assertSavedMemoriesCurrent, searchSavedMemories } from "./savedMemoryDiscovery.js";
+import {
+  assertSavedMemoryDependenciesCurrent,
+  recordSavedMemoryDependencies,
+} from "./savedMemoryLineage.js";
+import { executeUnscopedChatTask, createUnscopedChatTask, type UnscopedChatExecution } from "./unscopedChat.js";
+import type { RemoteChatAnswerRequest, RemoteChatAnswerResult } from "./chatAnswerProvider.js";
+import { recordConversationQueueLineage } from "./conversationQueueCompletion.js";
+
+const url = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+if (url && !["127.0.0.1", "localhost"].includes(new URL(url).hostname)) {
+  throw new Error("Use an isolated local PostgreSQL database for saved-Memory lineage tests.");
+}
+const pool = url ? new Pool({ connectionString: url, idleTimeoutMillis: 0, max: 6 }) : null;
+
+beforeAll(() => {
+  expect(url, "CONTACT_AGENT_TEST_DATABASE_URL must point at the synthetic test database").toBeTruthy();
+}, 10_000);
+
+afterAll(async () => {
+  await pool?.end();
+});
+
+// Real disposable-database round trips can exceed the default Vitest budget on
+// a loaded host; assertions are unchanged.
+vi.setConfig({ testTimeout: 30_000 });
+
+async function makeAuth(label: string): Promise<AuthContext> {
+  const accountId = randomUUID();
+  const userId = randomUUID();
+  const accountSlug = `lineage-${label}-${accountId.slice(0, 8)}`;
+  await pool!.query(
+    "INSERT INTO accounts(id,slug,name) VALUES($1,$2,$3)",
+    [accountId, accountSlug, `Lineage ${label}`],
+  );
+  await pool!.query(
+    "INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,$4,'simulated_human')",
+    [userId, accountId, `${accountSlug}@synthetic.local`, "Synthetic Owner"],
+  );
+  return {
+    accountId,
+    accountSlug,
+    userId,
+    userEmail: `${accountSlug}@synthetic.local`,
+    userKind: "simulated_human",
+    sessionId: randomUUID(),
+  };
+}
+
+async function removeAccount(accountId: string): Promise<void> {
+  const tables = (
+    await pool!.query<{ table_name: string }>(
+      "SELECT table_name FROM lab_test_workspace_table_manifest WHERE scope='account' ORDER BY table_name",
+    )
+  ).rows.map((row) => row.table_name);
+  const targets = [...tables, "sessions"];
+  await pool!.query(
+    `WITH ${targets.map((table, index) => `d${index} AS (DELETE FROM "${table}" WHERE account_id=$1 RETURNING 1)`).join(",")}
+     SELECT ${targets.map((_, index) => `(SELECT count(*) FROM d${index})` ).join("+")} AS removed`,
+    [accountId],
+  );
+  // Deleting accepted Memory retires its harness working context once more;
+  // remove that final generation row before the account can leave.
+  await pool!.query("DELETE FROM harness_source_generations WHERE account_id=$1", [accountId]);
+  await pool!.query("DELETE FROM users WHERE account_id=$1", [accountId]);
+  await pool!.query("DELETE FROM accounts WHERE id=$1", [accountId]);
+}
+
+async function insertSourceSession(
+  auth: AuthContext,
+  sessionId: string,
+  messageId: string,
+  text: string,
+): Promise<void> {
+  const iso = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO agent_sessions(account_id,id,created_by_user_id,revision,payload,created_at,expires_at)
+     VALUES($1,$2,$3,1,$4::jsonb,now(),now() + interval '30 days')`,
+    [
+      auth.accountId,
+      sessionId,
+      auth.userId,
+      JSON.stringify({
+        id: sessionId,
+        scopeKind: "unresolved_intent",
+        personDisplayLabel: "Memory source",
+        contextDisplayLabel: "Conversation",
+        title: "Memory source",
+        updatedAt: iso,
+        isUnread: false,
+        turns: [
+          {
+            id: messageId,
+            objective: text,
+            response: {
+              contractVersion: "2026-08-24.10",
+              taskID: randomUUID(),
+              contextManifestID: randomUUID(),
+              knowledgeSnapshotID: randomUUID(),
+              disposition: "answer",
+              createdAt: iso,
+            },
+            createdAt: iso,
+          },
+        ],
+      }),
+    ],
+  );
+}
+
+function candidate(overrides: Partial<MemoryProposalCandidate>): MemoryProposalCandidate {
+  const displayText = overrides.display_text ?? "I prefer conclusions first";
+  return {
+    scope: "self",
+    operation: "add",
+    statement_kind: "fact",
+    display_text: displayText,
+    subject_id: null,
+    relationship_context_id: null,
+    speaker: null,
+    reporter: null,
+    valid_time: null,
+    observed_time: null,
+    time_status: "known",
+    sensitivity: "normal",
+    source_excerpt: displayText,
+    source_locator: { kind: "message", session_id: null, message_id: null },
+    previous_memory_item_id: null,
+    previous_text: null,
+    previous_revision: null,
+    reason: "Useful next time",
+    ...overrides,
+  };
+}
+
+/** Accept one self-scope statement through the real review/commit machinery. */
+async function saveAcceptedMemory(
+  auth: AuthContext,
+  text: string,
+): Promise<{ sourceSessionId: string; sourceMessageId: string; memoryItemID: string; version: number }> {
+  const sourceSessionId = randomUUID();
+  const sourceMessageId = randomUUID();
+  await insertSourceSession(auth, sourceSessionId, sourceMessageId, text);
+  const authority = await resolveSessionSourceAuthority(
+    pool!, auth, sourceSessionId, sourceMessageId,
+  );
+  const request: MemoryProposalStageRequest = {
+    idempotency_key: randomUUID(),
+    surface: "chat",
+    session_id: sourceSessionId,
+    source_task_id: randomUUID(),
+    source_message_id: sourceMessageId,
+    person_id: null,
+    relationship_context_id: null,
+    contact_decision: "none",
+    identity_clue: null,
+    new_contact: null,
+    proposer: { kind: "human", name: "lineage-test", version: "1" },
+    items: [candidate({ display_text: text, source_excerpt: text })],
+  };
+  const staged = await inTransaction(pool!, (client) =>
+    stageMemoryProposal(client, auth, request, authority),
+  );
+  const opened = await openMemoryReview(pool!, auth, staged!.proposal.proposal_id, {
+    purpose: "chat",
+    person_id: null,
+    relationship_context_id: null,
+  });
+  const body: MemoryCommitRequest = {
+    idempotency_key: randomUUID(),
+    expected_proposal_revision: opened.review.proposal_revision,
+    contact_decision: "none",
+    selected_item_ids: opened.review.items.map((item) => item.id),
+    edited_text: {},
+    item_decisions: {},
+    expected_item_versions: {},
+    new_contact: null,
+    reason: "lineage test commit",
+  };
+  await commitMemoryReview(pool!, auth, opened.review.review_scope_id, opened.review_credential!, body);
+  const saved = await searchSavedMemories(pool!, auth, { terms: [] });
+  const item = saved.items.find((entry) => entry.display_text === text);
+  expect(item, "the accepted statement must be discoverable").toBeDefined();
+  return { sourceSessionId, sourceMessageId, memoryItemID: item!.id, version: item!.version };
+}
+
+async function seedConversation(auth: AuthContext): Promise<{ sessionId: string; createdAt: string }> {
+  const sessionId = randomUUID();
+  const iso = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO agent_sessions(account_id,id,created_by_user_id,revision,payload,created_at,expires_at)
+     VALUES($1,$2,$3,1,$4::jsonb,now(),now() + interval '7 days')`,
+    [
+      auth.accountId,
+      sessionId,
+      auth.userId,
+      JSON.stringify({
+        id: sessionId,
+        scopeKind: "unresolved_intent",
+        personDisplayLabel: "",
+        contextDisplayLabel: "",
+        title: "",
+        turns: [],
+        updatedAt: iso,
+        createdAt: iso,
+        isUnread: false,
+      }),
+    ],
+  );
+  return { sessionId, createdAt: iso };
+}
+
+async function admitAndClaim(
+  auth: AuthContext,
+  sessionId: string,
+  objective: string,
+): Promise<Awaited<ReturnType<typeof claimNextConversationQueueEntry>>> {
+  await admitConversationQueueEntry(pool!, auth, {
+    idempotency_key: randomUUID(),
+    session_id: sessionId,
+    message_id: randomUUID(),
+    objective,
+  });
+  return claimNextConversationQueueEntry(pool!, {
+    accountId: auth.accountId,
+    sessionId,
+    workerId: `lineage-${randomUUID()}`,
+  });
+}
+
+function executionResult(execution: UnscopedChatExecution): ConversationQueueExecutionResult {
+  return {
+    body: execution.body,
+    conversationMessageIDs: execution.conversationMessageIDs,
+    previousTaskIDs: execution.previousTaskIDs,
+    conversationSources: execution.conversationSources ?? [],
+    remoteStatus: execution.remoteStatus,
+    images: [],
+    execution: {
+      started_at: new Date(Date.now() - 1_000).toISOString(),
+      completed_at: new Date().toISOString(),
+      tools: [],
+    },
+    audit: {
+      providerID: null,
+      model: null,
+      providerRequestID: null,
+      prompt: null,
+      contactAgentEventKind: null,
+    },
+  };
+}
+
+/** Harness-like scripted provider: it executes the real supplemental tool. */
+class SavedMemoryScriptedProvider implements AgentProvider {
+  readonly id = "deterministic";
+  readonly model = "talent-signal-scripted-v1";
+  readonly sdkVersion = "deterministic-provider.v1";
+  readonly inputCapabilities = {
+    text: true,
+    image: true,
+    imageUnderstanding: false,
+  } as const;
+
+  constructor(
+    private readonly body: (found: string) => string,
+  ) {}
+
+  async run(
+    request: AgentProviderRequest,
+    _invokeTool: unknown,
+    signal: AbortSignal,
+  ): Promise<AgentProviderResult> {
+    const tool = request.supplementalTools?.find(
+      (entry) => entry.name === "search_saved_memory",
+    );
+    expect(tool, "the run must expose the saved-Memory search tool").toBeDefined();
+    const receipt = await tool!.execute({ terms: ["harborsentinel9"] }, signal);
+    const content = receipt.content[0]!;
+    const page = JSON.parse(
+      content.type === "text" ? content.text : "{}",
+    ) as { items: Array<{ display_text: string }> };
+    return {
+      structuredOutput: {
+        outcome: "reply",
+        title: "Saved record",
+        body: this.body(page.items[0]?.display_text ?? "nothing"),
+      },
+      inputTokens: 1,
+      outputTokens: 1,
+      estimatedUsd: 0,
+      turns: 1,
+      permissionDenials: [],
+    };
+  }
+}
+
+function searchProvider(): AgentProvider {
+  return new SavedMemoryScriptedProvider(
+    (found) => `Derived answer quoting ${found}`,
+  );
+}
+
+function plainProvider(): ScriptedAgentProvider {
+  return new ScriptedAgentProvider([], {
+    outcome: "reply",
+    title: "Plain",
+    body: "Follow-up answer that only reuses earlier context.",
+  });
+}
+
+async function runTask(input: {
+  auth: AuthContext;
+  sessionId: string;
+  taskID: string;
+  objective: string;
+  provider: AgentProvider;
+}): Promise<UnscopedChatExecution> {
+  return executeUnscopedChatTask({
+    request: {
+      idempotency_key: randomUUID(),
+      objective: input.objective,
+      session_id: input.sessionId,
+      message_id: randomUUID(),
+    },
+    taskID: input.taskID,
+    provider: input.provider as never,
+    database: pool!,
+    auth: input.auth,
+  });
+}
+
+async function dependencyRows(accountId: string, taskID: string) {
+  return (
+    await pool!.query<{
+      memory_item_id: string;
+      memory_item_version: number;
+      owner_user_id: string;
+    }>(
+      `SELECT memory_item_id, memory_item_version, owner_user_id
+       FROM agent_task_memory_dependencies
+       WHERE account_id=$1 AND task_id=lower($2::text) ORDER BY memory_item_id`,
+      [accountId, taskID],
+    )
+  ).rows;
+}
+
+async function retractedTasks(accountId: string): Promise<string[]> {
+  return (
+    await pool!.query<{ task_id: string }>(
+      "SELECT task_id FROM agent_session_retracted_tasks WHERE account_id=$1",
+      [accountId],
+    )
+  ).rows.map((row) => row.task_id);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
+/** The ordinary RemoteChatAnswerProviding.answer branch, not the workspace adapter. */
+function legacyProvider(
+  answer: (request: RemoteChatAnswerRequest) => Promise<RemoteChatAnswerResult> | RemoteChatAnswerResult,
+) {
+  return {
+    providerId: "zhipu-chat-completions" as const,
+    id: "zhipu-chat-completions",
+    model: "synthetic-legacy",
+    supportsImageInput: false,
+    answer: async (request: RemoteChatAnswerRequest) => answer(request),
+  };
+}
+
+function legacyAnswer(body: string): RemoteChatAnswerResult {
+  return {
+    kind: "answer",
+    title: "Legacy",
+    body,
+    citation_ids: [],
+    provider_id: "zhipu-chat-completions",
+    model: "synthetic-legacy",
+    provider_request_id: null,
+    input_tokens: 1,
+    output_tokens: 1,
+  };
+}
+
+/** A test-only barrier key whose advisory lock pauses one exact statement. */
+async function newBarrierKey(): Promise<string> {
+  return String(
+    (
+      await pool!.query<{ key: string }>(
+        "SELECT ('x'||substr(md5($1),1,16))::bit(64)::bigint AS key",
+        [randomUUID()],
+      )
+    ).rows[0]!.key,
+  );
+}
+
+/**
+ * Pause the real final Session mutation exactly at its Session UPDATE, i.e.
+ * after its redaction/currentness reads, while its transaction holds the
+ * saved-Memory lineage fence. Scoped to one Session and dropped afterwards.
+ */
+async function installSessionWritePause(sessionId: string, barrierKey: string): Promise<() => Promise<void>> {
+  const name = `lineage_test_pause_${randomUUID().replace(/-/g, "")}`;
+  await pool!.query(
+    `CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$
+     BEGIN
+       -- The pause must outlive the mutation's own bounded lock waits.
+       PERFORM set_config('lock_timeout', '0', true);
+       PERFORM pg_advisory_xact_lock(${barrierKey});
+       RETURN NEW;
+     END $$`,
+  );
+  await pool!.query(
+    `CREATE TRIGGER ${name} BEFORE UPDATE ON agent_sessions
+     FOR EACH ROW WHEN (NEW.id = '${sessionId}'::uuid) EXECUTE FUNCTION ${name}()`,
+  );
+  return async () => {
+    await pool!.query(`DROP TRIGGER IF EXISTS ${name} ON agent_sessions`);
+    await pool!.query(`DROP FUNCTION IF EXISTS ${name}()`);
+  };
+}
+
+describe.skipIf(!pool)("Saved Memory chat lineage", () => {
+  it("saves the queue result, then deleting the source scrubs the replay body and refuses replay", async () => {
+    const auth = await makeAuth("replay");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      expect(claimed).not.toBeNull();
+
+      // The run discovers saved Memory and persists durable dependencies
+      // before the discovered text can escape to the model.
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      expect(execution.body.blocks[0]!.body).toContain("HarborSentinel9");
+      const deps = await dependencyRows(auth.accountId, claimed.runId);
+      expect(deps).toEqual([
+        {
+          memory_item_id: memory.memoryItemID,
+          memory_item_version: memory.version,
+          owner_user_id: auth.userId,
+        },
+      ]);
+      // Lineage is identity and version only, never raw source content.
+      expect(JSON.stringify(deps)).not.toContain("HarborSentinel9");
+
+      const result = executionResult(execution);
+      await recordConversationQueueResult(pool!, claimed, result);
+
+      // Explicit source deletion before the crash replay.
+      await mutateAgentSession(
+        pool!, auth, memory.sourceSessionId,
+        { expected_revision: 1, idempotency_key: randomUUID() }, true,
+      );
+
+      // The stored replay body is scrubbed and the task is retracted.
+      const stored = await readStoredConversationQueueResult(pool!, auth.accountId, claimed.entryId);
+      expect(stored).toMatchObject({ state: "withdrawn", taskID: claimed.runId.toLowerCase() });
+      const row = await pool!.query<{ result: Record<string, unknown> }>(
+        "SELECT result FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+        [auth.accountId, claimed.entryId],
+      );
+      expect(row.rows[0]!.result).toMatchObject({ source_context_unavailable: true });
+      expect(JSON.stringify(row.rows[0]!.result)).not.toContain("HarborSentinel9");
+      expect(await retractedTasks(auth.accountId)).toContain(claimed.runId.toLowerCase());
+
+      // Even a caller still holding the original result cannot replay it: the
+      // durable rows, not a process-local map, gate the canonical write.
+      await expect(
+        persistConversationQueueCompletion(pool!, auth, {
+          fence: claimed, sessionId,
+          messageId: claimed.messageId, objective: claimed.objective,
+          acceptedAt: claimed.acceptedAt, images: [], result,
+        }),
+      ).rejects.toMatchObject({ statusCode: 410 });
+      expect((await getAgentSession(pool!, auth, sessionId)).payload!.turns).toEqual([]);
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("retracts a completed derived answer and future Session history when its source is withdrawn", async () => {
+    const auth = await makeAuth("history");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const result = executionResult(execution);
+      await recordConversationQueueResult(pool!, claimed, result);
+      await persistConversationQueueCompletion(pool!, auth, {
+        fence: claimed, sessionId,
+        messageId: claimed.messageId, objective: claimed.objective,
+        acceptedAt: claimed.acceptedAt, images: [], result,
+      });
+
+      const saved = (await getAgentSession(pool!, auth, sessionId)).payload!;
+      expect(saved.turns).toHaveLength(1);
+      expect(JSON.stringify(saved.turns[0]!.response)).toContain("HarborSentinel9");
+      const history = await readAgentSessionConversation(pool!, auth, sessionId, {
+        personId: null, relationshipContextId: null,
+      });
+      expect(
+        history.messages.some((message) => message.text.includes("HarborSentinel9")),
+      ).toBe(true);
+
+      // The owner explicitly withdraws the accepted statement.
+      await mutateMemoryItem(pool!, auth, memory.memoryItemID, {
+        operation: "delete",
+        idempotency_key: randomUUID(),
+        expected_version: memory.version,
+        reason: "withdrawn for lineage test",
+      });
+
+      // Completed derived text is retracted from canonical history.
+      const after = (await getAgentSession(pool!, auth, sessionId)).payload!;
+      expect(JSON.stringify(after)).not.toContain("HarborSentinel9");
+      const historyAfter = await readAgentSessionConversation(pool!, auth, sessionId, {
+        personId: null, relationshipContextId: null,
+      });
+      expect(
+        historyAfter.messages.some((message) => message.text.includes("HarborSentinel9")),
+      ).toBe(false);
+      await expect(
+        assertSessionChatSourcesAvailable(pool!, auth, claimed.runId),
+      ).rejects.toMatchObject({ statusCode: 410 });
+      // A later request cannot rebuild Session history from the withdrawn text.
+      await expect(
+        runTask({
+          auth, sessionId, taskID: randomUUID(),
+          objective: "Continue the documentation discussion.", provider: plainProvider(),
+        }),
+      ).rejects.toMatchObject({ code: "AGENT_SESSION_CONTEXT_UNAVAILABLE" });
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("fails closed on a changed version before any final use or replay", async () => {
+    const auth = await makeAuth("version");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+
+      await pool!.query(
+        "UPDATE memory_items SET version = version + 1 WHERE account_id = $1 AND id = $2",
+        [auth.accountId, memory.memoryItemID],
+      );
+
+      await expect(
+        assertSavedMemoriesCurrent(pool!, auth, new Map([[memory.memoryItemID, memory.version]])),
+      ).rejects.toMatchObject({ code: "MEMORY_SEARCH_SOURCE_NOT_CURRENT" });
+      await expect(
+        assertSavedMemoryDependenciesCurrent(pool!, auth, claimed.runId),
+      ).rejects.toMatchObject({ statusCode: 410 });
+      await expect(
+        assertSessionChatSourcesAvailable(pool!, auth, claimed.runId),
+      ).rejects.toMatchObject({ statusCode: 410 });
+      // A re-read at the new version cannot silently overwrite the exposed one.
+      await expect(
+        recordSavedMemoryDependencies(pool!, auth, claimed.runId, [
+          { memoryItemID: memory.memoryItemID, version: memory.version + 1 },
+        ]),
+      ).rejects.toMatchObject({ code: "MEMORY_SEARCH_SOURCE_NOT_CURRENT" });
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("denies a same-account other user the derived answer and its lineage", async () => {
+    const auth = await makeAuth("owner");
+    try {
+      await saveAcceptedMemory(auth, "Mira is preparing HarborSentinel9 documentation.");
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+
+      const otherUserId = randomUUID();
+      await pool!.query(
+        "INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Other','simulated_human')",
+        [otherUserId, auth.accountId, `${otherUserId}@synthetic.local`],
+      );
+      const other: AuthContext = { ...auth, userId: otherUserId, userEmail: `${otherUserId}@synthetic.local` };
+
+      expect((await searchSavedMemories(pool!, other, { terms: ["harborsentinel9"] })).items).toEqual([]);
+      await expect(
+        assertSavedMemoryDependenciesCurrent(pool!, other, claimed.runId),
+      ).rejects.toMatchObject({ statusCode: 404 });
+      await expect(
+        assertSessionChatSourcesAvailable(pool!, other, claimed.runId),
+      ).rejects.toMatchObject({ statusCode: 404 });
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("keeps a safe no-Memory task across unrelated saved-Memory withdrawal", async () => {
+    const auth = await makeAuth("safe");
+    try {
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "Say hello."))!;
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "Say hello.", provider: plainProvider(),
+      });
+      const result = executionResult(execution);
+      await recordConversationQueueResult(pool!, claimed, result);
+      await persistConversationQueueCompletion(pool!, auth, {
+        fence: claimed, sessionId,
+        messageId: claimed.messageId, objective: claimed.objective,
+        acceptedAt: claimed.acceptedAt, images: [], result,
+      });
+      expect(await dependencyRows(auth.accountId, claimed.runId)).toEqual([]);
+
+      // An unrelated accepted statement is created and withdrawn afterwards.
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      await mutateMemoryItem(pool!, auth, memory.memoryItemID, {
+        operation: "delete",
+        idempotency_key: randomUUID(),
+        expected_version: memory.version,
+        reason: "unrelated withdrawal",
+      });
+
+      await expect(
+        assertSessionChatSourcesAvailable(pool!, auth, claimed.runId),
+      ).resolves.toBeUndefined();
+      const history = await readAgentSessionConversation(pool!, auth, sessionId, {
+        personId: null, relationshipContextId: null,
+      });
+      expect(
+        history.messages.some((message) => message.text.includes("Follow-up answer")),
+      ).toBe(true);
+      expect(await retractedTasks(auth.accountId)).not.toContain(claimed.runId.toLowerCase());
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("records no identity, contact or write authority with saved-Memory lineage", async () => {
+    const auth = await makeAuth("authority");
+    try {
+      await saveAcceptedMemory(auth, "Mira is preparing HarborSentinel9 documentation.");
+      const page = await searchSavedMemories(pool!, auth, { terms: ["harborsentinel9"] });
+      expect(page.authority).toBe("saved_source_statements_not_identity_or_execution_authority");
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      expect(execution.body.external_effects).toEqual([]);
+
+      const deps = await dependencyRows(auth.accountId, claimed.runId);
+      expect(deps).toHaveLength(1);
+      expect(Object.keys(deps[0]!).sort()).toEqual([
+        "memory_item_id", "memory_item_version", "owner_user_id",
+      ]);
+      // Only the owner's self subject exists; no contact person, relationship
+      // context or identity case was promoted by the discovery or its lineage.
+      const subjects = await pool!.query<{ external_ref: string }>(
+        "SELECT external_ref FROM subjects WHERE account_id=$1",
+        [auth.accountId],
+      );
+      expect(subjects.rows.map((row) => row.external_ref)).toEqual([
+        `workspace-owner:${auth.userId}`,
+      ]);
+      for (const table of ["assignments", "identity_resolution_cases"]) {
+        const count = await pool!.query<{ n: string }>(
+          `SELECT count(*) AS n FROM ${table} WHERE account_id=$1`,
+          [auth.accountId],
+        );
+        expect(Number(count.rows[0]!.n), `${table} must not gain authority`).toBe(0);
+      }
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("inherits conservative lineage into a follow-up answer and retracts both together", async () => {
+    const auth = await makeAuth("inherit");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const first = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const firstExecution = await runTask({
+        auth, sessionId, taskID: first.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const firstResult = executionResult(firstExecution);
+      await recordConversationQueueResult(pool!, first, firstResult);
+      await persistConversationQueueCompletion(pool!, auth, {
+        fence: first, sessionId,
+        messageId: first.messageId, objective: first.objective,
+        acceptedAt: first.acceptedAt, images: [], result: firstResult,
+      });
+      await finalizeConversationQueueEntry(pool!, { fence: first, status: "completed" });
+
+      // The follow-up reuses the earlier derived answer from history without
+      // any new saved-Memory read, and inherits its dependencies.
+      const second = (await admitAndClaim(auth, sessionId, "And what should we do next?"))!;
+      const secondExecution = await runTask({
+        auth, sessionId, taskID: second.runId,
+        objective: "And what should we do next?", provider: plainProvider(),
+      });
+      expect(secondExecution.previousTaskIDs).toEqual([first.runId]);
+      // Inherited lineage is durable BEFORE the provider saw any history text,
+      // so a crash before completion can never store the reused old answer.
+      expect(await dependencyRows(auth.accountId, second.runId)).toEqual(
+        await dependencyRows(auth.accountId, first.runId),
+      );
+      const secondResult = executionResult(secondExecution);
+      await recordConversationQueueResult(pool!, second, secondResult);
+      await persistConversationQueueCompletion(pool!, auth, {
+        fence: second, sessionId,
+        messageId: second.messageId, objective: second.objective,
+        acceptedAt: second.acceptedAt, images: [], result: secondResult,
+      });
+      expect(await dependencyRows(auth.accountId, second.runId)).toEqual(
+        await dependencyRows(auth.accountId, first.runId),
+      );
+
+      await mutateMemoryItem(pool!, auth, memory.memoryItemID, {
+        operation: "delete",
+        idempotency_key: randomUUID(),
+        expected_version: memory.version,
+        reason: "withdrawn inherited source",
+      });
+      const retracted = await retractedTasks(auth.accountId);
+      expect(retracted).toContain(first.runId.toLowerCase());
+      expect(retracted).toContain(second.runId.toLowerCase());
+      const after = (await getAgentSession(pool!, auth, sessionId)).payload!;
+      expect(JSON.stringify(after)).not.toContain("HarborSentinel9");
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("refuses to replay a crashed follow-up that inherited a withdrawn source", async () => {
+    const auth = await makeAuth("inherit-replay");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const first = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const firstExecution = await runTask({
+        auth, sessionId, taskID: first.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const firstResult = executionResult(firstExecution);
+      await recordConversationQueueResult(pool!, first, firstResult);
+      await persistConversationQueueCompletion(pool!, auth, {
+        fence: first, sessionId,
+        messageId: first.messageId, objective: first.objective,
+        acceptedAt: first.acceptedAt, images: [], result: firstResult,
+      });
+      await finalizeConversationQueueEntry(pool!, { fence: first, status: "completed" });
+
+      // The follow-up reuses the old derived answer from history, stores its
+      // result, then crashes before persistence.
+      const second = (await admitAndClaim(auth, sessionId, "And what should we do next?"))!;
+      const secondExecution = await runTask({
+        auth, sessionId, taskID: second.runId,
+        objective: "And what should we do next?", provider: plainProvider(),
+      });
+      const secondResult = executionResult(secondExecution);
+      expect(await dependencyRows(auth.accountId, second.runId)).toEqual(
+        await dependencyRows(auth.accountId, first.runId),
+      );
+      await recordConversationQueueResult(pool!, second, secondResult);
+
+      await mutateMemoryItem(pool!, auth, memory.memoryItemID, {
+        operation: "delete",
+        idempotency_key: randomUUID(),
+        expected_version: memory.version,
+        reason: "withdrawn before follow-up replay",
+      });
+
+      // The inherited lineage keeps the replay fail-closed: no stored body, no
+      // canonical turn, no derived text anywhere.
+      expect(
+        await readStoredConversationQueueResult(pool!, auth.accountId, second.entryId),
+      ).toMatchObject({ state: "withdrawn" });
+      await expect(
+        persistConversationQueueCompletion(pool!, auth, {
+          fence: second, sessionId,
+          messageId: second.messageId, objective: second.objective,
+          acceptedAt: second.acceptedAt, images: [], result: secondResult,
+        }),
+      ).rejects.toMatchObject({ statusCode: 410 });
+      const after = (await getAgentSession(pool!, auth, sessionId)).payload!;
+      expect(after.turns).toHaveLength(1);
+      expect(JSON.stringify(after)).not.toContain("HarborSentinel9");
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("retracts a forked Session copy of a derived turn with the original", async () => {
+    const auth = await makeAuth("fork");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const result = executionResult(execution);
+      await recordConversationQueueResult(pool!, claimed, result);
+      await persistConversationQueueCompletion(pool!, auth, {
+        fence: claimed, sessionId,
+        messageId: claimed.messageId, objective: claimed.objective,
+        acceptedAt: claimed.acceptedAt, images: [], result,
+      });
+      const originTurn = (await getAgentSession(pool!, auth, sessionId)).payload!.turns[0]!;
+
+      // A local fork copies the derived turn; the turn keeps its task identity,
+      // so its durable dependency rows travel with it.
+      const forkId = randomUUID();
+      const forkAt = new Date().toISOString();
+      await mutateAgentSession(pool!, auth, forkId, {
+        expected_revision: 0,
+        idempotency_key: randomUUID(),
+        payload: {
+          id: forkId,
+          scopeKind: "unresolved_intent",
+          personDisplayLabel: "",
+          contextDisplayLabel: "",
+          title: "Fork",
+          turns: [structuredClone(originTurn)],
+          originKind: "local",
+          originSessionID: sessionId,
+          originTurnID: originTurn.id,
+          createdAt: forkAt,
+          updatedAt: forkAt,
+          isUnread: false,
+        },
+      });
+
+      await mutateMemoryItem(pool!, auth, memory.memoryItemID, {
+        operation: "delete",
+        idempotency_key: randomUUID(),
+        expected_version: memory.version,
+        reason: "withdrawn fork source",
+      });
+      const fork = (await getAgentSession(pool!, auth, forkId)).payload!;
+      expect(JSON.stringify(fork)).not.toContain("HarborSentinel9");
+      const forkHistory = await readAgentSessionConversation(pool!, auth, forkId, {
+        personId: null, relationshipContextId: null,
+      });
+      expect(
+        forkHistory.messages.some((message) => message.text.includes("HarborSentinel9")),
+      ).toBe(false);
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("never withdraws derived answers on natural source TTL, only on explicit deletion", async () => {
+    const auth = await makeAuth("natural-ttl");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const result = executionResult(execution);
+      await recordConversationQueueResult(pool!, claimed, result);
+      await persistConversationQueueCompletion(pool!, auth, {
+        fence: claimed, sessionId,
+        messageId: claimed.messageId, objective: claimed.objective,
+        acceptedAt: claimed.acceptedAt, images: [], result,
+      });
+
+      // Natural retention expiry of the raw source Session is not an explicit
+      // deletion: the accepted minimal evidence keeps its own retention.
+      await pool!.query(
+        "UPDATE agent_sessions SET expires_at = now() - interval '1 second' WHERE account_id=$1 AND id=$2",
+        [auth.accountId, memory.sourceSessionId],
+      );
+      await sweepAgentSessions(pool!, auth.accountId);
+
+      expect(
+        (await searchSavedMemories(pool!, auth, { terms: ["harborsentinel9"] })).items,
+      ).toHaveLength(1);
+      await expect(
+        assertSessionChatSourcesAvailable(pool!, auth, claimed.runId),
+      ).resolves.toBeUndefined();
+      const history = await readAgentSessionConversation(pool!, auth, sessionId, {
+        personId: null, relationshipContextId: null,
+      });
+      expect(
+        history.messages.some((message) => message.text.includes("HarborSentinel9")),
+      ).toBe(true);
+      expect(await retractedTasks(auth.accountId)).not.toContain(claimed.runId.toLowerCase());
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("stores no result body whose source was revoked before the result write", async () => {
+    const auth = await makeAuth("revoked-before-write");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const result = executionResult(execution);
+
+      await mutateAgentSession(
+        pool!, auth, memory.sourceSessionId,
+        { expected_revision: 1, idempotency_key: randomUUID() }, true,
+      );
+      await recordConversationQueueResult(pool!, claimed, result);
+
+      const row = await pool!.query<{ result: Record<string, unknown> }>(
+        "SELECT result FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+        [auth.accountId, claimed.entryId],
+      );
+      expect(row.rows[0]!.result).toMatchObject({ source_context_unavailable: true });
+      expect(JSON.stringify(row.rows[0]!.result)).not.toContain("HarborSentinel9");
+      expect(
+        await readStoredConversationQueueResult(pool!, auth.accountId, claimed.entryId),
+      ).toMatchObject({ state: "withdrawn" });
+      await expect(
+        persistConversationQueueCompletion(pool!, auth, {
+          fence: claimed, sessionId,
+          messageId: claimed.messageId, objective: claimed.objective,
+          acceptedAt: claimed.acceptedAt, images: [], result,
+        }),
+      ).rejects.toMatchObject({ statusCode: 410 });
+      expect((await getAgentSession(pool!, auth, sessionId)).payload!.turns).toEqual([]);
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("blocks final admission at the lineage fence while a source withdrawal is in flight", async () => {
+    const auth = await makeAuth("race-reject");
+    const writer = await pool!.connect();
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const result = executionResult(execution);
+
+      // The source transition is in flight: its retraction already holds the
+      // account lineage fence but has not committed.
+      await writer.query("BEGIN");
+      await writer.query(
+        "UPDATE memory_items SET status='invalidated', invalidated_at=now(), invalidated_reason='race' WHERE account_id=$1 AND id=$2",
+        [auth.accountId, memory.memoryItemID],
+      );
+
+      let settled = false;
+      const finalWrite = persistConversationQueueCompletion(pool!, auth, {
+        fence: claimed, sessionId,
+        messageId: claimed.messageId, objective: claimed.objective,
+        acceptedAt: claimed.acceptedAt, images: [], result,
+      }).then(
+        () => { settled = true; return null; },
+        (error: unknown) => { settled = true; return error; },
+      );
+      await sleep(600);
+      expect(settled, "final admission must not pass an in-flight source transition").toBe(false);
+      const waiting = await pool!.query<{ n: string }>(
+        "SELECT count(*) AS n FROM pg_stat_activity WHERE wait_event_type='Lock' AND query ILIKE '%lock_saved_memory_lineage%'",
+      );
+      expect(
+        Number(waiting.rows[0]!.n),
+        "the final write must wait on the saved-Memory lineage fence",
+      ).toBeGreaterThan(0);
+
+      await writer.query("COMMIT");
+      const outcome = await finalWrite;
+      expect(outcome).toMatchObject({ statusCode: 410 });
+      expect((await getAgentSession(pool!, auth, sessionId)).payload!.turns).toEqual([]);
+      expect(await retractedTasks(auth.accountId)).toContain(claimed.runId.toLowerCase());
+      const stored = await pool!.query<{ result: unknown }>(
+        "SELECT result FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+        [auth.accountId, claimed.entryId],
+      );
+      expect(stored.rows[0]?.result ?? null).toBeNull();
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      writer.release();
+      await removeAccount(auth.accountId);
+    }
+  });
+
+  it("fully retracts a derived answer when the source withdraws during the paused final Session write", async () => {
+    const auth = await makeAuth("race-retract");
+    const barrier = await pool!.connect();
+    const writer = await pool!.connect();
+    let barrierKey = "0";
+    let uninstall: () => Promise<void> = async () => undefined;
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const result = executionResult(execution);
+      await recordConversationQueueResult(pool!, claimed, result);
+
+      // Pause the real final Session mutation at its Session UPDATE, after its
+      // redaction/currentness reads, while it holds the lineage fence.
+      barrierKey = await newBarrierKey();
+      await barrier.query("SELECT pg_advisory_lock($1)", [barrierKey]);
+      uninstall = await installSessionWritePause(sessionId, barrierKey);
+      let settled = false;
+      const finalWrite = persistConversationQueueCompletion(pool!, auth, {
+        fence: claimed, sessionId,
+        messageId: claimed.messageId, objective: claimed.objective,
+        acceptedAt: claimed.acceptedAt, images: [], result,
+      }).then(
+        () => { settled = true; return null; },
+        (error: unknown) => { settled = true; return error; },
+      );
+      await sleep(600);
+      expect(settled, "the final Session write must pause after its redaction read").toBe(false);
+
+      // A concurrent source withdrawal cannot commit its retraction until the
+      // paused final write releases the fence.
+      await writer.query("BEGIN");
+      let withdrawn = false;
+      const withdrawal = writer.query(
+        "UPDATE memory_items SET status='invalidated', invalidated_at=now(), invalidated_reason='race' WHERE account_id=$1 AND id=$2",
+        [auth.accountId, memory.memoryItemID],
+      ).then(() => { withdrawn = true; });
+      await sleep(500);
+      expect(withdrawn, "the source retraction must wait for the fence holder").toBe(false);
+
+      await barrier.query("SELECT pg_advisory_unlock($1)", [barrierKey]);
+      const outcome = await finalWrite;
+      await withdrawal;
+      await writer.query("COMMIT");
+      expect(outcome, "the fenced final write committed before the withdrawal").toBeNull();
+
+      // After both transactions: everything derived is retracted, never stale.
+      const after = (await getAgentSession(pool!, auth, sessionId)).payload!;
+      expect(JSON.stringify(after)).not.toContain("HarborSentinel9");
+      const history = await readAgentSessionConversation(pool!, auth, sessionId, {
+        personId: null, relationshipContextId: null,
+      });
+      expect(
+        history.messages.some((message) => message.text.includes("HarborSentinel9")),
+      ).toBe(false);
+      const row = await pool!.query<{ result: Record<string, unknown> }>(
+        "SELECT result FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+        [auth.accountId, claimed.entryId],
+      );
+      expect(row.rows[0]!.result).toMatchObject({ source_context_unavailable: true });
+      expect(JSON.stringify(row.rows[0]!.result)).not.toContain("HarborSentinel9");
+      expect(await retractedTasks(auth.accountId)).toContain(claimed.runId.toLowerCase());
+      await expect(
+        assertSessionChatSourcesAvailable(pool!, auth, claimed.runId),
+      ).rejects.toMatchObject({ statusCode: 410 });
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      await barrier.query("SELECT pg_advisory_unlock($1)", [barrierKey]).catch(() => undefined);
+      await uninstall();
+      barrier.release();
+      writer.release();
+      await removeAccount(auth.accountId);
+    }
+  }, 90_000);
+
+  it("settles concurrent source transitions and account writes without hanging", async () => {
+    const auth = await makeAuth("concurrent");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+
+      const churnSource = async () => {
+        for (let i = 0; i < 4; i += 1) {
+          await pool!.query(
+            "UPDATE memory_items SET version = version + 1 WHERE account_id=$1 AND id=$2",
+            [auth.accountId, memory.memoryItemID],
+          );
+        }
+      };
+      const churnRegistration = async () => {
+        for (let i = 0; i < 4; i += 1) {
+          await inTransaction(pool!, (client) =>
+            recordSavedMemoryDependencies(client, auth, `churn-${randomUUID()}`, [
+              { memoryItemID: memory.memoryItemID, version: 1 },
+            ]),
+          ).catch(() => undefined);
+        }
+      };
+      const churnSessionWrite = async () => {
+        for (let i = 0; i < 3; i += 1) {
+          const scratch = await seedConversation(auth);
+          await mutateAgentSession(pool!, auth, scratch.sessionId, {
+            expected_revision: 1,
+            idempotency_key: randomUUID(),
+            payload: {
+              id: scratch.sessionId,
+              scopeKind: "unresolved_intent",
+              personDisplayLabel: "",
+              contextDisplayLabel: "",
+              title: "Churn",
+              turns: [],
+              createdAt: scratch.createdAt,
+              updatedAt: new Date().toISOString(),
+              isUnread: false,
+            },
+          });
+        }
+      };
+      await Promise.race([
+        Promise.all([
+          churnSource(), churnSource(), churnRegistration(),
+          churnSessionWrite(), churnSessionWrite(),
+        ]),
+        new Promise((_resolve, reject) =>
+          setTimeout(() => reject(new Error("concurrent source transitions hung the account")), 25_000),
+        ),
+      ]);
+
+      // Account writes still settle after the storm, and no derived text
+      // survives for the changed version.
+      await expect(
+        assertSessionChatSourcesAvailable(pool!, auth, claimed.runId),
+      ).rejects.toMatchObject({ statusCode: 410 });
+      const final = await seedConversation(auth);
+      await mutateAgentSession(pool!, auth, final.sessionId, {
+        expected_revision: 1,
+        idempotency_key: randomUUID(),
+        payload: {
+          id: final.sessionId,
+          scopeKind: "unresolved_intent",
+          personDisplayLabel: "",
+          contextDisplayLabel: "",
+          title: "Settled",
+          turns: [],
+          createdAt: final.createdAt,
+          updatedAt: new Date().toISOString(),
+          isUnread: false,
+        },
+      });
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  }, 90_000);
+
+  it("takes the lineage fence before queue locks so a concurrent withdrawal neither deadlocks nor leaks a raw body", async () => {
+    const auth = await makeAuth("lineage-order");
+    const writer = await pool!.connect();
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const claimed = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const execution = await runTask({
+        auth, sessionId, taskID: claimed.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const result = executionResult(execution);
+      await recordConversationQueueResult(pool!, claimed, result);
+
+      // In-flight source withdrawal: its retraction takes the account lineage
+      // fence and scrubs the queue row inside one transaction.
+      await writer.query("BEGIN");
+      await writer.query(
+        "UPDATE memory_items SET status='invalidated', invalidated_at=now(), invalidated_reason='race' WHERE account_id=$1 AND id=$2",
+        [auth.accountId, memory.memoryItemID],
+      );
+
+      let settled = false;
+      const lineage = recordConversationQueueLineage(pool!, auth, {
+        fence: claimed,
+        request: {
+          idempotency_key: `conversation-queue:${claimed.entryId}`,
+          session_id: sessionId,
+          message_id: claimed.messageId,
+          objective: claimed.objective,
+        },
+        result,
+      }).then(
+        () => { settled = true; return null; },
+        (error: unknown) => { settled = true; return error; },
+      );
+      await sleep(600);
+      expect(settled, "the lineage commit must wait on the fence before touching the queue row").toBe(false);
+      const waiting = await pool!.query<{ n: string }>(
+        "SELECT count(*) AS n FROM pg_stat_activity WHERE wait_event_type='Lock' AND query ILIKE '%lock_saved_memory_lineage%'",
+      );
+      expect(
+        Number(waiting.rows[0]!.n),
+        "the lineage transaction must queue on the account fence, never on the queue row",
+      ).toBeGreaterThan(0);
+
+      await writer.query("COMMIT");
+      const outcome = await lineage;
+      expect(outcome).toMatchObject({ statusCode: 410 });
+      const row = await pool!.query<{ result: Record<string, unknown> }>(
+        "SELECT result FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+        [auth.accountId, claimed.entryId],
+      );
+      expect(row.rows[0]!.result).toMatchObject({ source_context_unavailable: true });
+      expect(JSON.stringify(row.rows[0]!.result)).not.toContain("HarborSentinel9");
+      expect((await getAgentSession(pool!, auth, sessionId)).payload!.turns).toEqual([]);
+      const audits = await pool!.query<{ n: string }>(
+        "SELECT count(*) AS n FROM audit_events WHERE account_id=$1 AND entity_id=$2",
+        [auth.accountId, claimed.runId],
+      );
+      expect(Number(audits.rows[0]!.n), "no lineage audit may record a withdrawn body").toBe(0);
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      writer.release();
+      await removeAccount(auth.accountId);
+    }
+  }, 90_000);
+
+  it("gates an ordinary provider's memory-derived history before a stored result can replay it", async () => {
+    const auth = await makeAuth("legacy-provider");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const first = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const firstExecution = await runTask({
+        auth, sessionId, taskID: first.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const firstResult = executionResult(firstExecution);
+      await recordConversationQueueResult(pool!, first, firstResult);
+      await persistConversationQueueCompletion(pool!, auth, {
+        fence: first, sessionId,
+        messageId: first.messageId, objective: first.objective,
+        acceptedAt: first.acceptedAt, images: [], result: firstResult,
+      });
+      await finalizeConversationQueueEntry(pool!, { fence: first, status: "completed" });
+
+      const second = (await admitAndClaim(auth, sessionId, "Continue the documentation discussion."))!;
+      const started = deferred();
+      const gate = deferred();
+      const executionPromise = executeUnscopedChatTask({
+        request: {
+          idempotency_key: randomUUID(),
+          objective: "Continue the documentation discussion.",
+          session_id: sessionId,
+          message_id: randomUUID(),
+        },
+        taskID: second.runId,
+        provider: legacyProvider(async (request) => {
+          started.resolve();
+          // The reused derived answer reached the ordinary answer branch, and
+          // its inherited dependencies were durable before it did.
+          expect(JSON.stringify(request.conversation_history)).toContain("HarborSentinel9");
+          expect(await dependencyRows(auth.accountId, second.runId)).toEqual(
+            await dependencyRows(auth.accountId, first.runId),
+          );
+          await gate.promise;
+          return legacyAnswer("Legacy answer quoting HarborSentinel9");
+        }),
+        database: pool!,
+        probePool: pool!,
+        auth,
+      });
+      await started.promise;
+
+      // The source withdraws while the legacy answer is still being produced.
+      await mutateMemoryItem(pool!, auth, memory.memoryItemID, {
+        operation: "delete",
+        idempotency_key: randomUUID(),
+        expected_version: memory.version,
+        reason: "withdrawn during legacy answer",
+      });
+      gate.resolve();
+      const execution = await executionPromise;
+      expect(execution.body.blocks[0]!.body).toContain("HarborSentinel9");
+
+      // The result write keeps only the truthful withdrawal marker: the
+      // inherited rows make the body inadmissible even though this provider
+      // never called a memory tool itself.
+      await recordConversationQueueResult(pool!, second, executionResult(execution));
+      const row = await pool!.query<{ result: Record<string, unknown> }>(
+        "SELECT result FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+        [auth.accountId, second.entryId],
+      );
+      expect(row.rows[0]!.result).toMatchObject({ source_context_unavailable: true });
+      expect(JSON.stringify(row.rows[0]!.result)).not.toContain("HarborSentinel9");
+      expect(
+        await readStoredConversationQueueResult(pool!, auth.accountId, second.entryId),
+      ).toMatchObject({ state: "withdrawn" });
+      await expect(
+        persistConversationQueueCompletion(pool!, auth, {
+          fence: second, sessionId,
+          messageId: second.messageId, objective: second.objective,
+          acceptedAt: second.acceptedAt, images: [], result: executionResult(execution),
+        }),
+      ).rejects.toMatchObject({ statusCode: 410 });
+      const after = (await getAgentSession(pool!, auth, sessionId)).payload!;
+      expect(after.turns).toHaveLength(1);
+      expect(JSON.stringify(after)).not.toContain("HarborSentinel9");
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  }, 90_000);
+
+  it("commits sync-path lineage durably before exposure and never holds the account fence across provider calls", async () => {
+    const auth = await makeAuth("sync-durable");
+    try {
+      const memory = await saveAcceptedMemory(
+        auth, "Mira is preparing HarborSentinel9 documentation.",
+      );
+      const { sessionId } = await seedConversation(auth);
+      const first = (await admitAndClaim(auth, sessionId, "What is the current documentation work?"))!;
+      const firstExecution = await runTask({
+        auth, sessionId, taskID: first.runId,
+        objective: "What is the current documentation work?", provider: searchProvider(),
+      });
+      const firstResult = executionResult(firstExecution);
+      await recordConversationQueueResult(pool!, first, firstResult);
+      await persistConversationQueueCompletion(pool!, auth, {
+        fence: first, sessionId,
+        messageId: first.messageId, objective: first.objective,
+        acceptedAt: first.acceptedAt, images: [], result: firstResult,
+      });
+      await finalizeConversationQueueEntry(pool!, { fence: first, status: "completed" });
+
+      // Exact sync wiring: the request transaction hands its PoolClient to the
+      // adapter while an independent pool owns durable lineage writes.
+      const syncTaskID = randomUUID();
+      await inTransaction(pool!, (client) => executeUnscopedChatTask({
+        request: {
+          idempotency_key: randomUUID(),
+          objective: "Continue the documentation discussion.",
+          session_id: sessionId,
+          message_id: randomUUID(),
+        },
+        taskID: syncTaskID,
+        provider: legacyProvider(async (request) => {
+          // From an independent connection the inherited rows are already
+          // committed while the request transaction is still open.
+          expect(JSON.stringify(request.conversation_history)).toContain("HarborSentinel9");
+          expect(await dependencyRows(auth.accountId, syncTaskID)).toEqual(
+            await dependencyRows(auth.accountId, first.runId),
+          );
+          // No account fence may stay held across a provider call.
+          const probe = await pool!.connect();
+          try {
+            await probe.query("BEGIN");
+            const free = (
+              await probe.query<{ ok: boolean }>(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended('talent_signal.saved_memory_lineage:' || $1, 0)) AS ok",
+                [auth.accountId],
+              )
+            ).rows[0]!.ok;
+            await probe.query("COMMIT");
+            expect(free, "no account fence may stay held across provider calls").toBe(true);
+          } finally {
+            probe.release();
+          }
+          return legacyAnswer("Legacy answer quoting HarborSentinel9");
+        }),
+        database: client,
+        probePool: pool!,
+        auth,
+      }));
+
+      // A source withdrawal during a sync provider call fails the request
+      // closed: no idempotent body, no Session turn, no stored raw text.
+      const gate = deferred();
+      const started = deferred();
+      const request = {
+        idempotency_key: randomUUID(),
+        objective: "Continue the documentation discussion.",
+        session_id: sessionId,
+        message_id: randomUUID(),
+      };
+      const run = createUnscopedChatTask(pool!, auth, request, legacyProvider(async () => {
+        started.resolve();
+        await gate.promise;
+        return legacyAnswer("Withdrawn answer quoting HarborSentinel9");
+      }));
+      await started.promise;
+      await mutateMemoryItem(pool!, auth, memory.memoryItemID, {
+        operation: "delete",
+        idempotency_key: randomUUID(),
+        expected_version: memory.version,
+        reason: "withdrawn during sync answer",
+      });
+      gate.resolve();
+      await expect(run).rejects.toMatchObject({ statusCode: 410 });
+      const idempotent = await pool!.query<{ n: string }>(
+        "SELECT count(*) AS n FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2",
+        [auth.accountId, request.idempotency_key],
+      );
+      expect(Number(idempotent.rows[0]!.n), "no idempotent body may survive the withdrawal").toBe(0);
+      const after = (await getAgentSession(pool!, auth, sessionId)).payload!;
+      expect(JSON.stringify(after)).not.toContain("HarborSentinel9");
+    } finally {
+      await removeAccount(auth.accountId);
+    }
+  }, 90_000);
+});

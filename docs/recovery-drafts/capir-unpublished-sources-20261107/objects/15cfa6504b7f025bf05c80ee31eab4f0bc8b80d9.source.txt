@@ -1,0 +1,143 @@
+// Synthetic original-clock proof through registered HTTP, actual startup and periodic maintenance.
+import { randomUUID } from "node:crypto";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { Pool } from "pg";
+import { buildApp } from "../app.js";
+import { compileRelationshipWiki } from "./wiki.js";
+import type { AuthContext } from "./auth.js";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { pendingLifecycleRunForAttempt } from "./legacyChatLifecycle.js";
+const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) throw new Error("Use owned disposable loopback proof database.");
+const pool = database ? new Pool({connectionString: database, max: 4}) : null;
+afterAll(async () => { await pool?.end(); });
+async function fixture() {
+  const accountId = randomUUID(), userId = randomUUID(), person = randomUUID(), context = randomUUID();
+  const accountSlug = `m4-${randomUUID()}`, userEmail = `${randomUUID()}@synthetic.invalid`;
+  const auth: AuthContext = { accountId, accountSlug, userId, userEmail, userKind: "simulated_human", sessionId: randomUUID() };
+  await pool!.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic observation')", [accountId, accountSlug]);
+  await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic owner','simulated_human')", [userId,accountId,userEmail]);
+  await pool!.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'synthetic',now()+interval '2 hours')", [auth.sessionId,accountId,userId,randomUUID()]);
+  await pool!.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Synthetic Person')", [person,accountId]);
+  await pool!.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label) VALUES($1::uuid,$2,$3,$1::text,'Synthetic Context')", [context,accountId,person]);
+  const capture = randomUUID(), resource = randomUUID(), fragment = randomUUID();
+  await pool!.query(`INSERT INTO captures(id,account_id,created_by_user_id,subject_id,assignment_id,source_kind,source_metadata,identity_status,identity_context,purpose)
+    VALUES($1,$2,$3,$4,$5,'conversation_transcript','{}','bound','{}','Synthetic observation proof')`,[capture,accountId,userId,person,context]);
+  await pool!.query(`INSERT INTO source_resources(id,account_id,capture_id,created_by_user_id,client_resource_id,resource_kind,input_channel,display_name,media_type,observed_at,retention_scope,processing_state)
+    VALUES($1::uuid,$2,$3,$4,$1::text,'conversation_transcript','chat','Synthetic source','text/plain',now(),'reviewed_selected_text','ready')`,[resource,accountId,capture,userId]);
+  await pool!.query(`INSERT INTO source_retention_receipts(receipt_id,account_id,capture_id,policy_version,requested_mode,effective_mode,source_scope,source_access_state,source_access_reason,created_at,updated_at)
+    VALUES($1,$2,$3,'source-retention.v2','ephemeral','ephemeral','reviewed_selected_text','available','awaiting_review_completion',now(),now())`,[randomUUID(),accountId,capture]);
+  await pool!.query(`INSERT INTO evidence_fragments(id,account_id,capture_id,resource_id,fragment_kind,sequence,text_content,content_hash,locator,attributed_actor,attribution_status,parser_name,parser_version,review_status)
+    VALUES($1,$2,$3,$4,'message',0,'Synthetic source: two preparation hours and five discussion hours.',repeat('a',64),'{"kind":"message","source_message_id":"synthetic-work-log","sequence":0,"speaker_side":"right"}','recruiter','confirmed','fixture','1','reviewed')`,[fragment,accountId,capture,resource]);
+  await compileRelationshipWiki(pool!,auth,person,context,{idempotency_key:randomUUID(),objective:"Compile synthetic observation evidence"});
+  return {auth,person,context,capture,fragment};
+}
+async function heldChat(f: Awaited<ReturnType<typeof fixture>>, suppliedPool: unknown = pool!, sessionTtlSeconds = 3600, retentionSweepIntervalMs = 60000) {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const producer: {signal?: AbortSignal | undefined; returned: boolean} = {returned:false};
+  const entry = vi.fn(async (request: Parameters<RemoteChatAnswerProviding["answer"]>[0]) => {
+    producer.signal = request.signal;await gate;producer.returned = true;
+    return {kind:"answer" as const,title:"Synthetic",body:"Synthetic control answer",citation_ids:[],
+      provider_id:"zhipu-chat-completions" as const,model:"synthetic",provider_request_id:null,input_tokens:1,output_tokens:1};
+  });
+  let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+  let running: Promise<Awaited<ReturnType<Awaited<ReturnType<typeof buildApp>>["inject"]>>> | undefined;
+  const cleanup = async () => { release();try { await running; } finally { await app?.close(); } };
+  try {
+    app = await buildApp({pool:suppliedPool,config:{databaseUrl:database!,host:"127.0.0.1",port:0,allowedOrigins:[],appleSignInAudiences:[],appleSignInEnabled:false,
+      passwordAuthEnabled:false,passwordRegistrationEnabled:false,simulatedAuthEnabled:true,internalLabEnabled:false,retentionSweepIntervalMs,sessionTtlSeconds},
+      conversationQueueWorkerEnabled:false,remoteChatProvider:{providerId:"zhipu-chat-completions",model:"synthetic",supportsImageInput:false,answer:entry},personResearchProvider:null} as never);
+    const login = await app.inject({method:"POST",url:"/v1/auth/simulated-login",payload:{account_slug:f.auth.accountSlug,user_email:f.auth.userEmail,client_label:"m4-control-proof"}});
+    expect(login.statusCode,login.body).toBe(200);
+    const headers = {authorization:`Bearer ${login.json().access_token}`}, session = randomUUID();
+    const saved = await app.inject({method:"PUT",url:`/v1/agent-sessions/${session}`,headers,payload:{idempotency_key:randomUUID(),expected_revision:0,payload:{
+      id:session,scopeKind:"relationship",personID:f.person,relationshipContextID:f.context,personDisplayLabel:"Synthetic Person",contextDisplayLabel:"Synthetic Context",
+      title:"Heartbeat control",updatedAt:new Date().toISOString(),isUnread:false,turns:[]}}});
+    expect(saved.statusCode,saved.body).toBe(200);
+    const key = randomUUID(), payload = {idempotency_key:key,person_id:f.person,relationship_context_id:f.context,session_id:session,objective:"Use current synthetic control evidence."};
+    running = app.inject({method:"POST",url:"/v1/chat/tasks",headers,payload}).then(result => result);
+    await vi.waitFor(() => expect(entry).toHaveBeenCalledOnce(), {timeout:15000});
+    const tuple = (await pool!.query(`SELECT a.id AS attempt_id,a.intent_id,a.account_id,a.actor_user_id,i.operation_scope,a.task_id,a.run_id,a.fencing_generation,a.heartbeat_at,a.lease_until,a.execution_authority_expires_at AS execution,i.manifest_id,
+      i.canonical_retention_expires_at AS canonical,m.selected_source_expires_at AS selected,m.source_selection
+      FROM legacy_chat_task_intents i JOIN legacy_chat_task_attempts a ON a.account_id=i.account_id AND a.id=i.current_attempt_id
+      AND a.intent_id=i.id AND a.actor_user_id=i.actor_user_id AND a.task_id=i.task_id AND a.fencing_generation=i.fencing_generation
+      JOIN context_manifests m ON m.account_id=i.account_id AND m.id=i.manifest_id WHERE i.account_id=$1 AND i.idempotency_key=$2`, [f.auth.accountId,key])).rows[0]!;
+    expect(tuple).toMatchObject({account_id:f.auth.accountId,actor_user_id:f.auth.userId,operation_scope:"create_chat_task"});
+    expect(pendingLifecycleRunForAttempt(tuple.attempt_id)).toMatchObject({intentID:tuple.intent_id,attemptID:tuple.attempt_id,
+      taskID:tuple.task_id,runID:tuple.run_id,fencingGeneration:Number(tuple.fencing_generation)});
+    return {app,headers,key,payload,producer,entry,tuple,release,running,cleanup};
+  } catch (error) { await cleanup();throw error; }
+}
+
+
+async function maintenanceApp() {
+  return buildApp({pool:pool!,config:{databaseUrl:database!,host:"127.0.0.1",port:0,allowedOrigins:[],appleSignInAudiences:[],appleSignInEnabled:false,
+    passwordAuthEnabled:false,passwordRegistrationEnabled:false,simulatedAuthEnabled:true,internalLabEnabled:false,retentionSweepIntervalMs:60000,sessionTtlSeconds:3600},
+    conversationQueueWorkerEnabled:false,remoteChatProvider:null,personResearchProvider:null} as never);
+}
+
+describe.skipIf(!pool)("ordinary Chat startup and periodic metadata expiry", () => {
+  it.each(["startup", "periodic"] as const)("M4B retires the original finite execution clock at actual %s without pretending settlement", async mode => {
+    const f = await fixture();
+    const h = await heldChat(f,pool!,8,mode === "periodic" ? 1000 : 60000);
+    let reader: Awaited<ReturnType<typeof maintenanceApp>> | undefined;
+    try {
+      expect(h.tuple.execution).toBeInstanceOf(Date);
+      expect(h.tuple.canonical).toBeInstanceOf(Date);expect(Number.isFinite(h.tuple.canonical.valueOf())).toBe(true);
+      expect(h.tuple.canonical.valueOf()).toBeGreaterThan(h.tuple.execution.valueOf());
+      await vi.waitFor(async () => {
+        const row = (await pool!.query("SELECT clock_timestamp()>$1::timestamptz AS expired", [h.tuple.execution])).rows[0]!;
+        expect(row.expired).toBe(true);
+      }, {timeout:12000,interval:100});
+      reader = await maintenanceApp();
+      if (mode === "startup") await reader.ready();
+      const readRetired = async () => { return (await pool!.query(`SELECT i.state AS intent_state,a.state AS attempt_state,i.terminal_reason AS intent_reason,
+          a.terminal_reason AS attempt_reason,a.usage_uncertain,a.dispatch_state,i.current_attempt_id,
+          a.account_id,a.actor_user_id,i.operation_scope,a.intent_id,a.task_id,a.run_id,a.fencing_generation,
+          i.canonical_retention_expires_at AS canonical,a.execution_authority_expires_at AS execution
+          FROM legacy_chat_task_intents i JOIN legacy_chat_task_attempts a ON a.account_id=i.account_id AND a.id=i.current_attempt_id
+      AND a.intent_id=i.id AND a.actor_user_id=i.actor_user_id AND a.task_id=i.task_id AND a.fencing_generation=i.fencing_generation
+          WHERE i.account_id=$1 AND i.id=$2 AND a.id=$3`, [f.auth.accountId,h.tuple.intent_id,h.tuple.attempt_id])).rows[0]!; };
+      const assertRetired = (row: Record<string, unknown>) => {
+        expect(row).toMatchObject({intent_state:"revoked",attempt_state:"revoked",intent_reason:"execution_authority_expired",
+          attempt_reason:"execution_authority_expired",usage_uncertain:true,dispatch_state:"dispatched",current_attempt_id:h.tuple.attempt_id,
+          canonical:h.tuple.canonical,execution:h.tuple.execution,
+          account_id:f.auth.accountId,actor_user_id:f.auth.userId,operation_scope:"create_chat_task",intent_id:h.tuple.intent_id,
+          task_id:h.tuple.task_id,run_id:h.tuple.run_id,fencing_generation:h.tuple.fencing_generation});
+      };
+      await vi.waitFor(async () => { assertRetired(await readRetired()); }, {timeout:3000,interval:100});
+      // Durable COMMIT visibility can precede client release and trusted notification.
+      await vi.waitFor(() => expect(h.producer.signal?.reason).toMatchObject({code:"LEGACY_CHAT_AUTHORITY_EXPIRED"}), {timeout:2000});
+      assertRetired(await readRetired());
+      expect(h.producer.returned).toBe(false);expect(h.entry).toHaveBeenCalledOnce();
+      expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).toMatchObject({intentID:h.tuple.intent_id,attemptID:h.tuple.attempt_id,
+        taskID:h.tuple.task_id,runID:h.tuple.run_id,fencingGeneration:Number(h.tuple.fencing_generation)});
+      const login = await reader.inject({method:"POST",url:"/v1/auth/simulated-login",payload:{account_slug:f.auth.accountSlug,user_email:f.auth.userEmail,client_label:"m4b-fresh-reader"}});
+      expect(login.statusCode,login.body).toBe(200);const headers = {authorization:`Bearer ${login.json().access_token}`};
+      const duplicate = await reader.inject({method:"POST",url:"/v1/chat/tasks",headers,payload:h.payload});
+      expect(duplicate.statusCode,duplicate.body).toBe(409);expect(duplicate.json().error.code).toBe("LEGACY_CHAT_PHYSICAL_OWNER_PENDING");
+      expect(duplicate.json().error.details).toMatchObject({task_id:h.tuple.task_id,attempt_id:h.tuple.attempt_id,state:"revoked",
+        status_url:`/v1/chat/tasks/${h.tuple.task_id}/status`});
+      expect(h.entry).toHaveBeenCalledOnce();h.release();const result = await h.running;
+      expect(result.statusCode,result.body).toBe(409);expect(result.json().error.code).toBe("LEGACY_CHAT_AUTHORITY_EXPIRED");
+      expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).toBeNull();
+      const retired = (await pool!.query("SELECT state,terminal_reason,usage_uncertain FROM legacy_chat_task_attempts WHERE account_id=$1 AND id=$2", [f.auth.accountId,h.tuple.attempt_id])).rows[0]!;
+      expect(retired).toMatchObject({state:"revoked",terminal_reason:"execution_authority_expired",usage_uncertain:true});
+      expect((await pool!.query("SELECT 1 FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2 AND status='completed'", [f.auth.accountId,h.key])).rowCount).toBe(0);
+    } finally { try { await reader?.close(); } finally { await h.cleanup(); } }
+  }, 30000);
+
+  it("M4B startup preserves healthy registered execution and its one provider entry", async () => {
+    const f = await fixture(), h = await heldChat(f);
+    let reader: Awaited<ReturnType<typeof maintenanceApp>> | undefined;
+    try {
+      reader = await maintenanceApp();await reader.ready();
+      const row = (await pool!.query("SELECT state,terminal_reason FROM legacy_chat_task_attempts WHERE account_id=$1 AND id=$2", [f.auth.accountId,h.tuple.attempt_id])).rows[0]!;
+      expect(row).toMatchObject({state:"running",terminal_reason:null});expect(h.producer.signal?.aborted).toBe(false);
+      expect(h.entry).toHaveBeenCalledOnce();expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).not.toBeNull();
+      h.release();const result = await h.running;expect(result.statusCode,result.body).toBe(201);
+      expect(h.entry).toHaveBeenCalledOnce();expect(pendingLifecycleRunForAttempt(h.tuple.attempt_id)).toBeNull();
+    } finally { try { await reader?.close(); } finally { await h.cleanup(); } }
+  });
+});

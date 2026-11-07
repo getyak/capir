@@ -1,0 +1,23 @@
+import { SYSTEM_AGENT_RUNTIME } from "./runtimeDependencies.js";
+import type { AgentRuntimeDependencies } from "./types.js";
+
+/** Long explicit deadlines use representable timer chunks; absent means none. */
+export function executionDeadline(
+  callback: () => void,
+  durationMs: number | undefined,
+  runtime: Pick<AgentRuntimeDependencies, "nowMs" | "setTimeout" | "clearTimeout"> = SYSTEM_AGENT_RUNTIME,
+): (() => void) | undefined {
+  if (durationMs === undefined) return undefined;
+  if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error("EXECUTION_DEADLINE_INVALID");
+  const started = runtime.nowMs();
+  let cancelled = false;
+  let handle: unknown;
+  const schedule = () => {
+    if (cancelled) return;
+    const remaining = durationMs - Math.max(0, runtime.nowMs() - started);
+    if (remaining <= 0) { cancelled = true; callback(); return; }
+    handle = runtime.setTimeout(schedule, Math.min(2_147_483_647, Math.max(1, remaining)));
+  };
+  schedule();
+  return () => { cancelled = true; runtime.clearTimeout(handle); };
+}

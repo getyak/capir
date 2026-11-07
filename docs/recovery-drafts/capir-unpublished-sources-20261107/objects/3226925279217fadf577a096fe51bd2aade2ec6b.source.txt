@@ -1,0 +1,63 @@
+import "server-only";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+import type { MailProvider } from "../mail-integration";
+
+// Session-limited tests intentionally fail closed on process restart or routing
+// to a different replica. No token or mail payload is kept in this registry.
+const records = new Map<string, { generation: string; expiresAt: number; attempt: string | null; grant: string | null }>();
+const MAX_RECORDS = 1000;
+const HOUR = 3_600_000;
+function keyFor(binding: string, provider: MailProvider) { return `${binding}:${provider}`; }
+function prune(now: number) {
+  for (const [key, value] of records) if (value.expiresAt <= now) records.delete(key);
+}
+export function beginMailAttempt(binding: string, provider: MailProvider, now = Date.now()) {
+  prune(now);
+  const key = keyFor(binding, provider);
+  if (!records.has(key) && records.size >= MAX_RECORDS) throw new Error("MAIL_CAPACITY");
+  const generation = randomUUID();
+  const state = randomBytes(32).toString("base64url");
+  records.set(key, { generation, expiresAt: now + HOUR, attempt: state, grant: null });
+  return { generation, state };
+}
+export function consumeMailAttempt(binding: string, provider: MailProvider, state: string, generation: string, now = Date.now()) {
+  const record = records.get(keyFor(binding, provider));
+  if (!record || record.expiresAt <= now || record.generation !== generation || record.attempt !== state) return false;
+  record.attempt = null;
+  return true;
+}
+export function registerMailGrant(binding: string, provider: MailProvider, generation: string, expiresAt: number) {
+  const record = records.get(keyFor(binding, provider));
+  if (!record || record.generation !== generation || record.expiresAt <= Date.now() || record.attempt !== null || expiresAt <= Date.now()) return null;
+  const id = randomUUID();
+  record.grant = id;
+  record.expiresAt = expiresAt;
+  return id;
+}
+export function mailGrantActive(binding: string, provider: MailProvider, id: string, now = Date.now()) {
+  const record = records.get(keyFor(binding, provider));
+  return Boolean(record && record.expiresAt > now && record.grant === id);
+}
+export function disconnectMailGrant(binding: string, provider: MailProvider) { records.delete(keyFor(binding, provider)); }
+
+export function sealMailPayload(value: unknown, key: Buffer, purpose: string) {
+  const plaintext = Buffer.from(JSON.stringify(value));
+  // Keep the complete encrypted cookie below common browser header limits.
+  if (plaintext.length > 2800) throw new Error("MAIL_CREDENTIAL_TOO_LARGE");
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from(purpose));
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString("base64url");
+}
+export function openMailPayload(value: string | undefined, key: Buffer, purpose: string): unknown {
+  if (!value || value.length > 3900 || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.length < 29) return null;
+    const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12));
+    decipher.setAAD(Buffer.from(purpose));
+    decipher.setAuthTag(bytes.subarray(12, 28));
+    return JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString("utf8")) as unknown;
+  } catch { return null; }
+}

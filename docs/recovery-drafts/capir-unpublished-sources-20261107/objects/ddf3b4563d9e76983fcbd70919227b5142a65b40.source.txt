@@ -1,0 +1,161 @@
+import { randomUUID } from "node:crypto";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { InMemorySessionStore } from "@anthropic-ai/claude-agent-sdk";
+import { createClaudeHarnessWorkspace, sweepClaudeHarnessWorkspaces } from "./claudeHarnessWorkspace.js";
+
+const roots: string[] = [];
+async function root() { const path = await mkdtemp(join(tmpdir(), "get9-workspace-test-")); roots.push(path); return path; }
+afterEach(async () => { for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true }); });
+const marker = ".harness-owner.json";
+
+describe("SDK working-copy crash cleanup", () => {
+  it("cleans a crashed unbounded workspace whose PID belongs to a different process incarnation", async () => {
+    const path = await root();
+    const directory = join(path, `talent-signal-harness-v1-${randomUUID()}`);
+    await mkdir(directory);
+    await writeFile(join(directory, marker), JSON.stringify({ version: 1, pid: process.pid, processIdentity: "old-process-incarnation" }));
+    await writeFile(join(directory, "payload.txt"), "Synthetic source only");
+    await sweepClaudeHarnessWorkspaces(path);
+    await expect(access(directory)).rejects.toThrow();
+  });
+  // A chmod-based permission failure cannot be created by root (CAP_DAC_OVERRIDE
+  // deletes mode-0 payloads). These two run where the precondition is real; the
+  // root-proof retain/retry regression below covers the same ownership claim.
+  it.skipIf(process.getuid?.() === 0)("retains the journal through partial resume deletion and retries without the project directory", async () => {
+    const path = await root(), id = randomUUID(), workspace = await createClaudeHarnessWorkspace(1000, id, path);
+    const key = { projectKey: "partial-delete-project", sessionId: id };
+    await workspace.wrapStore(new InMemorySessionStore()).load(key);
+    const resume = join(path, `claude-resume-${randomUUID()}`), locked = join(resume, "locked");
+    await mkdir(join(resume, "projects", key.projectKey), { recursive: true });
+    await mkdir(locked); await writeFile(join(locked, "retained.txt"), "Synthetic payload");
+    await chmod(locked, 0);
+    try {
+      await expect(workspace.dispose()).rejects.toMatchObject({ code: "EACCES" });
+      const owner = JSON.parse(await readFile(join(workspace.directory, marker), "utf8"));
+      expect(owner.resumeCopies).toHaveLength(1);
+      // A failed recursive deletion may already have removed this authority
+      // clue. Retry must use the previously journaled root identity.
+      await rm(join(resume, "projects"), { recursive: true, force: true });
+      await chmod(locked, 0o700);
+      await writeFile(join(workspace.directory, marker), JSON.stringify({ ...owner, deadline: 1 }));
+      await sweepClaudeHarnessWorkspaces(path);
+      await expect(access(resume)).rejects.toThrow(); await expect(access(workspace.directory)).rejects.toThrow();
+    } finally { await chmod(locked, 0o700).catch(() => {}); }
+  });
+  it.skipIf(process.getuid?.() === 0)("keeps Run ownership until all local payloads are removed after a permission failure", async () => {
+    const path = await root(), workspace = await createClaudeHarnessWorkspace(1000, undefined, path);
+    const locked = join(workspace.directory, "locked");
+    await mkdir(locked); await writeFile(join(locked, "retained.txt"), "Synthetic payload"); await chmod(locked, 0);
+    try {
+      await expect(workspace.dispose()).rejects.toMatchObject({ code: "EACCES" });
+      const owner = JSON.parse(await readFile(join(workspace.directory, marker), "utf8"));
+      await chmod(locked, 0o700);
+      await writeFile(join(workspace.directory, marker), JSON.stringify({ ...owner, deadline: 1 }));
+      await sweepClaudeHarnessWorkspaces(path);
+      await expect(access(workspace.directory)).rejects.toThrow();
+    } finally { await chmod(locked, 0o700).catch(() => {}); }
+  });
+  it("keeps Run ownership through a failed cleanup and retries with the journaled identity", async () => {
+    const path = await root(), id = randomUUID(), workspace = await createClaudeHarnessWorkspace(undefined, id, path);
+    const key = { projectKey: "identity-retry-project", sessionId: id };
+    await workspace.wrapStore(new InMemorySessionStore()).load(key);
+    const resume = join(path, `claude-resume-${randomUUID()}`);
+    await mkdir(join(resume, "projects", key.projectKey), { recursive: true });
+    // Journal the copy identity first, then replace the directory so cleanup
+    // fails deterministically in any user context.
+    await workspace.rememberResumeCopies();
+    await rm(resume, { recursive: true, force: true });
+    await mkdir(join(resume, "projects", key.projectKey), { recursive: true });
+    const payload = join(workspace.directory, "retained.txt");
+    await writeFile(payload, "Synthetic payload");
+    await expect(workspace.dispose()).rejects.toThrow("HARNESS_WORKSPACE_COPY_IDENTITY_CHANGED");
+    // The failed cleanup keeps the owner journal and every local payload.
+    const owner = JSON.parse(await readFile(join(workspace.directory, marker), "utf8"));
+    expect(owner.resumeCopies).toHaveLength(1);
+    await access(payload);
+    // Retry cleans with the previously journaled root identity once the
+    // mismatching copy is gone. A consumed/dead owner is sweepable even though
+    // its Run declared no deadline.
+    await rm(resume, { recursive: true, force: true });
+    await writeFile(join(workspace.directory, marker), JSON.stringify({ ...owner, deadline: 1 }));
+    await sweepClaudeHarnessWorkspaces(path, Date.now() + 24 * 60 * 60 * 1000);
+    await expect(access(workspace.directory)).rejects.toThrow();
+  });
+  it("journals ownership before returning resume data and removes pre-SessionStart copies", async () => {
+    const path = await root(), id = randomUUID(), workspace = await createClaudeHarnessWorkspace(1000, id, path);
+    const store = new InMemorySessionStore(), key = { projectKey: "unique-run-project", sessionId: id };
+    await store.append(key, [{ type: "user", uuid: randomUUID(), message: { role: "user", content: "Synthetic context" } }]);
+    const wrapped = workspace.wrapStore(store);
+    expect(await wrapped.load(key)).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(workspace.directory, marker), "utf8"))).toMatchObject({ sessionID: id, projectKey: key.projectKey });
+    const resume = join(path, `claude-resume-${randomUUID()}`);
+    await mkdir(join(resume, "projects", key.projectKey), { recursive: true });
+    // No transcript file and no SessionStart hook yet: project identity suffices.
+    await workspace.dispose();
+    await expect(access(resume)).rejects.toThrow();
+    await expect(access(workspace.directory)).rejects.toThrow();
+  });
+  it("removes a crashed owner's main/subagent copies while preserving live and unrelated work", async () => {
+    const path = await root(), id = randomUUID(), project = "dead-owner-project";
+    const crashed = join(path, "talent-signal-harness-v1-crashed");
+    await mkdir(crashed);
+    await writeFile(join(crashed, marker), JSON.stringify({ version: 1, pid: process.pid, deadline: 1, sessionID: id, projectKey: project }));
+    const resume = join(path, `claude-resume-${randomUUID()}`), subagent = join(resume, "projects", project, id, "subagents");
+    await mkdir(subagent, { recursive: true });
+    await writeFile(join(subagent, "agent-child.jsonl"), "Synthetic derivative");
+    const unrelated = join(path, `claude-resume-${randomUUID()}`);
+    await mkdir(join(unrelated, "projects", "other-project"), { recursive: true });
+    const live = await createClaudeHarnessWorkspace(1000, randomUUID(), path);
+    await sweepClaudeHarnessWorkspaces(path);
+    await expect(access(crashed)).rejects.toThrow(); await expect(access(resume)).rejects.toThrow();
+    await access(live.directory); await access(unrelated);
+    await live.dispose();
+  });
+  it("does not follow directory symlinks or accept traversal markers as deletion authority", async () => {
+    const path = await root(), outside = await root();
+    await writeFile(join(outside, "keep.txt"), "unrelated");
+    await symlink(outside, join(path, "talent-signal-harness-v1-link"));
+    const forged = join(path, "talent-signal-harness-v1-forged"); await mkdir(forged);
+    await writeFile(join(forged, marker), JSON.stringify({ version: 1, pid: process.pid, deadline: 1, sessionID: randomUUID(), projectKey: "../../outside" }));
+    await sweepClaudeHarnessWorkspaces(path);
+    expect(await readFile(join(outside, "keep.txt"), "utf8")).toBe("unrelated"); await access(forged);
+  });
+  it("retains a live unbounded Run through any elapsed time without infinite timestamps", async () => {
+    const path = await root(), workspace = await createClaudeHarnessWorkspace(undefined, undefined, path);
+    const raw = await readFile(join(workspace.directory, marker), "utf8");
+    const owner = JSON.parse(raw);
+    // An unbounded Run journals no deadline at all: never Infinity, never an
+    // artificial expired timestamp.
+    expect(owner).toMatchObject({ version: 1, pid: process.pid });
+    expect(owner.deadline).toBeUndefined();
+    expect(raw).not.toContain("deadline");
+    expect(raw).not.toContain("Infinity");
+    // A live unbounded process is never swept because an artificial deadline
+    // expired, however long the Run lasts.
+    await sweepClaudeHarnessWorkspaces(path, Date.now() + 7 * 24 * 60 * 60 * 1000);
+    await access(workspace.directory);
+    await workspace.dispose();
+  });
+  it("removes a dead owner's unbounded payload", async () => {
+    const path = await root();
+    const dead = join(path, "talent-signal-harness-v1-dead");
+    await mkdir(dead);
+    await writeFile(join(dead, marker), JSON.stringify({ version: 1, pid: process.pid }));
+    // The payload's owning process is gone: dead owned payloads are cleaned
+    // even though the Run had no deadline.
+    const kill = vi.spyOn(process, "kill").mockImplementation((() => {
+      const error = new Error("synthetic ESRCH") as NodeJS.ErrnoException;
+      error.code = "ESRCH";
+      throw error;
+    }) as never);
+    try {
+      await sweepClaudeHarnessWorkspaces(path);
+    } finally {
+      kill.mockRestore();
+    }
+    await expect(access(dead)).rejects.toThrow();
+  });
+});

@@ -1,0 +1,113 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { readFile, writeFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { cli, fixture, provider, setup, openai, anthropic, binary, withoutDefaultTaskDeadline } from './model-helpers.mjs';
+
+const json=(res,value,status=200)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(value));};
+const list=['models','list','--remote','--json'];
+const longID=' exact🙂组合e\u0301/'+'m'.repeat(260)+'?a=1&b=2+TAIL ';
+const longLabel='模型🙂显示'.repeat(80)+'LABEL-TAIL';
+const add=(name,url,model='fixture',protocol='openai-compatible')=>['models','add',name,'--provider',protocol,'--base-url',url,'--model',model,'--auth','none'];
+const successful=r=>{assert.equal(r.code,0,r.stdout+r.stderr);return JSON.parse(r.stdout);};
+
+// These use the built production CLI and real owned HTTP, not a fake adapter.
+test('native traverses six full pages with long exact Unicode cursors and >1MiB aggregate',async t=>{
+  const pages=Array.from({length:6},(_,p)=>Array.from({length:150},(_,i)=>({id:`${p}-${i}-${longID}`,display_name:longLabel})));
+  const f=await setup(t,(req,res)=>{
+    const page=f.requests.length-1;
+    assert.equal(req.method,'GET'); assert.equal(req.headers['x-api-key'],f.env.CAPIR_SYNTHETIC_KEY);
+    assert.equal(req.headers['anthropic-version'],'2023-06-01'); assert.equal(req.headers['anthropic-beta'],undefined);
+    const url=new URL(req.url,'http://localhost');assert.equal(url.pathname,'/prefix/v1/models');
+    assert.equal(url.searchParams.get('after_id'),page===0?null:pages[page-1].at(-1).id);
+    json(res,{data:pages[page],has_more:page<5,last_id:pages[page].at(-1).id});
+  },'anthropic');
+  const r=await cli(list,await withoutDefaultTaskDeadline(f));const doc=successful(r);
+  assert.ok(Buffer.byteLength(r.stdout)>1024*1024); assert.deepEqual(doc.models,pages.flat());
+  assert.equal(doc.complete,true);assert.equal(doc.pagination_mode,'native_complete');assert.equal(doc.has_more,false);
+  assert.equal(doc.cursor,pages.at(-1).at(-1).id);assert.equal(f.requests.length,6);assert.ok(f.requests.every(x=>x.method==='GET'&&x.body===null));
+});
+test('native preserves finite overlapping observations including changed labels',async t=>{
+  const f=await setup(t,(_,res)=>f.requests.length===1?json(res,{data:[{id:'a',display_name:'old'},{id:'b'}],has_more:true,last_id:'b'}):json(res,{data:[{id:'a',display_name:'new'},{id:'c'}],has_more:false,last_id:'c'}),'anthropic');
+  assert.deepEqual(successful(await cli(list,f.env)).models,[{id:'a',display_name:'old'},{id:'b'},{id:'a',display_name:'new'},{id:'c'}]);assert.equal(f.requests.length,2);
+});
+test('native empty terminal catalogue is complete without manufacturing a cursor',async t=>{
+  const f=await setup(t,(_,res)=>json(res,{data:[],has_more:false,last_id:null}),'anthropic');const doc=successful(await cli(list,f.env));assert.deepEqual(doc.models,[]);assert.equal(doc.complete,true);assert.equal(doc.cursor,null);
+});
+test('native detects a later cursor cycle even when the page contains a new identity',async t=>{
+  const pages=[{data:[{id:'a'}],has_more:true,last_id:'a'},{data:[{id:'b'}],has_more:true,last_id:'b'},{data:[{id:'c'},{id:'a'}],has_more:true,last_id:'a'}];
+  const f=await setup(t,(_,res)=>json(res,pages[f.requests.length-1]),'anthropic');const r=await cli(list,f.env);assert.equal(r.code,3);assert.equal(JSON.parse(r.stdout).models,undefined);assert.equal(f.requests.length,3);
+});
+const badPages={
+  'empty advancing':{data:[],has_more:true,last_id:'b'},
+  'empty terminal with cursor':{data:[],has_more:false,last_id:'b'},
+  'unrelated lastID':{data:[{id:'b'}],has_more:true,last_id:'other'},
+  'self cursor':{data:[{id:'b'},{id:'a'}],has_more:true,last_id:'a'},
+  'cycle cursor':{data:[{id:'b'},{id:'a'}],has_more:false,last_id:'a'},
+  'no new identities':{data:[{id:'a'}],has_more:true,last_id:'a'},
+  'missing pagination status':{data:[{id:'b'}],last_id:'b'},
+  'string pagination status':{data:[{id:'b'}],has_more:'false',last_id:'b'},
+  'missing native cursor':{data:[{id:'b'}],has_more:false},
+  'lone surrogate ID':{data:[{id:'\ud800'}],has_more:false,last_id:'\ud800'},
+  'blank ID':{data:[{id:'  '}],has_more:false,last_id:'  '},
+  'control ID':{data:[{id:'a\u0001b'}],has_more:false,last_id:'a\u0001b'},
+  'malformed label':{data:[{id:'b',display_name:'\udc00'}],has_more:false,last_id:'b'},
+  'nonstring label':{data:[{id:'b',display_name:3}],has_more:false,last_id:'b'},
+  'malformed cursor':{data:[{id:'b'}],has_more:false,last_id:3},
+  'nonarray data':{data:null,has_more:false,last_id:null},
+};
+for(const [name,bad] of Object.entries(badPages))test(`native later ${name} fails without publishing accumulated rows`,async t=>{
+  const f=await setup(t,(_,res)=>json(res,f.requests.length===1?{data:[{id:'a'}],has_more:true,last_id:'a'}:bad),'anthropic');
+  const r=await cli(list,f.env);assert.equal(r.code,3,r.stdout);const doc=JSON.parse(r.stdout);assert.equal(doc.ok,false);assert.equal(doc.models,undefined);assert.equal(doc.complete,undefined);assert.equal(f.requests.length,2);
+});
+for(const status of [401,403,429,500,302])test(`native later HTTP${status} fails without fallback or partial success`,async t=>{
+  const f=await setup(t,(_,res)=>{if(f.requests.length===1)return json(res,{data:[{id:'a'}],has_more:true,last_id:'a'});res.writeHead(status,{location:'/steal'});res.end('synthetic-only-secret-12345');},'anthropic');
+  const r=await cli(list,f.env);assert.equal(r.code,status===401||status===403?4:status===429?5:3,r.stdout);assert.equal(JSON.parse(r.stdout).ok,false);assert.equal(f.requests.length,2);assert.equal((r.stdout+r.stderr).includes(f.env.CAPIR_SYNTHETIC_KEY),false);
+});
+for(const [name,data,code] of [['JSON','{broken',3],['UTF8',Buffer.from([0xff]),3],['page frame',' '.repeat(1024*1024+1),5]])test(`native later bad ${name} denies the whole traversal`,async t=>{
+  const f=await setup(t,(_,res)=>{if(f.requests.length===1)return json(res,{data:[{id:'a'}],has_more:true,last_id:'a'});res.writeHead(200,{'content-type':'application/json'});res.end(data);},'anthropic');const r=await cli(list,f.env);assert.equal(r.code,code);assert.equal(JSON.parse(r.stdout).models,undefined);assert.equal(f.requests.length,2);
+});
+for(const mode of ['timeout','SIGINT'])test(`actual models list later ${mode} closes its owned pending HTTP response`,{timeout:15000},async t=>{
+  let entered,disconnected;const ready=new Promise(r=>entered=r);const closed=new Promise(r=>disconnected=r);
+  const f=await setup(t,(_,res)=>{if(f.requests.length===1)return json(res,{data:[{id:'a'}],has_more:true,last_id:'a'});res.once('close',disconnected);res.writeHead(200,{'content-type':'application/json'});res.flushHeaders();entered();},'anthropic');
+  const child=spawn(process.execPath,[binary,...list,...mode==='timeout'?['--timeout','1']:[]],{env:f.env,stdio:['pipe','pipe','pipe']});t.after(()=>{if(child.exitCode===null)child.kill('SIGKILL');});child.stdin.end();let out='',err='';child.stdout.on('data',x=>out+=x);child.stderr.on('data',x=>err+=x);const exit=new Promise(r=>child.once('close',r));await ready;if(mode==='SIGINT')child.kill('SIGINT');assert.equal(await exit,mode==='timeout'?3:130,err+out);await closed;assert.equal(f.requests.length,2);assert.equal(JSON.parse(out).models,undefined);
+});
+for(const more of [undefined,false,true])test(`compatible full >100 response has honest completeness (${String(more)}) without guessed paging`,async t=>{
+  const rows=Array.from({length:140},(_,i)=>({id:`${i}-${longID}`,display_name:longLabel}));
+  const f=await setup(t,(_,res)=>json(res,{data:rows,...more===undefined?{}:{has_more:more},last_id:longID}));const doc=successful(await cli(list,f.env));assert.deepEqual(doc.models,rows);assert.equal(doc.cursor,longID);assert.equal(doc.has_more,more??null);assert.equal(doc.complete,more===undefined?null:!more);assert.equal(doc.pagination_mode,more===true?'unsupported_extension':'endpoint_response');assert.equal(f.requests.length,1);assert.equal(f.requests[0].path,'/prefix/v1/models');assert.equal(f.requests[0].method,'GET');
+});
+for(const fields of [{has_more:null},{has_more:'yes'},{last_id:''},{last_id:'\ud800'},{last_id:3}])test(`compatible malformed extension ${JSON.stringify(fields)} fails rather than dropping it`,async t=>{
+  const f=await setup(t,(_,res)=>json(res,{data:[{id:'ok'}],...fields}));assert.equal((await cli(list,f.env)).code,3);assert.equal(f.requests.length,1);
+});
+test('native uses raw credential-containing cursor internally but exposes only separately redacted display',async t=>{
+  const secret='synthetic-only-secret-12345';const id=longID+secret;const f=await setup(t,(req,res)=>{if(f.requests.length===1)return json(res,{data:[{id,display_name:'\u001b[31m'+secret+longLabel}],has_more:true,last_id:id});assert.equal(new URL(req.url,'http://localhost').searchParams.get('after_id'),id);json(res,{data:[{id:'tail'}],has_more:false,last_id:'tail'});},'anthropic');const r=await cli(list,f.env);const doc=successful(r);assert.equal(r.stdout.includes(secret),false);assert.equal(doc.models[0].id,longID+'[REDACTED]');assert.equal(doc.models[0].display_name,'[REDACTED]'+longLabel);assert.equal(f.requests.length,2);
+});
+test('more than32 profiles and long ASCII names reload, select, show, generate and remove',async t=>{
+  const f=await fixture(t);const p=await provider(t,(_,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(openai('ok'));});const name='long_'+'x'.repeat(80);
+  for(let i=0;i<34;i++)successful(await cli(add(`item${i}`,p.url),f.env));successful(await cli([...add(name,p.url,longID),'--default'],f.env));
+  assert.equal(successful(await cli(['models','list'],f.env)).profiles.length,35);assert.equal(successful(await cli(['models','show',name],f.env)).profile.model,longID);
+  successful(await cli(['models','use',name],f.env));successful(await cli(['ask','x','--no-stream','--json'],f.env));assert.equal(p.requests[0].body.model,longID);
+  successful(await cli(['models','remove',name],f.env));const doc=successful(await cli(['models','list'],f.env));assert.equal(doc.profiles.length,34);assert.equal(doc.default_profile,null);
+});
+test('long exact Unicode selected native ID reaches encoded metadata and generation unchanged',async t=>{
+  const f=await fixture(t);const p=await provider(t,(req,res,b)=>{if(req.method==='GET'){assert.equal(decodeURIComponent(req.url.split('/models/')[1]),longID);return json(res,{type:'model',id:longID,max_tokens:100,max_input_tokens:10000});}if(req.url.endsWith('/count_tokens'))return json(res,{input_tokens:10});assert.equal(b.model,longID);res.writeHead(200,{'content-type':'application/json'});res.end(anthropic('ok').replace('"model":"fixture"','"model":'+JSON.stringify(longID)));});successful(await cli([...add('work',p.url,longID,'anthropic'),'--default'],f.env));successful(await cli(['ask','x','--no-stream','--json'],f.env));assert.equal(p.requests.length,3);
+});
+for(const model of ['','  ','\ud800','x\udc00','a\u0001b'])test(`invalid exact configured model ${JSON.stringify(model)} fails before network`,async t=>{
+  const f=await fixture(t);const p=await provider(t,(_,res)=>json(res,{}));const good={provider:'openai-compatible',base_url:p.url,model,auth:'none',token_limit_field:'max_completion_tokens',system_role:'system',stream_usage:false};await writeFile(join(f.root,'models.json'),JSON.stringify({schema_version:'capir.models.v1',default_profile:'work',profiles:{work:good}}));assert.equal((await cli(['ask','x','--json'],f.env)).code,2);assert.equal(p.requests.length,0);
+});
+test('actual bounded config descriptor rejects malformed UTF8 without replacement',async t=>{
+  const f=await fixture(t);successful(await cli([...add('work','http://127.0.0.1:9999/v1'),'--default'],f.env));const file=join(f.root,'models.json');const b=await readFile(file);const offset=b.indexOf(Buffer.from('fixture'));const bad=Buffer.concat([b.subarray(0,offset),Buffer.from([0xff]),b.subarray(offset+7)]);await writeFile(file,bad);const r=await cli(['models','list'],f.env);assert.equal(r.code,2);assert.equal(JSON.parse(r.stdout).ok,false);assert.deepEqual(await readFile(file),bad);
+});
+test('64KiB atomic physical boundary preserves prior bytes/default and leaves no temporary files',async t=>{
+  const f=await fixture(t);const url='http://127.0.0.1:9999/v1';successful(await cli([...add('old',url),'--default'],f.env));successful(await cli(add('near',url,'m'.repeat(60000)),f.env));const file=join(f.root,'models.json'),old=await readFile(file);assert.ok(old.length<65536);const r=await cli([...add('oversize',url,'m'.repeat(10000)),'--default'],f.env);assert.equal(r.code,2);assert.deepEqual(await readFile(file),old);assert.equal(successful(await cli(['models','list'],f.env)).default_profile,'old');assert.equal((await readdir(f.root)).some(x=>x.endsWith('.tmp')),false);
+});
+test('actual remote timeout entry is documented and rejects nonremote use before GET',async t=>{
+  const f=await fixture(t);const help=successful(await cli(['models','list','--help'],f.env));assert.ok(help.commands.some(x=>x.includes('models list --remote')&&x.includes('--timeout')));assert.equal((await cli(['models','list','--timeout','1'],f.env)).code,2);
+});
+test('closed output pipe during final full-catalogue emission closes without a further request',{timeout:15000},async t=>{
+  const rows=Array.from({length:300},(_,i)=>({id:String(i),display_name:longLabel}));
+  assert.ok(Buffer.byteLength(JSON.stringify(rows))>65536);assert.ok(Buffer.byteLength(JSON.stringify(rows))<1024*1024);
+  const f=await setup(t,(_,res)=>json(res,{data:rows,has_more:false,last_id:'299'}),'anthropic');
+  const child=spawn(process.execPath,[binary,...list],{env:f.env,stdio:['pipe','pipe','pipe']});t.after(()=>{if(child.exitCode===null)child.kill('SIGKILL');});child.stdin.end();child.stderr.resume();const exit=new Promise(r=>child.once('close',r));child.stdout.once('data',()=>child.stdout.destroy());assert.equal(await exit,0);assert.equal(f.requests.length,1);
+});

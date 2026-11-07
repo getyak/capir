@@ -1,0 +1,20 @@
+/** Explicit provider truncation/rejection is not a completed answer or tool request.
+ * Missing legacy metadata preserves the existing compatibility path; unknown
+ * explicit terminal reasons fail closed without retaining provider error text.
+ */
+export function providerCompletionFailure(finishReason: string | null | undefined):
+  "provider_output_incomplete" | "provider_response_rejected" | undefined {
+  if (!finishReason || finishReason === "stop" || finishReason === "tool_calls" || finishReason === "function_call") return undefined;
+  return finishReason === "length" ? "provider_output_incomplete" : "provider_response_rejected";
+}
+
+/** Shared terminal admission policy; preserves each runner's usage receipt. */
+export function providerCompletionQuarantineReason(terminalReason: string | undefined) {
+  switch (terminalReason) {
+    case "provider_output_incomplete": return "PROVIDER_OUTPUT_INCOMPLETE";
+    case "provider_response_rejected": return "PROVIDER_RESPONSE_REJECTED";
+    case "provider_usage_unavailable": return "PROVIDER_USAGE_UNAVAILABLE";
+    case "structured_output_retry_exhausted": return "STRUCTURED_OUTPUT_RETRY_EXHAUSTED";
+    default: return undefined;
+  }
+}

@@ -1,0 +1,87 @@
+import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import pg from "pg";
+
+const root = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
+const deployed = "9f5c27e8c1cb89737888b72301abe040a32cb6a8";
+const name = process.env.CAPIR_DESKTOP_DB_NAME;
+const adminUrl = process.env.CAPIR_PROOF_DATABASE_URL;
+if (!name || !/^capir_deployed_[a-z0-9_]+$/.test(name) || !adminUrl) {
+  throw new Error("Set a unique capir_deployed_* database name and loopback CAPIR_PROOF_DATABASE_URL.");
+}
+const admin = new URL(adminUrl);
+if (!["localhost", "127.0.0.1"].includes(admin.hostname) || admin.port !== "55432") {
+  throw new Error("The proof must use the existing loopback PostgreSQL port 55432.");
+}
+const database = new URL(adminUrl);
+database.pathname = `/${name}`;
+const hash = value => createHash("sha256").update(value).digest("hex");
+const deployedFile = path => execFileSync("git", ["show", `${deployed}:${path}`], { cwd: root });
+const oldManifest = JSON.parse(deployedFile("apps/backend/src/database/migration-manifest.json").toString());
+const currentManifest = JSON.parse(readFileSync(resolve(root, "apps/backend/src/database/migration-manifest.json")));
+if (oldManifest.migrations.length !== 91 || currentManifest.migrations.length !== 92 ||
+    oldManifest.migrations.at(-1) !== "086_desktop_browser_login" ||
+    currentManifest.migrations.at(-1) !== "087_capir" ||
+    JSON.stringify(currentManifest.migrations.slice(0, 91)) !== JSON.stringify(oldManifest.migrations)) {
+  throw new Error("The exact deployed 91-migration prefix or appended capir migration changed.");
+}
+for (const version of oldManifest.migrations) {
+  const path = `apps/backend/src/database/${version}.sql`;
+  if (!readFileSync(resolve(root, path)).equals(deployedFile(path))) {
+    throw new Error(`Deployed migration bytes changed: ${version}`);
+  }
+}
+const pool = new pg.Pool({ connectionString: adminUrl, max: 1 });
+await pool.query(`CREATE DATABASE ${name}`);
+await pool.end();
+const fixture = new pg.Pool({ connectionString: database.toString(), max: 1 });
+try {
+  await fixture.query(`CREATE TABLE schema_migrations (
+    version text PRIMARY KEY, checksum text NOT NULL,
+    applied_at timestamptz NOT NULL DEFAULT now())`);
+  for (const version of oldManifest.migrations) {
+    const sql = deployedFile(`apps/backend/src/database/${version}.sql`).toString();
+    await fixture.query("BEGIN");
+    try {
+      await fixture.query(sql);
+      await fixture.query("INSERT INTO schema_migrations(version,checksum) VALUES($1,$2)", [version, hash(sql)]);
+      await fixture.query("COMMIT");
+    } catch (error) {
+      await fixture.query("ROLLBACK");
+      throw error;
+    }
+  }
+  const before = (await fixture.query("SELECT version,checksum FROM schema_migrations ORDER BY applied_at,version")).rows;
+  const tablesBefore = (await fixture.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")).rows.map(row => row.table_name);
+  if (before.length !== 91 || !tablesBefore.includes("desktop_browser_login_attempts") || tablesBefore.includes("capir_grants")) {
+    throw new Error("Deployed 91-migration database is not the expected desktop-only state.");
+  }
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const migrate = spawnSync("pnpm", ["--filter", "@talent-signal/backend", "migrate"], {
+      cwd: root, encoding: "utf8", env: { ...process.env, DATABASE_URL: database.toString() },
+    });
+    if (migrate.status !== 0) throw new Error(`Current migration runner attempt ${attempt} failed: ${migrate.stderr}`);
+  }
+  const after = (await fixture.query("SELECT version,checksum FROM schema_migrations")).rows;
+  const afterByName = new Map(after.map(row => [row.version, row.checksum]));
+  if (after.length !== 92 || before.some(row => afterByName.get(row.version) !== row.checksum) ||
+      afterByName.get("087_capir") !== hash(readFileSync(resolve(root, "apps/backend/src/database/087_capir.sql")))) {
+    throw new Error("Upgrade changed a deployed checksum, skipped capir, or executed twice.");
+  }
+  const tablesAfter = (await fixture.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")).rows.map(row => row.table_name);
+  if (tablesBefore.some(table => !tablesAfter.includes(table)) ||
+      !["desktop_browser_login_attempts", "capir_authorization_codes", "capir_grants", "capir_sandboxes", "capir_handoffs"].every(table => tablesAfter.includes(table))) {
+    throw new Error("Upgrade lost a deployed table or failed to add capir tables.");
+  }
+  process.stdout.write(JSON.stringify({
+    database: name, deployed_revision: deployed, before_migrations: before.length,
+    after_migrations: after.length, desktop_checksum: afterByName.get("086_desktop_browser_login"),
+    capir_checksum: afterByName.get("087_capir"), deployed_checksums_preserved: true,
+    deployed_tables_preserved: true, added_capir_tables: 4, second_runner_pass: "idempotent",
+  }, null, 2) + "\n");
+} finally {
+  await fixture.end();
+}

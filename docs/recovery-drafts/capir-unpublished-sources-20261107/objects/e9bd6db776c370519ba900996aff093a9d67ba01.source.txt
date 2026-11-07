@@ -1,0 +1,74 @@
+import XCTest
+@testable import TalentSignal
+
+/// Cross-language framing proof: these digests are also asserted by the
+/// TypeScript tests against `agentSessionDeltaFramingFixtures.ts`, so both
+/// runtimes frame identical bytes.
+final class AgentSessionDeltaFramingTests: XCTestCase {
+    func testSharedFramingFixturesMatchAcrossLanguages() throws {
+        for fixture in AgentSessionDeltaFramingFixtures.all {
+            XCTAssertEqual(
+                try AgentSessionDeltaFraming.sessionIntentDigest(fixture.value),
+                fixture.digest,
+                fixture.name
+            )
+        }
+    }
+
+    func testNegativeZeroFramesExactlyLikeZero() throws {
+        XCTAssertEqual(
+            try AgentSessionDeltaFraming.sessionIntentDigest(["a": -0.0]),
+            try AgentSessionDeltaFraming.sessionIntentDigest(["a": 0.0])
+        )
+    }
+
+    func testObjectKeyOrderDoesNotChangeTheDigest() throws {
+        let left: [String: Any] = ["z": 1.0, "\u{00E9}": 2.0, "a": 3.0, "\u{FFFF}": 4.0]
+        let right: [String: Any] = ["\u{FFFF}": 4.0, "a": 3.0, "\u{00E9}": 2.0, "z": 1.0]
+        XCTAssertEqual(
+            try AgentSessionDeltaFraming.frame(left),
+            try AgentSessionDeltaFraming.frame(right)
+        )
+    }
+
+    func testSwiftStringRepairsLoneSurrogateAndNonFiniteValuesAreRefused() throws {
+        let lone = String(utf16CodeUnits: [0x48, 0xD800, 0x21], count: 3)
+        // Swift String repairs invalid UTF16 on construction; the framer sees
+        // the actual valid replacement character, never the original surrogate.
+        XCTAssertEqual(Array(lone.utf16), [0x48, 0xFFFD, 0x21])
+        XCTAssertEqual(try AgentSessionDeltaFraming.sessionIntentDigest(["a": lone]),
+            try AgentSessionDeltaFraming.sessionIntentDigest(["a": "H\u{FFFD}!"]))
+        XCTAssertThrowsError(
+            try AgentSessionDeltaFraming.sessionIntentDigest(["a": NSNumber(value: Double.infinity)])
+        ) {
+            XCTAssertEqual($0 as? AgentSessionDeltaFramingError, .nonFiniteNumber)
+        }
+        XCTAssertThrowsError(
+            try AgentSessionDeltaFraming.sessionIntentDigest(["a": Date()])
+        ) {
+            XCTAssertEqual($0 as? AgentSessionDeltaFramingError, .unsupportedValue)
+        }
+    }
+
+    func testCanonicalIntentLowercasesUUIDShapedIdentifiersOnly() throws {
+        let payload: [String: Any] = [
+            "id": "7BA9A4B2-8E31-4C0A-9D2E-55AA7C4E1B10",
+            "title": "Kept As Written",
+            "turns": [
+                [
+                    "id": "0D90B077-2BD1-4C13-82CA-8F4DD366DB1B",
+                    "response": ["taskID": "CANCELLED-NOT-A-UUID"],
+                ] as [String: Any],
+            ] as [Any],
+        ]
+        let canonical = AgentSessionDeltaCanonical.sessionIntent(payload)
+        XCTAssertEqual(canonical["id"] as? String, "7ba9a4b2-8e31-4c0a-9d2e-55aa7c4e1b10")
+        XCTAssertEqual(canonical["title"] as? String, "Kept As Written")
+        let turns = canonical["turns"] as? [[String: Any]]
+        XCTAssertEqual(turns?.first?["id"] as? String, "0d90b077-2bd1-4c13-82ca-8f4dd366db1b")
+        XCTAssertEqual(
+            (turns?.first?["response"] as? [String: Any])?["taskID"] as? String,
+            "CANCELLED-NOT-A-UUID"
+        )
+    }
+}

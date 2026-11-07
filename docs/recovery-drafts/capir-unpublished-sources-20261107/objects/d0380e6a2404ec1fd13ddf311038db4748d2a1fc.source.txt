@@ -1,0 +1,33 @@
+import { fingerprint } from "./fingerprint.js";
+import type { AgentRunRequest, AgentFingerprints } from "./types.js";
+
+export function buildFingerprints(request: AgentRunRequest): AgentFingerprints {
+  return {
+    definition: fingerprint({
+      name: request.definition.name,
+      version: request.definition.version,
+      policyVersion: request.definition.policyVersion,
+      contractVersion: request.definition.contractVersion,
+    }),
+    systemPrompt: fingerprint(request.definition.systemPrompt),
+    toolManifest: fingerprint(request.definition.toolManifest),
+    sdk: fingerprint({
+      provider: request.provider.id,
+      sdkVersion: request.provider.sdkVersion,
+    }),
+    model: fingerprint(request.provider.model),
+    policy: fingerprint(request.definition.policyVersion),
+    contract: fingerprint(request.definition.contractVersion),
+    context: fingerprint({
+      workspaceID: request.scope.workspaceID,
+      userID: request.scope.userID,
+      pursuitID: request.scope.pursuitID,
+      pursuitRevision: request.scope.pursuitRevision,
+      captureID: request.scope.captureID,
+      objective: request.scope.objective,
+      evidenceManifest: request.scope.evidenceManifest,
+      inputArtifactManifest: request.scope.inputArtifactManifest ?? [],
+    }),
+  };
+}
+

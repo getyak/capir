@@ -1,0 +1,23 @@
+import Foundation
+
+extension URLPursuitWorkspaceClient {
+    func deltaServing() async throws -> AgentSessionDeltaServing? {
+        try await authenticatedSessionSyncClient().deltaServing()
+    }
+}
+
+extension AgentSessionSyncClient {
+    /// Construct from verified login identity. Bearer rotation never changes
+    /// durable ownership and credentials are never included in local keys.
+    static func authenticated(
+        baseURL: URL, bearerToken: String, accountID: String, userID: String,
+        session: URLSession
+    ) -> Self {
+        let endpointScope = RuntimeEndpoint.scope(baseURL)
+        return Self(baseURL: baseURL, bearerToken: bearerToken,
+            deltaNamespace: (endpointScope: endpointScope, accountID: accountID, userID: userID),
+            transferStore: AgentSessionDeltaTransferStore.scoped(
+                endpointScope: endpointScope, accountID: accountID, userID: userID),
+            session: session)
+    }
+}

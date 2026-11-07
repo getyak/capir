@@ -1,0 +1,7 @@
+import { notFound } from "next/navigation";
+import { CraftPreview } from "./preview";
+
+export default function CraftPage() {
+  if (process.env.NODE_ENV !== "development") notFound();
+  return <CraftPreview />;
+}

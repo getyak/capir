@@ -1,0 +1,281 @@
+import { events } from './sse.js';
+import { fail, object, numeric, modelIdentity, wellFormed, LIMIT, type ModelProfile, type WireMessage, type ModelResponse, type Usage } from './types.js';
+export interface RequestOptions {
+  model: string;
+  system: string;
+  maxTokens?: number;
+  pinnedModel?: string;
+  stream: boolean;
+  /** Only established native-compaction wire views carry this header. */
+  beta?: string;
+}
+function json(text: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (object(value))
+      return value;
+  }
+  catch { }
+  fail('CAPIR_MODEL_PROTOCOL', 'Provider returned malformed JSON.', 3);
+}
+function record(value: unknown): Record<string, unknown> { return object(value) ? value : {}; }
+export function providerHeaders(profile: ModelProfile, key: string): Record<string, string> { return { 'content-type': 'application/json', ...(profile.provider === 'anthropic' ? { 'anthropic-version': '2023-06-01', ...(key ? { 'x-api-key': key } : {}) } : key ? { authorization: `Bearer ${key}` } : {}) }; }
+export async function boundedBody(response: Response, signal: AbortSignal, limit: number): Promise<string> {
+  if (!response.body)
+    fail('CAPIR_MODEL_PROTOCOL', 'Provider returned an empty body.', 3);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let bytes = 0;
+  let result = '';
+  try {
+    while (true) {
+      signal.throwIfAborted();
+      const chunk = await reader.read();
+      if (chunk.done) {
+        result += decoder.decode();
+        return result;
+      }
+      bytes += chunk.value.length;
+      if (bytes > limit)
+        fail('CAPIR_MODEL_RESPONSE_LIMIT', 'Provider response body exceeds the limit.', 5);
+      result += decoder.decode(chunk.value, { stream: true });
+    }
+  }
+  finally {
+    await reader.cancel().catch(() => { });
+    reader.releaseLock();
+  }
+}
+async function checkHTTP(response: Response, signal: AbortSignal) {
+  if (response.ok)
+    return;
+  try {
+    await boundedBody(response, signal, LIMIT.error);
+  }
+  catch { /* never expose an untrusted error body */ }
+  const status = response.status;
+  fail('CAPIR_MODEL_HTTP', `Provider HTTP ${status}; no automatic retry was made.`, status === 401 || status === 403 ? 4 : status === 429 ? 5 : 3);
+}
+export async function generate(profile: ModelProfile, key: string, options: RequestOptions, messages: WireMessage[], onText: (text: string) => Promise<void>, signal: AbortSignal): Promise<ModelResponse> {
+  const anthropic = profile.provider === 'anthropic';
+  if (!anthropic && messages.some(message => typeof message.content !== 'string'))
+    fail('CAPIR_MODEL_PROTOCOL', 'Native compaction cannot be sent to a different provider.', 3);
+  signal.throwIfAborted();
+  if (anthropic && options.maxTokens === undefined)
+    fail('CAPIR_MODEL_CAPACITY_UNAVAILABLE', 'Anthropic requires a resolved output allowance before generation.', 3);
+  const body: Record<string, unknown> = { model: options.model, stream: options.stream, messages: anthropic ? messages : [...(options.system ? [{ role: profile.system_role ?? 'system', content: options.system }] : []), ...messages], ...(anthropic ? { max_tokens: options.maxTokens, ...options.system ? { system: options.system } : {} } : options.maxTokens === undefined ? {} : { [profile.token_limit_field ?? 'max_completion_tokens']: options.maxTokens }) };
+  if (!anthropic && options.stream && profile.stream_usage)
+    body.stream_options = { include_usage: true };
+  const response = await fetch(profile.base_url + (anthropic ? '/messages' : '/chat/completions'), { method: 'POST', headers: { ...providerHeaders(profile, key), ...(anthropic && options.beta ? { 'anthropic-beta': options.beta } : {}) }, body: JSON.stringify(body), redirect: 'error', signal });
+  await checkHTTP(response, signal);
+  let hasText = false;
+  let finish: string | null = null;
+  let terminal = false;
+  let supported = false;
+  let refused = false;
+  let tools = false;
+  let pinnedStart = false;
+  const validateModel = (message: Record<string, unknown>) => {
+    if (options.pinnedModel !== undefined && message.model !== options.pinnedModel)
+      fail('CAPIR_MODEL_IDENTITY', 'Provider response does not match the selected model identity; response is incomplete.', 3);
+  };
+  const usage: Usage = { input_tokens: null, output_tokens: null, total_tokens: null };
+  const updateUsage = (u: unknown) => {
+    const value = record(u);
+    if (anthropic) {
+      if (Object.hasOwn(value, 'input_tokens'))
+        usage.input_tokens = numeric(value.input_tokens);
+      if (Object.hasOwn(value, 'output_tokens'))
+        usage.output_tokens = numeric(value.output_tokens);
+    }
+    else {
+      usage.input_tokens = numeric(value.prompt_tokens);
+      usage.output_tokens = numeric(value.completion_tokens);
+      usage.total_tokens = numeric(value.total_tokens);
+    }
+  };
+  const append = async (value: unknown) => {
+    if (typeof value !== 'string')
+      return;
+    supported = true;
+    hasText ||= value.length > 0;
+    await onText(value);
+  };
+  const reason = (value: unknown) => {
+    if (typeof value !== 'string')
+      return;
+    if (finish !== null && finish !== value)
+      fail('CAPIR_MODEL_PROTOCOL', 'Provider sent conflicting terminal reasons; response is incomplete.', 3);
+    finish = value;
+  };
+  try {
+    if (options.stream) {
+      if (!response.headers.get('content-type')?.toLowerCase().includes('text/event-stream') || !response.body) {
+        await response.body?.cancel();
+        signal.throwIfAborted();
+        fail('CAPIR_MODEL_PROTOCOL', 'Expected an SSE response.', 3);
+      }
+      for await (const event of events(response.body, signal)) {
+        if (!anthropic && !['message', 'error'].includes(event.event))
+          continue;
+        if (!anthropic && event.data === '[DONE]') {
+          terminal = true;
+          break;
+        }
+        if (anthropic && !['message_start', 'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop', 'error'].includes(event.event))
+          continue;
+        const data = json(event.data);
+        if (data.error || event.event === 'error' || data.type === 'error')
+          fail('CAPIR_MODEL_PROVIDER_ERROR', 'Provider reported an in-band error; the response is incomplete.', 3);
+        if (anthropic) {
+          if (data.type !== event.event)
+            fail('CAPIR_MODEL_PROTOCOL', 'Anthropic event type does not match its data.', 3);
+          if (event.event === 'message_start') {
+            const message = record(data.message);
+            updateUsage(message.usage);
+            if (options.pinnedModel !== undefined && pinnedStart)
+              fail('CAPIR_MODEL_PROTOCOL', 'Provider sent multiple message starts; response is incomplete.', 3);
+            validateModel(message);
+            pinnedStart = true;
+          }
+          else if (event.event === 'content_block_start') {
+            if (options.pinnedModel !== undefined && !pinnedStart)
+              fail('CAPIR_MODEL_IDENTITY', 'Provider emitted content before the selected model identity.', 3);
+            const block = record(data.content_block);
+            if (block.type === 'compaction')
+              fail('CAPIR_MODEL_PROTOCOL', 'Unexpected compaction in an ordinary answer; turn not saved.', 3);
+            if (block.type === 'text')
+              await append(block.text);
+            else if (block.type === 'tool_use')
+              tools = true;
+          }
+          else if (event.event === 'content_block_delta') {
+            if (options.pinnedModel !== undefined && !pinnedStart)
+              fail('CAPIR_MODEL_IDENTITY', 'Provider emitted content before the selected model identity.', 3);
+            const delta = record(data.delta);
+            if (delta.type === 'text_delta')
+              await append(delta.text);
+          }
+          else if (event.event === 'message_delta') {
+            reason(record(data.delta).stop_reason);
+            if (data.usage)
+              updateUsage(data.usage);
+          }
+          else if (event.event === 'message_stop') {
+            terminal = true;
+            break;
+          }
+        }
+        else {
+          if (data.usage)
+            updateUsage(data.usage);
+          if (!Array.isArray(data.choices))
+            fail('CAPIR_MODEL_PROTOCOL', 'OpenAI stream has no choices array.', 3);
+          const choice = record(data.choices.find(x => record(x).index === 0));
+          const delta = record(choice.delta);
+          if (delta.refusal)
+            refused = true;
+          if (delta.tool_calls || delta.function_call)
+            tools = true;
+          await append(delta.content);
+          reason(choice.finish_reason);
+        }
+      }
+    }
+    else {
+      const data = json(await boundedBody(response, signal, LIMIT.body));
+      if (data.error)
+        fail('CAPIR_MODEL_PROVIDER_ERROR', 'Provider reported an error.', 3);
+      updateUsage(data.usage);
+      if (anthropic) {
+        validateModel(data);
+        if (Array.isArray(data.content))
+          for (const value of data.content) {
+            const block = record(value);
+            if (block.type === 'compaction')
+              fail('CAPIR_MODEL_PROTOCOL', 'Unexpected compaction in an ordinary answer; turn not saved.', 3);
+            if (block.type === 'text')
+              await append(block.text);
+            else if (block.type === 'tool_use')
+              tools = true;
+          }
+        reason(data.stop_reason);
+      }
+      else {
+        const choices = Array.isArray(data.choices) ? data.choices : [];
+        const choice = record(choices.find(x => record(x).index === 0) ?? choices[0]);
+        const message = record(choice.message);
+        if (message.refusal)
+          refused = true;
+        if (message.tool_calls || message.function_call)
+          tools = true;
+        await append(message.content);
+        reason(choice.finish_reason);
+      }
+      terminal = true;
+    }
+    if (!terminal || !finish)
+      fail('CAPIR_MODEL_INCOMPLETE', 'Provider ended without required terminal markers; partial response.', 3);
+    if (refused || finish === 'content_filter' || finish === 'refusal')
+      fail('CAPIR_MODEL_REFUSAL', 'The model refused the request.', 1);
+    if (finish === 'length' || finish === 'max_tokens')
+      fail('CAPIR_MODEL_TOKEN_LIMIT', 'Token budget reached; partial response.', 5);
+    if (tools || !['stop', 'end_turn', 'stop_sequence'].includes(finish))
+      fail('CAPIR_MODEL_UNSUPPORTED', 'Unsupported model completion; no tools were executed.', 3);
+    if (!supported || !hasText)
+      fail('CAPIR_MODEL_NO_TEXT', 'The model returned no supported text.', 3);
+    return { finish_reason: finish, usage };
+  }
+  catch (error) {
+    if (error instanceof Error)
+      Object.assign(error, { finish_reason: finish, usage });
+    throw error;
+  }
+}
+export async function discover(profile: ModelProfile, key: string, signal: AbortSignal) {
+  const native = profile.provider === 'anthropic';
+  const models: { id: string; display_name?: string }[] = [];
+  const identities = new Set<string>();
+  const cursors = new Set<string>();
+  let after: string | null = null;
+  while (true) {
+    signal.throwIfAborted();
+    const url = new URL(profile.base_url + '/models');
+    if (after !== null) url.searchParams.set('after_id', after);
+    const response = await fetch(url, { headers: providerHeaders(profile, key), redirect: 'error', signal });
+    await checkHTTP(response, signal);
+    const data = json(await boundedBody(response, signal, LIMIT.discovery));
+    signal.throwIfAborted();
+    if (!Array.isArray(data.data))
+      fail('CAPIR_MODEL_DISCOVERY_UNAVAILABLE', 'Provider does not expose supported model discovery.', 3);
+    const page = data.data.map(value => {
+      const model = record(value);
+      if (!modelIdentity(model.id) || model.display_name !== undefined && model.display_name !== null && (typeof model.display_name !== 'string' || !wellFormed(model.display_name)))
+        fail('CAPIR_MODEL_PROTOCOL', 'Invalid model catalog entry.', 3);
+      return { id: model.id, ...typeof model.display_name === 'string' ? { display_name: model.display_name } : {} };
+    });
+    if (data.has_more !== undefined && typeof data.has_more !== 'boolean' || native && typeof data.has_more !== 'boolean')
+      fail('CAPIR_MODEL_PROTOCOL', 'Invalid model catalog pagination status.', 3);
+    if (data.last_id !== undefined && data.last_id !== null && !modelIdentity(data.last_id))
+      fail('CAPIR_MODEL_PROTOCOL', 'Invalid model catalog cursor.', 3);
+    const more = typeof data.has_more === 'boolean' ? data.has_more : null;
+    const cursor = typeof data.last_id === 'string' ? data.last_id : null;
+    if (!native) {
+      // Compatible Models list has no documented cursor request interface.
+      return { models: page, has_more: more, cursor, complete: more === null ? null : !more, pagination_mode: more === true ? 'unsupported_extension' : 'endpoint_response' };
+    }
+    if (page.length === 0) {
+      if (more || cursor !== null)
+        fail('CAPIR_MODEL_PROTOCOL', 'Native model catalog has an empty advancing page.', 3);
+    }
+    else if (cursor !== page.at(-1)!.id || !page.some(model => !identities.has(model.id)) || cursors.has(cursor!)) {
+      fail('CAPIR_MODEL_PROTOCOL', 'Native model catalog cursor or identity made no valid progress.', 3);
+    }
+    // Keep overlapping observations, including changed labels. This is a
+    // traversal of a live endpoint, not an immutable inventory snapshot.
+    for (const model of page) { models.push(model); identities.add(model.id); }
+    if (cursor !== null) cursors.add(cursor);
+    if (!more) return { models, has_more: false, cursor, complete: true, pagination_mode: 'native_complete' };
+    after = cursor;
+  }
+}

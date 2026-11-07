@@ -1,0 +1,196 @@
+import { Type, type Static } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
+import type { PoolClient } from "pg";
+import { ApiError } from "../lib/apiError.js";
+import { assertAccountActive } from "./accountIdentity.js";
+import type { AuthContext } from "./auth.js";
+import type { OperatorTestDeployment } from "./labWorkspaceAccess.js";
+
+export type ServingAuthorityResolver = () => OperatorTestDeployment & { workspaceIds: readonly string[] | null };
+type Actor = Pick<AuthContext, "accountId" | "userId" | "sessionId" | "userKind">;
+type Client = Pick<PoolClient, "query">;
+const id = Type.String({ pattern: "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$" });
+const expiry = Type.Number({ minimum: 1 });
+const ordinaryKind = Type.Union([Type.Literal("simulated_human"), Type.Literal("password_human"), Type.Literal("apple_human"), Type.Literal("google_human")]);
+const session = { accountID: id, userID: id, id, expiresAt: expiry };
+const lab = {
+  version: Type.Literal(1),
+  session: Type.Object({ ...session, actorKind: Type.Literal("lab_human") }, { additionalProperties: false }),
+  workspace: Type.Object({ id, expiresAt: expiry }, { additionalProperties: false }),
+  entry: Type.Object({ id, expiresAt: expiry }, { additionalProperties: false }),
+};
+const parent = Type.Object({ ...session, actorKind: ordinaryKind }, { additionalProperties: false });
+export const OriginalAuthoritySchema = Type.Union([
+  Type.Object({ version: Type.Literal(1), kind: Type.Literal("ordinary"),
+    session: Type.Object({ ...session, actorKind: ordinaryKind }, { additionalProperties: false }) }, { additionalProperties: false }),
+  Type.Object({ ...lab, kind: Type.Literal("human_parent"), parent }, { additionalProperties: false }),
+  Type.Object({ ...lab, kind: Type.Literal("capir_parent"), parent,
+    grant: Type.Object({ id, expiresAt: expiry, entitlementID: id, generation: Type.Integer({ minimum: 1 }),
+      webOrigin: Type.String(), backendOrigin: Type.String() }, { additionalProperties: false }) }, { additionalProperties: false }),
+  Type.Object({ ...lab, kind: Type.Literal("operator"), runID: id,
+    principal: Type.Object({ id, generation: Type.Integer({ minimum: 1 }), webOrigin: Type.String(), backendOrigin: Type.String() },
+      { additionalProperties: false }) }, { additionalProperties: false }),
+]);
+export type OriginalAuthority = Static<typeof OriginalAuthoritySchema>;
+
+function unavailable(): never {
+  throw new ApiError(401, "LEGACY_CHAT_AUTHORITY_UNAVAILABLE", "This request has no current authorization to execute.");
+}
+export function authorityBusy(error: unknown): never {
+  if (error && typeof error === "object" && "code" in error && error.code === "55P03")
+    throw new ApiError(409, "LEGACY_CHAT_AUTHORITY_BUSY", "Authorization is being changed. Retry after the change has settled.");
+  throw error;
+}
+function milliseconds(value: Date): number {
+  if (!(value instanceof Date) || !Number.isFinite(value.valueOf())) unavailable();
+  return value.valueOf();
+}
+export function originalAuthorityDeadlines(value: OriginalAuthority): readonly number[] {
+  const dates = [value.session.expiresAt];
+  if (value.kind !== "ordinary") dates.push(value.workspace.expiresAt, value.entry.expiresAt);
+  if (value.kind === "human_parent" || value.kind === "capir_parent") dates.push(value.parent.expiresAt);
+  if (value.kind === "capir_parent") dates.push(value.grant.expiresAt);
+  return dates;
+}
+export function parseOriginalAuthority(value: unknown): OriginalAuthority {
+  if (!Value.Check(OriginalAuthoritySchema, value) || originalAuthorityDeadlines(value).some(n => !Number.isFinite(n))) unavailable();
+  return value;
+}
+/** Synchronous recheck after the last awaited final clock. Auxiliary parent
+ * accounts are lineage references, not additional deployment audience members. */
+export function assertServingAuthority(value: OriginalAuthority, resolver?: ServingAuthorityResolver): void {
+  const serving = resolver?.();
+  if (serving?.workspaceIds && !serving.workspaceIds.includes(value.session.accountID))
+    throw new ApiError(403, "DEPLOYMENT_WORKSPACE_NOT_ADMITTED", "This workspace is outside this deployment's configured audience.");
+  if (value.kind === "operator" && (!serving?.enabled
+    || serving.webOrigin !== value.principal.webOrigin || serving.backendOrigin !== value.principal.backendOrigin)) unavailable();
+  if (value.kind === "capir_parent" && (!serving?.userAuthEnabled
+    || serving.webOrigin !== value.grant.webOrigin || serving.backendOrigin !== value.grant.backendOrigin)) unavailable();
+}
+
+/** Capture on the caller's short transaction only. The classification read
+ * grants no authority; every selected identity is rechecked under held locks.
+ * All Lab authority locks are NOWAIT and the owner must rollback on busy. */
+export async function captureCurrentReaderAuthority(client: Client, auth: Actor,
+  serving?: ServingAuthorityResolver): Promise<OriginalAuthority> {
+  try {
+    const kind = (await client.query<{ kind: AuthContext["userKind"] }>(
+      "SELECT kind FROM users WHERE account_id=$1 AND id=$2", [auth.accountId, auth.userId])).rows[0]?.kind;
+    if (!kind || kind !== auth.userKind) unavailable();
+    if (kind !== "lab_human") await assertAccountActive(client, auth.accountId);
+    const child = (await client.query<{ expires_at: Date; kind: AuthContext["userKind"] }>(
+      `SELECT s.expires_at,u.kind FROM sessions s JOIN users u ON u.account_id=s.account_id AND u.id=s.user_id
+       JOIN accounts a ON a.id=s.account_id
+       WHERE s.account_id=$1 AND s.user_id=$2 AND s.id=$3 AND s.revoked_at IS NULL
+         AND u.status='active' AND u.kind=$4 AND a.retired_at IS NULL
+       FOR SHARE OF s,u,a ${kind === "lab_human" ? "NOWAIT" : ""}`,
+      [auth.accountId, auth.userId, auth.sessionId, kind])).rows[0];
+    if (!child) unavailable();
+    const base = { accountID: auth.accountId, userID: auth.userId, id: auth.sessionId, actorKind: child.kind,
+      expiresAt: milliseconds(child.expires_at) };
+    let descriptor: unknown = { version: 1, kind: "ordinary", session: base };
+    if (kind === "lab_human") {
+      const entry = (await client.query<{ workspace_id: string; workspace_expires_at: Date; entry_id: string; entry_expires_at: Date;
+        owner_session_id: string | null; owner_account_id: string | null; owner_user_id: string | null;
+        owner_principal_id: string | null; principal_generation: number | null; workspace_principal_id: string | null }>(
+        `SELECT w.id AS workspace_id,w.expires_at AS workspace_expires_at,e.id AS entry_id,e.expires_at AS entry_expires_at,
+         e.owner_session_id,w.owner_account_id,w.owner_user_id,e.owner_principal_id,e.principal_generation,
+         w.owner_principal_id AS workspace_principal_id
+         FROM lab_test_workspaces w JOIN lab_test_workspace_entries e ON e.workspace_id=w.id
+         WHERE w.target_account_id=$1 AND w.target_user_id=$2 AND e.session_id=$3
+           AND w.state='active' AND e.revoked_at IS NULL FOR SHARE OF w,e NOWAIT`,
+        [auth.accountId, auth.userId, auth.sessionId])).rows[0];
+      if (!entry) unavailable();
+      const shared = { version: 1, session: base, workspace: { id: entry.workspace_id, expiresAt: milliseconds(entry.workspace_expires_at) },
+        entry: { id: entry.entry_id, expiresAt: milliseconds(entry.entry_expires_at) } };
+      if (entry.owner_session_id) {
+        if (!entry.owner_account_id || !entry.owner_user_id || entry.owner_principal_id !== null || entry.principal_generation !== null) unavailable();
+        const owner = (await client.query<{ expires_at: Date; kind: AuthContext["userKind"] }>(
+          `SELECT s.expires_at,u.kind FROM sessions s JOIN users u ON u.account_id=s.account_id AND u.id=s.user_id
+           JOIN accounts a ON a.id=s.account_id WHERE s.id=$1 AND s.account_id=$2 AND s.user_id=$3
+             AND s.revoked_at IS NULL AND u.status='active' AND u.kind<>'lab_human' AND a.retired_at IS NULL
+           FOR SHARE OF s,u,a NOWAIT`, [entry.owner_session_id, entry.owner_account_id, entry.owner_user_id])).rows[0];
+        if (!owner) unavailable();
+        const originalParent = { id: entry.owner_session_id, accountID: entry.owner_account_id, userID: entry.owner_user_id,
+          actorKind: owner.kind, expiresAt: milliseconds(owner.expires_at) };
+        // Always map the actual admitted entry's parent; run creator audit
+        // references can differ from a later lawful grant's entry.
+        const grant = (await client.query<{ id: string; account_id: string; user_id: string; state: string; absolute_expires_at: Date; scopes: string[];
+          web_origin: string; backend_origin: string; test_entitlement_generation: number | null }>(
+          `SELECT id,account_id,user_id,state,absolute_expires_at,scopes,web_origin,backend_origin,test_entitlement_generation
+           FROM capir_auth_grants WHERE backing_session_id=$1 FOR SHARE NOWAIT`,
+          [entry.owner_session_id])).rows[0];
+        descriptor = { ...shared, kind: "human_parent", parent: originalParent };
+        if (grant) {
+          if (grant.account_id !== entry.owner_account_id || grant.user_id !== entry.owner_user_id
+            || grant.state !== "active" || !grant.scopes.includes("test.handoff")) unavailable();
+          const entitlement = (await client.query<{ id: string; generation: number }>(
+            `SELECT id,generation FROM capir_user_test_entitlements WHERE account_id=$1 AND user_id=$2
+             AND state='active' AND 'test.handoff'=ANY(scopes) FOR SHARE NOWAIT`,
+            [entry.owner_account_id, entry.owner_user_id])).rows[0];
+          if (!entitlement || entitlement.generation !== grant.test_entitlement_generation) unavailable();
+          descriptor = { ...shared, kind: "capir_parent", parent: originalParent, grant: { id: grant.id,
+            expiresAt: milliseconds(grant.absolute_expires_at), entitlementID: entitlement.id, generation: entitlement.generation,
+            webOrigin: grant.web_origin, backendOrigin: grant.backend_origin } };
+        }
+      } else {
+        if (!entry.owner_principal_id || entry.workspace_principal_id !== entry.owner_principal_id
+          || entry.owner_account_id !== null || entry.owner_user_id !== null) unavailable();
+        const operator = (await client.query<{ run_id: string; principal_id: string; principal_generation: number;
+          web_origin: string; backend_origin: string }>(
+          `SELECT r.id AS run_id,p.id AS principal_id,p.generation AS principal_generation,r.web_origin,r.backend_origin
+           FROM capir_test_runs r JOIN capir_test_provisioners p ON p.id=r.principal_id
+           WHERE r.workspace_id=$1 AND r.account_id=$2 AND r.user_id=$3 AND r.principal_id=$4
+             AND p.state='enabled' AND p.generation=r.principal_generation AND p.generation=$5
+             AND p.web_origin=r.web_origin AND p.backend_origin=r.backend_origin FOR SHARE OF r,p NOWAIT`,
+          [entry.workspace_id, auth.accountId, auth.userId, entry.owner_principal_id, entry.principal_generation])).rows[0];
+        if (!operator) unavailable();
+        descriptor = { ...shared, kind: "operator", runID: operator.run_id, principal: { id: operator.principal_id,
+          generation: operator.principal_generation, webOrigin: operator.web_origin, backendOrigin: operator.backend_origin } };
+      }
+    }
+    const value = parseOriginalAuthority(descriptor);
+    assertServingAuthority(value, serving);
+    const now = await authorityClock(client);
+    if (originalAuthorityDeadlines(value).some(deadline => deadline <= now)) unavailable();
+    assertServingAuthority(value, serving);
+    return value;
+  } catch (error) { return authorityBusy(error); }
+}
+
+function identityOnly(value: unknown): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value)) return Object.fromEntries(
+    Object.entries(value).filter(([key]) => key !== "expiresAt").sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => [key, identityOnly(item)]));
+  return value;
+}
+/** Original snapshots remain effective even if the same rows are renewed. */
+export async function recheckOriginalAuthority(client: Client, auth: Actor, original: OriginalAuthority,
+  serving?: ServingAuthorityResolver): Promise<readonly number[]> {
+  const current = await captureCurrentReaderAuthority(client, auth, serving);
+  if (JSON.stringify(identityOnly(current)) !== JSON.stringify(identityOnly(original))) unavailable();
+  const deadlines = [...originalAuthorityDeadlines(original), ...originalAuthorityDeadlines(current)];
+  const now = await authorityClock(client);
+  if (deadlines.some(deadline => deadline <= now)) unavailable();
+  assertServingAuthority(original, serving);
+  return deadlines;
+}
+
+/** Safe diagnostic writes are workspace-policy checks, not execution grants.
+ * Acquire this before a monitor/business row in the same owning transaction. */
+export async function lockLegacyMonitoringWorkspace(client: Client, accountID: string): Promise<void> {
+  try {
+    const workspace = (await client.query<{ state: string; expires_at: Date }>(
+      "SELECT state,expires_at FROM lab_test_workspaces WHERE target_account_id=$1 FOR SHARE NOWAIT", [accountID])).rows[0];
+    if (!workspace) return;
+    const now = await authorityClock(client);
+    if (workspace.state !== "active" || milliseconds(workspace.expires_at) <= now)
+      throw new ApiError(410, "LAB_TEST_WORKSPACE_CLOSED", "This test workspace no longer accepts diagnostic writes.");
+  } catch (error) { return authorityBusy(error); }
+}
+
+async function authorityClock(client: Client): Promise<number> {
+  const clock = (await client.query<{ checked_at: Date }>("SELECT clock_timestamp() AS checked_at")).rows[0]?.checked_at;
+  if (!clock) unavailable();
+  return milliseconds(clock);
+}

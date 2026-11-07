@@ -1,0 +1,124 @@
+"use client";
+
+import { ArrowRight, ArrowUpRight, Check, LinkSimple, X } from "@phosphor-icons/react";
+import type { AccountOnboarding, AccountOnboardingMutation, AccountOnboardingPreview } from "@talent-signal/contracts";
+import { useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { previewOnboarding, saveOnboarding, type OnboardingResult, type OnboardingScope } from "@/app/onboarding/actions";
+import entry from "@/app/login/login.module.css";
+import { normalizeOnboardingProfileUrl, ONBOARDING_PROFILE_URL_ERROR } from "@/lib/onboarding-profile-url";
+import styles from "./account-onboarding.module.css";
+
+export function AccountOnboardingForm({ initial, scope, callbackUrl, edit, nextUrl }: {
+  initial: AccountOnboarding; scope: OnboardingScope; callbackUrl: string; edit: boolean; nextUrl?: string;
+}) {
+  const router = useRouter();
+  const [name, setName] = useState(initial.display_name);
+  const [url, setUrl] = useState(initial.profile_url);
+  const [focus, setFocus] = useState(initial.focus);
+  const [preview, setPreview] = useState<AccountOnboardingPreview | null>(null);
+  const [previewError, setPreviewError] = useState("");
+  const [urlError, setUrlError] = useState("");
+  const [result, setResult] = useState<OnboardingResult>({});
+  const [saving, startSaving] = useTransition();
+  const [reading, startReading] = useTransition();
+  const operation = useRef<AccountOnboardingMutation | null>(null);
+  const latestUrl = useRef(url);
+  const urlInput = useRef<HTMLInputElement>(null);
+  const busy = saving || reading;
+  const uncertain = result.recovery === "retry";
+  const locked = busy || Boolean(result.recovery);
+  const reloadHref = `/onboarding?edit=true&callbackUrl=${encodeURIComponent(callbackUrl)}`;
+  function normalizeUrl() {
+    const normalized = normalizeOnboardingProfileUrl(url);
+    if (normalized === null) {
+      setUrlError(ONBOARDING_PROFILE_URL_ERROR);
+      urlInput.current?.focus();
+      return null;
+    }
+    setUrlError("");
+    latestUrl.current = normalized;
+    setUrl(normalized);
+    return normalized;
+  }
+  function save(skip = false) {
+    if (busy || (result.recovery && !uncertain)) return;
+    const profileUrl = skip ? initial.profile_url : operation.current?.profile_url ?? normalizeUrl();
+    if (profileUrl === null) return;
+    const input = operation.current ?? {
+      id: crypto.randomUUID(), expected_revision: initial.revision,
+      display_name: skip ? initial.display_name : name.trim(), focus: skip ? initial.focus : focus.trim(),
+      profile_url: profileUrl, status: skip ? "skipped" as const : "completed" as const,
+    };
+    operation.current = input;
+    startSaving(async () => {
+      let response: OnboardingResult;
+      try { response = await saveOnboarding(scope, input); }
+      catch { response = { error: "暂时无法确认保存结果，可以重试这次保存。", recovery: "retry" }; }
+      setResult(response);
+      if (response.data) { router.replace(nextUrl ?? callbackUrl); router.refresh(); }
+      else if (!response.recovery) operation.current = null;
+    });
+  }
+  function readLink() {
+    if (busy || !url.trim()) return;
+    const requested = normalizeUrl();
+    if (!requested) return;
+    setPreview(null); setPreviewError("");
+    startReading(async () => {
+      try {
+        const response = await previewOnboarding(scope, requested);
+        if (latestUrl.current.trim() !== requested) return;
+        setPreview(response.preview ?? null); setPreviewError(response.error ?? "");
+      } catch { setPreviewError("这次读取未完成，可以重试或直接填写介绍。"); }
+    });
+  }
+  return <section aria-labelledby="onboarding-title">
+    <header className={entry.heading}>
+      <p className={entry.eyebrow}>{edit ? "个人资料" : "账号已就绪 · 关于你"}</p>
+      <h1 id="onboarding-title">{edit ? "关于你。" : "让这里更懂你一点。"}</h1>
+      <p>一个称呼就好。也可以留个链接，<br />或说说你正在做的事。</p>
+    </header>
+    <form className={styles.form} onSubmit={event => { event.preventDefault(); save(); }}>
+      <fieldset disabled={locked} className={styles.fields}>
+        <div className="auth-field"><label htmlFor="onboarding-name">怎么称呼你</label>
+          <input id="onboarding-name" name="name" autoComplete="name" value={name} onChange={event => setName(event.target.value)} maxLength={100} required placeholder="你喜欢的名字" />
+        </div>
+        <div className="auth-field"><label htmlFor="onboarding-url">你的一个公开主页 <span className={styles.optional}>选填</span></label>
+          <div className={styles.linkInput}><LinkSimple size={17} aria-hidden="true" /><input ref={urlInput} id="onboarding-url" type="text" name="url"
+            autoComplete="url" inputMode="url" spellCheck={false} autoCapitalize="none" value={url}
+            aria-invalid={Boolean(urlError)} aria-describedby={urlError ? "onboarding-url-error" : undefined}
+            onBlur={() => { const normalized = normalizeOnboardingProfileUrl(url); if (normalized !== null) { latestUrl.current = normalized; setUrl(normalized); } }}
+            onChange={event => { latestUrl.current = event.target.value; setUrl(event.target.value); setPreview(null); setPreviewError(""); setUrlError(""); }}
+            placeholder="博客、LinkedIn 或个人网站" maxLength={2000} /></div>
+          {urlError && <p id="onboarding-url-error" className={styles.linkError} role="alert">{urlError}</p>}
+          {url.trim() && <div className={styles.linkRead}><p>点击后只读取这个公开页面，先预览，再决定是否使用。</p>
+            <button type="button" onClick={readLink} disabled={reading} aria-busy={reading}>{reading ? "正在读取…" : "读取公开简介"}<ArrowRight size={14} aria-hidden="true" /></button>
+          </div>}
+          {previewError && <p className={styles.linkError} role="alert">{previewError}</p>}
+          {preview && <div className={styles.preview}>
+            <div className={styles.previewHeader}><span>公开页面摘录 · 尚未保存</span><button type="button" onClick={() => setPreview(null)} aria-label="关闭简介预览"><X size={16} /></button></div>
+            <p>{preview.excerpt.slice(0, 280)}</p>
+            <div className={styles.previewActions}><a href={preview.profile_url} target="_blank" rel="noopener noreferrer">查看来源 <ArrowUpRight size={13} aria-hidden="true" /></a>
+              <button type="button" onClick={() => { setFocus(preview.excerpt.slice(0, 280)); setPreview(null); }}>填入介绍 <Check size={14} aria-hidden="true" /></button></div>
+          </div>}
+        </div>
+        <div className="auth-field"><label htmlFor="onboarding-focus">你在做什么，或正在推进什么 <span className={styles.optional}>选填</span></label>
+          <textarea id="onboarding-focus" name="focus" value={focus} onChange={event => setFocus(event.target.value)} maxLength={280} rows={3}
+            placeholder="例如：我在为早期团队寻找技术负责人，也想更好地维护长期合作关系。" />
+          <p className={styles.fieldNote}>只需一句话。以后可以随时修改或清空。</p>
+        </div>
+      </fieldset>
+      {result.error && <div className={entry.error} role="alert"><p>{result.error}</p>
+        {result.recovery === "refresh" && <a className={entry.textButton} href={reloadHref}>载入最新资料</a>}
+        {result.recovery === "login" && <a className={entry.textButton} href={`/login?reason=backend_session_expired&callbackUrl=${encodeURIComponent(reloadHref)}`}>重新登录</a>}
+      </div>}
+      <button className={entry.submit} type="submit" disabled={busy || Boolean(result.recovery && !uncertain)} aria-busy={saving}>
+        {saving ? "正在保存…" : uncertain ? "重试这次保存" : edit ? "保存资料" : "开始使用"}<ArrowRight size={18} aria-hidden="true" />
+      </button>
+      {uncertain && <a className={styles.skip} href={reloadHref}>重新载入，核对保存结果</a>}
+    </form>
+    {!edit && !result.recovery && <button type="button" className={styles.skip} disabled={busy} onClick={() => save(true)}>以后再说，先进去看看</button>}
+    {edit && !result.recovery && <a className={styles.skip} href={callbackUrl}>返回工作台</a>}
+  </section>;
+}

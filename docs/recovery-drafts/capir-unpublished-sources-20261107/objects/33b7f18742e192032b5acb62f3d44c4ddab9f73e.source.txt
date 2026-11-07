@@ -1,0 +1,696 @@
+import { createTelemetryTrace } from "./telemetry.js";
+import { ProductRunService } from "./productRuns.js";
+import { saveProductRunCase } from "./productRunCases.js";
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { Pool } from "pg";
+import { bundledPrompt } from "@talent-signal/agent/prompt-registry";
+import { createEnvironmentRuntimeObserver } from "@talent-signal/agent";
+import { CONTRACT_VERSION, type AgentSessionPayload, type FeedbackMutation, type FeedbackSource, type FeedbackObservationRequest, type LabJobRequest } from "@talent-signal/contracts";
+import { buildApp } from "../app.js";
+import type { AuthContext } from "./auth.js";
+import { configuredChatPrompt, type RemoteChatAnswerProviding, type RemoteChatAnswerRequest } from "./chatAnswerProvider.js";
+import { compileRelationshipWiki } from "./wiki.js";
+import { LabExperimentJobService } from "./labExperimentJobs.js";
+import { LabRegressionService } from "./labRegressions.js";
+import { FeedbackService, observationAssessment } from "./feedback.js";
+import { feedbackExecution } from "./feedbackExecutions.js";
+import { labHash } from "./labJobCases.js";
+
+// Explicit opt-in: the suite creates only its own synthetic business fixtures.
+const database = process.env.FEEDBACK_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) throw new Error("Use an owned disposable loopback PostgreSQL database.");
+const pool = database ? new Pool({ connectionString: database, max: 6 }) : null;
+const auth: AuthContext = { accountId: randomUUID(), accountSlug: `feedback-proof-${randomUUID()}`, userId: randomUUID(),
+  userEmail: "feedback-proof@example.test", userKind: "simulated_human", sessionId: randomUUID() };
+const requests: RemoteChatAnswerRequest[] = [];
+let beforeAnswer: (() => Promise<void>) | undefined;
+let fixtureUsageReported: boolean | undefined = true;
+const provider: RemoteChatAnswerProviding = {
+  providerId: "zhipu-chat-completions", model: "feedback-proof-model", supportsImageInput: false, supportsPromptPresets: true,
+  async answer(input) {
+    // Host capabilities are callable, not serializable replay input. Keep the
+    // inspected model context immutable without cloning live Memory authority.
+    const modelInput = { ...input };
+    delete modelInput.memoryReview;
+    requests.push(structuredClone(modelInput));
+    await beforeAnswer?.();
+    const prompt = input.prompt_snapshot ?? bundledPrompt("assistant/relationship");
+    return { kind: "answer", title: "Evidence-backed next step",
+      ...(input.session_title_requested ? { session_title: "Clarify tentative meeting date" } : {}),
+      body: "Clarify the current date before suggesting a meeting.",
+      citation_ids: input.allowed_citation_ids.slice(0, 1), provider_id: "zhipu-chat-completions", model: this.model,
+      provider_request_id: `fixture-${requests.length}`, input_tokens: fixtureUsageReported === false ? 0 : 20, output_tokens: fixtureUsageReported === false ? 0 : 12,
+      ...(fixtureUsageReported === undefined ? {} : { usage_reported: fixtureUsageReported }),
+      prompt_snapshot: prompt, prompt_revision: configuredChatPrompt("relationship", input.prompt_preset ?? "baseline", prompt.text).revision };
+  },
+};
+let app: Awaited<ReturnType<typeof buildApp>>, jobs: LabExperimentJobService, regressions: LabRegressionService;
+let headers: { authorization: string }, otherHeaders: { authorization: string };
+const stamp = () => new Date().toISOString();
+beforeAll(async () => {
+  if (!pool || !database) return;
+  vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", "feedback-proof-v1");
+  vi.stubEnv("LOG_LEVEL", "silent");
+  vi.stubEnv("TALENT_SIGNAL_OPIK_RUNTIME_POLICY", undefined);
+  expect(createEnvironmentRuntimeObserver()).toBeNull();
+  await pool.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Feedback proof')", [auth.accountId, auth.accountSlug]);
+  for (const id of [auth.userId, randomUUID()]) await pool.query(
+    "INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Feedback proof','simulated_human')",
+    [id, auth.accountId, id === auth.userId ? auth.userEmail : "other@example.test"]);
+  const providers = new Map([[provider.model, provider]]);
+  jobs = new LabExperimentJobService(pool, providers, "feedback-proof-v1");
+  regressions = new LabRegressionService(pool, jobs);
+  app = await buildApp({ pool, config: { databaseUrl: database, host: "127.0.0.1", port: 0, allowedOrigins: [], appleSignInAudiences: [],
+    appleSignInEnabled: false, passwordAuthEnabled: false, passwordRegistrationEnabled: false, simulatedAuthEnabled: true,
+    internalLabEnabled: true, retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3600 },
+    remoteChatProvider: provider, labProviders: providers, labJobWorkerEnabled: false, personResearchProvider: null });
+  for (const email of [auth.userEmail, "other@example.test"]) {
+    const login = await app.inject({ method: "POST", url: "/v1/auth/simulated-login", payload: {
+      account_slug: auth.accountSlug, user_email: email, client_label: "feedback-isolated-proof" } });
+    expect(login.statusCode, login.body).toBe(200);
+    const value = { authorization: `Bearer ${login.json().access_token}` };
+    if (email === auth.userEmail) headers = value; else otherHeaders = value;
+  }
+}, 30_000);
+afterAll(async () => { await jobs?.close(); await app?.close(); await pool?.end(); vi.unstubAllEnvs(); });
+
+async function fixture(options: { unreviewed?: boolean } = {}) {
+  const person = randomUUID(), context = randomUUID(), capture = randomUUID(), resource = randomUUID(), fragment = randomUUID();
+  await pool!.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Synthetic Person')", [person, auth.accountId]);
+  await pool!.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label) VALUES($1::uuid,$2,$3,$1::text,'Synthetic Context')", [context, auth.accountId, person]);
+  await pool!.query(`INSERT INTO captures(id,account_id,created_by_user_id,subject_id,assignment_id,source_kind,source_metadata,identity_status,identity_context,purpose)
+    VALUES($1,$2,$3,$4,$5,'conversation_transcript','{}','bound','{}','Synthetic feedback proof')`, [capture, auth.accountId, auth.userId, person, context]);
+  await pool!.query(`INSERT INTO source_resources(id,account_id,capture_id,created_by_user_id,client_resource_id,resource_kind,input_channel,display_name,media_type,observed_at,retention_scope,processing_state)
+    VALUES($1::uuid,$2,$3,$4,$1::text,'conversation_transcript','chat','Synthetic source','text/plain',now(),'reviewed_selected_text','ready')`, [resource, auth.accountId, capture, auth.userId]);
+  await pool!.query(`INSERT INTO source_retention_receipts(receipt_id,account_id,capture_id,policy_version,requested_mode,effective_mode,source_scope,source_access_state,source_access_reason,created_at,updated_at)
+    VALUES($1,$2,$3,'source-retention.v2','ephemeral','ephemeral','reviewed_selected_text','available','awaiting_review_completion',now(),now())`, [randomUUID(), auth.accountId, capture]);
+  await pool!.query(`INSERT INTO evidence_fragments(id,account_id,capture_id,resource_id,fragment_kind,sequence,text_content,content_hash,locator,attributed_actor,attribution_status,parser_name,parser_version,review_status)
+    VALUES($1,$2,$3,$4,'message',0,'Synthetic source: Wednesday is tentative; clarify the exact date.','synthetic','{}','recruiter','confirmed','fixture','1','reviewed')`, [fragment, auth.accountId, capture, resource]);
+  if (options.unreviewed) {
+    await pool!.query("UPDATE evidence_fragments SET review_status='proposed',attribution_status='unknown' WHERE id=$1", [fragment]);
+  }
+  await compileRelationshipWiki(pool!, auth, person, context, { idempotency_key: randomUUID(), objective: "Compile the authorized synthetic proof source" });
+  const value: AgentSessionPayload = { id: randomUUID(), scopeKind: "relationship", personID: person, relationshipContextID: context,
+    personDisplayLabel: "Synthetic Person", contextDisplayLabel: "Synthetic Context", title: "Feedback proof", updatedAt: stamp(), isUnread: false, turns: [] };
+  const saved = await app.inject({ method: "PUT", url: `/v1/agent-sessions/${value.id}`, headers,
+    payload: { idempotency_key: randomUUID(), expected_revision: 0, payload: value } });
+  expect(saved.statusCode, saved.body).toBe(200);
+  return { person, context, capture, resource, fragment, value, revision: saved.json().session.revision as number };
+}
+async function turn(f: Awaited<ReturnType<typeof fixture>>, objective = "What should I clarify before planning a meeting?") {
+  const request = { idempotency_key: randomUUID(), session_id: f.value.id, person_id: f.person, relationship_context_id: f.context, objective };
+  const answer = await app.inject({ method: "POST", url: "/v1/chat/tasks", headers, payload: request });
+  expect(answer.statusCode, answer.body).toBe(201);
+  const response = answer.json();
+  const id = randomUUID();
+  f.value.turns.push({ id, objective, createdAt: stamp(), response: {
+    contractVersion: CONTRACT_VERSION, taskID: response.task_id, contextManifestID: response.context_manifest_id,
+    knowledgeSnapshotID: response.knowledge_snapshot_id, disposition: response.disposition, createdAt: response.created_at,
+    savedBlocks: response.blocks.map((block: Record<string, unknown>) => ({ id: block.id, kind: block.kind, title: block.title,
+      body: block.body, status: block.status, citation_dependency_ids: [], requires_user_decision: false })) } });
+  const saved = await app.inject({ method: "PUT", url: `/v1/agent-sessions/${f.value.id}`, headers,
+    payload: { idempotency_key: randomUUID(), expected_revision: f.revision, payload: f.value } });
+  expect(saved.statusCode, saved.body).toBe(200);
+  f.revision = saved.json().session.revision;
+  f.value = saved.json().session.payload;
+  const source = await app.inject({ method: "GET", url: `/v1/agent-sessions/${f.value.id}/turns/${id}/feedback-source`, headers });
+  expect(source.statusCode, source.body).toBe(200);
+  expect(source.headers["cache-control"]).toBe("no-store");
+  expect(source.json().source.source_state).toBe("available");
+  return { source: source.json().source as FeedbackSource, request, response, id };
+}
+function mutation(source: FeedbackSource, expected_revision = 0): FeedbackMutation {
+  return { idempotency_key: randomUUID(), expected_revision, session_id: source.session_id, turn_id: source.turn_id,
+    expected_session_revision: source.session_revision, execution_id: source.execution_id!, output_hash: source.output_hash!,
+    operation: "submit", category: "wrong_time", expected_behavior_proposal: "Retain Wednesday as tentative and clarify its date." };
+}
+async function put(id: string, body: FeedbackMutation, status = 200) {
+  const result = await app.inject({ method: "PUT", url: `/v1/feedback/${id}`, headers, payload: body });
+  expect(result.statusCode, result.body).toBe(status);
+  return result.json();
+}
+async function queueRerun(id: string, productRoute = true) {
+  const saved = await regressions.read(auth, id), jobID = randomUUID();
+  const readback = await app.inject({ method: "GET", url: `/v1/lab/regressions/${id}/export`, headers });
+  expect(readback.statusCode, readback.body).toBe(200);
+  expect(readback.json().snapshot).toEqual(saved.snapshot);
+  const request: LabJobRequest = {
+    id: jobID, catalog_revision: jobs.catalogRevision, task: "relationship_text",
+    case_ids: [saved.snapshot.case.id], configurations: [{ model: provider.model, prompt_preset: "baseline" }, { model: provider.model, prompt_preset: "concise" }],
+    repetitions: 1, call_limit: 2, regression_source: { id, content_hash: saved.content_hash } };
+  if (productRoute) {
+    const queued = await app.inject({ method: "POST", url: "/v1/lab/experiment-jobs", headers, payload: request });
+    expect(queued.statusCode, queued.body).toBe(202);
+  } else {
+    // Worker race probes exercise the same admission service without exhausting
+    // the separate product route rate-limit; the main loop tests that route.
+    await jobs.start(auth, request);
+  }
+  return { saved, jobID };
+}
+async function rerun(id: string) {
+  const { saved, jobID } = await queueRerun(id);
+  await jobs.tick(); await jobs.waitForIdle();
+  const job = await jobs.read(auth, jobID);
+  const product = await app.inject({ method: "GET", url: `/v1/lab/experiment-jobs/${jobID}`, headers });
+  expect(product.statusCode, product.body).toBe(200);
+  expect(product.json().job).toEqual(job);
+  expect(job.status).toBe("completed");
+  expect(job.definition.business_write_count).toBe(0);
+  expect(job.definition.cases[0]!.input_hash).toBe(saved.snapshot.case.input_hash);
+  expect(job.attempts.every((attempt) => attempt.status === "completed")).toBe(true);
+  return { saved, job };
+}
+
+function pausedObservationPool(stage: "before" | "after") {
+  let reached!: () => void, resume!: () => void;
+  const paused = new Promise<void>((resolve) => { reached = resolve; });
+  const continuation = new Promise<void>((resolve) => { resume = resolve; });
+  let missingSourceRead = false;
+  const controlled = { connect: pool!.connect.bind(pool), async query(sql: string, values?: unknown[]) {
+    const observesSource = sql.startsWith("SELECT e.*,r.snapshot->>'data_class'");
+    if (observesSource && stage === "before") { reached(); await continuation; }
+    const result = await pool!.query(sql, values);
+    if (observesSource) missingSourceRead = !result.rows[0]?.snapshot;
+    if (observesSource && stage === "after") { reached(); await continuation; }
+    return result;
+  } } as unknown as Pool;
+  return { pool: controlled, paused, resume, get missingSourceRead() { return missingSourceRead; } };
+}
+
+function pausedRegressionPool() {
+  let reached!: () => void, resume!: () => void;
+  const paused = new Promise<void>((resolve) => { reached = resolve; });
+  const continuation = new Promise<void>((resolve) => { resume = resolve; });
+  const controlled = { query: pool!.query.bind(pool), async connect() {
+    const client = await pool!.connect();
+    return { release: client.release.bind(client), query: async (sql: string, values?: unknown[]) => {
+      if (sql.startsWith("INSERT INTO lab_regressions")) { reached(); await continuation; }
+      return client.query(sql, values);
+    } };
+  } } as unknown as Pool;
+  return { pool: controlled, paused, resume };
+}
+
+async function revokeWhilePaused(capture: string, gate: ReturnType<typeof pausedRegressionPool>) {
+  const client = await pool!.connect();
+  const pid = (await client.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+  const deletion = client.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE capture_id=$1", [capture]);
+  let waiting = false;
+  try {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const state = (await pool!.query("SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1", [pid])).rows[0];
+      if (state?.wait_event_type === "Lock") { waiting = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(waiting, "Source retraction must wait for the frozen execution held by derivation").toBe(true);
+  } finally { gate.resume(); await deletion; client.release(); }
+}
+
+describe.skipIf(!pool)("Authenticated product feedback learning PostgreSQL loop", () => {
+  it.each([false, true, undefined])("persists reported usage audit and telemetry honestly (reported=%s)", async reported => {
+    const f = await fixture();
+    const traceID = randomUUID().replaceAll("-", ""), rootSpanID = randomUUID().replaceAll("-", "").slice(0, 16), interactionID = randomUUID();
+    await createTelemetryTrace(pool!, auth, { trace_id: traceID, root_span_id: rootSpanID, interaction_id: interactionID,
+      browser_session_id: randomUUID(), name: "Synthetic usage proof", surface: "evaluation", route: "/v1/chat/tasks",
+      started_at: stamp(), data_classification: "synthetic", attributes: {}, content_parts: [] });
+    fixtureUsageReported = reported;
+    try {
+      const response = await app.inject({ method: "POST", url: "/v1/chat/tasks", headers, payload: {
+        idempotency_key: randomUUID(), person_id: f.person, relationship_context_id: f.context,
+        objective: "Clarify the synthetic tentative date.", telemetry: { trace_id: traceID, parent_span_id: rootSpanID, interaction_id: interactionID },
+      } });
+      expect(response.statusCode, response.body).toBe(201);
+      const audit = await pool!.query("SELECT metadata FROM audit_events WHERE account_id=$1 AND event_type='chat_task.assembled' AND metadata->>'task_id'=$2", [auth.accountId, response.json().task_id]);
+      expect(audit.rows).toHaveLength(1);
+      expect(audit.rows[0].metadata).toMatchObject({ remote_chat_status: "completed",
+        remote_chat_input_tokens: reported === false ? null : 20, remote_chat_output_tokens: reported === false ? null : 12 });
+      const spans = await pool!.query("SELECT safe_attributes FROM telemetry_spans WHERE account_id=$1 AND trace_id=$2 AND name LIKE 'model.chat %'", [auth.accountId, traceID]);
+      expect(spans.rows).toHaveLength(1);
+      expect(spans.rows[0].safe_attributes).toMatchObject({ "gen_ai.usage.input_tokens": reported === false ? null : 20,
+        "gen_ai.usage.output_tokens": reported === false ? null : 12 });
+    } finally { fixtureUsageReported = true; }
+  });
+
+  it.each([true, false])("excludes unchanged proposed evidence from the reviewed manifest without a false source-change error (Session: %s)", async (withSession) => {
+    const f = await fixture({ unreviewed: true });
+    const response = await app.inject({ method: "POST", url: "/v1/chat/tasks", headers, payload: {
+      idempotency_key: randomUUID(), ...(withSession ? { session_id: f.value.id } : {}),
+      person_id: f.person, relationship_context_id: f.context, objective: "Explain what still needs review before planning a meeting.",
+    } });
+    expect(response.statusCode, response.body).toBe(201);
+    expect(requests.at(-1)!.allowed_citation_ids).not.toContain(f.fragment);
+    expect(requests.at(-1)!.context_blocks.every((block) => !JSON.stringify(block).includes(f.fragment))).toBe(true);
+    expect((await pool!.query("SELECT evidence_fragment_id FROM context_manifest_evidence WHERE account_id=$1 AND manifest_id=$2",
+      [auth.accountId, response.json().context_manifest_id])).rows).toEqual([]);
+    expect((await pool!.query("SELECT review_status,attribution_status FROM evidence_fragments WHERE id=$1", [f.fragment])).rows[0])
+      .toEqual({ review_status: "proposed", attribution_status: "unknown" });
+  }, 30_000);
+
+  it("admits currently authorized evidence to provider work as the positive control", async () => {
+    const f = await fixture();
+    const response = await app.inject({ method: "POST", url: "/v1/chat/tasks", headers, payload: {
+      idempotency_key: randomUUID(), person_id: f.person, relationship_context_id: f.context,
+      objective: "Explain what must be clarified before planning a meeting." } });
+    expect(response.statusCode, response.body).toBe(201);
+    expect(requests.at(-1)!.allowed_citation_ids).toContain(f.fragment);
+    expect(JSON.stringify(requests.at(-1))).toContain("Wednesday is tentative");
+    expect((await pool!.query("SELECT evidence_fragment_id FROM context_manifest_evidence WHERE account_id=$1 AND manifest_id=$2",
+      [auth.accountId, response.json().context_manifest_id])).rows).toEqual([{ evidence_fragment_id: f.fragment }]);
+  }, 30_000);
+
+  it("fails early and truthfully when the source-authorization deadline elapsed before provider work", async () => {
+    const f = await fixture();
+    await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=now()-interval '1 second' WHERE capture_id=$1", [f.capture]);
+    const calls = requests.length;
+    const response = await app.inject({ method: "POST", url: "/v1/chat/tasks", headers, payload: {
+      idempotency_key: randomUUID(), person_id: f.person, relationship_context_id: f.context,
+      objective: "Explain what must be clarified before planning a meeting." } });
+    // The elapsed authorization is decided before provider work with a truthful
+    // error; the unauthorized text never reaches a model.
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("WIKI_SOURCE_AUTHORIZATION_STALE");
+    expect(requests.length).toBe(calls);
+    expect(response.body).not.toContain("Wednesday is tentative");
+  }, 30_000);
+
+  it.each<[
+    string,
+    (f: Awaited<ReturnType<typeof fixture>>) => Promise<unknown>,
+  ]>([
+    ["a deleted source resource", (f) =>
+      pool!.query("UPDATE source_resources SET processing_state='deleted' WHERE account_id=$1 AND id=$2", [auth.accountId, f.resource])],
+    ["empty reviewed text", (f) =>
+      pool!.query("UPDATE evidence_fragments SET text_content='   ' WHERE id=$1", [f.fragment])],
+    ["a capture bound to a different scope", async (f) => {
+      const other = await fixture();
+      await pool!.query("UPDATE captures SET subject_id=$2, assignment_id=$3 WHERE id=$1", [f.capture, other.person, other.context]);
+    }],
+  ])("excludes evidence with %s before provider work instead of a false source-change error", async (_label, exclude) => {
+    const f = await fixture();
+    await exclude(f);
+    const calls = requests.length;
+    const response = await app.inject({ method: "POST", url: "/v1/chat/tasks", headers, payload: {
+      idempotency_key: randomUUID(), person_id: f.person, relationship_context_id: f.context,
+      objective: "Explain what must be clarified before planning a meeting." } });
+    // The outcome is decided before provider work: the unauthorized fragment
+    // never reaches the model and no post-provider source-change error fires.
+    expect(response.statusCode, response.body).toBe(201);
+    expect(requests.length).toBe(calls + 1);
+    expect(requests.at(-1)!.allowed_citation_ids).not.toContain(f.fragment);
+    expect(requests.at(-1)!.context_blocks.every((block) => !JSON.stringify(block).includes(f.fragment))).toBe(true);
+    expect(JSON.stringify(requests.at(-1))).not.toContain("Wednesday is tentative");
+    expect((await pool!.query("SELECT evidence_fragment_id FROM context_manifest_evidence WHERE account_id=$1 AND manifest_id=$2",
+      [auth.accountId, response.json().context_manifest_id])).rows).toEqual([]);
+  }, 30_000);
+
+  it("rejects a prior answer that expires while its correction is being generated", async () => {
+    const f=await fixture();
+    const ask=(payload:Record<string,unknown>)=>app.inject({method:"POST",url:"/v1/chat/tasks",headers,payload});
+    const first=await ask({idempotency_key:randomUUID(),person_id:f.person,relationship_context_id:f.context,objective:"Explain the tentative meeting."});
+    expect(first.statusCode,first.body).toBe(201);
+    const previous=first.json().task_id;
+    await pool!.query("UPDATE product_runs SET expires_at=clock_timestamp()+interval '1 second' WHERE account_id=$1 AND task_id=$2",[auth.accountId,previous]);
+    let previousWasRead=false;
+    beforeAnswer=async()=>{
+      previousWasRead=requests.at(-1)!.conversation_history?.some(message=>message.role==='assistant'&&message.text.includes('Clarify the current date'))??false;
+      await pool!.query("SELECT pg_sleep(GREATEST(0,EXTRACT(EPOCH FROM expires_at-clock_timestamp()))+0.05) FROM product_runs WHERE account_id=$1 AND task_id=$2",[auth.accountId,previous]);
+    };
+    const intent=randomUUID();
+    try {
+      const response=await ask({idempotency_key:intent,person_id:f.person,relationship_context_id:f.context,previous_task_id:previous,objective:"Revise the previous answer."});
+      expect(previousWasRead).toBe(true);
+      expect(response.statusCode,response.body).toBe(409);
+      expect(response.json().error.code).toBe('PREVIOUS_ANSWER_UNAVAILABLE');
+      const run=await new ProductRunService(pool!).detail(auth,response.headers['x-talent-signal-run-id'] as string);
+      expect(run.run.status).toBe('failed');expect(run.input).toBeNull();expect(run.output).toBeNull();
+      expect(run.run.content_available).toBe(false);
+    } finally { beforeAnswer=undefined; }
+  },30_000);
+  it("resolves a Web correction from its owned prior task and invalidates its descendants", async () => {
+    const f=await fixture();
+    const ask=async (payload:Record<string,unknown>, authHeaders=headers)=>app.inject({method:"POST",url:"/v1/chat/tasks",headers:authHeaders,payload});
+    const first=await ask({idempotency_key:randomUUID(),person_id:f.person,relationship_context_id:f.context,objective:"Explain the tentative meeting."});
+    expect(first.statusCode,first.body).toBe(201);
+    const previous=first.json().task_id;
+    const payload={idempotency_key:randomUUID(),person_id:f.person,relationship_context_id:f.context,
+      previous_task_id:previous,objective:`请修改上一条回答：${"保留待确认状态。".repeat(110)}`};
+    const correction=await ask(payload);expect(correction.statusCode,correction.body).toBe(201);
+    expect(requests.at(-1)!.session_title_requested).toBe(false);
+    expect(correction.json().session_title).toBeUndefined();
+    const childDetail=await new ProductRunService(pool!).detail(auth,correction.json().task_id,true);
+    const childCaseID=randomUUID();
+    await saveProductRunCase(pool!,auth,childDetail,{id:childCaseID,output_hash:childDetail.run.output_hash!,expected_behavior:"Preserve the corrected tentative date."});
+    expect(requests.at(-1)!.conversation_history).toEqual(expect.arrayContaining([
+      expect.objectContaining({role:"user",text:"Explain the tentative meeting."}),
+      expect.objectContaining({role:"assistant",text:expect.stringContaining("Clarify the current date")}),
+    ]));
+    const denied=await ask({...payload,idempotency_key:randomUUID()},otherHeaders);expect(denied.statusCode).toBe(409);
+    const different=await fixture();
+    const wrongScope=await ask({...payload,idempotency_key:randomUUID(),person_id:different.person,relationship_context_id:different.context});
+    expect(wrongScope.statusCode).toBe(409);
+    await pool!.query("INSERT INTO agent_session_retracted_tasks(account_id,task_id) VALUES($1,$2)",[auth.accountId,previous]);
+    const detail=await new ProductRunService(pool!).detail(auth,correction.json().task_id,true);
+    expect(detail.run.content_available).toBe(false);expect(detail.output).toBeNull();
+    await pool!.query("UPDATE product_runs SET input=NULL,output=NULL WHERE id=$1",[detail.run.id]);
+    expect((await new ProductRunService(pool!).detail(auth,correction.json().task_id,true)).run.content_available).toBe(false);
+    await expect(regressions.read(auth,childCaseID)).rejects.toMatchObject({code:"LAB_REGRESSION_GONE"});
+    const retry=await ask(payload);expect(retry.statusCode).toBe(409);
+  },30_000);
+  it("replays a product run without a thumb through the existing Lab and retracts invalidated sources", async () => {
+    const f=await fixture(), original=await turn(f);
+    const detail=await new ProductRunService(pool!).detail(auth,original.response.task_id,true);
+    expect(detail.run.feedback.sentiment).toBeNull();
+    const id=randomUUID();
+    await saveProductRunCase(pool!,auth,detail,{id,output_hash:detail.run.output_hash!,expected_behavior:"Retain the tentative date and ask for clarification."});
+    const {saved,job}=await rerun(id);
+    expect(saved.snapshot.product_run_source?.run_id).toBe(detail.run.id);
+    expect(job.attempts).toHaveLength(2);
+    expect(job.definition.cases[0]!.input_hash).toBe(saved.snapshot.case.input_hash);
+    await pool!.query("INSERT INTO agent_session_retracted_tasks(account_id,task_id) VALUES($1,$2)",[auth.accountId,original.response.task_id]);
+    await expect(regressions.read(auth,id)).rejects.toMatchObject({code:"LAB_REGRESSION_GONE"});
+    await expect(jobs.read(auth,job.id)).rejects.toMatchObject({code:"LAB_REGRESSION_GONE"});
+  },30_000);
+  it("exports the same trusted Session group for distinct product turns and preserves legacy Lab readability", async () => {
+    const submit = async (source: FeedbackSource) => {
+      // This independent synthetic client has its own route quota; the shared
+      // lifecycle suite intentionally issues many other feedback mutations.
+      const response = await app.inject({ method: "PUT", url: `/v1/feedback/${randomUUID()}`, headers,
+        remoteAddress: "127.0.0.2", payload: mutation(source) });
+      expect(response.statusCode, response.body).toBe(200); return response.json().feedback;
+    };
+    const f = await fixture(), firstTurn = await turn(f, "Clarify the first tentative meeting date.");
+    const first = await submit(firstTurn.source);
+    const secondTurn = await turn(f, "What still needs confirming for the second meeting?");
+    const second = await submit(secondTurn.source);
+    const exported = [];
+    for (const feedback of [first, second]) {
+      const response = await app.inject({ method: "GET", url: `/v1/lab/regressions/${feedback.regression_id}/export`, headers });
+      expect(response.statusCode, response.body).toBe(200);
+      const bundle = response.json(), source = bundle.snapshot.feedback_source;
+      const execution = (await pool!.query("SELECT session_id FROM feedback_execution_snapshots WHERE account_id=$1 AND user_id=$2 AND id=$3",
+        [auth.accountId, auth.userId, source.execution_id])).rows[0];
+      expect(source.session_id).toBe(f.value.id);
+      expect(source.session_id).toBe(execution.session_id);
+      expect(bundle.content_hash).toBe(labHash(bundle.snapshot));
+      exported.push(bundle);
+    }
+    expect(exported[0].snapshot.feedback_source.execution_id).not.toBe(exported[1].snapshot.feedback_source.execution_id);
+    expect(exported[0].snapshot.case.input_hash).not.toBe(exported[1].snapshot.case.input_hash);
+    // Simulate a pre-field frozen snapshot. Generic Lab history still reads it;
+    // the optimizer's authenticated source adapter must reject its missing group.
+    const legacy = exported[0].snapshot;
+    delete legacy.feedback_source.session_id;
+    await pool!.query("UPDATE lab_regressions SET snapshot=$2::jsonb,content_hash=$3 WHERE id=$1",
+      [first.regression_id, JSON.stringify(legacy), labHash(legacy)]);
+    const historical = await app.inject({ method: "GET", url: `/v1/lab/regressions/${first.regression_id}/export`, headers });
+    expect(historical.statusCode, historical.body).toBe(200);
+    expect(historical.json().snapshot.feedback_source.session_id).toBeUndefined();
+  }, 30_000);
+
+  it("captures the original product request, isolates its owner, handles edit/CAS/idempotency/withdrawal and replays the frozen private input", async () => {
+    const f = await fixture(), original = await turn(f), id = randomUUID(), body = mutation(original.source);
+    const before = await feedbackExecution(pool!, auth, original.source.execution_id!);
+    expect(before!.snapshot!.input.objective).toBe(original.request.objective);
+    expect(before!.snapshot!.input.reference_time).toBe(before!.snapshot!.reference_time);
+    expect(before!.snapshot!.input.context_blocks.length).toBeGreaterThan(0);
+    const denied = await app.inject({ method: "GET", url: `/v1/agent-sessions/${f.value.id}/turns/${original.id}/feedback-source`, headers: otherHeaders });
+    expect(denied.statusCode).toBe(404);
+    const first = (await put(id, body)).feedback;
+    expect(first.adjudication).toBe("proposed");
+    expect(first.regression_id).toBeTruthy();
+    expect((await put(id, body)).feedback.revision).toBe(1);
+    await put(id, { ...body, expected_behavior_proposal: "Different intent" }, 409);
+    await put(id, { ...body, idempotency_key: randomUUID() }, 409);
+    const otherWrite = await app.inject({ method: "PUT", url: `/v1/feedback/${randomUUID()}`, headers: otherHeaders, payload: body });
+    expect(otherWrite.statusCode).toBe(404);
+    const second = (await put(id, { ...body, idempotency_key: randomUUID(), expected_revision: 1, expected_behavior_proposal: "Clarify the precise date; never confirm a tentative time." })).feedback;
+    await expect(regressions.read(auth, first.regression_id)).rejects.toMatchObject({ statusCode: 410 });
+    const calls = requests.length, { saved, job } = await rerun(second.regression_id);
+    expect(saved.snapshot.data_class).toBe("private_business");
+    expect(saved.snapshot.feedback_source!.expectation_authority).toBe("proposal");
+    expect(saved.snapshot.case.partition).toBe("development");
+    for (const input of requests.slice(calls)) {
+      const { prompt_snapshot: _prompt, prompt_preset: _preset, observation: _observation, ...replayed } = input;
+      expect(replayed).toEqual(before!.snapshot!.input);
+      expect(JSON.stringify(replayed)).not.toContain(second.expected_behavior_proposal);
+    }
+    await put(id, { ...body, expected_revision: 2, idempotency_key: randomUUID(), operation: "withdraw" });
+    await expect(regressions.read(auth, second.regression_id)).rejects.toMatchObject({ statusCode: 410 });
+    await expect(jobs.read(auth, job.id)).rejects.toMatchObject({ statusCode: 410 });
+    expect((await pool!.query("SELECT count(*)::int AS n FROM lab_experiment_attempts WHERE job_id=$1", [job.id])).rows[0].n).toBe(0);
+    expect((await pool!.query("SELECT expected_behavior_proposal FROM product_feedback WHERE id=$1", [id])).rows[0].expected_behavior_proposal).toBeNull();
+  }, 30_000);
+
+  it("keeps feedback active after deleting its Lab case, but never returns a dead or mismatched-revision case link", async () => {
+    const f = await fixture(), original = await turn(f), id = randomUUID(), body = mutation(original.source);
+    const feedback = (await put(id, body)).feedback;
+    const read = async () => {
+      const response = await app.inject({ method: "GET", url: `/v1/feedback/${id}`, headers });
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json().feedback;
+    };
+    expect((await read()).regression_id).toBe(feedback.regression_id);
+    await pool!.query("UPDATE lab_regressions SET snapshot=jsonb_set(snapshot,'{feedback_source,feedback_revision}','2') WHERE id=$1", [feedback.regression_id]);
+    expect((await read()).regression_id).toBeNull();
+    await pool!.query("UPDATE lab_regressions SET snapshot=jsonb_set(snapshot,'{feedback_source,feedback_revision}','1') WHERE id=$1", [feedback.regression_id]);
+    const deletion = await app.inject({ method: "DELETE", url: `/v1/lab/regressions/${feedback.regression_id}`, headers });
+    expect(deletion.statusCode, deletion.body).toBe(200);
+    const current = await read();
+    expect(current).toMatchObject({ status: "active", revision: 1, source_state: "available", regression_id: null,
+      expected_behavior_proposal: body.expected_behavior_proposal });
+    expect((await put(id, body)).feedback.regression_id).toBeNull();
+    const rows = (await pool!.query("SELECT snapshot,deleted_at FROM lab_regressions WHERE source_feedback_id=$1", [id])).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ snapshot: null, deleted_at: expect.any(Date) });
+  }, 30_000);
+
+  it.each([
+    { stage: "before", change: "feedback" }, { stage: "after", change: "feedback" },
+    { stage: "before", change: "source" }, { stage: "after", change: "source" },
+  ] as const)("does not dispatch a reserved private Lab input when $change is revoked $stage observation source read", async ({ stage, change }) => {
+    const f = await fixture(), original = await turn(f), id = randomUUID(), body = mutation(original.source);
+    const feedback = (await put(id, body)).feedback;
+    const { jobID } = await queueRerun(feedback.regression_id, false), gate = pausedObservationPool(stage);
+    const worker = new LabExperimentJobService(gate.pool, new Map([[provider.model, provider]]), "feedback-proof-v1");
+    const calls = requests.length;
+    try {
+      await worker.tick(); await gate.paused;
+      expect((await pool!.query("SELECT calls_reserved FROM lab_experiment_jobs WHERE id=$1", [jobID])).rows[0].calls_reserved).toBe(1);
+      if (change === "feedback") await put(id, { ...body, expected_revision: 1, operation: "withdraw", idempotency_key: randomUUID() });
+      else await pool!.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE capture_id=$1", [f.capture]);
+      gate.resume(); await worker.waitForIdle();
+      expect(gate.missingSourceRead).toBe(stage === "before");
+      expect(requests.length - calls).toBe(0);
+      expect((await pool!.query("SELECT definition->'cases' AS cases,lease_id,calls_reserved FROM lab_experiment_jobs WHERE id=$1", [jobID])).rows[0])
+        .toMatchObject({ cases: [], lease_id: null, calls_reserved: 1 });
+      expect((await pool!.query("SELECT record FROM lab_experiment_attempts WHERE job_id=$1", [jobID])).rows).toEqual([]);
+    } finally { gate.resume(); await worker.close(); }
+  }, 30_000);
+
+  it.each(["lease", "job", "source"] as const)("checks current %s expiry immediately before dispatch even when a private observation source was already read", async (expired) => {
+    const f = await fixture(), original = await turn(f), id = randomUUID();
+    const feedback = (await put(id, mutation(original.source))).feedback;
+    const { jobID } = await queueRerun(feedback.regression_id, false), gate = pausedObservationPool("after");
+    const worker = new LabExperimentJobService(gate.pool, new Map([[provider.model, provider]]), "feedback-proof-v1");
+    const calls = requests.length;
+    try {
+      await worker.tick(); await gate.paused;
+      if (expired === "lease") await pool!.query("UPDATE lab_experiment_jobs SET lease_expires_at=now()-interval '1 second' WHERE id=$1", [jobID]);
+      else if (expired === "job") await pool!.query("UPDATE lab_experiment_jobs SET expires_at=now()-interval '1 second' WHERE id=$1", [jobID]);
+      else await pool!.query("UPDATE feedback_execution_snapshots SET expires_at=now()-interval '1 second' WHERE id=$1", [original.source.execution_id]);
+      gate.resume(); await worker.waitForIdle();
+      expect(requests.length - calls).toBe(0);
+      const records = (await pool!.query("SELECT record FROM lab_experiment_attempts WHERE job_id=$1 ORDER BY ordinal", [jobID])).rows;
+      expect(records[0]!.record).toMatchObject({ status: "cancelled", error_code: "LAB_ATTEMPT_AUTHORIZATION_CHANGED", remote_requests_started: 0, answer: null });
+      expect(records.every((row) => row.record.status === "cancelled")).toBe(true);
+      expect((await pool!.query("SELECT calls_reserved FROM lab_experiment_jobs WHERE id=$1", [jobID])).rows[0].calls_reserved).toBe(1);
+    } finally { gate.resume(); await worker.close(); }
+  }, 30_000);
+
+  it("releases dispatch locks before a model responds and never persists its late private result after withdrawal", async () => {
+    const f = await fixture(), original = await turn(f), id = randomUUID(), body = mutation(original.source);
+    const feedback = (await put(id, body)).feedback;
+    const { jobID } = await queueRerun(feedback.regression_id, false);
+    let reached!: () => void, resume!: () => void;
+    const paused = new Promise<void>((resolve) => { reached = resolve; });
+    const continuation = new Promise<void>((resolve) => { resume = resolve; });
+    const originalAnswer = provider.answer.bind(provider);
+    let modelCalls = 0;
+    const intercepted = vi.spyOn(provider, "answer").mockImplementation(async (input) => {
+      modelCalls++; reached(); await continuation;
+      return { ...await originalAnswer(input), body: "late-private-Lab-result-must-not-persist" };
+    });
+    try {
+      await jobs.tick(); await paused;
+      await put(id, { ...body, expected_revision: 1, operation: "withdraw", idempotency_key: randomUUID() });
+      resume(); await jobs.waitForIdle();
+      expect(modelCalls).toBe(1);
+      expect((await pool!.query("SELECT record FROM lab_experiment_attempts WHERE job_id=$1", [jobID])).rows).toEqual([]);
+      expect((await pool!.query("SELECT definition->'cases' AS cases,lease_id FROM lab_experiment_jobs WHERE id=$1", [jobID])).rows[0])
+        .toMatchObject({ cases: [], lease_id: null });
+      await expect(jobs.read(auth, jobID)).rejects.toMatchObject({ statusCode: 410 });
+    } finally { resume(); intercepted.mockRestore(); }
+  }, 30_000);
+
+  it("records a changed-version later product exposure with bounded observation, then synchronously removes derived replay content on source revocation", async () => {
+    const f = await fixture(), original = await turn(f), id = randomUUID();
+    const feedback = (await put(id, mutation(original.source))).feedback;
+    vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", "feedback-proof-v2");
+    const later = await turn(f, "Has the meeting date been clarified?");
+    const laterRow = await feedbackExecution(pool!, auth, later.source.execution_id!);
+    const observation: FeedbackObservationRequest = { id: randomUUID(), idempotency_key: randomUUID(), expected_feedback_revision: feedback.revision,
+      later_execution_id: later.source.execution_id!, later_output_hash: later.source.output_hash!,
+      window_start: laterRow!.created_at.toISOString(), window_end: stamp(), observed_at: stamp(), outcome: "same_issue" };
+    observation.observed_at = observation.window_end;
+    const post = () => app.inject({ method: "POST", url: `/v1/feedback/${id}/observations`, headers, payload: observation });
+    const result = await post();
+    expect(result.statusCode, result.body).toBe(200);
+    const recorded = result.json().observation;
+    expect(recorded.assessment).toBe("issue_observed");
+    expect(recorded.causal_claim).toBe("none");
+    expect((await post()).json().observation.id).toBe(observation.id);
+    const { job } = await rerun(recorded.followup_regression_id);
+    const additionalLater = await turn(f), additionalRow = await feedbackExecution(pool!, auth, additionalLater.source.execution_id!);
+    const additionalEnd = stamp();
+    const extraObservation = await app.inject({ method: "POST", url: `/v1/feedback/${id}/observations`, headers,
+      payload: { ...observation, id: randomUUID(), idempotency_key: randomUUID(),
+        later_execution_id: additionalLater.source.execution_id!, later_output_hash: additionalLater.source.output_hash!,
+        window_start: additionalRow!.created_at.toISOString(), window_end: additionalEnd, observed_at: additionalEnd } });
+    expect(extraObservation.statusCode, extraObservation.body).toBe(200);
+    const additional = extraObservation.json().observation;
+    const caseDeletion = await app.inject({ method: "DELETE", url: `/v1/lab/regressions/${additional.followup_regression_id}`, headers });
+    expect(caseDeletion.statusCode, caseDeletion.body).toBe(200);
+    const remainingObservation = await app.inject({ method: "GET", url: `/v1/feedback/${id}/observations/${additional.id}`, headers });
+    expect(remainingObservation.json().observation).toMatchObject({ assessment: "issue_observed", followup_regression_id: null });
+    await pool!.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE capture_id=$1", [f.capture]);
+    for (const execution of [original.source.execution_id, later.source.execution_id]) {
+      const row = await feedbackExecution(pool!, auth, execution!);
+      expect(row!.snapshot).toBeNull();
+      expect(row!.current_state).not.toBe("available");
+    }
+    const read = await app.inject({ method: "GET", url: `/v1/feedback/${id}/observations/${observation.id}`, headers });
+    expect(read.statusCode, read.body).toBe(200);
+    expect(read.json().observation.assessment).toBe("unknown");
+    expect(read.json().observation.followup_regression_id).toBeNull();
+    await expect(jobs.read(auth, job.id)).rejects.toMatchObject({ statusCode: 410 });
+    expect((await pool!.query("SELECT snapshot FROM lab_regressions WHERE source_feedback_id=$1", [id])).rows.every((row) => row.snapshot === null)).toBe(true);
+  }, 30_000);
+
+  it("denies expired-source readback before maintenance and scrubs it on sweep", async () => {
+    const f = await fixture(), source = await turn(f), id = randomUUID();
+    const feedback = (await put(id, mutation(source.source))).feedback;
+    const { job } = await rerun(feedback.regression_id);
+    await pool!.query("UPDATE feedback_execution_snapshots SET expires_at=now()-interval '1 second' WHERE id=$1", [source.source.execution_id]);
+    await expect(jobs.read(auth, job.id)).rejects.toMatchObject({ statusCode: 410 });
+    await new FeedbackService(pool!).sweep();
+    expect((await feedbackExecution(pool!, auth, source.source.execution_id!))!.snapshot).toBeNull();
+    expect((await pool!.query("SELECT definition->'cases' AS cases FROM lab_experiment_jobs WHERE id=$1", [job.id])).rows[0].cases).toEqual([]);
+  }, 30_000);
+
+  it("fences concurrent feedback writers and removes the original and descendants on Session deletion", async () => {
+    const f = await fixture(), original = await turn(f), id = randomUUID(), body = mutation(original.source);
+    const first = (await put(id, body)).feedback;
+    const concurrent = await Promise.all(["Clarify Wednesday.", "Do not confirm Wednesday."].map((proposal) =>
+      app.inject({ method: "PUT", url: `/v1/feedback/${id}`, headers, payload: {
+        ...body, expected_revision: 1, idempotency_key: randomUUID(), expected_behavior_proposal: proposal } })));
+    expect(concurrent.map((value) => value.statusCode).sort()).toEqual([200, 409]);
+    const current = concurrent.find((value) => value.statusCode === 200)!.json().feedback;
+    const { job } = await rerun(current.regression_id);
+    const child = await regressions.save(auth, { id: randomUUID(), source_job_id: job.id, source_attempt_id: job.attempts[0]!.id,
+      source_definition_hash: job.definition_hash, failure_categories: ["stale_evidence"], expected_behavior: "Retain uncertainty.", review_note: "Human review proposal" });
+    expect(child.snapshot.data_class).toBe("private_business");
+    const deletion = await app.inject({ method: "DELETE", url: `/v1/agent-sessions/${f.value.id}`, headers,
+      payload: { expected_revision: f.revision, idempotency_key: randomUUID() } });
+    expect(deletion.statusCode, deletion.body).toBe(200);
+    expect((await feedbackExecution(pool!, auth, original.source.execution_id!))!.snapshot).toBeNull();
+    for (const regression of [first.regression_id, current.regression_id, child.id])
+      await expect(regressions.read(auth, regression)).rejects.toMatchObject({ statusCode: 410 });
+    const withdrawn = (await put(id, { ...body, expected_revision: 2, idempotency_key: randomUUID(), operation: "withdraw" })).feedback;
+    expect(withdrawn.status).toBe("withdrawn");
+    expect(withdrawn.source_state).toBe("source_deleted");
+  }, 30_000);
+
+  it("invalidates corrected message evidence without allowing a later restore to resurrect the original learning record", async () => {
+    const f = await fixture(), original = await turn(f), id = randomUUID();
+    const feedback = (await put(id, mutation(original.source))).feedback;
+    await pool!.query("UPDATE evidence_fragments SET text_content='Corrected synthetic message: no meeting is planned.' WHERE id=$1", [f.fragment]);
+    expect((await feedbackExecution(pool!, auth, original.source.execution_id!))!.snapshot).toBeNull();
+    await pool!.query("UPDATE evidence_fragments SET text_content='Synthetic source: Wednesday is tentative; clarify the exact date.' WHERE id=$1", [f.fragment]);
+    const record = await new FeedbackService(pool!).read(auth, id);
+    expect(record.source_state).not.toBe("available");
+    expect(record.expected_behavior_proposal).toBeNull();
+    await expect(regressions.read(auth, feedback.regression_id)).rejects.toMatchObject({ statusCode: 410 });
+  }, 30_000);
+
+  it("fences source revocation while an observation is paused before its derived regression INSERT", async () => {
+    vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", "race-before");
+    const f = await fixture(), original = await turn(f), id = randomUUID();
+    const feedback = (await put(id, mutation(original.source))).feedback;
+    vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", "race-after");
+    const later = await turn(f), laterRow = await feedbackExecution(pool!, auth, later.source.execution_id!);
+    const end = stamp(), observationID = randomUUID(), gate = pausedRegressionPool();
+    const pending = new FeedbackService(gate.pool).observe(auth, id, { id: observationID, idempotency_key: randomUUID(),
+      expected_feedback_revision: feedback.revision, later_execution_id: later.source.execution_id!, later_output_hash: later.source.output_hash!,
+      window_start: laterRow!.created_at.toISOString(), window_end: end, observed_at: end, outcome: "same_issue" });
+    await gate.paused;
+    await revokeWhilePaused(f.capture, gate);
+    await pending;
+    const rows = (await pool!.query("SELECT snapshot FROM lab_regressions WHERE source_feedback_id=$1", [id])).rows;
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.snapshot === null)).toBe(true);
+    expect((await new FeedbackService(pool!).readObservation(auth, id, observationID)).assessment).toBe("unknown");
+  }, 30_000);
+
+  it("fences source revocation while saving a child of a private Lab regression", async () => {
+    const f = await fixture(), original = await turn(f), id = randomUUID();
+    const feedback = (await put(id, mutation(original.source))).feedback;
+    const { job } = await rerun(feedback.regression_id), childID = randomUUID(), gate = pausedRegressionPool();
+    const pending = new LabRegressionService(gate.pool, jobs).save(auth, { id: childID, source_job_id: job.id,
+      source_attempt_id: job.attempts[0]!.id, source_definition_hash: job.definition_hash,
+      failure_categories: ["stale_evidence"], expected_behavior: "Clarify the current date.", review_note: "Concurrent source revocation proof" });
+    // Post-commit readback may already observe the concurrent deletion, which is the correct 410 outcome.
+    const outcome = pending.catch((error: unknown) => { expect(error).toMatchObject({ statusCode: 410 }); });
+    await gate.paused;
+    await revokeWhilePaused(f.capture, gate);
+    await outcome;
+    expect((await pool!.query("SELECT snapshot,deleted_at FROM lab_regressions WHERE id=$1", [childID])).rows[0]).toMatchObject({ snapshot: null, deleted_at: expect.any(Date) });
+  }, 30_000);
+
+  it.each([true, false])("does not retain a late model result after source revocation (persisted Session: %s)", async (withSession) => {
+    const f = await fixture();
+    let reached!: () => void, resume!: () => void;
+    const paused = new Promise<void>((resolve) => { reached = resolve; });
+    const continuation = new Promise<void>((resolve) => { resume = resolve; });
+    const originalAnswer = provider.answer.bind(provider);
+    const intercepted = vi.spyOn(provider, "answer").mockImplementation(async (input) => {
+      reached(); await continuation; return originalAnswer(input);
+    });
+    try {
+      const key = randomUUID();
+      const pending = app.inject({ method: "POST", url: "/v1/chat/tasks", headers, payload: {
+        idempotency_key: key, ...(withSession ? { session_id: f.value.id } : {}), person_id: f.person, relationship_context_id: f.context,
+        objective: "Clarify the date from the original source." } });
+      await paused;
+      await pool!.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE capture_id=$1", [f.capture]);
+      resume();
+      const response = await pending;
+      expect(response.statusCode, response.body).toBe(409);
+      expect(response.json().error.code).toBe("CHAT_COMPLETION_SOURCE_CHANGED");
+      expect((await pool!.query("SELECT snapshot FROM feedback_execution_snapshots WHERE session_id=$1", [f.value.id])).rows).toEqual([]);
+      expect((await pool!.query("SELECT response_body FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2", [auth.accountId, key])).rows).toEqual([]);
+    } finally { resume(); intercepted.mockRestore(); }
+  }, 30_000);
+});
+
+describe("Feedback observation uncertainty", () => {
+  const window = { window_start: "2026-09-01T00:00:00Z", window_end: "2026-09-02T00:00:00Z", observed_at: "2026-09-01T12:00:00Z", outcome: "no_issue_observed" as const };
+  it("claims only an observed window, with missing, late, censored, immature and unavailable outcomes unknown", () => {
+    expect(observationAssessment(window, "2026-09-03T00:00:00Z", true)).toBe("no_issue_observed_in_window");
+    for (const outcome of ["missing", "late", "censored"] as const) expect(observationAssessment({ ...window, outcome }, "2026-09-03T00:00:00Z", true)).toBe("unknown");
+    expect(observationAssessment(window, "2026-09-01T18:00:00Z", true)).toBe("unknown");
+    expect(observationAssessment(window, "2026-09-03T00:00:00Z", false)).toBe("unknown");
+    expect(observationAssessment({ ...window, observed_at: null }, "2026-09-03T00:00:00Z", true)).toBe("unknown");
+  });
+});

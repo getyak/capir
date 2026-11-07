@@ -1,0 +1,22 @@
+import { Value } from "@sinclair/typebox/value";
+import { describe, expect, it } from "vitest";
+import { PasswordRegistrationRequestSchema, PasswordLoginRequestSchema,
+  CompleteCredentialChangeRequestSchema, CapirTestCreateRequestSchema } from "@talent-signal/contracts";
+
+describe("chosen account password policy", () => {
+  for (const [entry, schema] of Object.entries({
+    registration: PasswordRegistrationRequestSchema.properties.password,
+    credentialChange: CompleteCredentialChangeRequestSchema.properties.password,
+    testAccount: CapirTestCreateRequestSchema.properties.password,
+  })) {
+    it(`${entry} rejects five and accepts six/seven without composition rules`, () => {
+      expect(Value.Check(schema, "short")).toBe(false);
+      for (const password of ["simple", "123456", "      ", "密码测试专用", "seven77"]) {
+        expect(Value.Check(schema, password)).toBe(true);
+      }
+    });
+  }
+  it("does not apply new-password requirements to existing sign-in", () => {
+    expect(Value.Check(PasswordLoginRequestSchema.properties.password, "x")).toBe(true);
+  });
+});

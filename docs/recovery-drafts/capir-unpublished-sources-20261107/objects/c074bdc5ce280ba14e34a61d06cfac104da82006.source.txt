@@ -1,0 +1,45 @@
+import { cookies } from "next/headers";
+
+import { authenticatedBackendClient, readPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Read-only first-party login status (ADR 0021). It validates the LIVE
+ * backend session and returns only safe account/user metadata for the
+ * observed actor — never a claim that all old writers ended — with
+ * `no-store` and NO Set-Cookie of any kind. The Auth.js `/api/auth/session`
+ * endpoint is deliberately NOT used: it refreshes cookies, which this
+ * ownership boundary forbids.
+ */
+export async function GET(): Promise<Response> {
+  const claims = await readPrimaryBackendSessionClaims();
+  const body = async () => {
+    if (!claims) return { authenticated: false, actor: null };
+    const client = await authenticatedBackendClient();
+    if (!client) return { authenticated: false, actor: null };
+    try {
+      const settings = await client.accountSettings();
+      // Only the observed actor's safe metadata: no tokens, no counts, no
+      // provider details, no workspace inventory.
+      return {
+        authenticated: true,
+        actor: {
+          account_id: settings.workspace.id,
+          account_name: settings.workspace.name,
+          user_id: settings.user.id,
+        },
+      };
+    } catch {
+      return { authenticated: false, actor: null };
+    }
+  };
+  void cookies;
+  return Response.json(await body(), {
+    status: 200,
+    headers: {
+      "cache-control": "private, no-store",
+      "content-type": "application/json",
+    },
+  });
+}

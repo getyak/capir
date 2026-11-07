@@ -1,0 +1,251 @@
+import CryptoKit
+import Foundation
+
+/// One durably retained uncertain frame: the exact serialized request intent
+/// plus the identity needed for byte-exact replay. The frame body lives only
+/// in this client-owned store — the server keeps source-free frame metadata
+/// only — and its lifetime is bound to the Session retention and to one
+/// account/endpoint/user partition. Deleted, expired or source-revoked
+/// Sessions can never be resurrected through a replayed frame.
+struct AgentSessionDeltaInFlightFrame: Codable, Equatable {
+    var sessionID: UUID
+    var transferID: UUID
+    var frameIndex: Int
+    var idempotencyKey: UUID
+    var expectedRevision: Int
+    var targetPayloadDigest: String
+    var requestBody: Data
+    var isFinal: Bool
+    var createdAt: Date
+    /// The ORIGINAL canonical Session deadline. Refresh and retry never extend
+    /// it; a legacy frame without a trustworthy deadline fails closed instead
+    /// of being granted a fresh retention window.
+    var sessionExpiresAt: Date?
+}
+
+protocol AgentSessionDeltaTransferStoring {
+    func inFlightFrame(
+        accountID: String, userID: String, endpointScope: String, sessionID: UUID
+    ) throws -> AgentSessionDeltaInFlightFrame?
+    /// Governed startup/periodic sweep: idle private frames expire against
+    /// their original Session deadline even when they are never re-read.
+    /// Failures surface to the caller instead of being swallowed.
+    func sweepExpired() throws
+    func retain(
+        _ frame: AgentSessionDeltaInFlightFrame,
+        accountID: String, userID: String, endpointScope: String
+    ) throws
+    func release(accountID: String, userID: String, endpointScope: String, sessionID: UUID) throws
+    /// Account, endpoint or user lifetime change: drop every in-flight frame
+    /// for the retiring partition. No stored user data is reused elsewhere.
+    func releasePartition(accountID: String, userID: String, endpointScope: String) throws
+}
+
+/// Local cleanup authority is established from verified login identity before
+/// network synchronization starts. It contains no bearer credential.
+struct AgentSessionDeltaLocalCleanup {
+    let releaseSession: (UUID) throws -> Void
+    let releasePartition: () throws -> Void
+
+    init(store: AgentSessionDeltaTransferStoring, endpointScope: String, accountID: String, userID: String) {
+        releaseSession = { try store.release(accountID: accountID, userID: userID,
+                                            endpointScope: endpointScope, sessionID: $0) }
+        releasePartition = { try store.releasePartition(accountID: accountID, userID: userID,
+                                                       endpointScope: endpointScope) }
+    }
+
+    static func authenticated(_ session: PursuitWorkspaceSession) -> Self? {
+        guard let accountID = session.accountID, let userID = session.userID,
+              !accountID.isEmpty, !userID.isEmpty else { return nil }
+        let endpoint = RuntimeEndpoint.scope(session.baseURL)
+        return Self(store: AgentSessionDeltaTransferStore.scoped(endpointScope: endpoint,
+                    accountID: accountID, userID: userID),
+                    endpointScope: endpoint, accountID: accountID, userID: userID)
+    }
+}
+
+/// Durable production store. The local persistence namespace is the stable
+/// RuntimeEndpoint/account/user partition — never the rotating bearer token —
+/// so uncertain frames survive process restarts and cannot replay across
+/// accounts or endpoints.
+final class AgentSessionDeltaTransferStore: AgentSessionDeltaTransferStoring {
+    static let sessionRetention: TimeInterval = 30 * 24 * 60 * 60
+
+    private let directory: URL
+    private let now: () -> Date
+
+    init(directory: URL, now: @escaping () -> Date = Date.init) {
+        self.directory = directory
+        self.now = now
+    }
+
+    static func scoped(
+        endpointScope: String,
+        accountID: String,
+        userID: String,
+        now: @escaping () -> Date = Date.init
+    ) -> AgentSessionDeltaTransferStore {
+        let partition = SHA256.hex("\(endpointScope)|\(accountID)|\(userID)")
+        return AgentSessionDeltaTransferStore(
+            directory: RuntimeScopedDirectories.directory(
+                "session-delta-transfers", scope: endpointScope
+            ).appending(path: partition, directoryHint: .isDirectory),
+            now: now
+        )
+    }
+
+    static func retirePartition(endpointScope: String, partitionScope: String) throws {
+        guard partitionScope.count == 64,
+              partitionScope.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+            throw AppSessionError.scopeMismatch
+        }
+        let directory = RuntimeScopedDirectories.directory("session-delta-transfers", scope: endpointScope)
+            .appending(path: partitionScope, directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
+    }
+
+    /// First creation derives the ORIGINAL deadline from the canonical
+    /// skeleton's creation time and the existing retention semantics.
+    static func originalDeadline(createdAt: Date, now: Date = Date()) -> Date {
+        min(createdAt, now).addingTimeInterval(sessionRetention)
+    }
+
+    func inFlightFrame(
+        accountID: String, userID: String, endpointScope: String, sessionID: UUID
+    ) throws -> AgentSessionDeltaInFlightFrame? {
+        let url = try recordURL(accountID: accountID, userID: userID, endpointScope: endpointScope, sessionID: sessionID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        try protectDirectory()
+        try protectExistingFrame(at: url)
+        guard let frame = try? JSONDecoder().decode(
+            AgentSessionDeltaInFlightFrame.self, from: Data(contentsOf: url)
+        ) else {
+            // An unreadable or legacy frame has no trustworthy original
+            // deadline: fail closed and wipe instead of granting new lifetime.
+            try FileManager.default.removeItem(at: url)
+            return nil
+        }
+        guard let deadline = frame.sessionExpiresAt, deadline > now() else {
+            // Lifetime is bound to the ORIGINAL Session deadline; refresh and
+            // retry never extend it.
+            try FileManager.default.removeItem(at: url)
+            return nil
+        }
+        return frame
+    }
+
+    func sweepExpired() throws {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: directory.path) else { return }
+        try protectDirectory()
+        for url in try manager.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil
+        ) where url.pathExtension == "json" {
+            try protectExistingFrame(at: url)
+            guard let frame = try? JSONDecoder().decode(
+                AgentSessionDeltaInFlightFrame.self, from: Data(contentsOf: url)
+            ) else {
+                try manager.removeItem(at: url)
+                continue
+            }
+            if frame.sessionExpiresAt.map({ $0 <= now() }) ?? true {
+                try manager.removeItem(at: url)
+            }
+        }
+    }
+
+    func retain(
+        _ frame: AgentSessionDeltaInFlightFrame,
+        accountID: String, userID: String, endpointScope: String
+    ) throws {
+        let url = try recordURL(accountID: accountID, userID: userID, endpointScope: endpointScope, sessionID: frame.sessionID)
+        try protectDirectory()
+        try JSONEncoder().encode(frame).write(
+            to: url, options: [.atomic, .completeFileProtectionUnlessOpen]
+        )
+    }
+
+    func release(accountID: String, userID: String, endpointScope: String, sessionID: UUID) throws {
+        let url = try recordURL(accountID: accountID, userID: userID, endpointScope: endpointScope, sessionID: sessionID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
+    }
+
+    func releasePartition(accountID: String, userID: String, endpointScope: String) throws {
+        let url = try recordURL(
+            accountID: accountID, userID: userID, endpointScope: endpointScope,
+            sessionID: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        ).deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
+    }
+
+    /// Match the canonical Session cache policy before any private body is
+    /// written or replayed. Attribute failures propagate and prevent dispatch.
+    private func protectDirectory() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var protected = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try protected.setResourceValues(values)
+    }
+
+    private func protectExistingFrame(at url: URL) throws {
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUnlessOpen], ofItemAtPath: url.path
+        )
+    }
+
+    private func recordURL(
+        accountID: String, userID: String, endpointScope: String, sessionID: UUID
+    ) throws -> URL {
+        return directory.appending(
+            path: SHA256.hex("\(endpointScope)|\(accountID)|\(userID)|\(sessionID.uuidString.lowercased())") + ".json"
+        )
+    }
+}
+
+/// Ephemeral store for legacy mock constructors and isolated tests. Production
+/// uses `AgentSessionDeltaTransferStore` with its explicit stable namespace.
+final class EphemeralAgentSessionDeltaTransferStore: AgentSessionDeltaTransferStoring {
+    private var frames: [String: AgentSessionDeltaInFlightFrame] = [:]
+
+    private func key(_ accountID: String, _ userID: String, _ endpointScope: String, _ sessionID: UUID) -> String {
+        "\(endpointScope)|\(accountID)|\(userID)|\(sessionID.uuidString.lowercased())"
+    }
+
+    func inFlightFrame(
+        accountID: String, userID: String, endpointScope: String, sessionID: UUID
+    ) throws -> AgentSessionDeltaInFlightFrame? {
+        let key = key(accountID, userID, endpointScope, sessionID)
+        guard let frame = frames[key] else { return nil }
+        guard let deadline = frame.sessionExpiresAt, deadline > Date() else {
+            frames.removeValue(forKey: key)
+            return nil
+        }
+        return frame
+    }
+
+    func sweepExpired() throws {
+        frames = frames.filter { _, frame in
+            frame.sessionExpiresAt.map { $0 > Date() } ?? false
+        }
+    }
+
+    func retain(
+        _ frame: AgentSessionDeltaInFlightFrame,
+        accountID: String, userID: String, endpointScope: String
+    ) throws {
+        frames[key(accountID, userID, endpointScope, frame.sessionID)] = frame
+    }
+
+    func release(accountID: String, userID: String, endpointScope: String, sessionID: UUID) throws {
+        frames.removeValue(forKey: key(accountID, userID, endpointScope, sessionID))
+    }
+
+    func releasePartition(accountID: String, userID: String, endpointScope: String) throws {
+        frames = frames.filter { !$0.key.hasPrefix("\(endpointScope)|\(accountID)|\(userID)|") }
+    }
+}

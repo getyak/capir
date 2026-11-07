@@ -1,0 +1,45 @@
+import { CONTRACT_VERSION } from "@talent-signal/contracts";
+import { expect, it, vi } from "vitest";
+import { readCapirSandboxExpiry } from "./capirSandbox";
+
+const sandboxId = "22222222-2222-4222-8222-222222222222";
+const accountId = "11111111-1111-4111-8111-111111111111";
+const userId = "33333333-3333-4333-8333-333333333333";
+const expiry = new Date(Date.now() + 4 * 3600_000).toISOString();
+const capir = { sandboxId, entryPath: `/capir/sandboxes/${sandboxId}`,
+  sessionExpiresAt: new Date(Date.now() + 3600_000).toISOString() };
+const claims = { backendAccessToken: "k".repeat(43), backendAccountId: accountId,
+  backendAccountName: "Lab", backendAccountSlug: `lab-${sandboxId}`,
+  backendExpiresAt: capir.sessionExpiresAt, backendRole: "member" as const,
+  backendUserId: userId, backendUsername: null };
+const workspace = { id: sandboxId, owner_account_id: "44444444-4444-4444-8444-444444444444",
+  owner_user_id: "55555555-5555-4555-8555-555555555555", account_id: accountId,
+  user_id: userId, name: "Test workspace", state: "active", created_at: new Date().toISOString(),
+  empty_verified_at: null, expires_at: expiry, duration_hours: 4, stop_id: null,
+  stop_reason: null, stopped_at: null, deleted_at: null, cleanup_error: null,
+  data_rows: 5, active_sessions: 1, pending_media_writes: 0, scope: "isolated_test_account" };
+
+it("reads actual sandbox expiry through the verified Lab child identity", async () => {
+  const fetchImpl = vi.fn(async (_url: unknown, init: RequestInit) => {
+    expect(init.redirect).toBe("error");
+    expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${claims.backendAccessToken}`);
+    return new Response(JSON.stringify({ contract_version: CONTRACT_VERSION, workspace }));
+  }) as unknown as typeof fetch;
+  expect(await readCapirSandboxExpiry(capir, claims, fetchImpl)).toBe(expiry);
+  expect(fetchImpl).toHaveBeenCalledOnce();
+});
+
+it("fails closed on mismatched account, workspace, state and redirects", async () => {
+  const response = (overrides: object) => async () => new Response(JSON.stringify({
+    contract_version: CONTRACT_VERSION, workspace: { ...workspace, ...overrides },
+  }));
+  for (const bad of [{ account_id: "66666666-6666-4666-8666-666666666666" },
+    { user_id: "66666666-6666-4666-8666-666666666666" },
+    { state: "deleted" }, { expires_at: "2020-01-01T00:00:00.000Z" }]) {
+    expect(await readCapirSandboxExpiry(capir, claims, response(bad) as typeof fetch)).toBeNull();
+  }
+  expect(await readCapirSandboxExpiry(capir,
+    { ...claims, backendAccountSlug: "lab-wrong" }, vi.fn() as typeof fetch)).toBeNull();
+  expect(await readCapirSandboxExpiry(capir, claims,
+    (async () => { throw new Error("redirect rejected"); }) as typeof fetch)).toBeNull();
+});

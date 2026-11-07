@@ -1,0 +1,146 @@
+import { describe, expect, it, vi } from "vitest";
+import { BigModelAgentProvider } from "./bigModelProvider.js";
+import { OpenRouterAgentProvider } from "./openRouterProvider.js";
+import { ZhipuChatAnswerProvider } from "./chatAnswerProvider.js";
+import { agentUsage } from "./runBudget.js";
+import type { AgentBudget, AgentProviderRequest } from "./types.js";
+
+const request: AgentProviderRequest = {
+  runID: "10000000-0000-4000-8000-000000000099", objective: "Read synthetic evidence.",
+  systemPrompt: "No external effects.", toolManifest: ["read_pursuit"], budget: {},
+  scopeSummary: { kind: "pursuit", workspaceID: "10000000-0000-4000-8000-000000000001",
+    pursuitID: "10000000-0000-4000-8000-000000000002", pursuitRevision: 1, evidenceRefs: [] },
+};
+const providers = [
+  { name: "BigModel", model: "glm-5.3", create: (fetcher: typeof fetch) => new BigModelAgentProvider({
+    apiKey: "synthetic-only", model: "glm-5.3", inputCnyPerMillion: 8, outputCnyPerMillion: 28, cnyPerUsd: 7, fetcher }) },
+  { name: "OpenRouter", model: "z-ai/glm-5.3", create: (fetcher: typeof fetch) => new OpenRouterAgentProvider({
+    apiKey: "synthetic-only", model: "z-ai/glm-5.3", fetcher }) },
+  { name: "ZhipuChat", model: "glm-5.3", create: (fetcher: typeof fetch) => new ZhipuChatAnswerProvider({
+    apiKey: "synthetic-only", model: "glm-5.3", observer: null, fetcher }) },
+];
+const final = { outcome: "no_action", reason: "No change", reason_code: "NO_MATERIAL_CHANGE", missing_evidence_refs: [] };
+function response(model: string, usage: unknown, tools = false, finish?: string) {
+  return Response.json({ id: "synthetic-response", model,
+    choices: [{ finish_reason: finish ?? (tools ? "tool_calls" : "stop"), message: {
+      content: JSON.stringify(final), ...(tools ? { tool_calls: [{ id: "synthetic-call", type: "function",
+        function: { name: "read_pursuit", arguments: "{}" } }] } : {}),
+    } }], ...(usage === undefined ? {} : { usage }) });
+}
+
+describe.each(providers)("$name whole-task usage admission", ({ name, model, create }) => {
+  const scopedRequest: AgentProviderRequest = name === "ZhipuChat" ? { ...request, scopeSummary: { kind: "workspace_conversation", workspaceID: "synthetic-workspace", sessionID: null, currentPersonID: null, currentRelationshipContextID: null } } : request;
+  async function run(usage: unknown, budget: AgentBudget, tools = false, finish?: string) {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(model, usage, tools, finish));
+    const invokeTool = vi.fn().mockResolvedValue({ ok: true, data: {} });
+    const result = await create(fetcher).run({ ...scopedRequest, budget }, invokeTool, new AbortController().signal);
+    return { result, fetcher, invokeTool, receipt: agentUsage(0, invokeTool.mock.calls.length, result, 1) };
+  }
+
+  it("keeps large explicit cumulative allowances out of the output parameter", async () => {
+    const { result, fetcher } = await run({ prompt_tokens: 39_509, completion_tokens: 2_000, cost: 0.2 }, { maxTaskTokens: 4_000_000 });
+    expect(result.structuredOutput).toEqual(final);
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).not.toHaveProperty("max_tokens");
+  });
+
+  it.each([false, true])("quarantines an over-budget first response (tools=%s)", async tools => {
+    const { result, invokeTool, fetcher, receipt } = await run({ prompt_tokens: 39_509, completion_tokens: 3_001, cost: 0.2 }, { maxTaskTokens: 32_000 }, tools);
+    expect(result).toMatchObject({ structuredOutput: null, terminalReason: "budget_exhausted", turns: 1 });
+    expect(receipt).toMatchObject({ inputTokens: 39_509, outputTokens: 3_001, totalTokens: 42_510 });
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])("checks cumulative usage before admitting the second response (tools=%s)", async tools => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(model, { prompt_tokens: 60, completion_tokens: 10, cost: 0 }, true))
+      .mockResolvedValueOnce(response(model, { prompt_tokens: 30, completion_tokens: 10, cost: 0 }, tools));
+    const invokeTool = vi.fn().mockResolvedValue({ ok: true, data: {} });
+    const result = await create(fetcher).run({ ...scopedRequest, budget: { maxTaskTokens: 100 } }, invokeTool, new AbortController().signal);
+    expect(result).toMatchObject({ structuredOutput: null, terminalReason: "budget_exhausted", turns: 2 });
+    expect(agentUsage(0, 1, result, 1)).toMatchObject({ inputTokens: 90, outputTokens: 20, totalTokens: 110 });
+    expect(invokeTool).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])("admits an exact-budget final answer and refuses further tools (tools=%s)", async tools => {
+    const { result, fetcher, invokeTool } = await run({ prompt_tokens: 90, completion_tokens: 10, cost: 0 }, { maxTaskTokens: 100 }, tools);
+    expect(result.structuredOutput).toEqual(tools ? null : final);
+    expect(result.terminalReason).toBe(tools ? "budget_exhausted" : name === "ZhipuChat" ? "completed" : "provider_stopped");
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, {}, { prompt_tokens: 10 }, { prompt_tokens: "10", completion_tokens: 0 },
+    { prompt_tokens: 10, completion_tokens: -1 }, { prompt_tokens: 10, completion_tokens: 0.5 }])(
+    "refuses tools when explicit token accounting is unavailable: %j", async usage => {
+      const { result, invokeTool, fetcher, receipt } = await run(usage, { maxTaskTokens: 100 }, true);
+      expect(result).toMatchObject({ structuredOutput: null, terminalReason: "provider_usage_unavailable" });
+      expect(receipt.totalTokens).toBeNull();
+      expect(invokeTool).not.toHaveBeenCalled();
+      expect(fetcher).toHaveBeenCalledOnce();
+    });
+
+  it("allows an unbounded answer with honest partial usage", async () => {
+    const { result, receipt } = await run({ prompt_tokens: 10 }, {});
+    expect(result.structuredOutput).toEqual(final);
+    expect(receipt).toMatchObject({ inputTokens: 10, outputTokens: null, totalTokens: null, estimatedUsd: null });
+  });
+
+  it("does not treat a later complete report as recovery of earlier unknown usage", async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(model, { prompt_tokens: 10 }, true))
+      .mockResolvedValueOnce(response(model, { prompt_tokens: 20, completion_tokens: 5, cost: 0 }));
+    const invokeTool = vi.fn().mockResolvedValue({ ok: true, data: {} });
+    const result = await create(fetcher).run(scopedRequest, invokeTool, new AbortController().signal);
+    expect(result.structuredOutput).toEqual(final);
+    expect(agentUsage(0, 1, result, 1)).toMatchObject({ inputTokens: 30, outputTokens: null, totalTokens: null, estimatedUsd: null });
+  });
+
+  it("preserves abnormal-completion quarantine even with missing budget accounting", async () => {
+    const { result, invokeTool } = await run(undefined, { maxTaskTokens: 100 }, true, "length");
+    expect(result.terminalReason).toBe("provider_output_incomplete");
+    expect(result.structuredOutput).toBeNull();
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(providers.slice(1))("$name explicit reported cost accounting", ({ name, model, create }) => {
+  const costRequest: AgentProviderRequest = name === "ZhipuChat" ? { ...request, scopeSummary: { kind: "workspace_conversation", workspaceID: "synthetic-workspace", sessionID: null, currentPersonID: null, currentRelationshipContextID: null } } : request;
+  it.each([undefined, null, "", -1, "unknown"])("rejects unavailable reported cost %j before tools", async cost => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(model, { prompt_tokens: 10, completion_tokens: 2, cost }, true));
+    const invokeTool = vi.fn();
+    const result = await create(fetcher).run({ ...costRequest, budget: { maxEstimatedUsd: 1 } }, invokeTool, new AbortController().signal);
+    expect(result.terminalReason).toBe("provider_usage_unavailable");
+    expect(agentUsage(0, 0, result, 1).estimatedUsd).toBeNull();
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it.each([{ cost: 0, tools: false, stopped: false }, { cost: 1, tools: false, stopped: false },
+    { cost: 1, tools: true, stopped: true }, { cost: 1.1, tools: false, stopped: true }])(
+    "checks reported cost $cost with tools=$tools", async ({ cost, tools, stopped }) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(model, { prompt_tokens: 10, completion_tokens: 2, cost }, tools));
+      const invokeTool = vi.fn();
+      const result = await create(fetcher).run({ ...costRequest, budget: { maxEstimatedUsd: 1 } }, invokeTool, new AbortController().signal);
+      expect(result.structuredOutput).toEqual(stopped ? null : final);
+      expect(result.terminalReason).toBe(stopped ? "budget_exhausted" : name === "ZhipuChat" ? "completed" : "provider_stopped");
+      expect(agentUsage(0, 0, result, 1).estimatedUsd).toBe(cost);
+      expect(invokeTool).not.toHaveBeenCalled();
+    });
+});
+
+
+it("Zhipu preset observations retain partial usage without inventing zero cost", async () => {
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(response("glm-5.3", { prompt_tokens: 10 }, true))
+    .mockResolvedValueOnce(response("glm-5.3", { prompt_tokens: 20, completion_tokens: 5 }));
+  const provider = new ZhipuChatAnswerProvider({ apiKey: "synthetic-only", model: "glm-5.3", observer: null, fetcher });
+  const observed = vi.fn();
+  const result = await provider.runWithPromptPreset({ ...request, scopeSummary: { kind: "workspace_conversation",
+    workspaceID: "synthetic-workspace", sessionID: null, currentPersonID: null, currentRelationshipContextID: null } },
+    vi.fn().mockResolvedValue({ ok: true, data: {} }), new AbortController().signal, "baseline", observed);
+  expect(result.structuredOutput).toEqual(final);
+  expect(agentUsage(0, 1, result, 1)).toMatchObject({ inputTokens: 30, outputTokens: null, totalTokens: null, estimatedUsd: null });
+  expect(observed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ input_tokens: 30, output_tokens: null,
+    requests_started: 2, responses_received: 2, actual_model: "glm-5.3" }));
+});

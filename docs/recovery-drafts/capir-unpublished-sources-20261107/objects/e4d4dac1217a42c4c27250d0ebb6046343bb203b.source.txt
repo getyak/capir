@@ -1,0 +1,624 @@
+import EventKit
+import Foundation
+
+@MainActor
+final class PreviewOnlyFollowUpReminderService: FollowUpReminderServing {
+    func previewDestination() async -> Result<FollowUpReminderDestination, FollowUpReminderFailure> {
+        .failure(.previewOnly)
+    }
+
+    func execute(_ proposal: FollowUpReminderProposal) async -> Result<FollowUpReminderReceipt, FollowUpReminderFailure> {
+        .failure(.previewOnly)
+    }
+
+    func reconcile(_ proposal: FollowUpReminderProposal) async -> Result<FollowUpReminderReceipt, FollowUpReminderFailure> {
+        .failure(.previewOnly)
+    }
+
+    func remove(_ receipt: FollowUpReminderReceipt) async -> Result<FollowUpReminderRemovalReceipt, FollowUpReminderFailure> {
+        .failure(.previewOnly)
+    }
+
+    func reconcileRemoval(_ receipt: FollowUpReminderReceipt) async -> Result<FollowUpReminderRemovalReceipt, FollowUpReminderFailure> {
+        .failure(.previewOnly)
+    }
+}
+
+private struct StoredReminderReceipt: Codable {
+    enum State: String, Codable {
+        case pending
+        case verified
+    }
+
+    let idempotencyKey: String
+    let state: State
+    let reminderIdentifier: String?
+    let destinationIdentifier: String
+    let verifiedAt: Date
+}
+
+// MARK: - Injected producer seams
+
+/// The exact authorization state the producer needs. The production adapter
+/// maps EKAuthorizationStatus; tests inject controlled values.
+enum FollowUpReminderAuthorizationStatus: Sendable, Equatable {
+    case fullAccess
+    case notDetermined
+    case denied
+}
+
+struct FollowUpReminderList: Equatable, Sendable {
+    let identifier: String
+    let title: String
+}
+
+/// One read-back reminder record. It carries only what exact verification
+/// needs; nothing here is copied into UserDefaults beyond the opaque recovery
+/// reference.
+struct FollowUpReminderRecord: Equatable, Sendable {
+    let identifier: String
+    let title: String
+    let dueComponents: DateComponents?
+    let recoveryURL: URL?
+    let listIdentifier: String
+    let listTitle: String
+}
+
+struct FollowUpReminderWrite: Sendable {
+    let title: String
+    let dueComponents: DateComponents
+    let recoveryURL: URL?
+    let listIdentifier: String
+}
+
+/// Injected dependency/permission/fetch/save seam for the real producer. The
+/// production adapter wraps EKEventStore; tests inject controlled seams and
+/// never touch a real calendar or a real user's reminders.
+@MainActor
+protocol FollowUpReminderEventStore: AnyObject {
+    func reminderAuthorizationStatus() -> FollowUpReminderAuthorizationStatus
+    func requestReminderAccess() async -> Bool
+    func defaultReminderList() -> FollowUpReminderList?
+    func reminderList(withIdentifier: String) -> FollowUpReminderList?
+    func savedReminder(withIdentifier: String) -> FollowUpReminderRecord?
+    /// The one consequential external write. Returns the provider's opaque
+    /// reminder identifier.
+    func saveReminder(_ write: FollowUpReminderWrite) throws -> String
+    /// The one consequential external removal.
+    func removeReminder(withIdentifier: String) throws
+    /// Narrow readback: only the reviewed destination list is searched for the
+    /// opaque recovery URL; unrelated reminders are never enumerated.
+    func fetchReminders(listIdentifier: String, recoveryURL: URL?) async -> [FollowUpReminderRecord]
+}
+
+/// Production adapter over EKEventStore. It is the only path that can touch a
+/// real calendar.
+@MainActor
+final class SystemEventKitReminderStore: FollowUpReminderEventStore {
+    private let eventStore: EKEventStore
+
+    init(eventStore: EKEventStore = EKEventStore()) {
+        self.eventStore = eventStore
+    }
+
+    func reminderAuthorizationStatus() -> FollowUpReminderAuthorizationStatus {
+        switch EKEventStore.authorizationStatus(for: .reminder) {
+        case .fullAccess, .authorized:
+            return .fullAccess
+        case .notDetermined:
+            return .notDetermined
+        case .denied, .restricted, .writeOnly:
+            return .denied
+        @unknown default:
+            return .denied
+        }
+    }
+
+    func requestReminderAccess() async -> Bool {
+        (try? await eventStore.requestFullAccessToReminders()) ?? false
+    }
+
+    func defaultReminderList() -> FollowUpReminderList? {
+        eventStore.defaultCalendarForNewReminders().map {
+            FollowUpReminderList(identifier: $0.calendarIdentifier, title: $0.title)
+        }
+    }
+
+    func reminderList(withIdentifier identifier: String) -> FollowUpReminderList? {
+        eventStore.calendar(withIdentifier: identifier).map {
+            FollowUpReminderList(identifier: $0.calendarIdentifier, title: $0.title)
+        }
+    }
+
+    func savedReminder(withIdentifier identifier: String) -> FollowUpReminderRecord? {
+        (eventStore.calendarItem(withIdentifier: identifier) as? EKReminder).map(Self.record(for:))
+    }
+
+    func saveReminder(_ write: FollowUpReminderWrite) throws -> String {
+        guard let calendar = eventStore.calendar(withIdentifier: write.listIdentifier) else {
+            throw FollowUpReminderFailure.destinationChanged
+        }
+        let reminder = EKReminder(eventStore: eventStore)
+        reminder.calendar = calendar
+        reminder.title = write.title
+        reminder.dueDateComponents = write.dueComponents
+        reminder.url = write.recoveryURL
+        try eventStore.save(reminder, commit: true)
+        return reminder.calendarItemIdentifier
+    }
+
+    func removeReminder(withIdentifier identifier: String) throws {
+        guard let reminder = eventStore.calendarItem(withIdentifier: identifier) as? EKReminder else {
+            return
+        }
+        try eventStore.remove(reminder, commit: true)
+    }
+
+    func fetchReminders(listIdentifier: String, recoveryURL: URL?) async -> [FollowUpReminderRecord] {
+        guard let calendar = eventStore.calendar(withIdentifier: listIdentifier) else { return [] }
+        let predicate = eventStore.predicateForReminders(in: [calendar])
+        let reminders: [EKReminder] = await withCheckedContinuation { continuation in
+            eventStore.fetchReminders(matching: predicate) { result in
+                continuation.resume(returning: result ?? [])
+            }
+        }
+        return reminders.map(Self.record(for:))
+    }
+
+    private static func record(for reminder: EKReminder) -> FollowUpReminderRecord {
+        FollowUpReminderRecord(
+            identifier: reminder.calendarItemIdentifier,
+            title: reminder.title,
+            dueComponents: reminder.dueDateComponents,
+            recoveryURL: reminder.url,
+            listIdentifier: reminder.calendar.calendarIdentifier,
+            listTitle: reminder.calendar.title
+        )
+    }
+}
+
+// MARK: - Real producer
+
+@MainActor
+final class EventKitFollowUpReminderService: FollowUpReminderServing {
+    /// Exact original account/operation/ledger namespace captured at producer
+    /// entry. Every effect after an await uses this captured owner; a newer
+    /// account switch or recovery clear can never be written over, and an
+    /// obsolete callback can never recreate cleared recovery.
+    private struct ProducerAuthority {
+        let accountID: String
+        let operationKey: String
+        let epoch: UInt64
+    }
+
+    private let eventStore: any FollowUpReminderEventStore
+    private let defaults: UserDefaults
+    private let lifecycleLedger: ReminderLifecycleLedger
+    private let receiptKeyPrefix = "talent-signal.macos.follow-up-reminder-receipts.v2"
+    private let legacyReceiptKey = "talent-signal.macos.follow-up-reminder-receipts.v1"
+    private var accountID: String = "unbound"
+    /// Monotonic producer authority epoch. Account switches and recovery
+    /// clears bump it; a captured operation whose epoch no longer matches may
+    /// not dispatch a new external effect.
+    private var authorityEpoch: UInt64 = 0
+
+    init(
+        eventStore: (any FollowUpReminderEventStore)? = nil,
+        defaults: UserDefaults = .standard,
+        lifecycleLedger: ReminderLifecycleLedger? = nil
+    ) {
+        self.eventStore = eventStore ?? SystemEventKitReminderStore()
+        self.defaults = defaults
+        self.lifecycleLedger = lifecycleLedger ?? ReminderLifecycleLedger(defaults: defaults)
+        self.lifecycleLedger.setAccountScope(accountID)
+    }
+
+    func setLocalRecoveryAccount(_ accountID: String) {
+        guard accountID != self.accountID else { return }
+        self.accountID = accountID
+        // An account switch is a producer authority boundary: in-flight
+        // operations keep their captured owner and can no longer dispatch new
+        // external effects under the newer account.
+        authorityEpoch += 1
+        lifecycleLedger.setAccountScope(accountID)
+    }
+
+    func clearLocalRecovery() {
+        authorityEpoch += 1
+        lifecycleLedger.setAccountScope(accountID)
+        defaults.removeObject(forKey: receiptKey(forDigest: lifecycleLedger.currentAccountScopeDigest))
+        defaults.removeObject(forKey: legacyReceiptKey)
+        lifecycleLedger.clearCurrentAccount()
+    }
+
+    func previewDestination() async -> Result<FollowUpReminderDestination, FollowUpReminderFailure> {
+        let owner = captureAuthority(operationKey: "preview-destination")
+        guard await ensureReminderAccess(for: owner) else { return .failure(.permissionDenied) }
+        guard let list = eventStore.defaultReminderList() else {
+            return .failure(.noDefaultList)
+        }
+        return .success(.init(identifier: list.identifier, title: list.title))
+    }
+
+    func execute(_ proposal: FollowUpReminderProposal) async -> Result<FollowUpReminderReceipt, FollowUpReminderFailure> {
+        let owner = captureAuthority(operationKey: proposal.idempotencyKey)
+        guard await ensureReminderAccess(for: owner) else { return .failure(.permissionDenied) }
+        guard let list = eventStore.reminderList(withIdentifier: proposal.destination.identifier) else {
+            return .failure(.destinationChanged)
+        }
+
+        if let stored = storedReceipt(for: owner, idempotencyKey: proposal.idempotencyKey) {
+            if let identifier = stored.reminderIdentifier,
+               let existing = eventStore.savedReminder(withIdentifier: identifier) {
+                return verifyAndRecord(existing, proposal: proposal, owner: owner, lifecycleState: .reconciled)
+            }
+            // A prior attempt lost readback. Search only the reviewed
+            // destination list for our opaque recovery URL; the normal
+            // first-write path never enumerates unrelated reminders.
+            if let existing = await findReminder(
+                idempotencyKey: proposal.idempotencyKey,
+                listIdentifier: list.identifier,
+                owner: owner
+            ) {
+                return verifyAndRecord(existing, proposal: proposal, owner: owner, lifecycleState: .reconciled)
+            }
+        }
+
+        // The duplicate-prevention reference is admitted and recorded only
+        // while this exact operation may still dispatch a new external effect.
+        guard admitsNewEffect(owner) else {
+            return .failure(.permissionDenied)
+        }
+        guard recordPending(proposal, owner: owner) else {
+            return .failure(.recoveryUnavailable)
+        }
+
+        let savedIdentifier: String
+        do {
+            // Not-yet-dispatched external save: authority is re-checked in the
+            // same synchronous admission so a revoked producer can never write.
+            guard admitsNewEffect(owner) else {
+                return .failure(.permissionDenied)
+            }
+            savedIdentifier = try eventStore.saveReminder(FollowUpReminderWrite(
+                title: proposal.title,
+                dueComponents: dueComponents(for: proposal),
+                recoveryURL: recoveryURL(for: proposal.idempotencyKey),
+                listIdentifier: proposal.destination.identifier
+            ))
+        } catch {
+            // EventKit errors can arrive after a provider accepted a write.
+            // Callers must reconcile instead of blindly creating a duplicate.
+            recordLateLedger(owner, state: .outcomeUnknown)
+            return .failure(.saveFailed(error.localizedDescription))
+        }
+
+        // The write is already dispatched: its outcome stays truthful and
+        // reconcilable even if authority changed during readback. It is never
+        // reported as canceled, and any late record stays in the ORIGINAL
+        // owner namespace or is skipped when that recovery was cleared.
+        var readback = eventStore.savedReminder(withIdentifier: savedIdentifier)
+        if readback == nil {
+            readback = await findReminder(
+                idempotencyKey: proposal.idempotencyKey,
+                listIdentifier: list.identifier,
+                owner: owner
+            )
+        }
+        guard let readback else {
+            recordLateLedger(owner, state: .outcomeUnknown)
+            return .failure(.readbackMissing)
+        }
+        return verifyAndRecord(readback, proposal: proposal, owner: owner, lifecycleState: .verified)
+    }
+
+    func reconcile(_ proposal: FollowUpReminderProposal) async -> Result<FollowUpReminderReceipt, FollowUpReminderFailure> {
+        let owner = captureAuthority(operationKey: proposal.idempotencyKey)
+        guard await ensureReminderAccess(for: owner) else { return .failure(.permissionDenied) }
+        guard let list = eventStore.reminderList(withIdentifier: proposal.destination.identifier) else {
+            return .failure(.destinationChanged)
+        }
+        if let stored = storedReceipt(for: owner, idempotencyKey: proposal.idempotencyKey),
+           let identifier = stored.reminderIdentifier,
+           let reminder = eventStore.savedReminder(withIdentifier: identifier) {
+            return verifyAndRecord(reminder, proposal: proposal, owner: owner, lifecycleState: .reconciled)
+        }
+        guard let reminder = await findReminder(
+            idempotencyKey: proposal.idempotencyKey,
+            listIdentifier: list.identifier,
+            owner: owner
+        ) else {
+            recordLateLedger(owner, state: .reconcileNotFound)
+            return .failure(.readbackMissing)
+        }
+        return verifyAndRecord(reminder, proposal: proposal, owner: owner, lifecycleState: .reconciled)
+    }
+
+    func remove(_ receipt: FollowUpReminderReceipt) async -> Result<FollowUpReminderRemovalReceipt, FollowUpReminderFailure> {
+        let owner = captureAuthority(operationKey: receipt.idempotencyKey)
+        recordLedger(owner, state: .removalRequested)
+        guard await ensureReminderAccess(for: owner) else { return .failure(.permissionDenied) }
+        guard let list = eventStore.reminderList(withIdentifier: receipt.destinationIdentifier) else {
+            return .failure(.destinationChanged)
+        }
+        var reminder = eventStore.savedReminder(withIdentifier: receipt.reminderIdentifier)
+        if reminder == nil {
+            reminder = await findReminder(
+                idempotencyKey: receipt.idempotencyKey,
+                listIdentifier: list.identifier,
+                owner: owner
+            )
+        }
+        guard let reminder else {
+            clearStoredReceipt(owner, idempotencyKey: receipt.idempotencyKey)
+            recordLateLedger(owner, state: .removed)
+            return .success(removalReceipt(from: receipt, wasAlreadyAbsent: true))
+        }
+        guard reminder.listIdentifier == receipt.destinationIdentifier,
+              reminder.recoveryURL == recoveryURL(for: receipt.idempotencyKey) else {
+            return .failure(.readbackMismatch)
+        }
+        do {
+            // Not-yet-dispatched external removal: authority is re-checked in
+            // the same synchronous admission.
+            guard admitsNewEffect(owner) else {
+                return .failure(.permissionDenied)
+            }
+            try eventStore.removeReminder(withIdentifier: reminder.identifier)
+        } catch {
+            recordLateLedger(owner, state: .removalUnknown)
+            return .failure(.saveFailed(error.localizedDescription))
+        }
+        return await reconcileRemoval(receipt)
+    }
+
+    func reconcileRemoval(_ receipt: FollowUpReminderReceipt) async -> Result<FollowUpReminderRemovalReceipt, FollowUpReminderFailure> {
+        let owner = captureAuthority(operationKey: receipt.idempotencyKey)
+        guard await ensureReminderAccess(for: owner) else { return .failure(.permissionDenied) }
+        guard let list = eventStore.reminderList(withIdentifier: receipt.destinationIdentifier) else {
+            return .failure(.destinationChanged)
+        }
+        if eventStore.savedReminder(withIdentifier: receipt.reminderIdentifier) != nil {
+            recordLateLedger(owner, state: .removalStillPresent)
+            return .failure(.readbackMismatch)
+        }
+        if await findReminder(
+            idempotencyKey: receipt.idempotencyKey,
+            listIdentifier: list.identifier,
+            owner: owner
+        ) != nil {
+            recordLateLedger(owner, state: .removalStillPresent)
+            return .failure(.readbackMismatch)
+        }
+        clearStoredReceipt(owner, idempotencyKey: receipt.idempotencyKey)
+        recordLateLedger(owner, state: .removed)
+        return .success(removalReceipt(from: receipt, wasAlreadyAbsent: false))
+    }
+
+    // MARK: Producer authority and captured-namespace persistence
+
+    private func captureAuthority(operationKey: String) -> ProducerAuthority {
+        ProducerAuthority(accountID: accountID, operationKey: operationKey, epoch: authorityEpoch)
+    }
+
+    /// True while this exact captured operation may still dispatch a new
+    /// external effect. After an account switch or recovery clear no new write
+    /// or removal is admitted.
+    private func admitsNewEffect(_ owner: ProducerAuthority) -> Bool {
+        owner.epoch == authorityEpoch
+    }
+
+    /// True while the captured owner still governs its ORIGINAL recovery
+    /// namespace for this exact operation. A cleared namespace is never
+    /// recreated by an obsolete callback, and a newer operation's receipt is
+    /// never overwritten or deleted.
+    private func ownsStoredRecovery(_ owner: ProducerAuthority, idempotencyKey: String) -> Bool {
+        guard let stored = storedReceipt(for: owner, idempotencyKey: idempotencyKey) else {
+            return false
+        }
+        return stored.idempotencyKey == idempotencyKey
+    }
+
+    /// Pins the ledger to the ORIGINAL account namespace. The pin and the
+    /// ledger call are one synchronous section on the main actor, so a newer
+    /// account can never interleave between them.
+    private func ownerNamespace(_ owner: ProducerAuthority) -> String {
+        lifecycleLedger.setAccountScope(owner.accountID)
+        return lifecycleLedger.currentAccountScopeDigest
+    }
+
+    private func recordLedger(_ owner: ProducerAuthority, state: ReminderLifecycleEvent.State) {
+        lifecycleLedger.setAccountScope(owner.accountID)
+        lifecycleLedger.append(operationKey: owner.operationKey, state: state)
+    }
+
+    /// Post-await ledger writes land only in the ORIGINAL owner namespace and
+    /// only while the producer still governs it. An obsolete callback can never
+    /// recreate a cleared old ledger and never writes account A under account
+    /// B; an already dispatched effect stays a truthful unknown/reconcilable
+    /// outcome instead of being reported as canceled.
+    private func recordLateLedger(_ owner: ProducerAuthority, state: ReminderLifecycleEvent.State) {
+        guard admitsNewEffect(owner)
+            || ownsStoredRecovery(owner, idempotencyKey: owner.operationKey) else {
+            return
+        }
+        recordLedger(owner, state: state)
+    }
+
+    private func ensureReminderAccess(for owner: ProducerAuthority) async -> Bool {
+        switch eventStore.reminderAuthorizationStatus() {
+        case .fullAccess:
+            return true
+        case .notDetermined:
+            return await eventStore.requestReminderAccess()
+        case .denied:
+            return false
+        }
+    }
+
+    private func findReminder(
+        idempotencyKey: String,
+        listIdentifier: String,
+        owner: ProducerAuthority
+    ) async -> FollowUpReminderRecord? {
+        let expectedURL = recoveryURL(for: idempotencyKey)
+        return await eventStore.fetchReminders(listIdentifier: listIdentifier, recoveryURL: expectedURL)
+            .first { $0.recoveryURL == expectedURL }
+    }
+
+    private func verifyAndRecord(
+        _ reminder: FollowUpReminderRecord,
+        proposal: FollowUpReminderProposal,
+        owner: ProducerAuthority,
+        lifecycleState: ReminderLifecycleEvent.State
+    ) -> Result<FollowUpReminderReceipt, FollowUpReminderFailure> {
+        guard reminder.title == proposal.title,
+              reminder.listIdentifier == proposal.destination.identifier,
+              reminder.recoveryURL == recoveryURL(for: proposal.idempotencyKey),
+              let dueComponents = reminder.dueComponents,
+              let dueAt = date(from: dueComponents, timeZoneIdentifier: proposal.timeZoneIdentifier),
+              abs(dueAt.timeIntervalSince(proposal.dueAt)) < 60,
+              !reminder.identifier.isEmpty else {
+            recordLateLedger(owner, state: .outcomeUnknown)
+            return .failure(.readbackMismatch)
+        }
+        let receipt = FollowUpReminderReceipt(
+            idempotencyKey: proposal.idempotencyKey,
+            reminderIdentifier: reminder.identifier,
+            title: reminder.title,
+            dueAt: dueAt,
+            destinationIdentifier: reminder.listIdentifier,
+            destinationTitle: reminder.listTitle,
+            verifiedAt: Date()
+        )
+        record(receipt, owner: owner)
+        recordLateLedger(owner, state: lifecycleState)
+        return .success(receipt)
+    }
+
+    private func dueComponents(for proposal: FollowUpReminderProposal) -> DateComponents {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: proposal.timeZoneIdentifier) ?? .current
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: proposal.dueAt)
+        components.timeZone = calendar.timeZone
+        return components
+    }
+
+    private func date(from components: DateComponents?, timeZoneIdentifier: String) -> Date? {
+        guard var components else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? .current
+        components.timeZone = calendar.timeZone
+        return calendar.date(from: components)
+    }
+
+    private func recoveryURL(for idempotencyKey: String) -> URL? {
+        URL(string: "talentsignal://follow-up-reminder/\(idempotencyKey)")
+    }
+
+    // MARK: Opaque receipt storage in the ORIGINAL account namespace
+
+    private func storedReceipt(
+        for owner: ProducerAuthority,
+        idempotencyKey: String
+    ) -> StoredReminderReceipt? {
+        let key = receiptKey(forDigest: ownerNamespace(owner))
+        guard let data = defaults.data(forKey: key),
+              let receipts = try? JSONDecoder().decode([String: StoredReminderReceipt].self, from: data) else {
+            return nil
+        }
+        return receipts[idempotencyKey]
+    }
+
+    private func record(_ receipt: FollowUpReminderReceipt, owner: ProducerAuthority) {
+        // Compare-before-write in the ORIGINAL namespace: an obsolete callback
+        // never writes its state over a newer operation and never recreates
+        // recovery that sign-out already cleared.
+        guard ownsStoredRecovery(owner, idempotencyKey: receipt.idempotencyKey) else { return }
+        let key = receiptKey(forDigest: ownerNamespace(owner))
+        var receipts: [String: StoredReminderReceipt] = [:]
+        if let data = defaults.data(forKey: key),
+           let decoded = try? JSONDecoder().decode([String: StoredReminderReceipt].self, from: data) {
+            receipts = decoded
+        }
+        // Persist only an opaque recovery reference. The reminder title, due
+        // date, evidence, person, and list title remain in EventKit readback
+        // and are never copied into UserDefaults.
+        receipts[receipt.idempotencyKey] = StoredReminderReceipt(
+            idempotencyKey: receipt.idempotencyKey,
+            state: .verified,
+            reminderIdentifier: receipt.reminderIdentifier,
+            destinationIdentifier: receipt.destinationIdentifier,
+            verifiedAt: receipt.verifiedAt
+        )
+        if let encoded = try? JSONEncoder().encode(receipts) {
+            defaults.set(encoded, forKey: key)
+        }
+    }
+
+    private func recordPending(_ proposal: FollowUpReminderProposal, owner: ProducerAuthority) -> Bool {
+        // This is the pre-dispatch admission write for the captured owner: it
+        // creates the duplicate-prevention reference only while this exact
+        // operation may still dispatch, and only under its original account.
+        guard admitsNewEffect(owner) else { return false }
+        let key = receiptKey(forDigest: ownerNamespace(owner))
+        var receipts: [String: StoredReminderReceipt] = [:]
+        if let data = defaults.data(forKey: key),
+           let decoded = try? JSONDecoder().decode([String: StoredReminderReceipt].self, from: data) {
+            receipts = decoded
+        }
+        receipts[proposal.idempotencyKey] = StoredReminderReceipt(
+            idempotencyKey: proposal.idempotencyKey,
+            state: .pending,
+            reminderIdentifier: nil,
+            destinationIdentifier: proposal.destination.identifier,
+            verifiedAt: Date()
+        )
+        if let encoded = try? JSONEncoder().encode(receipts) {
+            defaults.set(encoded, forKey: key)
+            let verified = storedReceipt(for: owner, idempotencyKey: proposal.idempotencyKey)?.state == .pending
+            if verified {
+                recordLedger(owner, state: .pending)
+            }
+            return verified
+        }
+        return false
+    }
+
+    private func removalReceipt(
+        from receipt: FollowUpReminderReceipt,
+        wasAlreadyAbsent: Bool
+    ) -> FollowUpReminderRemovalReceipt {
+        FollowUpReminderRemovalReceipt(
+            idempotencyKey: receipt.idempotencyKey,
+            reminderIdentifier: receipt.reminderIdentifier,
+            destinationTitle: receipt.destinationTitle,
+            removedAt: Date(),
+            wasAlreadyAbsent: wasAlreadyAbsent
+        )
+    }
+
+    private func clearStoredReceipt(_ owner: ProducerAuthority, idempotencyKey: String) {
+        // Compare-before-delete in the ORIGINAL namespace: a stale cleanup can
+        // never delete a newer operation's receipt and never touches a newer
+        // account's namespace.
+        guard ownsStoredRecovery(owner, idempotencyKey: idempotencyKey) else { return }
+        let key = receiptKey(forDigest: ownerNamespace(owner))
+        guard let data = defaults.data(forKey: key),
+              var receipts = try? JSONDecoder().decode([String: StoredReminderReceipt].self, from: data) else {
+            return
+        }
+        receipts.removeValue(forKey: idempotencyKey)
+        if receipts.isEmpty {
+            // No recovery reference remains: the namespace is removed rather
+            // than leaving an empty payload that could look like live recovery.
+            defaults.removeObject(forKey: key)
+        } else if let encoded = try? JSONEncoder().encode(receipts) {
+            defaults.set(encoded, forKey: key)
+        }
+    }
+
+    private func receiptKey(forDigest digest: String) -> String {
+        "\(receiptKeyPrefix).\(digest)"
+    }
+}

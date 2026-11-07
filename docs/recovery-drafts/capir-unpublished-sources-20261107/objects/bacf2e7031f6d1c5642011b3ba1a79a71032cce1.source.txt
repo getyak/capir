@@ -1,0 +1,56 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { ArrowUp } from "@phosphor-icons/react";
+import { WorkspaceComposer } from "@/components/workspace-composer";
+import { applyTheme } from "@/lib/theme-preference";
+import styles from "./preview.module.css";
+
+/** Real composer, synthetic local state: no account, directory or Agent request. */
+export function CraftPreview() {
+  const [draft, setDraft] = useState("");
+  const [narrow, setNarrow] = useState(false);
+  const [large, setLarge] = useState(false);
+  const [status, setStatus] = useState("合成预览 · 这里的输入不会进入工作区");
+  useEffect(() => {
+    function changePreviewTheme(event: KeyboardEvent) {
+      if (!event.altKey || event.isComposing) return;
+      if (event.code === "KeyD" || event.code === "KeyL") {
+        event.preventDefault();
+        applyTheme(event.code === "KeyD" ? "dark" : "light");
+      }
+    }
+    window.addEventListener("keydown", changePreviewTheme);
+    return () => window.removeEventListener("keydown", changePreviewTheme);
+  }, []);
+  return (
+    <main className={`${styles.page} ts-workspace-theme quiet-workspace`}>
+      <header className={styles.controls}>
+        <h1>会话细节对照</h1>
+        <button onClick={() => applyTheme("light")}>浅色 · ⌥L</button>
+        <button onClick={() => applyTheme("dark")}>深色 · ⌥D</button>
+        <button aria-pressed={narrow} onClick={() => setNarrow(!narrow)}>窄窗口</button>
+        <button aria-pressed={large} onClick={() => setLarge(!large)}>画布放大</button>
+      </header>
+      <section className={styles.canvas} data-narrow={narrow} data-large={large}>
+        <h2>试点合作 · 下一步</h2>
+        <div className={styles.transcript}>
+          <p>下一次，把试点范围说清楚。</p>
+          <p>先核对沟通记录，再形成可编辑的草稿。</p>
+          <blockquote>示例内容，不来自任何真实人物或会话。</blockquote>
+        </div>
+        <WorkspaceComposer
+          id="craft-composer" label="消息" value={draft} maxLength={1000}
+          placeholder="有什么想一起理清的？" variant="home" layout="inline"
+          canSubmit={Boolean(draft.trim())} rows={1} binding={null}
+          onValueChange={setDraft}
+          onSubmit={() => { setStatus("已验证本地发送反馈；未提交到 Agent"); setDraft(""); }}
+          onNavigate={() => setStatus("已验证导航选择；预览保留在本页")}
+          onFiles={(files) => setStatus(`已选择 ${files.length} 个本地文件；没有上传`)}
+          footerEnd={<button className={styles.send} aria-label="发送合成消息" disabled={!draft.trim()} onClick={() => { setStatus("已验证本地发送反馈；未提交到 Agent"); setDraft(""); }}><ArrowUp size={18} aria-hidden="true"/></button>}
+        />
+      </section>
+      <p className={styles.status} role="status">{status}</p>
+    </main>
+  );
+}

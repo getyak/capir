@@ -1,0 +1,99 @@
+import Foundation
+
+/// Cross-language framing fixtures. The exact digests are asserted by the
+/// TypeScript tests (`agentSessionDelta.test.ts`) and by
+/// `AgentSessionDeltaFramingTests`, so all runtimes frame identical bytes for
+/// key ordering, unicode/emoji/combining text, floating numbers (including
+/// -0), and empty or nullable containers.
+enum AgentSessionDeltaFramingFixtures {
+    struct Fixture {
+        let name: String
+        let value: Any
+        let digest: String
+    }
+
+    static let all: [Fixture] = [
+        Fixture(name: "empty-object", value: [String: Any](), digest: "92e5420b60da601f83e2c3346724b96eb92d40537d1a65dc37f2a198ebe29e89"),
+        Fixture(name: "empty-array", value: [Any](), digest: "dd35b158a15dd4f8ed7735f631684b203f20f6fa5875d6eb5ab185236f247657"),
+        Fixture(
+            name: "nullable-containers",
+            value: ["a": NSNull(), "b": [Any](), "c": [String: Any](), "d": false, "e": true] as [String: Any],
+            digest: "5c52499b7f86887d2d552b7be6a35140e309bb2d28bc0a406234af8cc3b0819e"
+        ),
+        Fixture(
+            name: "key-ordering",
+            value: ["b": 1, "a": 2, "C": 3, "_": 4, "\u{00E9}": 5, "\u{1F600}": 6, "\u{FFFF}": 7, "z": 8] as [String: Any],
+            digest: "0a193095a3d7b3c64e7a7df6eacd2610c633afdecbcc6f0f913a59e6fed781ed"
+        ),
+        Fixture(
+            name: "key-ordering-shuffled",
+            value: ["z": 8, "\u{FFFF}": 7, "\u{1F600}": 6, "\u{00E9}": 5, "_": 4, "C": 3, "a": 2, "b": 1] as [String: Any],
+            digest: "0a193095a3d7b3c64e7a7df6eacd2610c633afdecbcc6f0f913a59e6fed781ed"
+        ),
+        Fixture(
+            name: "unicode-emoji-combining",
+            value: [
+                "composed": "caf\u{00E9}",
+                "combining": "cafe\u{0301}",
+                "emoji": "\u{1F44B}\u{1F3FD}",
+                "rtl": "\u{05D0}\u{05D1}\u{05D2}",
+                "zwj": "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+            ] as [String: Any],
+            digest: "092347a797458c7c4db6ef96d31b77c2afbf390f3e68b8155db66d83564abb1a"
+        ),
+        Fixture(
+            name: "floating-numbers",
+            value: [
+                "zero": 0.0,
+                "negZero": -0.0,
+                "one": 1.0,
+                "frac": 1.5,
+                "neg": -2.25,
+                "tiny": 5e-324,
+                "large": 1.7976931348623157e308,
+                "pow": 1024.0,
+                "third": 1.0 / 3.0,
+            ] as [String: Any],
+            digest: "2fa0071da2ddf23ee3aeb5de4470410f0eee8118186ae3fa574741505bb8263f"
+        ),
+        Fixture(
+            name: "integer-limits",
+            value: [
+                "maxSafe": 9007199254740991.0,
+                "minSafe": -9007199254740991.0,
+                "bigish": 1234567890123456789.0,
+            ] as [String: Any],
+            digest: "78f4014f379e5e0aaf5ad5c586602be0dc62d947db3c895b633d5aac14bc8edd"
+        ),
+        Fixture(
+            name: "nested-containers",
+            value: [
+                "list": [1.0, [2.0, [3.0, ["deep": NSNull()] as [String: Any]] as [Any]] as [Any]],
+                "obj": ["k": [["v": ""]] as [Any]] as [String: Any],
+                "mixed": [[Any](), [String: Any](), NSNull(), [[String: Any]()] as [Any]] as [Any],
+            ] as [String: Any],
+            digest: "99126731d6f7c845d87ceb3db0d1a08a66bdae7a58d7f404a8e745f0cfe759d6"
+        ),
+        Fixture(
+            name: "control-characters",
+            value: ["text": "line one\nline two\ttabbed \u{0001}\u{001F}\u{007F}"] as [String: Any],
+            digest: "85bebb3015fca5a4ff926d021b6a7edc50f981b20e55bf683901cbb57e85c0ff"
+        ),
+        Fixture(
+            name: "session-like",
+            value: [
+                "id": "7BA9A4B2-8E31-4C0A-9D2E-55AA7C4E1B10",
+                "updatedAt": "2026-10-08T03:07:24.000Z",
+                "turns": [
+                    [
+                        "id": "0d90b077-2bd1-4c13-82ca-8f4dd366db1b",
+                        "objective": "hi \u{1F44B}",
+                        "createdAt": "2026-10-08T03:07:24.123Z",
+                    ] as [String: Any],
+                ] as [Any],
+                "isUnread": false,
+            ] as [String: Any],
+            digest: "c47904ad663aa2da6d931396c25971dfd792ab59db172f6136a4f27c86787ff5"
+        ),
+    ]
+}

@@ -1,0 +1,728 @@
+import XCTest
+@testable import TalentSignal
+
+/// Production lifecycle proof for the delta chain: real archive Store, real
+/// `AgentSessionSyncClient` construction (stable RuntimeEndpoint/account/user
+/// namespace + durable transfer store) and a suspended, non-cancellation-aware
+/// wire handler. Real Store events — local delete, original expiry, task
+/// cancellation and account/scope swaps — must stop every remaining frame
+/// immediately and wipe or preserve the exact private bytes they own.
+@MainActor
+final class AgentSessionDeltaLifecycleTests: XCTestCase {
+    // MARK: - wire stub (parked handler ignores cancellation)
+
+    private final class SuspendedWireStub: URLProtocol, @unchecked Sendable {
+        static let lock = NSLock()
+        static var sessionID = UUID()
+        static var rawPayload: [String: Any] = [:]
+        static var patchBodies: [Data] = []
+        static var parkedInstance: SuspendedWireStub?
+        static var parkedContinuation: CheckedContinuation<Void, Never>?
+        static var parked = false
+
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+        override func startLoading() {
+            var request = self.request
+            if request.httpBody == nil, let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var body = Data(), buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    body.append(contentsOf: buffer.prefix(count))
+                }
+                request.httpBodyStream = nil
+                request.httpBody = body
+            }
+            guard let url = request.url else { return }
+            if request.httpMethod == "GET" {
+                let envelope: [String: Any] = [
+                    "contract_version": TalentSignalAPIContract.version,
+                    "session": [
+                        "session_id": Self.sessionID.uuidString.lowercased(),
+                        "revision": 1,
+                        "updated_at": "2026-10-08T03:07:24.000Z",
+                        "expires_at": "2099-01-01T00:00:00.000Z",
+                        "deleted_at": NSNull(),
+                        "payload": Self.rawPayload,
+                        "display_authority": "stale_unconfirmed",
+                        "sync": [
+                            "state": "complete", "transfer_id": NSNull(),
+                            "target_payload_digest": NSNull(), "started_at": NSNull(),
+                            "frame_count": 0,
+                        ] as [String: Any],
+                    ] as [String: Any],
+                ]
+                deliver(url: url, payload: envelope)
+                return
+            }
+            Self.lock.lock()
+            if let body = request.httpBody { Self.patchBodies.append(body) }
+            Self.parkedInstance = self
+            Self.parked = true
+            Self.lock.unlock()
+            Task.detached {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    Self.lock.lock()
+                    Self.parkedContinuation = continuation
+                    Self.lock.unlock()
+                }
+                // Non-cancellation-aware completion: the response is delivered
+                // even after cancellation was requested.
+                let envelope: [String: Any] = [
+                    "contract_version": TalentSignalAPIContract.version,
+                    "session": [
+                        "session_id": Self.sessionID.uuidString.lowercased(),
+                        "revision": 2,
+                        "updated_at": "2026-10-08T03:07:25.000Z",
+                        "expires_at": "2099-01-01T00:00:00.000Z",
+                        "deleted_at": NSNull(),
+                        "payload": NSNull(),
+                        "display_authority": "stale_unconfirmed",
+                        "sync": [
+                            "state": "complete", "transfer_id": NSNull(),
+                            "target_payload_digest": NSNull(), "started_at": NSNull(),
+                            "frame_count": 1,
+                        ] as [String: Any],
+                    ] as [String: Any],
+                    "transfer": [
+                        "transfer_id": UUID().uuidString.lowercased(),
+                        "frame_index": 1, "replayed": false, "complete": true,
+                    ] as [String: Any],
+                ]
+                Self.lock.lock()
+                let instance = Self.parkedInstance
+                Self.parkedInstance = nil
+                Self.parked = false
+                Self.lock.unlock()
+                instance?.deliver(url: url, payload: envelope)
+            }
+        }
+
+        override func stopLoading() {}
+
+        private func deliver(url: URL, payload: [String: Any]) {
+            let response = HTTPURLResponse(
+                url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: payload))
+            client?.urlProtocolDidFinishLoading(self)
+        }
+
+        static func waitUntilParked() async -> Bool {
+            for _ in 0..<400 {
+                lock.lock()
+                let parkedNow = parked
+                lock.unlock()
+                if parkedNow { return true }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+            return false
+        }
+
+        static func resumeParked() async {
+            for _ in 0..<400 {
+                lock.lock()
+                let continuation = parkedContinuation
+                parkedContinuation = nil
+                lock.unlock()
+                if let continuation {
+                    continuation.resume()
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
+
+        static func reset(sessionID: UUID, rawPayload: [String: Any]) {
+            lock.lock()
+            self.sessionID = sessionID
+            self.rawPayload = rawPayload
+            self.patchBodies = []
+            self.parkedInstance = nil
+            self.parkedContinuation = nil
+            self.parked = false
+            lock.unlock()
+        }
+    }
+
+    private final class MemoryPersistence: AgentSessionPersisting {
+        var data: Data?
+        func load() throws -> Data? { data }
+        func save(_ data: Data) throws { self.data = data }
+        func deletionPending() throws -> Bool { false }
+        func beginDeletion() throws {}
+        func completeDeletion() throws { data = nil }
+    }
+
+    /// Legacy mock list/put for the store loop; the DELTA chain is the real
+    /// production client (below), never a helper-only mock.
+    private final class DrivingSyncClient: AgentSessionSyncServing {
+        var records: [AgentSessionRemoteRecord]
+        let delta: AgentSessionDeltaServing?
+        var lookupError: Error?
+        init(records: [AgentSessionRemoteRecord], delta: AgentSessionDeltaServing?) {
+            self.records = records
+            self.delta = delta
+        }
+        func list(after: String?) async throws -> AgentSessionRemotePage {
+            .init(contractVersion: TalentSignalAPIContract.version, sessions: records, complete: true, nextCursor: nil)
+        }
+        func put(_ payload: PersistedAgentSession, expectedRevision: Int, idempotencyKey: UUID) async throws -> AgentSessionRemoteRecord {
+            let record = AgentSessionRemoteRecord(
+                sessionID: payload.id, revision: expectedRevision + 1, updatedAt: Date(),
+                expiresAt: Date().addingTimeInterval(86400), deletedAt: nil, payload: payload
+            )
+            records.removeAll { $0.sessionID == payload.id }
+            records.append(record)
+            return record
+        }
+        func delete(id: UUID, expectedRevision: Int, idempotencyKey: UUID) async throws -> AgentSessionRemoteRecord {
+            let record = AgentSessionRemoteRecord(
+                sessionID: id, revision: expectedRevision + 1, updatedAt: Date(),
+                expiresAt: Date().addingTimeInterval(86400), deletedAt: Date(), payload: nil
+            )
+            records.removeAll { $0.sessionID == id }
+            records.append(record)
+            return record
+        }
+        func deltaServing() async throws -> AgentSessionDeltaServing? {
+            if let lookupError { throw lookupError }; return delta
+        }
+    }
+
+    private func makeWire() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SuspendedWireStub.self]
+        return URLSession(configuration: configuration)
+    }
+
+    private func makeProductionDelta(
+        wire: URLSession, storeDirectory: URL, sessionID: UUID
+    ) async throws -> AgentSessionDeltaClient {
+        let syncClient = AgentSessionSyncClient(
+            baseURL: URL(string: "https://synthetic.invalid")!,
+            bearerToken: "synthetic-token-never-persisted",
+            deltaNamespace: (
+                endpointScope: "https://synthetic.invalid",
+                accountID: "account-a",
+                userID: "user-a"
+            ),
+            transferStore: AgentSessionDeltaTransferStore(directory: storeDirectory),
+            session: wire
+        )
+        return try await syncClient.deltaServing() as! AgentSessionDeltaClient
+    }
+
+    private func makeStore(now: @escaping () -> Date = Date.init) -> AgentSessionStore {
+        AgentSessionStore(persistence: MemoryPersistence(), now: now)
+    }
+
+    /// The raw server canonical payload built from the REAL archive DTO: same
+    /// turn identities (lowercase canonical, matching the uppercase DTO), plus
+    /// the server-owned fields the DTO cannot model and a different title so a
+    /// real frame is planned.
+    private func rawServerPayload(from dtoJSON: [String: Any], sessionID: UUID) -> [String: Any] {
+        var raw = AgentSessionDeltaCanonical.canonicalizingIdentityStrings(dtoJSON) as! [String: Any]
+        raw["id"] = sessionID.uuidString.lowercased()
+        raw["title"] = "Remote title awaiting overlay"
+        raw["turns"] = ((raw["turns"] as? [[String: Any]]) ?? []).enumerated().map { index, turn in
+            var turn = turn
+            turn["steeredMessages"] = [["id": "10000000-0000-4000-8000-00000000000\(index)", "objective": "steered"]] as [Any]
+            var response = turn["response"] as? [String: Any] ?? [:]
+            response["execution"] = [
+                "tools": [["name": "search", "completed_at": "2026-10-08T03:07:25.000Z"]],
+            ] as [String: Any]
+            turn["response"] = response
+            return turn
+        }
+        return raw
+    }
+
+    private func desiredFromDTO(
+        _ dto: PersistedAgentSession, sessionID: UUID
+    ) throws -> [String: Any] {
+        var desired = try JSONSerialization.jsonObject(
+            with: try JSONEncoder.agentSession.encode(dto)
+        ) as! [String: Any]
+        desired["id"] = sessionID.uuidString.lowercased()
+        return desired
+    }
+
+    private func makeArchiveSession() throws -> (AgentSessionStore, UUID, PersistedAgentSession) {
+        let archive = makeStore()
+        let localID = try XCTUnwrap(archive.beginUnscopedSession(objective: "Lifecycle conversation"))
+        let dto = PersistedAgentSession(try XCTUnwrap(archive.session(id: localID)))
+        return (archive, localID, dto)
+    }
+
+    private func retainedFrameCount(storeDirectory: URL) -> Int {
+        (try? FileManager.default.contentsOfDirectory(at: storeDirectory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }.count) ?? 0
+    }
+
+    // MARK: - real Store events across a suspended non-cancelable handler
+
+    private func startParkedTransfer(
+        archive: AgentSessionStore, sessionID: UUID, desired: [String: Any],
+        delta: AgentSessionDeltaClient
+    ) async -> Task<AgentSessionDeltaClient.Progress, Error> {
+        // Real production wiring first: the archive installs the per-Session
+        // cleanup from its own synchronization pass before the transfer runs.
+        _ = await archive.synchronize(using: DrivingSyncClient(records: [], delta: delta))
+        archive.activateSynchronizationScope(isCurrent: { true })
+        return Task {
+            try await delta.synchronize(
+                sessionID: sessionID, desired: desired,
+                skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired),
+                isCurrent: { true },
+                isSessionCurrent: archive.makeDeltaSessionFence()
+            )
+        }
+    }
+
+    func testRealStoreDeleteWipesRetainedFrameAndStopsSuspendedWire() async throws {
+        let storeDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-life-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: storeDirectory) }
+        let (archive, localID, dto) = try makeArchiveSession()
+        let sessionID = localID
+        let desired = try desiredFromDTO(dto, sessionID: sessionID)
+        SuspendedWireStub.reset(
+            sessionID: sessionID, rawPayload: rawServerPayload(from: desired, sessionID: sessionID)
+        )
+        let delta = try await makeProductionDelta(wire: makeWire(), storeDirectory: storeDirectory, sessionID: sessionID)
+
+        let task = await startParkedTransfer(
+            archive: archive, sessionID: sessionID, desired: desired, delta: delta
+        )
+        let parked = await SuspendedWireStub.waitUntilParked()
+        XCTAssertTrue(parked, "the first frame must be suspended in flight")
+        XCTAssertEqual(self.retainedFrameCount(storeDirectory: storeDirectory), 1)
+
+        // Real local delete: the exact Session's private frame is wiped
+        // immediately and no newer operation is damaged.
+        XCTAssertTrue(archive.delete(localID))
+        XCTAssertEqual(self.retainedFrameCount(storeDirectory: storeDirectory), 0)
+
+        await SuspendedWireStub.resumeParked()
+        let outcome = await task.result
+        if case let .success(progress) = outcome {
+            XCTAssertFalse(progress.synchronized, "a deleted Session can never report sync success")
+        }
+        // The suspended wire cannot retain or dispatch anything further.
+        XCTAssertEqual(SuspendedWireStub.patchBodies.count, 1)
+        XCTAssertEqual(self.retainedFrameCount(storeDirectory: storeDirectory), 0)
+    }
+
+    func testOriginalExpiryStopsSuspendedWireWithoutNewFrames() async throws {
+        let storeDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-life-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: storeDirectory) }
+        var clock = Date()
+        let archive = makeStore(now: { clock })
+        let localID = try XCTUnwrap(archive.beginUnscopedSession(objective: "Lifecycle conversation"))
+        let sessionID = localID
+        let dto = PersistedAgentSession(try XCTUnwrap(archive.session(id: localID)))
+        let desired = try desiredFromDTO(dto, sessionID: sessionID)
+        SuspendedWireStub.reset(
+            sessionID: sessionID, rawPayload: rawServerPayload(from: desired, sessionID: sessionID)
+        )
+        let delta = try await makeProductionDelta(wire: makeWire(), storeDirectory: storeDirectory, sessionID: sessionID)
+
+        let task = await startParkedTransfer(
+            archive: archive, sessionID: sessionID, desired: desired, delta: delta
+        )
+        let parked = await SuspendedWireStub.waitUntilParked()
+        XCTAssertTrue(parked)
+
+        // The ORIGINAL Session deadline passes while the wire is suspended.
+        clock = clock.addingTimeInterval(31 * 24 * 60 * 60)
+        archive.pruneExpired()
+        XCTAssertEqual(self.retainedFrameCount(storeDirectory: storeDirectory), 0)
+        await SuspendedWireStub.resumeParked()
+        let outcome = await task.result
+        if case let .success(progress) = outcome {
+            XCTAssertFalse(progress.synchronized, "an expired Session can never report sync success")
+        }
+        // No further dispatch and the expired frame never gains a fresh
+        // retention window.
+        XCTAssertEqual(SuspendedWireStub.patchBodies.count, 1)
+        XCTAssertEqual(self.retainedFrameCount(storeDirectory: storeDirectory), 0)
+    }
+
+    func testTaskCancellationStopsNonCancelableWireWithoutNewFrames() async throws {
+        let storeDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-life-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: storeDirectory) }
+        let (archive, sessionID, dto) = try makeArchiveSession()
+        let desired = try desiredFromDTO(dto, sessionID: sessionID)
+        SuspendedWireStub.reset(
+            sessionID: sessionID, rawPayload: rawServerPayload(from: desired, sessionID: sessionID)
+        )
+        let delta = try await makeProductionDelta(wire: makeWire(), storeDirectory: storeDirectory, sessionID: sessionID)
+
+        let task = await startParkedTransfer(
+            archive: archive, sessionID: sessionID, desired: desired, delta: delta
+        )
+        let parked = await SuspendedWireStub.waitUntilParked()
+        XCTAssertTrue(parked)
+        task.cancel()
+        await SuspendedWireStub.resumeParked()
+        let outcome = await task.result
+        if case let .success(progress) = outcome {
+            XCTAssertFalse(progress.synchronized, "a cancelled task can never report sync success")
+        }
+        // The already dispatched frame keeps its truthful unknown outcome and
+        // nothing new is dispatched after cancellation.
+        XCTAssertEqual(SuspendedWireStub.patchBodies.count, 1)
+    }
+
+    // MARK: - authentication/scope ownership race
+
+    func testPausedOldAuthenticationCannotOverwriteNewScopeOwnership() async throws {
+        let directoryA = FileManager.default.temporaryDirectory
+            .appending(path: "delta-ab-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let directoryB = FileManager.default.temporaryDirectory
+            .appending(path: "delta-ab-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer {
+            try? FileManager.default.removeItem(at: directoryA)
+            try? FileManager.default.removeItem(at: directoryB)
+        }
+        let archive = makeStore()
+        _ = archive.beginUnscopedSession(objective: "Scope conversation")
+        let localID = try XCTUnwrap(archive.beginUnscopedSession(objective: "Scope conversation second"))
+
+        let clientA = try await makeProductionDelta(wire: makeWire(), storeDirectory: directoryA, sessionID: localID)
+        let clientB = try await makeProductionDelta(wire: makeWire(), storeDirectory: directoryB, sessionID: localID)
+
+        let paused = PausedLookup()
+        let driverA = PausedSyncClient(
+            delta: PausedDeltaClient(inner: clientA, paused: paused), paused: paused
+        )
+        let staleSync = Task { await archive.synchronize(using: driverA) }
+        for _ in 0..<400 where !paused.parked {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(paused.parked)
+
+        // The scope retires and B authenticates: B installs its own ownership
+        // and creates its own private frame file.
+        archive.invalidateSynchronizationScope()
+        archive.activateSynchronizationScope(isCurrent: { true })
+        let driverB = DrivingSyncClient(records: [], delta: clientB)
+        _ = await archive.synchronize(using: driverB)
+        let bFrame = AgentSessionDeltaInFlightFrame(
+            sessionID: localID, transferID: UUID(), frameIndex: 1,
+            idempotencyKey: UUID(), expectedRevision: 1,
+            targetPayloadDigest: String(repeating: "b", count: 64),
+            requestBody: Data(#"{"probe":"b"}"#.utf8), isFinal: false, createdAt: Date(),
+            sessionExpiresAt: Date(timeIntervalSinceNow: 600)
+        )
+        try AgentSessionDeltaTransferStore(directory: directoryB).retain(
+            bFrame, accountID: "account-a", userID: "user-a", endpointScope: "https://synthetic.invalid"
+        )
+
+        // Old A's lookup completes late: its ownership install is dropped by
+        // the generation fence and B's current state and files stay untouched.
+        paused.continuation?.resume()
+        paused.continuation = nil
+        _ = await staleSync.value
+        XCTAssertEqual(self.retainedFrameCount(storeDirectory: directoryB), 1)
+        XCTAssertEqual(self.retainedFrameCount(storeDirectory: directoryA), 0)
+
+        // Scope retirement cleans the CURRENT owner (B) only: B's private
+        // bodies do not survive its logout and A's namespace is never deleted
+        // by B's retirement.
+        archive.invalidateSynchronizationScope()
+        XCTAssertEqual(self.retainedFrameCount(storeDirectory: directoryB), 0)
+        XCTAssertEqual(self.retainedFrameCount(storeDirectory: directoryA), 0)
+    }
+
+    // MARK: - governed sweep on small-only synchronization
+
+    func testFailedIdleCleanupCannotReportSuccessfulSmallSyncAndRecoversOnRetry() async throws {
+        let counting = CountingStore()
+        counting.failsSweep = true
+        let delta = AgentSessionDeltaClient(transport: NoopTransport(), store: counting,
+            accountID: "a", userID: "u", endpointScope: "e")
+        let archive = makeStore()
+        let id = try XCTUnwrap(archive.beginUnscopedSession(objective: "Small conversation"))
+        let driver = DrivingSyncClient(records: [], delta: delta)
+        let first = await archive.synchronize(using: driver, requiredSessionID: id)
+        XCTAssertFalse(first)
+        XCTAssertNotNil(archive.syncNotice(sessionID: id))
+        XCTAssertFalse(archive.isSynchronizing)
+        XCTAssertTrue(driver.records.isEmpty, "Cleanup must finish before ordinary small PUT")
+        counting.failsSweep = false
+        let second = await archive.synchronize(using: driver, requiredSessionID: id)
+        XCTAssertTrue(second)
+        XCTAssertNil(archive.syncNotice(sessionID: id))
+    }
+
+    func testDeltaLookupFailureCannotBeTreatedAsMissingOptionalDeltaClient() async throws {
+        let archive = makeStore()
+        let id = try XCTUnwrap(archive.beginUnscopedSession(objective: "Small conversation"))
+        let driver = DrivingSyncClient(records: [], delta: nil)
+        driver.lookupError = CocoaError(.fileReadNoPermission)
+        let first = await archive.synchronize(using: driver, requiredSessionID: id)
+        XCTAssertFalse(first)
+        XCTAssertNotNil(archive.syncNotice(sessionID: id))
+        XCTAssertFalse(archive.isSynchronizing)
+        driver.lookupError = nil
+        let second = await archive.synchronize(using: driver, requiredSessionID: id)
+        XCTAssertTrue(second)
+    }
+
+    func testRestartDeletesDurableFrameBeforeFirstSyncEvenWhenOffline() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "delta-restart-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = FileAgentSessionPersistence(accountID: "synthetic", rootURL: root)
+        let original = AgentSessionStore(persistence: persistence)
+        let doomed = try XCTUnwrap(original.beginUnscopedSession(objective: "Delete after restart"))
+        let kept = try XCTUnwrap(original.beginUnscopedSession(objective: "Keep after restart"))
+        let frameDirectory = root.appending(path: "frames")
+        let transfers = AgentSessionDeltaTransferStore(directory: frameDirectory)
+        func frame(_ id: UUID) -> AgentSessionDeltaInFlightFrame {
+            .init(sessionID: id, transferID: UUID(), frameIndex: 1, idempotencyKey: UUID(),
+                  expectedRevision: 0, targetPayloadDigest: String(repeating: "a", count: 64),
+                  requestBody: Data("exact private bytes".utf8), isFinal: false, createdAt: Date(),
+                  sessionExpiresAt: Date(timeIntervalSinceNow: 600))
+        }
+        let keptFrame = frame(kept)
+        try transfers.retain(frame(doomed), accountID: "a", userID: "u", endpointScope: "e")
+        try transfers.retain(keptFrame, accountID: "a", userID: "u", endpointScope: "e")
+        // Fresh Store and fresh durable transfer Store: no synchronization has
+        // ever installed a remote callback on this instance.
+        let restarted = AgentSessionStore(persistence: persistence,
+            deltaCleanup: .init(store: AgentSessionDeltaTransferStore(directory: frameDirectory),
+                                endpointScope: "e", accountID: "a", userID: "u"))
+        XCTAssertTrue(restarted.delete(doomed))
+        XCTAssertNil(try transfers.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: doomed))
+        XCTAssertEqual(try transfers.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: kept), keptFrame)
+        let offline = DrivingSyncClient(records: [], delta: nil)
+        offline.lookupError = URLError(.notConnectedToInternet)
+        let result = await restarted.synchronize(using: offline)
+        XCTAssertFalse(result)
+        XCTAssertNil(restarted.session(id: doomed))
+        XCTAssertNil(try transfers.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: doomed))
+        XCTAssertEqual(try transfers.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: kept), keptFrame)
+    }
+
+    func testFullWipeKeepsDurableIntentAcrossCleanupFailureAndRestart() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "delta-full-wipe-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = FileAgentSessionPersistence(accountID: "a", rootURL: root)
+        let partitionA = AgentSessionDeltaTransferStore(directory: root.appending(path: "a"))
+        let partitionB = AgentSessionDeltaTransferStore(directory: root.appending(path: "b"))
+        let failing = PartitionFailureStore(inner: partitionA)
+        let cleanup = AgentSessionDeltaLocalCleanup(store: failing, endpointScope: "e", accountID: "a", userID: "u")
+        let original = AgentSessionStore(persistence: persistence, deltaCleanup: cleanup)
+        let id = try XCTUnwrap(original.beginUnscopedSession(objective: "Full wipe"))
+        let frame = AgentSessionDeltaInFlightFrame(sessionID: id, transferID: UUID(), frameIndex: 1,
+            idempotencyKey: UUID(), expectedRevision: 0, targetPayloadDigest: String(repeating: "a", count: 64),
+            requestBody: Data("private transfer".utf8), isFinal: false, createdAt: Date(),
+            sessionExpiresAt: Date(timeIntervalSinceNow: 600))
+        try partitionA.retain(frame, accountID: "a", userID: "u", endpointScope: "e")
+        try partitionB.retain(frame, accountID: "b", userID: "u", endpointScope: "e")
+        failing.failsRetirement = true
+        XCTAssertFalse(original.deleteAll())
+        XCTAssertTrue(try persistence.deletionPending())
+        let failedRestart = AgentSessionStore(persistence: persistence, deltaCleanup: cleanup)
+        XCTAssertTrue(failedRestart.sessions.isEmpty)
+        XCTAssertTrue(try persistence.deletionPending())
+        XCTAssertNotNil(try partitionA.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: id))
+        failing.failsRetirement = false
+        let successfulRestart = AgentSessionStore(persistence: persistence, deltaCleanup: cleanup)
+        XCTAssertTrue(successfulRestart.sessions.isEmpty)
+        XCTAssertFalse(try persistence.deletionPending())
+        XCTAssertNil(try persistence.load())
+        XCTAssertNil(try partitionA.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: id))
+        XCTAssertEqual(try partitionB.inFlightFrame(accountID: "b", userID: "u", endpointScope: "e", sessionID: id), frame)
+    }
+
+    func testRestartRecoversFailedLocalCleanupFromDurableTombstone() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "delta-cleanup-retry-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = FileAgentSessionPersistence(accountID: "synthetic", rootURL: root)
+        let counting = CountingStore()
+        let cleanup = AgentSessionDeltaLocalCleanup(store: counting, endpointScope: "e", accountID: "a", userID: "u")
+        let original = AgentSessionStore(persistence: persistence, deltaCleanup: cleanup)
+        let doomed = try XCTUnwrap(original.beginUnscopedSession(objective: "Delete with local error"))
+        counting.failsRelease = true
+        XCTAssertTrue(original.delete(doomed))
+        XCTAssertNotNil(original.syncNotice(sessionID: doomed))
+        counting.failsRelease = false
+        let restarted = AgentSessionStore(persistence: persistence, deltaCleanup: cleanup)
+        XCTAssertNil(restarted.session(id: doomed))
+        XCTAssertTrue(counting.released.contains(doomed))
+        XCTAssertNil(restarted.syncNotice(sessionID: doomed))
+    }
+
+    func testFailedDeletionCleanupSurvivesSmallSyncAndRetriesExactSessionOnly() async throws {
+        let counting = CountingStore()
+        let delta = AgentSessionDeltaClient(transport: NoopTransport(), store: counting,
+            accountID: "a", userID: "u", endpointScope: "e")
+        let archive = makeStore()
+        let doomed = try XCTUnwrap(archive.beginUnscopedSession(objective: "Delete conversation"))
+        let kept = try XCTUnwrap(archive.beginUnscopedSession(objective: "Keep conversation"))
+        let driver = DrivingSyncClient(records: [], delta: delta)
+        _ = await archive.synchronize(using: driver)
+        counting.failsRelease = true
+        archive.delete(doomed)
+        let failed = await archive.synchronize(using: driver, requiredSessionID: kept)
+        XCTAssertFalse(failed)
+        XCTAssertNotNil(archive.syncNotice(sessionID: kept))
+        counting.failsRelease = false
+        let retried = await archive.synchronize(using: driver, requiredSessionID: kept)
+        XCTAssertTrue(retried)
+        XCTAssertNil(archive.syncNotice(sessionID: kept))
+    }
+
+    func testSmallOnlySynchronizeStillSweepsIdleFrames() async throws {
+        let counting = CountingStore()
+        let expired = AgentSessionDeltaInFlightFrame(
+            sessionID: UUID(), transferID: UUID(), frameIndex: 1,
+            idempotencyKey: UUID(), expectedRevision: 0,
+            targetPayloadDigest: String(repeating: "a", count: 64),
+            requestBody: Data(#"{"probe":1}"#.utf8), isFinal: false,
+            createdAt: Date(timeIntervalSince1970: 0),
+            sessionExpiresAt: Date(timeIntervalSinceNow: -60)
+        )
+        try counting.retain(expired, accountID: "a", userID: "u", endpointScope: "e")
+
+        let delta = AgentSessionDeltaClient(
+            transport: NoopTransport(), store: counting,
+            accountID: "a", userID: "u", endpointScope: "e"
+        )
+        let archive = makeStore()
+        _ = archive.beginUnscopedSession(objective: "Small conversation")
+        let driver = DrivingSyncClient(records: [], delta: delta)
+        // Only a small Session synchronizes here: the governed sweep still runs
+        // and expires the idle orphan frame.
+        _ = await archive.synchronize(using: driver)
+        XCTAssertGreaterThanOrEqual(counting.sweeps, 1)
+        XCTAssertTrue(counting.frames.isEmpty, "idle frames expire without any reread")
+    }
+}
+
+private final class NoopTransport: AgentSessionDeltaTransport {
+    func rawSession(id: UUID) async throws -> AgentSessionDeltaRawRecord? { nil }
+    func sendDeltaFrame(id: UUID, requestBody: Data) async throws -> AgentSessionDeltaWireResponse {
+        throw URLError(.unsupportedURL)
+    }
+    func abandonDelta(id: UUID, requestBody: Data) async throws -> AgentSessionDeltaWireResponse {
+        throw URLError(.unsupportedURL)
+    }
+}
+
+private final class CountingStore: AgentSessionDeltaTransferStoring {
+    var failsSweep = false
+    var failsRelease = false
+    var released = Set<UUID>()
+    var sweeps = 0
+    var frames: [String: AgentSessionDeltaInFlightFrame] = [:]
+    func inFlightFrame(
+        accountID: String, userID: String, endpointScope: String, sessionID: UUID
+    ) throws -> AgentSessionDeltaInFlightFrame? {
+        frames["\(sessionID)"]
+    }
+    func sweepExpired() throws {
+        sweeps += 1
+        if failsSweep { throw CocoaError(.fileWriteNoPermission) }
+        frames = frames.filter { $0.value.sessionExpiresAt.map { $0 > Date() } ?? false }
+    }
+    func retain(_ frame: AgentSessionDeltaInFlightFrame, accountID: String, userID: String, endpointScope: String) throws {
+        frames["\(frame.sessionID)"] = frame
+    }
+    func release(accountID: String, userID: String, endpointScope: String, sessionID: UUID) throws {
+        if failsRelease { throw CocoaError(.fileWriteNoPermission) }
+        released.insert(sessionID)
+        frames.removeValue(forKey: "\(sessionID)")
+    }
+    func releasePartition(accountID: String, userID: String, endpointScope: String) throws {
+        frames.removeAll()
+    }
+}
+
+private final class PausedLookup: @unchecked Sendable {
+    var continuation: CheckedContinuation<Void, Never>?
+    var parked = false
+}
+
+private final class PausedDeltaClient: AgentSessionDeltaServing, @unchecked Sendable {
+    let inner: AgentSessionDeltaClient
+    let paused: PausedLookup
+    init(inner: AgentSessionDeltaClient, paused: PausedLookup) {
+        self.inner = inner
+        self.paused = paused
+    }
+    func synchronizeSessionDelta(
+        sessionID: UUID, desired: [String: Any], skeleton: [String: Any]?,
+        isCurrent: @escaping () -> Bool,
+        isSessionCurrent: @escaping (UUID) -> Bool
+    ) async throws -> AgentSessionDeltaClient.Progress {
+        try await inner.synchronizeSessionDelta(
+            sessionID: sessionID, desired: desired, skeleton: skeleton,
+            isCurrent: isCurrent, isSessionCurrent: isSessionCurrent
+        )
+    }
+    func releaseDeltaTransferPartition() throws { try inner.releaseDeltaTransferPartition() }
+    func releaseSessionFrame(sessionID: UUID) throws { try inner.releaseSessionFrame(sessionID: sessionID) }
+    func sweepExpiredFrames() throws { try inner.sweepExpiredFrames() }
+}
+
+private final class PausedSyncClient: AgentSessionSyncServing, @unchecked Sendable {
+    let delta: AgentSessionDeltaServing
+    let paused: PausedLookup
+    init(delta: AgentSessionDeltaServing, paused: PausedLookup) {
+        self.delta = delta
+        self.paused = paused
+    }
+    func list(after: String?) async throws -> AgentSessionRemotePage {
+        .init(contractVersion: TalentSignalAPIContract.version, sessions: [], complete: true, nextCursor: nil)
+    }
+    func put(_ payload: PersistedAgentSession, expectedRevision: Int, idempotencyKey: UUID) async throws -> AgentSessionRemoteRecord {
+        AgentSessionRemoteRecord(
+            sessionID: payload.id, revision: 1, updatedAt: Date(),
+            expiresAt: Date().addingTimeInterval(86400), deletedAt: nil, payload: payload
+        )
+    }
+    func delete(id: UUID, expectedRevision: Int, idempotencyKey: UUID) async throws -> AgentSessionRemoteRecord {
+        AgentSessionRemoteRecord(
+            sessionID: id, revision: 1, updatedAt: Date(),
+            expiresAt: Date().addingTimeInterval(86400), deletedAt: Date(), payload: nil
+        )
+    }
+    func deltaServing() async throws -> AgentSessionDeltaServing? {
+        paused.parked = true
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            paused.continuation = continuation
+        }
+        return delta
+    }
+}
+
+private final class PartitionFailureStore: AgentSessionDeltaTransferStoring {
+    let inner: AgentSessionDeltaTransferStore
+    var failsRetirement = false
+    init(inner: AgentSessionDeltaTransferStore) { self.inner = inner }
+    func inFlightFrame(accountID: String, userID: String, endpointScope: String, sessionID: UUID) throws -> AgentSessionDeltaInFlightFrame? {
+        try inner.inFlightFrame(accountID: accountID, userID: userID, endpointScope: endpointScope, sessionID: sessionID)
+    }
+    func sweepExpired() throws { try inner.sweepExpired() }
+    func retain(_ frame: AgentSessionDeltaInFlightFrame, accountID: String, userID: String, endpointScope: String) throws {
+        try inner.retain(frame, accountID: accountID, userID: userID, endpointScope: endpointScope)
+    }
+    func release(accountID: String, userID: String, endpointScope: String, sessionID: UUID) throws {
+        try inner.release(accountID: accountID, userID: userID, endpointScope: endpointScope, sessionID: sessionID)
+    }
+    func releasePartition(accountID: String, userID: String, endpointScope: String) throws {
+        if failsRetirement { throw CocoaError(.fileWriteNoPermission) }
+        try inner.releasePartition(accountID: accountID, userID: userID, endpointScope: endpointScope)
+    }
+}

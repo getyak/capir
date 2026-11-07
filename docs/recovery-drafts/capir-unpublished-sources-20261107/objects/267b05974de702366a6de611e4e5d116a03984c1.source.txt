@@ -1,0 +1,62 @@
+import Foundation
+
+/// Source-free correlation stored ONLY inside the existing encrypted Capsule.
+/// Original provenance is immutable; legitimate restart recovery adopts a new
+/// current authority ticket without rewriting this original runtime or lifetime.
+struct MacTaskAdmissionReference: Codable, Equatable, Sendable {
+    let backendOrigin: String
+    let accountID: String
+    let actorID: String
+    let pursuitID: String
+    let pursuitRevision: Int
+    let captureID: String
+    let taskIdempotencyKey: String
+    let operationID: String
+    let originalRuntimeID: UUID
+    let originalAttemptID: UUID
+    let originalAuthenticationGeneration: UInt64
+    let expiresAt: Date
+}
+
+enum MacTaskLifecycleEvent: Sendable {
+    /// Persisted before POST admission; a crash here cannot prove nondispatch.
+    case prepared(MacTaskAdmissionReference)
+    /// Persisted after validated acknowledgement and BEFORE any task polling.
+    case accepted(MacTaskAdmissionReference, taskID: String)
+}
+
+struct MacTaskLifecycleObserver: Sendable {
+    let runtimeID: UUID
+    let attemptID: UUID
+    let expiresAt: Date
+    let observe: @MainActor @Sendable (MacTaskLifecycleEvent) throws -> Void
+}
+
+struct MacTaskAdmissionReadback: Decodable, Sendable {
+    enum State: String, Decodable { case accepted, processing, notObserved = "not_observed", unavailable }
+    enum AuthorityState: String, Decodable { case current, notCurrent = "not_current", unknown }
+    let contractVersion: String
+    let admissionState: State
+    let taskID: String?
+    enum TaskStatus: String, Decodable {
+        case active, waitingForClarification = "waiting_for_clarification"
+        case waitingForDomainDecision = "waiting_for_domain_decision"
+        case waitingForExternal = "waiting_for_external", needsRebase = "needs_rebase"
+        case completed, noAction = "no_action", abstained, failed, cancelled, expired
+        var isTerminal: Bool {
+            switch self {
+            case .completed, .noAction, .abstained, .failed, .cancelled, .expired: return true
+            default: return false
+            }
+        }
+    }
+    let taskStatus: TaskStatus?
+    let authorityState: AuthorityState
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case admissionState = "admission_state"
+        case taskID = "task_id"
+        case taskStatus = "task_status"
+        case authorityState = "authority_state"
+    }
+}

@@ -1,0 +1,734 @@
+import { Value } from "@sinclair/typebox/value";
+import {
+  AgentSessionDeltaFrameRequestSchema,
+  AgentSessionDeltaAbandonRequestSchema,
+  AgentSessionPayloadSchema,
+  CONTRACT_VERSION,
+  applyAgentSessionDeltaOperations,
+  agentSessionIntentDigest,
+  AgentSessionDeltaOperationError,
+  type AgentSessionDeltaFrameRequest,
+  type AgentSessionDeltaAbandonRequest,
+  type AgentSessionDeltaResponse,
+  type AgentSessionPayload,
+  type AgentSessionRecord,
+} from "@talent-signal/contracts";
+import type { Pool, PoolClient } from "pg";
+import { inTransaction, type DatabaseClient } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import { digestValue } from "../lib/hash.js";
+import { assertAccountActive } from "./accountIdentity.js";
+import type { AuthContext } from "./auth.js";
+import {
+  invalid,
+  lockAgentSessionSources,
+  normalizeSessionIdentifiers,
+  prepareComposerDraft,
+  preserveExecutionProvenance,
+  preserveExistingShareClassifications,
+  preserveExistingTurnImages,
+  record,
+  rowFor,
+  sweepAgentSessions,
+  validatePayload,
+  type Row,
+} from "./agentSessions.js";
+import { lockConversationQueueSession } from "./conversationQueueState.js";
+import { lockSavedMemoryLineage } from "./savedMemoryLineage.js";
+
+const DAY = 86_400_000;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Incremental Session synchronization.
+ *
+ * Every frame is a canonical mutation of the stored canonical record: the
+ * server rebuilds the candidate payload inside the owner/source transaction
+ * and runs the full current schema, provenance, queue, image, retention and
+ * redaction validation before the frame commits. There is no raw staging
+ * store and no caller-controlled checksum authority: the declared target
+ * digest is recomputed from the rebuilt payload and only gates the final
+ * transition out of the visibly incomplete state.
+ */
+export interface AgentSessionDeltaOutcome {
+  contract_version: typeof CONTRACT_VERSION;
+  session: AgentSessionRecord;
+  transfer: {
+    transfer_id: string;
+    frame_index: number;
+    replayed: boolean;
+    complete: boolean;
+  };
+}
+
+function outcome(
+  row: Row,
+  transferID: string,
+  frameIndex: number,
+  replayed: boolean,
+): AgentSessionDeltaOutcome {
+  const current = record(row);
+  return {
+    contract_version: CONTRACT_VERSION,
+    session: current,
+    transfer: {
+      transfer_id: transferID,
+      frame_index: frameIndex,
+      replayed,
+      complete: current.sync?.state === "complete",
+    },
+  };
+}
+
+function conflict(message: string, details?: Record<string, unknown>): never {
+  throw new ApiError(
+    409,
+    "AGENT_SESSION_DELTA_TRANSFER_MISMATCH",
+    message,
+    details,
+  );
+}
+
+function applyOperations(
+  base: unknown,
+  operations: AgentSessionDeltaFrameRequest["operations"],
+  canonicalOriginTurns: readonly unknown[] = [],
+): AgentSessionPayload {
+  try {
+    // Raw structural application first: identifier normalization must never
+    // run before the schema check, so a malformed frame value fails as a
+    // typed 400 instead of a server error.
+    return applyAgentSessionDeltaOperations(
+      base,
+      operations,
+      { canonicalOriginTurns },
+    ) as AgentSessionPayload;
+  } catch (error) {
+    if (error instanceof AgentSessionDeltaOperationError) {
+      invalid(
+        `${error.message}${error.path ? ` (${error.path})` : ""}`,
+      );
+    }
+    throw error;
+  }
+}
+
+async function assertStartDisruptionSafe(
+  client: DatabaseClient,
+  auth: AuthContext,
+  id: string,
+): Promise<void> {
+  // Coordinate transfer start with the queue session fence (already held by
+  // the caller): a live queue run cannot pause safely mid-execution, so a
+  // disruptive bulk transfer refuses to start until it settles. Queued work
+  // pauses safely because claims are fenced while the record is incomplete.
+  const live = (
+    await client.query(
+      `SELECT 1 FROM conversation_queue_entries
+       WHERE account_id=$1 AND session_id=$2 AND status='running' LIMIT 1`,
+      [auth.accountId, id],
+    )
+  ).rowCount;
+  if (live) {
+    throw new ApiError(
+      409,
+      "CONVERSATION_QUEUE_SYNC_BUSY",
+      "A message is running in this conversation; wait for it to finish or stop it before synchronizing a large history.",
+    );
+  }
+}
+
+/** Origin authority is re-read and locked for every frame and replay, not
+ * just the first empty prefix. An unregistered local origin remains a local
+ * read-only import; an existing foreign, deleted or expired origin is denied. */
+async function currentDeltaOrigin(client: PoolClient, auth: AuthContext, payload: AgentSessionPayload): Promise<Row | null> {
+  if (!payload.originSessionID) return null;
+  await client.query("SELECT id FROM agent_sessions WHERE account_id=$1 AND id=$2 FOR SHARE NOWAIT",
+    [auth.accountId, payload.originSessionID]);
+  const origin = await rowFor(client, auth, payload.originSessionID);
+  if (!origin) {
+    if (payload.originKind !== "local" || (await client.query(
+      "SELECT 1 FROM agent_sessions WHERE id=$1 LIMIT 1", [payload.originSessionID])).rowCount) throw missingSession();
+    return null;
+  }
+  if (origin.deleted_at || origin.expires_at <= new Date() || !origin.payload
+      || !origin.payload.turns.some(turn => sameID(turn.id, payload.originTurnID))) throw missingSession();
+  return origin;
+}
+
+export async function mutateAgentSessionDelta(
+  pool: Pool,
+  auth: AuthContext,
+  id: string,
+  request: AgentSessionDeltaFrameRequest,
+): Promise<AgentSessionDeltaOutcome> {
+  if (!Value.Check(AgentSessionDeltaFrameRequestSchema, request)) {
+    invalid("The Session delta frame must match the typed contract.");
+  }
+  if (!UUID.test(request.transfer_id) || !UUID.test(request.idempotency_key)) {
+    invalid("A delta frame needs its stable transfer and operation identities.");
+  }
+  const frameRequest: AgentSessionDeltaFrameRequest = {
+    ...request,
+    transfer_id: request.transfer_id.toLowerCase(),
+    idempotency_key: request.idempotency_key.toLowerCase(),
+    target_payload_digest: request.target_payload_digest.toLowerCase(),
+    operations: request.operations,
+    final: request.final,
+  };
+  // Exact per-frame intent hashed with the existing canonical hashing and
+  // retained in the operation registry for exact replay after uncertainty.
+  const hash = digestValue({
+    session_id: id.toLowerCase(),
+    deleted: false,
+    request: frameRequest,
+  });
+
+  const performFrame = () =>
+    inTransaction(pool, async (client) => {
+      await lockSavedMemoryLineage(client, auth.accountId);
+      await assertAccountActive(client, auth.accountId);
+      await client.query("SET LOCAL lock_timeout = '100ms'");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [`${auth.accountId}:${auth.userId}:agent-sessions`],
+      );
+      await lockConversationQueueSession(client, id);
+      await sweepAgentSessions(client, auth.accountId);
+      const existing = await rowFor(client, auth, id);
+
+      const replay = (
+        await client.query<{
+          request_hash: string;
+          session_id: string;
+          transfer_id: string;
+          frame_index: number;
+        }>(
+          `SELECT request_hash,session_id,transfer_id,frame_index
+           FROM agent_session_delta_frames
+           WHERE account_id=$1 AND actor_user_id=$2 AND idempotency_key=$3`,
+          [auth.accountId, auth.userId, frameRequest.idempotency_key],
+        )
+      ).rows[0];
+      if (replay) {
+        if (
+          replay.request_hash !== hash ||
+          replay.session_id !== id.toLowerCase() ||
+          replay.transfer_id !== frameRequest.transfer_id
+        ) {
+          throw new ApiError(
+            409,
+            "AGENT_SESSION_IDEMPOTENCY_CONFLICT",
+            "This operation key already identifies a different Session intent.",
+          );
+        }
+        if (!existing) throw missingSession();
+        if (existing.payload) await currentDeltaOrigin(client, auth, existing.payload);
+        // A lost response replays against the CURRENT redacted canonical
+        // record; the frame is never applied twice.
+        return outcome(
+          existing,
+          frameRequest.transfer_id,
+          replay.frame_index,
+          true,
+        );
+      }
+      const priorOperation = (
+        await client.query(
+          "SELECT 1 FROM agent_session_operations WHERE account_id=$1 AND actor_user_id=$2 AND idempotency_key=$3",
+          [auth.accountId, auth.userId, frameRequest.idempotency_key],
+        )
+      ).rowCount;
+      if (priorOperation) {
+        throw new ApiError(
+          409,
+          "AGENT_SESSION_IDEMPOTENCY_CONFLICT",
+          "This operation key already identifies a different Session intent.",
+        );
+      }
+
+      if (existing?.deleted_at) {
+        throw new ApiError(
+          410,
+          "AGENT_SESSION_DELETED",
+          "This Session was deleted or expired and cannot be restored.",
+          { session: record(existing) },
+        );
+      }
+      if ((existing?.revision ?? 0) !== frameRequest.expected_revision) {
+        throw new ApiError(
+          409,
+          "AGENT_SESSION_REVISION_CONFLICT",
+          "The Session changed on another device. Merge with its current revision.",
+          { session: existing ? record(existing) : null },
+        );
+      }
+
+      // The active transfer identity and its declared target digest are
+      // immutable for ordinary continuation. Switching intent requires an
+      // explicit abandon/rebase, which never certifies the current prefix.
+      const activeTransferID = existing?.sync_transfer_id ?? null;
+      if (activeTransferID != null) {
+        if (activeTransferID.toLowerCase() !== frameRequest.transfer_id) {
+          conflict(
+            "This Session already has an active synchronization transfer; finish it or abandon it explicitly.",
+            { session: record(existing!) },
+          );
+        }
+        if (
+          existing!.sync_target_payload_digest !==
+          frameRequest.target_payload_digest
+        ) {
+          conflict(
+            "The declared target of an active transfer cannot change during ordinary continuation.",
+            { session: record(existing!) },
+          );
+        }
+      }
+      const starting = activeTransferID == null;
+      if (starting) {
+        if (existing && frameRequest.skeleton !== undefined) {
+          invalid("A skeleton is only for first offline creation.");
+        }
+        // A routine single-frame delta finalizes atomically and never exposes
+        // an incomplete interval; only bulk starts need the queue fence.
+        if (!frameRequest.final) {
+          await assertStartDisruptionSafe(client, auth, id);
+        }
+      }
+
+      let base: unknown;
+      if (existing) {
+        base = existing.payload;
+        if (base == null) throw missingSession();
+      } else {
+        const skeleton = frameRequest.skeleton;
+        if (skeleton === undefined) {
+          invalid("First offline creation needs its canonical empty skeleton.");
+        }
+        if (
+          (skeleton as AgentSessionPayload).turns?.length ||
+          (skeleton as AgentSessionPayload).contactReceipts?.length
+        ) {
+          invalid("A first-creation skeleton starts empty; content arrives in frames.");
+        }
+        if (
+          (skeleton as AgentSessionPayload).id.toLowerCase() !== id.toLowerCase()
+        ) {
+          invalid("The skeleton must carry the Session ID of its route.");
+        }
+        base = skeleton;
+      }
+
+      // Origin identity is immutable in both skeleton and accepted payload.
+      // Resolve current owned authority before accepting any origin receipt.
+      const currentOrigin = await currentDeltaOrigin(client, auth, base as AgentSessionPayload);
+      const through = currentOrigin?.payload?.turns.findIndex((turn) =>
+        sameID(turn.id, (base as AgentSessionPayload).originTurnID)) ?? -1;
+      const originTurns = through >= 0 ? currentOrigin!.payload!.turns.slice(0, through + 1) : [];
+      const candidate = applyOperations(base, frameRequest.operations, originTurns);
+      // Structural truth first: every frame — intermediate or final — leaves a
+      // canonical payload that satisfies the CURRENT payload schema, so an
+      // operation value can never smuggle a malformed field or an unknown key
+      // past the typed contract. Semantic, source and queue validation below
+      // runs on the same complete shape.
+      if (!Value.Check(AgentSessionPayloadSchema, candidate)) {
+        invalid(
+          "Every delta frame must leave a canonical Session payload that matches the current contract.",
+        );
+      }
+      const canonicalCandidate = normalizeSessionIdentifiers(candidate);
+      if (canonicalCandidate.id.toLowerCase() !== id.toLowerCase()) {
+        invalid("The Session ID must match its route.");
+      }
+
+      // Whole-intent completeness: the declared target digest is recomputed
+      // from the rebuilt canonical payload before host normalization or
+      // redaction. Only a final frame that matches the whole declared intent
+      // may leave the visibly incomplete state; nothing is ever accepted on a
+      // checksum alone.
+      if (frameRequest.final) {
+        const digest = agentSessionIntentDigest(structuredClone(candidate));
+        if (digest !== frameRequest.target_payload_digest) {
+          throw new ApiError(
+            409,
+            "AGENT_SESSION_DELTA_DIGEST_MISMATCH",
+            "The completed frames do not add up to the declared Session intent. Reconcile the current record and plan a new transfer.",
+            {
+              session: existing ? record(existing) : null,
+              computed_digest: digest,
+              turns: (candidate.turns as unknown[]).length,
+              operations: frameRequest.operations.length,
+            },
+          );
+        }
+      }
+
+      // Full current source/provenance/owner/retention/queue fences run for
+      // every intermediate frame, not only the final one.
+      const payload = structuredClone(canonicalCandidate);
+      // Continue importing the same canonical prefix on every frame; an
+      // existing partial payload must not hide later original provenance.
+      const provenanceSource = existing?.payload || currentOrigin?.payload
+        ? { ...(existing?.payload ?? currentOrigin!.payload!),
+            turns: [...originTurns.filter((turn) => !existing?.payload?.turns.some((stored) => sameID(stored.id, turn.id))),
+                    ...(existing?.payload?.turns ?? [])] }
+        : null;
+      preserveExecutionProvenance(payload, provenanceSource);
+      const newIDs = payload.turns
+        .flatMap((turn) => [turn, ...(turn.steeredMessages ?? [])])
+        .filter(
+          (message) =>
+            !existing?.payload?.turns.some((turn) =>
+              [turn, ...(turn.steeredMessages ?? [])].some((before) =>
+                sameID(before.id, message.id),
+              ),
+            ),
+        )
+        .map((message) => message.id);
+      if (newIDs.length) {
+        const reserved = await client.query(
+          `SELECT 1 FROM conversation_queue_entries WHERE account_id=$1 AND session_id=$2
+           AND message_id=ANY($3::uuid[]) LIMIT 1`,
+          [auth.accountId, id, newIDs],
+        );
+        if (reserved.rowCount) {
+          throw new ApiError(
+            409,
+            "AGENT_SESSION_QUEUE_MESSAGE_RESERVED",
+            "An admitted queue message can only be saved by its owned execution.",
+          );
+        }
+      }
+      preserveExistingShareClassifications(payload, existing?.payload ?? null);
+      preserveExistingTurnImages(payload, existing?.payload ?? null);
+      await lockAgentSessionSources(client, auth, payload);
+      await validatePayload(
+        client,
+        auth,
+        id,
+        payload,
+        existing?.payload ?? null,
+        { deltaInheritedGrowth: true },
+      );
+      // Every prefix can reveal an older original source clock. It can only
+      // shorten the canonical lifetime, never grant old history a fresh lease.
+      const createdAt = new Date(
+        Math.min(
+          Date.now(),
+          ...(existing ? [existing.created_at.valueOf()] : []),
+          ...(currentOrigin ? [currentOrigin.created_at.valueOf()] : []),
+          Date.parse(payload.updatedAt),
+          ...(payload.createdAt ? [Date.parse(payload.createdAt)] : []),
+          ...payload.turns.map((turn) => Date.parse(turn.createdAt)),
+        ),
+      );
+      if (createdAt.valueOf() + 30 * DAY <= Date.now()) {
+        throw new ApiError(
+          410,
+          "AGENT_SESSION_EXPIRED",
+          "This Session is older than the thirty-day retention period.",
+        );
+      }
+      const composerMetadata = prepareComposerDraft(auth, id, payload, existing);
+      await client.query("SELECT retract_agent_session_tasks($1,$2::jsonb)", [
+        auth.accountId,
+        JSON.stringify(payload),
+      ]);
+      const redacted = (
+        await client.query<{ payload: AgentSessionPayload }>(
+          "SELECT redact_agent_session_payload($1,$2::jsonb) AS payload",
+          [auth.accountId, JSON.stringify(payload)],
+        )
+      ).rows[0]!.payload;
+
+      const frameIndex = (existing?.sync_frame_count ?? 0) + 1;
+      const complete = frameRequest.final;
+      const result = (
+        await client.query<Row>(
+          `INSERT INTO agent_sessions(account_id,id,created_by_user_id,revision,payload,created_at,expires_at,deleted_at,composer_draft_hash,composer_draft_started_at,sync_state,sync_transfer_id,sync_target_payload_digest,sync_started_at,sync_frame_count)
+        VALUES ($1,$2,$3,1,$4::jsonb,$5,$6,NULL,$7,$9,
+          CASE WHEN $10::boolean THEN 'complete' ELSE 'incomplete' END,
+          CASE WHEN $10::boolean THEN NULL ELSE $11::uuid END,
+          CASE WHEN $10::boolean THEN NULL ELSE $12::text END,
+          CASE WHEN $10::boolean THEN NULL ELSE COALESCE($13::timestamptz, now()) END,
+          CASE WHEN $10::boolean THEN 0 ELSE $14::integer END)
+        ON CONFLICT (account_id,id) DO UPDATE SET revision=agent_sessions.revision+1,payload=EXCLUDED.payload,updated_at=now(),
+          created_at=LEAST(agent_sessions.created_at,EXCLUDED.created_at),
+          expires_at=LEAST(agent_sessions.expires_at,EXCLUDED.expires_at),
+          composer_draft_hash=COALESCE(EXCLUDED.composer_draft_hash,agent_sessions.composer_draft_hash),
+          composer_draft_started_at=COALESCE(EXCLUDED.composer_draft_started_at,agent_sessions.composer_draft_started_at),
+          sync_state=EXCLUDED.sync_state,
+          sync_transfer_id=EXCLUDED.sync_transfer_id,
+          sync_target_payload_digest=EXCLUDED.sync_target_payload_digest,
+          sync_started_at=EXCLUDED.sync_started_at,
+          sync_frame_count=EXCLUDED.sync_frame_count
+        WHERE agent_sessions.created_by_user_id=$3 AND agent_sessions.revision=$8 AND agent_sessions.deleted_at IS NULL
+        RETURNING *`,
+          [
+            auth.accountId,
+            id,
+            auth.userId,
+            JSON.stringify(redacted),
+            createdAt,
+            new Date(Math.min(createdAt.valueOf() + 30 * DAY,
+              existing?.expires_at.valueOf() ?? Infinity,
+              currentOrigin?.expires_at.valueOf() ?? Infinity)),
+            composerMetadata?.hash ?? null,
+            frameRequest.expected_revision,
+            composerMetadata?.startedAt ?? null,
+            complete,
+            frameRequest.transfer_id,
+            frameRequest.target_payload_digest,
+            existing?.sync_started_at ?? null,
+            frameIndex,
+          ],
+        )
+      ).rows[0];
+      if (!result) {
+        const current = await rowFor(client, auth, id);
+        throw new ApiError(
+          current?.deleted_at ? 410 : 409,
+          current?.deleted_at
+            ? "AGENT_SESSION_DELETED"
+            : "AGENT_SESSION_REVISION_CONFLICT",
+          "The Session changed while this frame was being checked.",
+          { session: current ? record(current) : null },
+        );
+      }
+      // Exact per-frame identity (key, revision, transfer) is retained for
+      // uncertain delivery without any frame body or user content; the client's
+      // own durable transfer store holds the exact frame intent. The existing
+      // operation registry keeps replay and cross-protocol idempotency
+      // authoritative.
+      await client.query(
+        `INSERT INTO agent_session_delta_frames(account_id,session_id,actor_user_id,idempotency_key,transfer_id,frame_index,request_hash,resulting_revision)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          auth.accountId,
+          id,
+          auth.userId,
+          frameRequest.idempotency_key,
+          frameRequest.transfer_id,
+          frameIndex,
+          hash,
+          result.revision,
+        ],
+      );
+      await client.query(
+        `INSERT INTO agent_session_operations(account_id,session_id,actor_user_id,idempotency_key,request_hash,resulting_revision) VALUES ($1,$2,$3,$4,$5,$6)`,
+        [
+          auth.accountId,
+          id,
+          auth.userId,
+          frameRequest.idempotency_key,
+          hash,
+          result.revision,
+        ],
+      );
+      return outcome(result, frameRequest.transfer_id, frameIndex, false);
+    });
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await performFrame();
+    } catch (error) {
+      const databaseError = error as { code?: string; table?: string };
+      if (["55P03", "40P01", "40001"].includes(databaseError.code ?? "")) {
+        if (attempt < 4) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, 25 * 2 ** attempt),
+          );
+          continue;
+        }
+        throw new ApiError(
+          409,
+          "AGENT_SESSION_SOURCE_BUSY",
+          "The Session source is changing. Retry the same frame after it settles.",
+        );
+      }
+      if (
+        databaseError.code === "23514" &&
+        databaseError.table === "agent_sessions"
+      ) {
+        invalid("The stored Session does not match its bounded contract.");
+      }
+      throw error;
+    }
+  }
+}
+
+/**
+ * Explicit abandon/rebase of an active transfer. The acknowledged canonical
+ * prefix stays exactly as it is and remains visibly incomplete: abandoning a
+ * transfer can never silently certify a partial record complete.
+ */
+export async function abandonAgentSessionDelta(
+  pool: Pool,
+  auth: AuthContext,
+  id: string,
+  request: AgentSessionDeltaAbandonRequest,
+): Promise<AgentSessionDeltaOutcome> {
+  if (!Value.Check(AgentSessionDeltaAbandonRequestSchema, request)) {
+    invalid("The Session delta abandon must match the typed contract.");
+  }
+  const abandonRequest = {
+    ...request,
+    transfer_id: request.transfer_id.toLowerCase(),
+    idempotency_key: request.idempotency_key.toLowerCase(),
+  };
+  const hash = digestValue({
+    session_id: id.toLowerCase(),
+    deleted: false,
+    request: abandonRequest,
+  });
+  const perform = () =>
+    inTransaction(pool, async (client) => {
+      await lockSavedMemoryLineage(client, auth.accountId);
+      await assertAccountActive(client, auth.accountId);
+      await client.query("SET LOCAL lock_timeout = '100ms'");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [`${auth.accountId}:${auth.userId}:agent-sessions`],
+      );
+      await lockConversationQueueSession(client, id);
+      await sweepAgentSessions(client, auth.accountId);
+      const existing = await rowFor(client, auth, id);
+      const replay = (
+        await client.query<{ request_hash: string; frame_index: number }>(
+          `SELECT request_hash,frame_index FROM agent_session_delta_frames
+           WHERE account_id=$1 AND actor_user_id=$2 AND idempotency_key=$3`,
+          [auth.accountId, auth.userId, abandonRequest.idempotency_key],
+        )
+      ).rows[0];
+      if (replay) {
+        if (replay.request_hash !== hash) {
+          throw new ApiError(
+            409,
+            "AGENT_SESSION_IDEMPOTENCY_CONFLICT",
+            "This operation key already identifies a different Session intent.",
+          );
+        }
+        if (!existing) throw missingSession();
+        return outcome(existing, abandonRequest.transfer_id, replay.frame_index, true);
+      }
+      if (!existing) throw missingSession();
+      if (existing.deleted_at) {
+        throw new ApiError(
+          410,
+          "AGENT_SESSION_DELETED",
+          "This Session was deleted or expired and cannot be restored.",
+          { session: record(existing) },
+        );
+      }
+      if (existing.revision !== abandonRequest.expected_revision) {
+        throw new ApiError(
+          409,
+          "AGENT_SESSION_REVISION_CONFLICT",
+          "The Session changed on another device. Merge with its current revision.",
+          { session: record(existing) },
+        );
+      }
+      if (
+        existing.sync_transfer_id == null ||
+        existing.sync_transfer_id.toLowerCase() !== abandonRequest.transfer_id
+      ) {
+        conflict(
+          "There is no matching active transfer to abandon on this Session.",
+          { session: record(existing) },
+        );
+      }
+      const frameIndex = existing.sync_frame_count + 1;
+      const result = (
+        await client.query<Row>(
+          `UPDATE agent_sessions
+           SET revision=revision+1, updated_at=now(),
+               sync_transfer_id=NULL, sync_target_payload_digest=NULL, sync_started_at=NULL
+           WHERE account_id=$1 AND id=$2 AND revision=$3 AND deleted_at IS NULL
+             AND sync_transfer_id=$4
+           RETURNING *`,
+          [
+            auth.accountId,
+            id,
+            abandonRequest.expected_revision,
+            abandonRequest.transfer_id,
+          ],
+        )
+      ).rows[0];
+      if (!result) {
+        const current = await rowFor(client, auth, id);
+        throw new ApiError(
+          current?.deleted_at ? 410 : 409,
+          current?.deleted_at
+            ? "AGENT_SESSION_DELETED"
+            : "AGENT_SESSION_REVISION_CONFLICT",
+          "The Session changed while this transfer was being abandoned.",
+          { session: current ? record(current) : null },
+        );
+      }
+      await client.query(
+        `INSERT INTO agent_session_delta_frames(account_id,session_id,actor_user_id,idempotency_key,transfer_id,frame_index,request_hash,resulting_revision)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          auth.accountId,
+          id,
+          auth.userId,
+          abandonRequest.idempotency_key,
+          abandonRequest.transfer_id,
+          frameIndex,
+          hash,
+          result.revision,
+        ],
+      );
+      await client.query(
+        `INSERT INTO agent_session_operations(account_id,session_id,actor_user_id,idempotency_key,request_hash,resulting_revision) VALUES ($1,$2,$3,$4,$5,$6)`,
+        [
+          auth.accountId,
+          id,
+          auth.userId,
+          abandonRequest.idempotency_key,
+          hash,
+          result.revision,
+        ],
+      );
+      return outcome(result, abandonRequest.transfer_id, frameIndex, false);
+    });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await perform();
+    } catch (error) {
+      const databaseError = error as { code?: string };
+      if (["55P03", "40P01", "40001"].includes(databaseError.code ?? "")) {
+        if (attempt < 4) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, 25 * 2 ** attempt),
+          );
+          continue;
+        }
+        throw new ApiError(
+          409,
+          "AGENT_SESSION_SOURCE_BUSY",
+          "The Session source is changing. Retry after it settles.",
+        );
+      }
+      throw error;
+    }
+  }
+}
+
+function missingSession(): ApiError {
+  return new ApiError(
+    404,
+    "AGENT_SESSION_NOT_FOUND",
+    "The Session is not available in this account and user scope.",
+  );
+}
+
+function sameID(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  return left == null || right == null
+    ? left == null && right == null
+    : left.toLowerCase() === right.toLowerCase();
+}

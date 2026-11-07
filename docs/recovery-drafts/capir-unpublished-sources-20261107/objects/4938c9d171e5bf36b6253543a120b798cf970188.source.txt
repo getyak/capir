@@ -1,0 +1,234 @@
+import type { TimeActivity, TimeReviewRequest } from "@talent-signal/contracts";
+import type { Pool } from "pg";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocked = vi.hoisted(() => ({ collect: vi.fn() }));
+
+vi.mock("./timeActivities.js", () => ({
+  collectTimeActivities: mocked.collect,
+  listTimeActivities: vi.fn(),
+}));
+
+import type { AuthContext } from "./auth.js";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { reviewTimeRange } from "./timeReview.js";
+
+const auth: AuthContext = {
+  accountId: "11111111-1111-4111-8111-111111111111",
+  accountSlug: "review-account",
+  userId: "22222222-2222-4222-8222-222222222222",
+  userEmail: "review@example.test",
+  sessionId: "33333333-3333-4333-8333-333333333333",
+  userKind: "simulated_human",
+};
+
+const request: TimeReviewRequest = {
+  scope: {
+    from: "2026-03-01",
+    to: "2026-04-01",
+    time_zone: "UTC",
+  },
+  objective: "Summarize the past week of work.",
+};
+
+function activity(overrides: Partial<TimeActivity> = {}): TimeActivity {
+  return {
+    id: "schedule:44444444-4444-4444-8444-444444444444",
+    kind: "schedule",
+    source_id: "44444444-4444-4444-8444-444444444444",
+    source_revision: 1,
+    title: "Intro call",
+    summary: "Prepare notes",
+    occurred_at: "2026-03-02T15:00:00.000Z",
+    recorded_at: "2026-03-01T00:00:00.000Z",
+    ends_at: "2026-03-02T16:00:00.000Z",
+    local_day: "2026-03-02",
+    time_zone: "UTC",
+    all_day: false,
+    person_id: null,
+    person_label: null,
+    relationship_context_id: null,
+    context_label: null,
+    session_id: null,
+    status: "planned",
+    authority: "user_authored",
+    external_effect: "none",
+    ...overrides,
+  };
+}
+
+function admitted(activities: TimeActivity[], complete = true) {
+  return { activities, complete, snapshot_at: "2026-03-02T00:00:00.000Z" };
+}
+
+function provider(
+  answer: RemoteChatAnswerProviding["answer"],
+): RemoteChatAnswerProviding {
+  return {
+    providerId: "zhipu-chat-completions",
+    model: "glm-test",
+    supportsImageInput: false,
+    answer,
+  } as RemoteChatAnswerProviding;
+}
+
+beforeEach(() => {
+  mocked.collect.mockReset();
+});
+
+describe("time range review", () => {
+  it("fails truthfully when no provider is configured", async () => {
+    await expect(
+      reviewTimeRange({} as Pool, auth, request, null),
+    ).rejects.toMatchObject({ statusCode: 503, code: "TIME_REVIEW_UNAVAILABLE" });
+    expect(mocked.collect).not.toHaveBeenCalled();
+  });
+
+  it("returns a deterministic no_action result for an empty scope", async () => {
+    mocked.collect.mockResolvedValueOnce(admitted([]));
+    const answer = vi.fn();
+    const result = await reviewTimeRange(
+      {} as Pool,
+      auth,
+      request,
+      provider(answer as unknown as RemoteChatAnswerProviding["answer"]),
+    );
+    expect(answer).not.toHaveBeenCalled();
+    expect(result.title).toBe("无需操作");
+    expect(result.sources).toEqual([]);
+    expect(result.authority).toBe("unconfirmed");
+    expect(result.external_effect).toBe("none");
+  });
+
+  it("rejects a model result whose source authority changed", async () => {
+    const source = activity();
+    mocked.collect
+      .mockResolvedValueOnce(admitted([source]))
+      .mockResolvedValueOnce(admitted([]));
+    await expect(
+      reviewTimeRange(
+        {} as Pool,
+        auth,
+        request,
+        provider(async () => ({
+          kind: "answer",
+          title: "Summary",
+          body: "Body",
+          citation_ids: [source.id],
+          provider_id: "zhipu-chat-completions",
+          model: "glm-test",
+          provider_request_id: null,
+          input_tokens: 1,
+          output_tokens: 1,
+        })),
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "TIME_REVIEW_SOURCES_CHANGED",
+    });
+  });
+
+  it("does not accept a citation outside the admitted scope", async () => {
+    const source = activity();
+    mocked.collect
+      .mockResolvedValueOnce(admitted([source]))
+      .mockResolvedValueOnce(admitted([source]));
+    await expect(
+      reviewTimeRange(
+        {} as Pool,
+        auth,
+        request,
+        provider(async () => ({
+          kind: "answer",
+          title: "Summary",
+          body: "Body",
+          citation_ids: ["schedule:ghost"],
+          provider_id: "zhipu-chat-completions",
+          model: "glm-test",
+          provider_request_id: null,
+          input_tokens: 1,
+          output_tokens: 1,
+        })),
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 502,
+      code: "TIME_REVIEW_UNSCOPED_CITATION",
+    });
+  });
+
+  it("fails closed when the provider itself fails", async () => {
+    mocked.collect.mockResolvedValueOnce(admitted([activity()]));
+    await expect(
+      reviewTimeRange(
+        {} as Pool,
+        auth,
+        request,
+        provider(async () => {
+          throw new Error("upstream down");
+        }),
+      ),
+    ).rejects.toMatchObject({ statusCode: 503, code: "TIME_REVIEW_UNAVAILABLE" });
+  });
+
+  it("returns only admitted sources and cites against activity metadata", async () => {
+    const source = activity();
+    mocked.collect
+      .mockResolvedValueOnce(admitted([source]))
+      .mockResolvedValueOnce(admitted([source]));
+    const answer = vi.fn(async (input: { context_blocks: unknown[]; allowed_citation_ids: string[] }) => {
+      expect(input.allowed_citation_ids).toEqual([source.id]);
+      expect(input.context_blocks).toHaveLength(1);
+      return {
+        kind: "answer",
+        title: "Review",
+        body: "One planned call.",
+        citation_ids: [source.id],
+        provider_id: "zhipu-chat-completions",
+        model: "glm-test",
+        provider_request_id: null,
+        input_tokens: 5,
+        output_tokens: 6,
+      };
+    });
+    const result = await reviewTimeRange(
+      {} as Pool,
+      auth,
+      request,
+      provider(answer as unknown as RemoteChatAnswerProviding["answer"]),
+    );
+    expect(result.sources).toEqual([source]);
+    expect(result.title).toBe("Review");
+    expect(result.complete).toBe(true);
+    expect(result.authority).toBe("unconfirmed");
+  });
+
+  it("uses a stable stale-source fingerprint helper", async () => {
+    const { timeReviewFingerprint } = await import("./timeReview.js");
+    expect(timeReviewFingerprint([activity()])).toHaveLength(64);
+    expect(
+      timeReviewFingerprint([activity({ source_revision: 2 })]),
+    ).not.toBe(timeReviewFingerprint([activity()]));
+  });
+  it("preserves every admitted activity and its full metadata beyond former count and character ceilings", async () => {
+    const many = Array.from({ length: 130 }, (_, index) => activity({ id: `session:${index}`, title: "t".repeat(500), summary: "s".repeat(1000), person_label: "p".repeat(200), context_label: "c".repeat(300) }));
+    mocked.collect.mockResolvedValue(admitted(many));
+    const result = await reviewTimeRange({} as Pool, auth, request, provider(async (input) => {
+      expect(JSON.stringify(input).length).toBeGreaterThan(40000);
+      expect(input.context_blocks.length).toBeGreaterThan(0);
+      expect(input.context_blocks).toHaveLength(130);
+      expect(input.context_blocks[0]!.headline).toBe(many[0]!.title);
+      expect(input.context_blocks[0]!.summary).toBe(many[0]!.summary);
+      return { kind: "answer", title: "Review", body: "Bounded review", citation_ids: input.allowed_citation_ids, provider_id: "zhipu-chat-completions", model: "glm-test", provider_request_id: null, input_tokens: 0, output_tokens: 0 };
+    }));
+    expect(result.complete).toBe(true); expect(result.sources).toHaveLength(130);
+    expect(mocked.collect.mock.calls.every(call => call[3] === null)).toBe(true);
+  });
+  it("stops model context reads when a live label changes without a source revision", async () => {
+    mocked.collect.mockResolvedValueOnce(admitted([activity({ person_label: "Old name" })])).mockResolvedValue(admitted([activity({ person_label: "Current name" })]));
+    await expect(reviewTimeRange({} as Pool, auth, request, provider(async (input) => {
+      expect(input.assertCurrent).toBeTypeOf("function"); await input.assertCurrent!();
+      throw new Error("Source guard did not stop the model");
+    }))).rejects.toMatchObject({ code: "TIME_REVIEW_SOURCES_CHANGED" });
+  });
+
+});

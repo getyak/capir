@@ -1,0 +1,236 @@
+import { Type } from "@sinclair/typebox";
+import {
+  AgentSessionMutationRequestSchema,
+  AgentSessionDeleteRequestSchema,
+  AgentSessionDeltaFrameRequestSchema,
+  AgentSessionDeltaAbandonRequestSchema,
+  AgentSessionDeltaResponseSchema,
+  AgentSessionResponseSchema,
+  AgentSessionListResponseSchema,
+  ErrorResponseSchema,
+  CONTRACT_VERSION,
+  type AgentSessionMutationRequest,
+  type AgentSessionDeleteRequest,
+  type AgentSessionDeltaFrameRequest,
+  type AgentSessionDeltaAbandonRequest,
+} from "@talent-signal/contracts";
+import type { FastifyInstance, preHandlerHookHandler } from "fastify";
+import type { Pool } from "pg";
+import { ApiError } from "../lib/apiError.js";
+import { registerRecurringJob } from "../lib/recurringJob.js";
+import {
+  getAgentSession,
+  listAgentSessions,
+  mutateAgentSession,
+  runAgentSessionRetentionSweep,
+} from "./agentSessions.js";
+import {
+  abandonAgentSessionDelta,
+  mutateAgentSessionDelta,
+} from "./agentSessionDelta.js";
+export function registerAgentSessionRoutes(
+  app: FastifyInstance,
+  pool: Pool,
+  authenticate: preHandlerHookHandler,
+) {
+  const common = {
+    preHandler: authenticate,
+    schema: { security: [{ bearerSession: [] }], tags: ["agent-sessions"] },
+  };
+  const params = Type.Object(
+    { id: Type.String({ format: "uuid" }) },
+    { additionalProperties: false },
+  );
+  const authenticatedListRateLimit = app.rateLimit({
+    errorResponseBuilder: () => new ApiError(
+      429,
+      "AGENT_SESSION_LIST_RATE_LIMITED",
+      "Too many Session list refreshes; retry after the current window.",
+    ),
+    keyGenerator: (request) =>
+      `${request.auth.accountId}:${request.auth.userId}`,
+    max: 30,
+    timeWindow: "1 minute",
+  });
+  const firstPageListRateLimit: preHandlerHookHandler = async function (
+    request,
+    reply,
+  ) {
+    const query = request.query as { after?: string };
+    if (!query.after) {
+      await authenticatedListRateLimit.call(this, request, reply);
+    }
+  };
+  app.get<{ Querystring: { after?: string; limit?: string } }>(
+    "/v1/agent-sessions",
+    {
+      ...common,
+      // Authentication must establish the owner before the bucket key is
+      // derived; loopback Web traffic otherwise collapses into one IP bucket.
+      preHandler: [authenticate, firstPageListRateLimit],
+      schema: {
+        ...common.schema,
+        querystring: Type.Object(
+          {
+            after: Type.Optional(
+              Type.String({ maxLength: 512, pattern: "^[A-Za-z0-9_-]+$" }),
+            ),
+            limit: Type.Optional(
+              Type.String({ pattern: "^(?:[1-9]|[1-4][0-9]|50)$" }),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+        response: {
+          200: AgentSessionListResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      return listAgentSessions(
+        pool,
+        request.auth,
+        request.query.after,
+        Number(request.query.limit ?? 50),
+      );
+    },
+  );
+  app.get<{ Params: { id: string } }>(
+    "/v1/agent-sessions/:id",
+    {
+      ...common,
+      schema: {
+        ...common.schema,
+        params,
+        response: {
+          200: AgentSessionResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      return {
+        contract_version: CONTRACT_VERSION,
+        session: await getAgentSession(pool, request.auth, request.params.id),
+      };
+    },
+  );
+  app.put<{ Params: { id: string }; Body: AgentSessionMutationRequest }>(
+    "/v1/agent-sessions/:id",
+    {
+      ...common,
+      bodyLimit: 250 * 1024,
+      schema: {
+        ...common.schema,
+        params,
+        body: AgentSessionMutationRequestSchema,
+        response: {
+          200: AgentSessionResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      return {
+        contract_version: CONTRACT_VERSION,
+        session: await mutateAgentSession(
+          pool,
+          request.auth,
+          request.params.id,
+          request.body,
+        ),
+      };
+    },
+  );
+  app.patch<{ Params: { id: string }; Body: AgentSessionDeltaFrameRequest }>(
+    "/v1/agent-sessions/:id/delta",
+    {
+      ...common,
+      // The per-frame byte guard stays truthful: one frame is one bounded
+      // canonical mutation, never a whole-history upload. An individually
+      // oversized turn fails here explicitly while local history remains.
+      bodyLimit: 250 * 1024,
+      schema: {
+        ...common.schema,
+        params,
+        body: AgentSessionDeltaFrameRequestSchema,
+        response: {
+          200: AgentSessionDeltaResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      return mutateAgentSessionDelta(
+        pool,
+        request.auth,
+        request.params.id,
+        request.body,
+      );
+    },
+  );
+  app.post<
+    { Params: { id: string }; Body: AgentSessionDeltaAbandonRequest }
+  >(
+    "/v1/agent-sessions/:id/delta/abandon",
+    {
+      ...common,
+      schema: {
+        ...common.schema,
+        params,
+        body: AgentSessionDeltaAbandonRequestSchema,
+        response: {
+          200: AgentSessionDeltaResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      return abandonAgentSessionDelta(
+        pool,
+        request.auth,
+        request.params.id,
+        request.body,
+      );
+    },
+  );
+  app.delete<{ Params: { id: string }; Body: AgentSessionDeleteRequest }>(
+    "/v1/agent-sessions/:id",
+    {
+      ...common,
+      schema: {
+        ...common.schema,
+        params,
+        body: AgentSessionDeleteRequestSchema,
+        response: {
+          200: AgentSessionResponseSchema,
+          "4xx": ErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      return {
+        contract_version: CONTRACT_VERSION,
+        session: await mutateAgentSession(
+          pool,
+          request.auth,
+          request.params.id,
+          request.body,
+          true,
+        ),
+      };
+    },
+  );
+  registerRecurringJob(app, {
+    name: "agent-session-retention-sweep",
+    intervalMs: 60_000,
+    run: () => runAgentSessionRetentionSweep(pool),
+  });
+}

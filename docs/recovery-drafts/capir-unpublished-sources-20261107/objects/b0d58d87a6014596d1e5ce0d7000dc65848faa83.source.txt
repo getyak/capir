@@ -1,0 +1,74 @@
+import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi, type Mock } from "vitest";
+import { RuntimeObservationSession, type RuntimeObservationPolicy } from "./runtimeObservation.js";
+import { RuntimeObservationOutbox, type RuntimeObservationSourceState, type RuntimeObservationTransport } from "./runtimeObservationOutbox.js";
+const policy: RuntimeObservationPolicy={version:"private_full_content.v1",mode:"private_full_content",endpoint:"http://localhost:5173/api",
+  workspace:"default",project:"m3-source-state-unit",source_workspace_ids:["synthetic-workspace"],authorization_scopes:["relationship_text"],retention_days:1,max_content_bytes:1024*1024};
+const context=(person="10000000-0000-4000-8000-000000000001")=>({run_id:"synthetic-ordinary-task",workspace_id:"synthetic-workspace",authorization_scope:"relationship_text",
+  source_refs:{kind:"product" as const,capture_ids:[],fragment_ids:[],media_ids:[],person_ids:[person],relationship_context_ids:[],expires_at:new Date(Date.now()+60000).toISOString()}});
+async function withQueue(run:(q:RuntimeObservationOutbox,root:string,retain:Mock<RuntimeObservationTransport["retain"]>,remove:Mock<RuntimeObservationTransport["remove"]>)=>Promise<void>,retain=vi.fn<RuntimeObservationTransport["retain"]>(async()=>{})) {
+  const root=await mkdtemp(join(tmpdir(),"runtime-source-state-")),remove=vi.fn<RuntimeObservationTransport["remove"]>(async()=>{});
+  try {await run(new RuntimeObservationOutbox(root,policy,{retain,remove}),root,retain,remove);} finally {await rm(root,{recursive:true,force:true});}
+}
+async function enqueue(q:RuntimeObservationOutbox,person?:string) {
+  const session=new RuntimeObservationSession(policy,context(person),{text:"Synthetic private input"},q);
+  await session.complete({text:"Synthetic private result"},"ok");return session;
+}
+describe("runtime observation source publication",()=>{
+  it("M3 defers all attempts before transport when a later observation is pending",async()=>withQueue(async(q,_root,retain,remove)=>{
+    q.setSourceValidator(async c=>c.source_refs?.kind==="product" && c.source_refs.person_ids[0]?.endsWith("2")?"defer_pending":"current");
+    await enqueue(q);await enqueue(q,"10000000-0000-4000-8000-000000000002");await q.flush();
+    expect((await q.status()).receipts[0]).toMatchObject({state:"pending",attempts:0,retained_span_ids:[],error_code:null});
+    expect(retain).not.toHaveBeenCalled();expect(remove).not.toHaveBeenCalled();
+  }));
+  it("M3 lets a withdrawn later sibling dominate an earlier deferred observation",async()=>withQueue(async(q,root,retain,remove)=>{
+    q.setSourceValidator(async c=>c.source_refs?.kind==="product" && c.source_refs.person_ids[0]?.endsWith("2")?"withdrawn":"defer_pending");
+    const session=await enqueue(q);await enqueue(q,"10000000-0000-4000-8000-000000000002");await q.flush();
+    expect((await q.status()).receipts[0]).toMatchObject({state:"deleted",attempts:1});
+    expect(retain).not.toHaveBeenCalled();expect(remove).toHaveBeenCalledOnce();
+    expect(await readFile(join(root,`${session.id}.json`),"utf8")).not.toContain("Synthetic private");
+  }));
+  it("M3 preserves actual post-retain delivery and uncertainty across restart",async()=>{
+    let state:RuntimeObservationSourceState="current";
+    const transport=vi.fn<RuntimeObservationTransport["retain"]>(async()=>{state="defer_pending";});
+    await withQueue(async(q,root,retain,remove)=>{
+      q.setSourceValidator(async()=>state);await enqueue(q);await q.flush();
+      const first=(await q.status()).receipts[0]!;expect(first).toMatchObject({state:"pending",attempts:1,error_code:"OPIK_RUNTIME_SOURCE_PUBLICATION_UNCERTAIN"});
+      expect(first.retained_span_ids.length).toBeGreaterThan(0);expect(retain).toHaveBeenCalledOnce();expect(remove).not.toHaveBeenCalled();
+      const restarted=new RuntimeObservationOutbox(root,policy,{retain,remove});restarted.setSourceValidator(async()=>state);await restarted.flush();
+      expect((await restarted.status()).receipts[0]).toMatchObject({state:"pending",attempts:1,retained_span_ids:first.retained_span_ids});
+      state="current";await restarted.flush();expect((await restarted.status()).receipts[0]).toMatchObject({state:"retained",attempts:1,error_code:null});
+      expect(retain).toHaveBeenCalledOnce();expect(remove).not.toHaveBeenCalled();
+    },transport);
+  });
+  it("M3 does not count a source transition immediately before retain as a transport attempt",async()=>withQueue(async(q,_root,retain,remove)=>{
+    let checks=0;q.setSourceValidator(async()=>++checks===1?"current":"defer_pending");await enqueue(q);await q.flush();
+    expect((await q.status()).receipts[0]).toMatchObject({state:"pending",attempts:0});expect(retain).not.toHaveBeenCalled();expect(remove).not.toHaveBeenCalled();
+  }));
+  it("M3 rejects an invalid truthy classifier result without deletion or export",async()=>withQueue(async(q,_root,retain,remove)=>{
+    q.setSourceValidator(async()=>"pending" as never);await enqueue(q);await q.flush();
+    expect((await q.status()).receipts[0]).toMatchObject({state:"pending",attempts:0,error_code:"OPIK_RUNTIME_SOURCE_PROTOCOL_INVALID"});
+    expect(retain).not.toHaveBeenCalled();expect(remove).not.toHaveBeenCalled();
+  }));
+  it("M3 expires deferred content before preflight and still performs deletion",async()=>withQueue(async(q,root,retain,remove)=>{
+    q.setSourceValidator(async()=>"defer_pending");const session=await enqueue(q);await q.flush(Date.now()+120000);
+    expect((await q.status()).receipts[0]).toMatchObject({state:"deleted",attempts:1});expect(remove).toHaveBeenCalledOnce();expect(retain).not.toHaveBeenCalled();
+    expect(await readFile(join(root,`${session.id}.json`),"utf8")).not.toContain("Synthetic private");
+  }));
+  it("M3 never overwrites a deletion arriving during a deferred preflight",async()=>withQueue(async(q,root,retain,remove)=>{
+    q.setSourceValidator(async c=>{await q.deleteRun(c,true);return "defer_pending";});const session=await enqueue(q);await q.flush();
+    expect((await q.status()).receipts[0]).toMatchObject({state:"deletion_pending",attempts:0});expect(retain).not.toHaveBeenCalled();
+    expect(await readFile(join(root,`${session.id}.json`),"utf8")).not.toContain("Synthetic private");
+    await q.flush();expect((await q.status()).deleted).toBe(1);expect(remove).toHaveBeenCalledOnce();
+  }));
+  it("M3 preserves exact Boolean compatibility and checks retained sources",async()=>withQueue(async(q,_root,retain,remove)=>{
+    let available=true;q.setSourceValidator(async()=>available);await enqueue(q);await q.flush();expect((await q.status()).retained).toBe(1);
+    available=false;await q.flush();expect((await q.status()).deleted).toBe(1);expect(retain).toHaveBeenCalledOnce();expect(remove).toHaveBeenCalledOnce();
+  }));
+  it("M3 never exports business content with a missing source validator",async()=>withQueue(async(q,_root,retain,remove)=>{
+    await enqueue(q);await q.flush();expect((await q.status()).receipts[0]).toMatchObject({state:"pending",attempts:0,error_code:"OPIK_RUNTIME_EXPORT_RETRY_REQUIRED"});
+    expect(retain).not.toHaveBeenCalled();expect(remove).not.toHaveBeenCalled();
+  }));
+});

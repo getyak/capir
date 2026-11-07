@@ -1,0 +1,327 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import {
+  runClaudeHarness,
+  type ClaudeHarnessRequest,
+  type HarnessSteeringFeed,
+} from "./claudeHarness.js";
+import { claudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
+
+const config = claudeHarnessConfiguration({
+  ANTHROPIC_API_KEY: "synthetic-secret",
+  TALENT_SIGNAL_AGENT_MODEL: "synthetic-model",
+});
+
+const messageA = "11111111-1111-4111-8111-111111111111";
+const messageB = "22222222-2222-4222-8222-222222222222";
+const messageC = "33333333-3333-4333-8333-333333333333";
+
+function request(overrides: Partial<ClaudeHarnessRequest> = {}): ClaudeHarnessRequest {
+  return {
+    objective: "Synthetic objective.",
+    systemPrompt: "Synthetic system prompt.",
+    tools: [],
+    budget: {
+      maxTurns: 8,
+      maxToolCalls: 10,
+      maxDurationMs: 30_000,
+      maxTaskTokens: 4_000,
+      maxEstimatedUsd: 1,
+    },
+    assertCurrent: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
+function assistant(id: string, text: string, usage: { input_tokens: number; output_tokens: number }) {
+  return {
+    type: "assistant",
+    message: { id, model: "synthetic-model", content: [{ type: "text", text }], usage },
+  };
+}
+
+function result(overrides: object = {}) {
+  return {
+    type: "result",
+    subtype: "success",
+    result: "Synthetic final answer.",
+    is_error: false,
+    modelUsage: {
+      synthetic: {
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+      },
+    },
+    total_cost_usd: 0.01,
+    num_turns: 1,
+    session_id: "synthetic-session",
+    permission_denials: [],
+    ...overrides,
+  };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+describe("Claude harness steering dispatch", () => {
+  it("holds supplements while a tool is in flight, then delivers the coalesced batch before the next work with one final answer last", async () => {
+    const toolGate = deferred();
+    const toolStarted = deferred();
+    const events: string[] = [];
+    const probe = vi.fn(async () => {
+      events.push("tool-start");
+      toolStarted.resolve();
+      await toolGate.promise;
+      events.push("tool-end");
+      return { content: [{ type: "text" as const, text: "Synthetic tool receipt." }] };
+    });
+    let feedPulls = 0;
+    const feed: HarnessSteeringFeed = {
+      async nextBatchAtSafePoint() {
+        events.push("feed-pull");
+        feedPulls += 1;
+        if (feedPulls === 1) {
+          // One coalesced batch: every original message keeps its identity.
+          return { messages: [
+            { messageID: messageB, acceptedAt: "2026-09-30T10:00:00.100Z", text: "fragment one" },
+            { messageID: messageC, acceptedAt: "2026-09-30T10:00:00.200Z", text: "fragment two" },
+          ] };
+        }
+        return null;
+      },
+    };
+    const frames: any[] = [];
+    let postToolUse: (input: any) => Promise<unknown>;
+    const sdk = (({ prompt, options }: any) => ({
+      close: vi.fn(),
+      async *[Symbol.asyncIterator]() {
+        postToolUse = options.hooks.PostToolUse[0].hooks[0];
+        const toolHandler = options.mcpServers.talent_signal.instance.server._requestHandlers.get("tools/call");
+        frames.push((await prompt.next()).value);
+        // The model starts product work: one tool is genuinely in flight.
+        const inFlight = toolHandler(
+          { method: "tools/call", params: { name: "probe", arguments: {} } },
+          { signal: new AbortController().signal },
+        );
+        await toolStarted.promise;
+        // Pulling the input stream must hold: a tool in flight receives no
+        // supplement until its safe completion checkpoint.
+        const pending = prompt.next();
+        const raced = await Promise.race([pending.then(() => "yielded"), delay(60).then(() => "held")]);
+        expect(raced).toBe("held");
+        expect(feedPulls).toBe(0);
+        // Safe completion: the tool resolves and its completion is observed.
+        toolGate.resolve();
+        await inFlight;
+        await postToolUse({
+          hook_event_name: "PostToolUse",
+          tool_name: "mcp__talent_signal__probe",
+          tool_input: { secret_argument: "PRIVATE_ARGUMENT" },
+          tool_response: { secret_result: "PRIVATE_RESULT" },
+        });
+        events.push("tool-completed");
+        // The held pull resolves: the latest fragment batch is processed
+        // before any further model work.
+        frames.push((await pending).value);
+        for (;;) {
+          const step = await prompt.next();
+          if (step.done) break;
+          frames.push(step.value);
+        }
+        // One standalone final answer comes last.
+        events.push("final");
+        yield assistant("message-one", "Working note.", { input_tokens: 10, output_tokens: 5 });
+        yield result({ result: "Synthetic combined final answer." });
+      },
+    })) as any;
+    const outcome = await runClaudeHarness(
+      config,
+      request({
+        messageID: messageA,
+        steering: feed,
+        tools: [{
+          name: "probe",
+          description: "Synthetic probe",
+          schema: z.strictObject({}),
+          readOnly: true,
+          execute: probe,
+        }],
+      }),
+      new AbortController().signal,
+      sdk,
+      null,
+    );
+    // The supplement was pulled and delivered only after the tool's safe
+    // completion, and the batch was fully processed before the final answer.
+    expect(events.indexOf("tool-end")).toBeLessThan(events.indexOf("feed-pull"));
+    expect(events.indexOf("tool-completed")).toBeLessThan(events.indexOf("final"));
+    expect(feedPulls).toBe(2);
+    // Every original message id, order and accepted time is preserved; rapid
+    // fragments combine for one processing step (only the last frame queries).
+    expect(frames).toHaveLength(3);
+    expect(frames[0].uuid).toBe(messageA);
+    expect(frames[1]).toMatchObject({
+      uuid: messageB,
+      timestamp: "2026-09-30T10:00:00.100Z",
+      shouldQuery: false,
+    });
+    expect(frames[2]).toMatchObject({
+      uuid: messageC,
+      timestamp: "2026-09-30T10:00:00.200Z",
+    });
+    expect(frames[2].shouldQuery).toBeUndefined();
+    expect(frames.map((frame) => frame.message.content[0].text)).toEqual([
+      "Synthetic objective.",
+      "fragment one",
+      "fragment two",
+    ]);
+    expect(outcome.text).toBe("Synthetic combined final answer.");
+    // The tool-completion count is genuine and its receipt is name/time only.
+    expect(outcome.toolCalls).toBe(1);
+    expect(outcome.toolCompletions).toHaveLength(1);
+    expect(outcome.toolCompletions[0]!.name).toBe("probe");
+    expect(Date.parse(outcome.toolCompletions[0]!.completedAt)).toBeGreaterThan(0);
+    expect(JSON.stringify(outcome.toolCompletions)).not.toContain("Synthetic tool receipt");
+    expect(JSON.stringify(outcome.toolCompletions)).not.toContain("PRIVATE_");
+  });
+
+  it("treats empty assistant text as legal and never fabricates tool completions", async () => {
+    const feed: HarnessSteeringFeed = { nextBatchAtSafePoint: async () => null };
+    const sdk = (({ prompt }: any) => ({
+      close: vi.fn(),
+      async *[Symbol.asyncIterator]() {
+        for await (const _message of prompt) { /* consume the single frame */ }
+        yield result({ result: "" });
+      },
+    })) as any;
+    const outcome = await runClaudeHarness(
+      config,
+      request({ messageID: messageA, steering: feed }),
+      new AbortController().signal,
+      sdk,
+      null,
+    );
+    expect(outcome.text).toBe("");
+    expect(outcome.toolCompletions).toEqual([]);
+    expect(outcome.toolCalls).toBe(0);
+  });
+
+  it("reads cumulative usage from the latest result frame without double counting across turns", async () => {
+    // Two turns: per-message usage 50+50 tokens. Each result frame carries the
+    // cumulative session total; only the latest frame's totals are reported.
+    const runOnce = async (maxTaskTokens: number) => {
+      let pulls = 0;
+      const dynamicFeed: HarnessSteeringFeed = {
+        async nextBatchAtSafePoint() {
+          pulls += 1;
+          return pulls === 1
+            ? { messages: [{ messageID: messageB, acceptedAt: "2026-09-30T10:00:01.000Z", text: "steering note" }] }
+            : null;
+        },
+      };
+      const sdk = (({ prompt }: any) => ({
+        close: vi.fn(),
+        async *[Symbol.asyncIterator]() {
+          // The steering batch is consumed before the second turn's work.
+          for await (const _message of prompt) { /* frames consumed */ }
+          yield assistant("message-one", "First turn.", { input_tokens: 40, output_tokens: 10 });
+          yield result({
+            num_turns: 1,
+            modelUsage: {
+              synthetic: { inputTokens: 40, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+            },
+          });
+          yield assistant("message-two", "Second turn.", { input_tokens: 30, output_tokens: 20 });
+          yield result({
+            num_turns: 2,
+            modelUsage: {
+              synthetic: { inputTokens: 70, outputTokens: 30, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+            },
+          });
+        },
+      })) as any;
+      return runClaudeHarness(
+        config,
+        request({
+          messageID: messageA,
+          steering: dynamicFeed,
+          budget: {
+            maxTurns: 8,
+            maxToolCalls: 10,
+            maxDurationMs: 30_000,
+            maxTaskTokens,
+            maxEstimatedUsd: 1,
+          },
+        }),
+        new AbortController().signal,
+        sdk,
+        null,
+      );
+    };
+    // 100 cumulative tokens fit a 110 budget only when frames are not summed
+    // twice; the receipt reports the latest cumulative totals.
+    const outcome = await runOnce(110);
+    expect(outcome.inputTokens).toBe(70);
+    expect(outcome.outputTokens).toBe(30);
+    expect(outcome.turns).toBe(2);
+    expect(outcome.modelResponses).toBe(2);
+    // The same cumulative usage still trips budget enforcement across turns.
+    await expect(runOnce(90)).rejects.toMatchObject({ message: "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED" });
+  });
+
+  it("refuses image steering into a durable continuation session explicitly, never silently", async () => {
+    const bytes = Buffer.from("synthetic-image-bytes");
+    const image = {
+      kind: "image" as const,
+      artifactID: "synthetic-image",
+      mimeType: "image/png" as const,
+      byteSize: bytes.length,
+      contentHash: createHash("sha256").update(bytes).digest("hex"),
+      dataBase64: bytes.toString("base64"),
+    };
+    const feed: HarnessSteeringFeed = {
+      async nextBatchAtSafePoint() {
+        return {
+          messages: [{ messageID: messageB, acceptedAt: "2026-09-30T10:00:01.000Z", text: "look at this", images: [image] }],
+        };
+      },
+    };
+    const sessionID = "99999999-9999-4999-8999-999999999999";
+    const sdk = (({ prompt }: any) => ({
+      close: vi.fn(),
+      async *[Symbol.asyncIterator]() {
+        for await (const _message of prompt) { /* initial frame only until the steering image */ }
+        yield result();
+      },
+    })) as any;
+    await expect(
+      runClaudeHarness(
+        config,
+        request({
+          messageID: messageA,
+          steering: feed,
+          continuation: async () => ({
+            sessionID,
+            resume: false,
+            store: { append: vi.fn(), load: vi.fn(), delete: vi.fn(), listSubkeys: vi.fn() },
+            assertCurrent: async () => {},
+            finish: vi.fn(),
+          }),
+        }),
+        new AbortController().signal,
+        sdk,
+        null,
+      ),
+    ).rejects.toThrow("CLAUDE_HARNESS_IMAGE_CONTINUATION_NOT_ADMITTED");
+  });
+});

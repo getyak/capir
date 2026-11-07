@@ -1,0 +1,148 @@
+/**
+ * Entry verdict policy over settled directory state: a zero link count is
+ * only "verified empty" after the people directory settled to ready. Covers
+ * the already-settled empty case, delayed hydration, and the failed-directory
+ * negative case the review called out.
+ */
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { runInNewContext } from "node:vm";
+
+import { evaluateEntryVerification } from "../dist/runner.js";
+import { sampleEntryDom } from "../dist/browser-runner.js";
+
+const EXPIRES = "2026-10-01T12:00:00.000Z";
+
+const observation = (overrides = {}) => ({
+  banner_state: "active",
+  demo_expiry: EXPIRES,
+  directory_state: "ready",
+  people_links: 0,
+  ...overrides,
+});
+
+describe("settled directory entry verification", () => {
+  it("samples hydration state and rendered links in one browser-side DOM turn", async () => {
+    const phases = [
+      { state: "loading", links: 0 },
+      { state: "ready", links: 5 },
+      { state: "ready", links: 0 },
+    ];
+    let evaluateCalls = 0;
+    const page = {
+      async evaluate(callback) {
+        evaluateCalls++;
+        const phase = phases.shift();
+        assert.ok(phase);
+        const document = {
+          querySelector(selector) {
+            const attributes = selector === "[data-capir-session-state]"
+              ? { "data-capir-session-state": "active" }
+              : selector === "[data-capir-demo-expiry]"
+                ? { "data-capir-demo-expiry": EXPIRES }
+                : selector === "[data-people-directory-state]"
+                  ? { "data-people-directory-state": phase.state }
+                  : null;
+            return attributes ? { getAttribute: (name) => attributes[name] ?? null } : null;
+          },
+          querySelectorAll(selector) {
+            assert.match(selector, /workspace\/people/);
+            return Array.from({ length: phase.links });
+          },
+        };
+        // Run the same serialized callback Playwright sends into the browser.
+        // Hydration advances only between evaluate calls; separate awaited
+        // count/state reads would mix loading/0 with ready/5.
+        return runInNewContext(`(${callback.toString()})()`, { document });
+      },
+      getAttribute() { throw new Error("split attribute read is forbidden"); },
+      locator() { throw new Error("split count read is forbidden"); },
+    };
+    const loading = await sampleEntryDom(page);
+    assert.equal(evaluateCalls, 1);
+    assert.equal(loading.directory_state, "loading");
+    assert.equal(loading.people_links, 0);
+    assert.equal(evaluateEntryVerification(loading, "no-people", EXPIRES).passed, false);
+    const hydrated = await sampleEntryDom(page);
+    assert.equal(evaluateCalls, 2);
+    assert.equal(hydrated.directory_state, "ready");
+    assert.equal(hydrated.people_links, 5);
+    assert.equal(evaluateEntryVerification(hydrated, "no-people", EXPIRES).passed, false);
+    const settledEmpty = await sampleEntryDom(page);
+    assert.equal(evaluateCalls, 3);
+    assert.equal(settledEmpty.directory_state, "ready");
+    assert.equal(settledEmpty.people_links, 0);
+    assert.equal(evaluateEntryVerification(settledEmpty, "no-people", EXPIRES).passed, true);
+  });
+
+  it("accepts an already-settled empty directory as verified empty", () => {
+    const verdict = evaluateEntryVerification(observation(), "no-people", EXPIRES);
+    assert.equal(verdict.passed, true);
+    assert.equal(verdict.settled, true);
+    assert.equal(verdict.settled_empty, true);
+    assert.equal(verdict.reason, "");
+  });
+
+  it("never reports delayed hydration with zero links as verified empty", () => {
+    const verdict = evaluateEntryVerification(
+      observation({ directory_state: "loading" }),
+      "no-people",
+      EXPIRES,
+    );
+    assert.equal(verdict.passed, false);
+    assert.equal(verdict.settled, false);
+    assert.equal(verdict.settled_empty, false);
+    assert.match(verdict.reason, /did not settle/);
+  });
+
+  it("never reports a missing directory marker as verified empty", () => {
+    const verdict = evaluateEntryVerification(
+      observation({ directory_state: null }),
+      "no-people",
+      EXPIRES,
+    );
+    assert.equal(verdict.passed, false);
+    assert.equal(verdict.settled_empty, false);
+  });
+
+  it("fails a settled error directory instead of passing it as empty", () => {
+    const verdict = evaluateEntryVerification(
+      observation({ directory_state: "error" }),
+      "no-people",
+      EXPIRES,
+    );
+    assert.equal(verdict.passed, false);
+    assert.equal(verdict.settled, true);
+    assert.equal(verdict.settled_empty, false);
+    assert.match(verdict.reason, /failed to load/);
+  });
+
+  it("requires settled ready with at least one people link for daily", () => {
+    const hydrating = evaluateEntryVerification(
+      observation({ directory_state: "loading", people_links: 3 }),
+      "people",
+      EXPIRES,
+    );
+    assert.equal(hydrating.passed, false, "links alone do not prove a settled directory");
+    const empty = evaluateEntryVerification(observation({ people_links: 0 }), "people", EXPIRES);
+    assert.equal(empty.passed, false);
+    assert.match(empty.reason, /at least one people link/);
+    const ready = evaluateEntryVerification(
+      observation({ people_links: 2 }),
+      "people",
+      EXPIRES,
+    );
+    assert.equal(ready.passed, true);
+  });
+
+  it("keeps banner and expiry requirements for every scenario", () => {
+    assert.equal(
+      evaluateEntryVerification(observation({ banner_state: "revoked" }), "no-people", EXPIRES).passed,
+      false,
+    );
+    assert.equal(
+      evaluateEntryVerification(observation({ demo_expiry: "2026-10-01T11:00:00.000Z" }), "no-people", EXPIRES).passed,
+      false,
+    );
+  });
+});

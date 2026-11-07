@@ -1,0 +1,93 @@
+import { expect, it } from "vitest";
+
+import {
+  authorizedCallbackUrl,
+  deniedCallbackUrl,
+  openConsent,
+  parseConsentQuery,
+  sealConsent,
+  validateLoopbackRedirect,
+} from "./capirAuthorize";
+
+const validQuery = {
+  redirect_uri: "http://127.0.0.1:54321/capir/callback",
+  state: "a".repeat(43),
+  code_challenge: "b".repeat(43),
+  code_challenge_method: "S256",
+  web_origin: "http://127.0.0.1:3000",
+  backend_origin: "http://127.0.0.1:4317",
+  client_label: "capir-cli",
+};
+
+it("accepts the literal loopback callback contract", () => {
+  expect(validateLoopbackRedirect("http://127.0.0.1:54321/capir/callback")).toBe(true);
+  for (const denied of [
+    "https://127.0.0.1:54321/capir/callback",
+    "http://127.0.0.1:54321/other",
+    "http://127.0.0.1:54321/capir/callback?x=1",
+    "http://localhost:54321/capir/callback",
+    "http://127.0.0.1:54321/capir/callback#frag",
+    "http://user:pass@127.0.0.1:54321/capir/callback",
+  ]) {
+    expect(validateLoopbackRedirect(denied), denied).toBe(false);
+  }
+});
+
+it("rejects tampered or incomplete authorization requests", () => {
+  expect(
+    parseConsentQuery(validQuery, { expectedWebOrigin: "http://127.0.0.1:3000" }).ok,
+  ).toBe(true);
+  const rejected = [
+    { ...validQuery, code_challenge_method: "plain" },
+    { ...validQuery, state: "short" },
+    { ...validQuery, code_challenge: "x".repeat(44) + "!" },
+    { ...validQuery, redirect_uri: "https://evil.example/capir/callback" },
+    { ...validQuery, web_origin: "https://evil.example" },
+    { ...validQuery, backend_origin: "http://example.com:4317" },
+    { ...validQuery, client_label: "" },
+    { ...validQuery, state: undefined },
+  ];
+  for (const query of rejected) {
+    expect(
+      parseConsentQuery(query, { expectedWebOrigin: "http://127.0.0.1:3000" }).ok,
+      JSON.stringify(query),
+    ).toBe(false);
+  }
+  // A different site's origin is refused even when it is well-formed.
+  expect(
+    parseConsentQuery(
+      { ...validQuery, web_origin: "http://127.0.0.1:3999" },
+      { expectedWebOrigin: "http://127.0.0.1:3000" },
+    ).ok,
+  ).toBe(false);
+});
+
+it("seals the consent envelope against tampering and expiry", () => {
+  const request = parseConsentQuery(validQuery);
+  expect(request.ok).toBe(true);
+  if (!request.ok) throw new Error("unreachable");
+  const now = Date.parse("2026-10-01T08:00:00.000Z");
+  const sealed = sealConsent("secret-value", request.request, now);
+  expect(openConsent("secret-value", sealed, now)).toEqual(request.request);
+  expect(openConsent("wrong-secret", sealed, now)).toBeNull();
+  expect(openConsent("secret-value", `${sealed}.extra`, now)).toBeNull();
+  expect(openConsent("secret-value", sealed, now + 601_000)).toBeNull();
+  const parts = sealed.split(".");
+  const forged = `${Buffer.from(
+    JSON.stringify({ request: { ...request.request, client_label: "evil" }, exp: now + 600_000 }),
+  ).toString("base64url")}.${parts[1]}`;
+  expect(openConsent("secret-value", forged, now)).toBeNull();
+});
+
+it("success and denial callbacks carry only code and public state", () => {
+  const request = parseConsentQuery(validQuery);
+  if (!request.ok) throw new Error("unreachable");
+  const success = new URL(authorizedCallbackUrl(request.request, "c".repeat(43)));
+  expect(success.origin + success.pathname).toBe("http://127.0.0.1:54321/capir/callback");
+  expect(success.searchParams.get("code")).toBe("c".repeat(43));
+  expect(success.searchParams.get("state")).toBe("a".repeat(43));
+  const denied = new URL(deniedCallbackUrl(request.request));
+  expect(denied.searchParams.get("error")).toBe("access_denied");
+  expect(denied.searchParams.get("code")).toBeNull();
+  expect(denied.searchParams.get("state")).toBe("a".repeat(43));
+});

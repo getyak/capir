@@ -1,0 +1,34 @@
+/** Optional per-call deadline; long durations use representable timer chunks. */
+export interface DeadlineClock {
+  now(): number;
+  set(callback: () => void, milliseconds: number): unknown;
+  clear(handle: unknown): void;
+}
+const systemClock: DeadlineClock = {
+  now: () => performance.now(),
+  set: (callback, milliseconds) => setTimeout(callback, milliseconds),
+  clear: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+export function modelDeadline(
+  callback: () => void,
+  durationMs: number | undefined,
+  clock: DeadlineClock = systemClock,
+): (() => void) | undefined {
+  if (durationMs === undefined) return undefined;
+  if (!Number.isSafeInteger(durationMs) || durationMs <= 0) throw new Error('MODEL_DEADLINE_INVALID');
+  const started = clock.now();
+  let disposed = false;
+  let handle: unknown;
+  const schedule = () => {
+    if (disposed) return;
+    const remaining = durationMs - Math.max(0, clock.now() - started);
+    if (remaining <= 0) {
+      disposed = true;
+      callback();
+      return;
+    }
+    handle = clock.set(schedule, Math.min(2_147_483_647, Math.max(1, Math.ceil(remaining))));
+  };
+  schedule();
+  return () => { disposed = true; clock.clear(handle); };
+}

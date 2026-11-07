@@ -1,0 +1,28 @@
+import Foundation
+
+/// Missing values mean that the task did not impose that execution limit.
+struct AgentRunBudget: Decodable, Sendable {
+    let maxTurns: Int?
+    let maxToolCalls: Int?
+    let maxDurationMilliseconds: Int?
+    let maxTaskTokens: Int?
+    let maximumEstimatedUSD: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case maxTurns = "max_turns"
+        case maxToolCalls = "max_tool_calls"
+        case maxDurationMilliseconds = "max_duration_ms"
+        case maxTaskTokens = "max_task_tokens"
+        case maximumEstimatedUSD = "max_estimated_usd"
+    }
+
+    var displayDescription: String {
+        var limits: [String] = []
+        if let maxTurns { limits.append("\(maxTurns) turns") }
+        if let maxToolCalls { limits.append("\(maxToolCalls) tool calls") }
+        if let maxDurationMilliseconds { limits.append("\(maxDurationMilliseconds) ms") }
+        if let maxTaskTokens { limits.append("\(maxTaskTokens) tokens") }
+        if let maximumEstimatedUSD { limits.append(String(format: "≤ $%.2f", maximumEstimatedUSD)) }
+        return limits.isEmpty ? "No imposed run limits" : limits.joined(separator: " · ")
+    }
+}

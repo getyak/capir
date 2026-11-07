@@ -1,0 +1,291 @@
+import Foundation
+
+// MARK: - ADR 0021: primary-login browser-store ownership
+
+/// Immutable ownership lease for one origin's primary-login store. A store
+/// identifier is local browser routing metadata only; canonical account and
+/// user IDs still own synchronized data.
+struct LoginStoreLease: Equatable, Codable {
+    let origin: String
+    let storeID: UUID
+    let epoch: UInt64
+    let hostID: String
+    let operationID: String
+}
+
+/// The durable selection state for one origin. `unresolvedLoginEntry` is the
+/// conservative uncertainty marker set BEFORE any interactive login form is
+/// exposed; it survives restart and is never a submission gate by itself.
+struct LoginStoreSelection: Equatable, Codable {
+    var origin: String
+    var storeID: UUID
+    var epoch: UInt64
+    var unresolvedLoginEntry: Bool
+    var lastLeaseHostID: String?
+}
+
+enum LoginStoreRegistryError: Error, Equatable {
+    /// The OS process lock could not be taken: an actionable UNAVAILABLE
+    /// state, never permission to fall back to a stale store.
+    case processLockUnavailable
+    /// The journal is damaged or unreadable: fail closed, do not guess.
+    case registryDamaged
+    /// Persistence failed: the new authentication flow must not load.
+    case persistenceFailed
+    /// A different host owns this origin's primary login.
+    case ownedByAnotherHost(String)
+    case noSelection
+}
+
+/// Durable registry + OS process lock for primary-login store ownership.
+///
+/// One coordinator owns each origin across all hosts of this process; the OS
+/// file lock (a STABLE, separate lock identity — never the journal inode that
+/// atomic replacement replaces) keeps a second app process from independently
+/// writing an origin's selection. Every state change is an atomic file
+/// replacement with file AND containing-directory fsync, private permissions,
+/// and a bounded schema. Roots are injectable for tests; production uses the
+/// app-support directory and never user preferences or an installed registry.
+final class PrimaryLoginStoreRegistry {
+    struct Roots {
+        var directory: URL
+        var lockFile: URL
+    }
+
+    static let journalName = "primary-login-stores.json"
+    static let schemaVersion = 1
+
+    private struct Journal: Codable {
+        var schemaVersion: Int
+        var selections: [String: LoginStoreSelection]
+    }
+
+    private let roots: Roots
+    private let hostID: String
+    private let now: () -> Date
+    private var lockDescriptor: Int32 = -1
+    private var heldLeases: [String: LoginStoreLease] = [:]
+
+    init(roots: Roots, hostID: String = UUID().uuidString, now: @escaping () -> Date = Date.init) {
+        self.roots = roots
+        self.hostID = hostID
+        self.now = now
+    }
+
+    /// Production root: Application Support/PrimaryLoginStores (private dir).
+    static func standardRoots() throws -> Roots {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: true
+        ).appendingPathComponent("PrimaryLoginStores", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return Roots(directory: base, lockFile: base.appendingPathComponent("primary-login-stores.lock"))
+    }
+
+    // MARK: Process lock
+
+    /// Take the stable OS process lock. A failure is an actionable unavailable
+    /// state; the caller must NOT proceed with a stale selection.
+    func acquireProcessLock() throws {
+        guard lockDescriptor < 0 else { return }
+        let path = roots.lockFile.path
+        let descriptor = open(path, O_CREAT | O_RDWR, 0o600)
+        guard descriptor >= 0 else { throw LoginStoreRegistryError.processLockUnavailable }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            close(descriptor)
+            throw LoginStoreRegistryError.processLockUnavailable
+        }
+        lockDescriptor = descriptor
+    }
+
+    func releaseProcessLock() {
+        guard lockDescriptor >= 0 else { return }
+        flock(lockDescriptor, LOCK_UN)
+        close(lockDescriptor)
+        lockDescriptor = -1
+    }
+
+    // MARK: Durable journal
+
+    private var journalURL: URL { roots.directory.appendingPathComponent(Self.journalName) }
+
+    private func readJournal() throws -> Journal {
+        let url = journalURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return Journal(schemaVersion: Self.schemaVersion, selections: [:])
+        }
+        let data: Data
+        do { data = try Data(contentsOf: url) } catch { throw LoginStoreRegistryError.registryDamaged }
+        guard let journal = try? JSONDecoder().decode(Journal.self, from: data),
+              journal.schemaVersion == Self.schemaVersion
+        else { throw LoginStoreRegistryError.registryDamaged }
+        return journal
+    }
+
+    /// Atomic file replacement with file and directory durability, private
+    /// permissions. Persistence failure never silently proceeds.
+    private func writeJournal(_ journal: Journal) throws {
+        let url = journalURL
+        let temporary = roots.directory.appendingPathComponent(".primary-login-stores.\(UUID().uuidString).tmp")
+        let payload: Data
+        do {
+            payload = try JSONEncoder().encode(journal)
+        } catch {
+            throw LoginStoreRegistryError.persistenceFailed
+        }
+        do {
+            try payload.write(to: temporary, options: .atomic)
+            let handle = try FileHandle(forWritingTo: temporary)
+            try handle.synchronize()
+            try handle.close()
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+            if FileManager.default.fileExists(atPath: url.path) {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
+            } else {
+                try FileManager.default.moveItem(at: temporary, to: url)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw LoginStoreRegistryError.persistenceFailed
+        }
+        // Containing-directory durability after the atomic replacement.
+        let directoryFD = open(roots.directory.path, O_RDONLY)
+        if directoryFD >= 0 {
+            fsync(directoryFD)
+            close(directoryFD)
+        }
+    }
+
+    // MARK: Selection
+
+    /// First adoption: the legacy deterministic origin UUID is adopted ONCE so
+    /// an existing installation's workspace does not reset on upgrade.
+    func adoptExistingStore(for origin: String, legacyStoreID: UUID) throws -> LoginStoreSelection {
+        try acquireProcessLock()
+        var journal = try readJournal()
+        if let existing = journal.selections[origin] { return existing }
+        let selection = LoginStoreSelection(
+            origin: origin,
+            storeID: legacyStoreID,
+            epoch: 1,
+            unresolvedLoginEntry: false,
+            lastLeaseHostID: hostID
+        )
+        journal.selections[origin] = selection
+        try writeJournal(journal)
+        return selection
+    }
+
+    /// Start a new primary-login entry in a FRESH persistent store. The
+    /// selection and its unresolved marker are persisted BEFORE the caller may
+    /// load any login form, password field or authentication request.
+    func beginPrimaryLogin(for origin: String) throws -> LoginStoreLease {
+        try acquireProcessLock()
+        var journal = try readJournal()
+        let previous = journal.selections[origin]
+        let lease = LoginStoreLease(
+            origin: origin,
+            storeID: UUID(),
+            epoch: (previous?.epoch ?? 0) &+ 1,
+            hostID: hostID,
+            operationID: UUID().uuidString
+        )
+        journal.selections[origin] = LoginStoreSelection(
+            origin: origin,
+            storeID: lease.storeID,
+            epoch: lease.epoch,
+            unresolvedLoginEntry: true,
+            lastLeaseHostID: hostID
+        )
+        try writeJournal(journal)
+        heldLeases[origin] = lease
+        return lease
+    }
+
+    /// Current selection. A damaged or missing journal fails CLOSED.
+    func selection(for origin: String) throws -> LoginStoreSelection {
+        try readJournal().selections[origin] ?? { throw LoginStoreRegistryError.noSelection }()
+    }
+
+    func lease(for origin: String) -> LoginStoreLease? { heldLeases[origin] }
+
+    /// Only the exact lease owner (immutable host AND operation identity) may
+    /// expose an interactive primary-login form.
+    func canExposeLoginForm(for origin: String) -> Bool {
+        guard let lease = heldLeases[origin] else { return false }
+        return lease.hostID == hostID && lease.operationID == heldLeases[origin]?.operationID
+    }
+
+    /// A captured lease may act only while it is still the current
+    /// store/epoch AND still owned by its immutable host/operation pair.
+    func ownsCurrent(_ lease: LoginStoreLease) -> Bool {
+        guard let current = heldLeases[lease.origin],
+              current == lease,
+              let selection = try? selection(for: lease.origin),
+              selection.storeID == lease.storeID,
+              selection.epoch == lease.epoch
+        else { return false }
+        return true
+    }
+
+    /// The uncertain outcome of a possibly committing login is marked BEFORE
+    /// any exposure; the durable marker survives restart and conservative
+    /// next-login rotation stays required until it clears.
+    func markUncertain(_ lease: LoginStoreLease) throws {
+        guard var journal = try? readJournal(), var selection = journal.selections[lease.origin],
+              selection.storeID == lease.storeID, selection.epoch == lease.epoch
+        else { throw LoginStoreRegistryError.noSelection }
+        selection.unresolvedLoginEntry = true
+        journal.selections[lease.origin] = selection
+        try writeJournal(journal)
+    }
+
+    /// A confirmed outcome releases the uncertainty for THIS lease only.
+    func markResolved(_ lease: LoginStoreLease) throws {
+        guard var journal = try? readJournal(), var selection = journal.selections[lease.origin],
+              selection.storeID == lease.storeID, selection.epoch == lease.epoch
+        else { throw LoginStoreRegistryError.noSelection }
+        selection.unresolvedLoginEntry = false
+        journal.selections[lease.origin] = selection
+        try writeJournal(journal)
+        heldLeases[lease.origin] = nil
+    }
+
+    /// A stale lease (older epoch/store) can never select, release or clear a
+    /// newer store's state.
+    func isCurrent(_ lease: LoginStoreLease) throws -> Bool {
+        let selection = try selection(for: lease.origin)
+        return selection.storeID == lease.storeID && selection.epoch == lease.epoch
+    }
+}
+
+/// Synchronous single-flight gate for one interactive login flow: Enter,
+/// alternate-method clicks and rapid retries share ONE in-flight submission.
+/// A render-time disabled flag alone is not sufficient.
+final class LoginSingleFlightGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var inFlight: Set<String> = []
+
+    /// Runs `work` only if no submission is in flight for this flow key.
+    func submit<T>(_ key: String, work: () async throws -> T) async rethrows -> T? {
+        lock.lock()
+        if inFlight.contains(key) {
+            lock.unlock()
+            return nil
+        }
+        inFlight.insert(key)
+        lock.unlock()
+        defer {
+            lock.lock()
+            inFlight.remove(key)
+            lock.unlock()
+        }
+        return try await work()
+    }
+
+    func isBlocked(_ key: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return inFlight.contains(key)
+    }
+}

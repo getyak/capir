@@ -1,0 +1,159 @@
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { Pool } from "pg";
+import { inTransaction } from "../database/pool.js";
+import type { AuthContext } from "./auth.js";
+import { admitAuthorityClocks, admitLifecycleTask, finishLifecycleAttempt } from "./legacyChatLifecycle.js";
+import { LocalChatMediaStorage } from "./chatMediaStorage.js";
+import { LabWorkspaceService } from "./labWorkspaces.js";
+
+const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+const pool = database ? new Pool({ connectionString: database, max: 3, idleTimeoutMillis: 0, connectionTimeoutMillis: 30_000 }) : null;
+afterAll(async () => { await pool?.end(); });
+async function account(existing?: AuthContext): Promise<AuthContext> {
+  const auth: AuthContext = { accountId: existing?.accountId ?? randomUUID(), accountSlug: existing?.accountSlug ?? `m1-${randomUUID()}`,
+    userId: randomUUID(), userEmail: `${randomUUID()}@synthetic.invalid`, userKind: "simulated_human", sessionId: randomUUID() };
+  if (!existing) await pool!.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic identity proof')", [auth.accountId, auth.accountSlug]);
+  await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic owner','simulated_human')", [auth.userId, auth.accountId, auth.userEmail]);
+  await pool!.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'Synthetic M1',clock_timestamp()+interval '2 hours')", [auth.sessionId, auth.accountId, auth.userId, randomUUID()]);
+  return auth;
+}
+const admit = (auth: AuthContext, key = randomUUID()) => inTransaction(pool!, client => admitLifecycleTask(client, {
+  auth, operation: "create_unscoped_chat_task", request: { synthetic: "M1 original request" }, idempotencyKey: key,
+  clocks: () => admitAuthorityClocks(client, auth),
+}));
+const intent = async (id: string) => (await pool!.query("SELECT to_jsonb(i) AS value FROM legacy_chat_task_intents i WHERE id=$1", [id])).rows[0]?.value;
+const attempt = async (id: string) => (await pool!.query("SELECT to_jsonb(a) AS value FROM legacy_chat_task_attempts a WHERE id=$1", [id])).rows[0]?.value;
+
+describe.skipIf(!pool)("M1 composite lifecycle database identity", () => {
+  it.each(["foreign account", "wrong actor"] as const)("M1 rejects an independently valid %s attempt before INSERT returns", async kind => {
+    const owner = await account(), stranger = await account(kind === "wrong actor" ? owner : undefined);
+    const parent = await admit(owner), source = await admit(stranger), id = randomUUID();
+    const before = await intent(parent.identity.intentID);
+    let insertReturned = false;
+    await expect(inTransaction(pool!, async client => {
+      await client.query(`INSERT INTO legacy_chat_task_attempts(id,account_id,intent_id,actor_user_id,task_id,run_id,
+        fencing_generation,state,auth_session_id,auth_actor_kind,execution_authority_expires_at,original_authority)
+        SELECT $1,account_id,$2,actor_user_id,$3,$4,2,'running',auth_session_id,auth_actor_kind,
+        execution_authority_expires_at,original_authority FROM legacy_chat_task_attempts WHERE id=$5`,
+        [id, parent.identity.intentID, randomUUID(), randomUUID(), source.identity.attemptID]);
+      insertReturned = true;
+    })).rejects.toMatchObject({ code: "23503", constraint: "legacy_chat_attempt_intent_owner_fk" });
+    expect(insertReturned).toBe(false);
+    expect(await attempt(id)).toBeUndefined();
+    expect(await intent(parent.identity.intentID)).toEqual(before);
+  });
+
+  it.each(["foreign account", "another intent", "dangling", "wrong task", "wrong fence"] as const)("M1 rejects a %s current pointer at actual COMMIT and rolls back", async kind => {
+    const owner = await account(), first = await admit(owner);
+    const other = await admit(kind === "foreign account" ? await account() : owner);
+    const before = await intent(first.identity.intentID), oldAttempt = await attempt(first.identity.attemptID);
+    const unrelated = await intent(other.identity.intentID);
+    const pointer = kind === "dangling" ? randomUUID() : ["foreign account", "another intent"].includes(kind) ? other.identity.attemptID : first.identity.attemptID;
+    const task = kind === "wrong task" ? randomUUID() : ["foreign account", "another intent"].includes(kind) ? other.identity.taskID : first.identity.taskID;
+    const fence = kind === "wrong fence" ? first.identity.fencingGeneration + 1 : first.identity.fencingGeneration;
+    let updateReturned = false;
+    await expect(inTransaction(pool!, async client => {
+      await client.query("UPDATE legacy_chat_task_intents SET current_attempt_id=$2,task_id=$3,fencing_generation=$4 WHERE id=$1",
+        [first.identity.intentID, pointer, task, fence]);
+      updateReturned = true;
+    })).rejects.toMatchObject({ code: "23503", constraint: "legacy_chat_current_attempt_identity_fk" });
+    expect(updateReturned).toBe(true);
+    expect(await intent(first.identity.intentID)).toEqual(before);
+    expect(await attempt(first.identity.attemptID)).toEqual(oldAttempt);
+    expect(await intent(other.identity.intentID)).toEqual(unrelated);
+  });
+
+  it.each([
+    ["id", "id=$2", (): string => randomUUID()],
+    ["request hash", "request_hash=$2", (): string => "different-original-request"],
+    ["idempotency key", "idempotency_key=$2", (): string => randomUUID()],
+    ["operation", "operation_scope=$2", (): string => "create_chat_task"],
+    ["creation time", "created_at=$2", (): Date => new Date(Date.now() - 3600_000)],
+    ["canonical expiry", "canonical_retention_expires_at=$2", (): Date => new Date(Date.now() + 10 * 86_400_000)],
+  ] as const)("M1 preserves immutable original %s", async (_name, assignment, value) => {
+    const auth = await account(), admitted = await admit(auth), before = await intent(admitted.identity.intentID);
+    await expect(pool!.query(`UPDATE legacy_chat_task_intents SET ${assignment} WHERE id=$1`, [admitted.identity.intentID, value()]))
+      .rejects.toMatchObject({ code: "23514", message: "LEGACY_CHAT_INTENT_IDENTITY_IMMUTABLE" });
+    expect(await intent(admitted.identity.intentID)).toEqual(before);
+  });
+
+  it("M1 preserves original account and actor with independently valid replacement identities", async () => {
+    const auth = await account(), other = await account(), sameAccountOther = await account(auth), admitted = await admit(auth);
+    const before = await intent(admitted.identity.intentID);
+    await expect(pool!.query("UPDATE legacy_chat_task_intents SET account_id=$2,actor_user_id=$3 WHERE id=$1", [admitted.identity.intentID, other.accountId, other.userId])).rejects.toMatchObject({ code: "23514", message: "LEGACY_CHAT_INTENT_IDENTITY_IMMUTABLE" });
+    await expect(pool!.query("UPDATE legacy_chat_task_intents SET actor_user_id=$2 WHERE id=$1", [admitted.identity.intentID, sameAccountOther.userId])).rejects.toMatchObject({ code: "23514", message: "LEGACY_CHAT_INTENT_IDENTITY_IMMUTABLE" });
+    expect(await intent(admitted.identity.intentID)).toEqual(before);
+  });
+
+  it("M1 keeps a NULL canonical retention snapshot immutable", async () => {
+    const auth = await account();
+    const first = await inTransaction(pool!, async client => {
+      const admitted = await admitLifecycleTask(client, { auth, operation: "create_unscoped_chat_task", request: {}, idempotencyKey: randomUUID(),
+        clocks: async () => ({ ...(await admitAuthorityClocks(client, auth)), canonicalRetentionExpiresAt: null }) });
+      return admitted;
+    });
+    const before = await intent(first.identity.intentID);
+    expect(before.canonical_retention_expires_at).toBeNull();
+    await expect(pool!.query("UPDATE legacy_chat_task_intents SET canonical_retention_expires_at=clock_timestamp()+interval '1 day' WHERE id=$1", [first.identity.intentID])).rejects.toMatchObject({ code: "23514", message: "LEGACY_CHAT_INTENT_IDENTITY_IMMUTABLE" });
+    expect(await intent(first.identity.intentID)).toEqual(before);
+  });
+
+  it("M1 commits initial admission and explicit retry with fresh exact current identity and unchanged original clocks", async () => {
+    const auth = await account(), key = randomUUID(), first = await admit(auth, key);
+    const before = await intent(first.identity.intentID);
+    await inTransaction(pool!, client => finishLifecycleAttempt(client, { accountID: auth.accountId, identity: first.identity, state: "failed_retryable", terminalReason: "synthetic_pre_dispatch_failure" }));
+    const historical = await attempt(first.identity.attemptID), retry = await admit(auth, key), current = await intent(first.identity.intentID);
+    expect(retry.kind).toBe("retry");
+    expect(retry.identity.intentID).toBe(first.identity.intentID);
+    for (const field of ["attemptID", "taskID", "runID"] as const) expect(retry.identity[field]).not.toBe(first.identity[field]);
+    expect(retry.identity.fencingGeneration).toBe(first.identity.fencingGeneration + 1);
+    for (const field of ["request_hash", "created_at", "canonical_retention_expires_at"] as const) expect(current[field]).toEqual(before[field]);
+    expect(current).toMatchObject({ account_id: auth.accountId, actor_user_id: auth.userId, id: first.identity.intentID,
+      current_attempt_id: retry.identity.attemptID, task_id: retry.identity.taskID, fencing_generation: retry.identity.fencingGeneration });
+    expect(await attempt(retry.identity.attemptID)).toMatchObject({ account_id: auth.accountId, actor_user_id: auth.userId,
+      intent_id: first.identity.intentID, task_id: retry.identity.taskID, fencing_generation: retry.identity.fencingGeneration });
+    expect(await attempt(first.identity.attemptID)).toEqual(historical);
+    await expect(pool!.query("UPDATE legacy_chat_task_intents SET fencing_generation=1 WHERE id=$1", [first.identity.intentID])).rejects.toMatchObject({ code: "23514", message: "LEGACY_CHAT_INTENT_IDENTITY_IMMUTABLE" });
+    expect(await intent(first.identity.intentID)).toEqual(current);
+  });
+
+  it("M1 denies current-attempt deletion at COMMIT but permits terminal historical deletion", async () => {
+    const auth = await account(), key = randomUUID(), first = await admit(auth, key), original = await attempt(first.identity.attemptID);
+    let deleted = false;
+    await expect(inTransaction(pool!, async client => {
+      await client.query("DELETE FROM legacy_chat_task_attempts WHERE id=$1", [first.identity.attemptID]); deleted = true;
+    })).rejects.toMatchObject({ code: "23503", constraint: "legacy_chat_current_attempt_identity_fk" });
+    expect(deleted).toBe(true); expect(await attempt(first.identity.attemptID)).toEqual(original);
+    await inTransaction(pool!, client => finishLifecycleAttempt(client, { accountID: auth.accountId, identity: first.identity, state: "failed_retryable", terminalReason: "synthetic_pre_dispatch_failure" }));
+    const retry = await admit(auth, key);
+    expect((await pool!.query("DELETE FROM legacy_chat_task_attempts WHERE id=$1", [first.identity.attemptID])).rowCount).toBe(1);
+    expect(await attempt(first.identity.attemptID)).toBeUndefined();
+    expect((await intent(first.identity.intentID)).current_attempt_id).toBe(retry.identity.attemptID);
+    expect(await attempt(retry.identity.attemptID)).toBeTruthy();
+  });
+
+  it("M1 preserves real Lab graph cleanup and an unrelated ordinary intent", async () => {
+    const owner = await account(), ordinary = await admit(owner), original = await intent(ordinary.identity.intentID), originalAttempt = await attempt(ordinary.identity.attemptID);
+    const directory = await mkdtemp(join(tmpdir(), "m1-lab-"));
+    const service = new LabWorkspaceService(pool!, new LocalChatMediaStorage(directory), 3600), workspaceID = randomUUID();
+    let created = false;
+    try {
+      const workspace = await service.create(owner, { id: workspaceID, duration_hours: 1 }); created = true;
+      const entered = await service.enter(owner, workspaceID, { id: randomUUID(), access_token: randomBytes(32).toString("base64url") });
+      expect(entered.state).toBe("active");
+      const target = { ...owner, accountId: workspace.account_id, userId: workspace.user_id, userKind: "lab_human" as const, sessionId: entered.session_id };
+      const child = await admit(target);
+      expect(await attempt(child.identity.attemptID)).toBeTruthy();
+      expect(await service.stop(owner, workspaceID, randomUUID())).toMatchObject({ state: "deleted", cleanup_error: null, data_rows: 0 });
+      expect(await intent(child.identity.intentID)).toBeUndefined(); expect(await attempt(child.identity.attemptID)).toBeUndefined();
+      expect(await intent(ordinary.identity.intentID)).toEqual(original); expect(await attempt(ordinary.identity.attemptID)).toEqual(originalAttempt);
+    } finally {
+      try { if (created) await service.stop(owner, workspaceID, randomUUID()); }
+      finally { await rm(directory, { recursive: true, force: true }); }
+    }
+  });
+});

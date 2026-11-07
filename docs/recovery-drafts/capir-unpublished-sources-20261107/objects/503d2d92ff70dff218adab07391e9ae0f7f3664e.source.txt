@@ -1,0 +1,236 @@
+import { createHash } from "node:crypto";
+import { isIP } from "node:net";
+
+import {
+  publicResearchDomainAllowed,
+  type AgentPublicResearchScope,
+} from "@talent-signal/agent";
+
+import type { AgentWebSearchProvider, AgentWebSearchRequest } from "./webSearchProviders.js";
+
+export interface ExaSource {
+  url: string;
+  title: string;
+  text: string;
+  publishedAt: string | null;
+  retrievedAt: string;
+  contentHash: string;
+  providerID: "exa";
+  providerRequestID: string | null;
+}
+
+export class ExaProviderError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "ExaProviderError";
+  }
+}
+
+const MAX_RESPONSE_BYTES = 1_000_000;
+
+/** Provider output is untrusted. Never send a local/private URL to a fetch service. */
+export function publicExaUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 2_000) return null;
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase().replace(/\.$/u, "");
+    if (
+      url.protocol !== "https:" || url.username || url.password ||
+      (url.port && url.port !== "443") || !host.includes(".") ||
+      isIP(host.replace(/^\[|\]$/gu, "")) !== 0 ||
+      /(?:^|\.)(?:localhost|local|internal|lan|home|invalid)$/u.test(host)
+    ) return null;
+    url.hostname = host;
+    url.hash = "";
+    return url.toString();
+  } catch { return null; }
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
+
+function resultLimit(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 10) {
+    throw new ExaProviderError("EXA_RESULT_LIMIT_INVALID", "Exa permits 1-10 results per bounded search.");
+  }
+  return value;
+}
+
+function queryText(value: string): string {
+  const text = value.normalize("NFKC").trim();
+  if (text.length < 2 || text.length > 400) {
+    throw new ExaProviderError("EXA_QUERY_INVALID", "Search requires 2-400 characters.");
+  }
+  return text;
+}
+
+async function boundedJson(response: Response): Promise<Record<string, unknown>> {
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (declared > MAX_RESPONSE_BYTES || !response.body) {
+    await response.body?.cancel();
+    throw new ExaProviderError("EXA_RESPONSE_INVALID", "Exa returned an empty or oversized response.");
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new ExaProviderError("EXA_RESPONSE_TOO_LARGE", "Exa exceeded its response byte budget.");
+      }
+      chunks.push(next.value);
+    }
+  } finally { reader.releaseLock(); }
+  try {
+    const payload = record(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    if (payload) return payload;
+  } catch { /* Do not include provider response content in an error. */ }
+  throw new ExaProviderError("EXA_RESPONSE_INVALID", "Exa returned an invalid JSON object.");
+}
+
+export class ExaProvider implements AgentWebSearchProvider {
+  readonly id = "exa" as const;
+  private readonly apiKey: string;
+  private readonly fetcher: typeof fetch;
+
+  constructor(options: { apiKey: string; fetcher?: typeof fetch }) {
+    this.apiKey = options.apiKey.trim();
+    if (!this.apiKey) throw new ExaProviderError("EXA_CREDENTIAL_MISSING", "EXA_API_KEY is required.");
+    this.fetcher = options.fetcher ?? fetch;
+  }
+
+  private async request(path: "/search" | "/contents", body: object, signal: AbortSignal) {
+    let response: Response;
+    try {
+      response = await this.fetcher(`https://api.exa.ai${path}`, {
+        method: "POST",
+        headers: { "x-api-key": this.apiKey, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify(body),
+        redirect: "error",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+      });
+    } catch {
+      throw new ExaProviderError("EXA_UNAVAILABLE", "Exa did not return a response; no provider fallback was attempted.");
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new ExaProviderError(
+        [401, 403].includes(response.status) ? "EXA_AUTH_FAILED"
+          : response.status === 402 ? "EXA_CREDIT_UNAVAILABLE"
+            : response.status === 429 ? "EXA_RATE_LIMITED" : "EXA_REQUEST_FAILED",
+        `Exa request failed with HTTP ${response.status}.`,
+      );
+    }
+    return boundedJson(response);
+  }
+
+  private sources(payload: Record<string, unknown>, maximum: number): ExaSource[] {
+    if (!Array.isArray(payload.results)) {
+      throw new ExaProviderError("EXA_RESPONSE_INVALID", "Exa returned no results array.");
+    }
+    const seen = new Set<string>();
+    const sources: ExaSource[] = [];
+    for (const raw of payload.results) {
+      const item = record(raw);
+      const url = publicExaUrl(item?.url);
+      if (!item || !url || seen.has(url)) continue;
+      const title = (typeof item.title === "string" ? item.title.trim() : "").slice(0, 500) || url.slice(0, 500);
+      const highlights = Array.isArray(item.highlights)
+        ? item.highlights.filter((value): value is string => typeof value === "string").join("\n") : "";
+      const text = (typeof item.text === "string" ? item.text : highlights).trim();
+      seen.add(url);
+      sources.push({
+        url, title, text,
+        publishedAt: typeof item.publishedDate === "string" && Number.isFinite(Date.parse(item.publishedDate))
+          ? new Date(item.publishedDate).toISOString() : null,
+        retrievedAt: new Date().toISOString(),
+        contentHash: createHash("sha256").update(JSON.stringify({ url, title, text })).digest("hex"),
+        providerID: "exa",
+        providerRequestID: typeof payload.requestId === "string" ? payload.requestId.slice(0, 500) : null,
+      });
+      if (sources.length >= maximum) break;
+    }
+    return sources;
+  }
+
+  /** LinkedIn discovery. Search hits are possible identity matches, never binding authority. */
+  async searchProfiles(query: string, maximumResults: number, signal: AbortSignal): Promise<ExaSource[]> {
+    const normalized = queryText(query);
+    if (/\b(?:email|phone|home address|background check)\b|邮箱|手机号|家庭住址|背调/iu.test(normalized) ||
+        /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/iu.test(normalized)) {
+      throw new ExaProviderError("EXA_PRIVATE_LOOKUP_PROHIBITED", "Professional-profile search cannot look up private contact details.");
+    }
+    const maximum = resultLimit(maximumResults);
+    const payload = await this.request("/search", {
+      query: normalized, category: "people", type: "auto", numResults: maximum,
+      includeDomains: ["linkedin.com"], contents: { highlights: true },
+    }, signal);
+    return this.sources(payload, maximum).filter((source) => {
+      const url = new URL(source.url);
+      return (url.hostname === "linkedin.com" || url.hostname.endsWith(".linkedin.com")) && url.pathname.startsWith("/in/");
+    });
+  }
+
+  async searchWeb(query: string, maximumResults: number, signal: AbortSignal): Promise<ExaSource[]> {
+    const maximum = resultLimit(maximumResults);
+    return this.sources(await this.request("/search", {
+      query: queryText(query), type: "auto", numResults: maximum,
+      contents: { highlights: true },
+    }, signal), maximum);
+  }
+
+  async search(scope: AgentPublicResearchScope, request: AgentWebSearchRequest, signal: AbortSignal) {
+    const maximum = resultLimit(request.maximumResults);
+    const payload = await this.request("/search", {
+      query: queryText(request.query), type: "auto", numResults: maximum,
+      contents: { highlights: true },
+      ...(scope.authorization.accessMode === "domain_allowlist"
+        ? { includeDomains: scope.authorization.allowedDomains } : {}),
+      ...(request.recencyDays !== null
+        ? { startPublishedDate: new Date(Date.now() - request.recencyDays * 86_400_000).toISOString() } : {}),
+    }, signal);
+    return this.sources(payload, maximum)
+      .filter((source) => publicResearchDomainAllowed(new URL(source.url).hostname, scope.authorization))
+      .map((source) => ({ url: source.url, title: source.title, snippet: source.text.slice(0, 2_000),
+        publishedAt: source.publishedAt, providerID: source.providerID }));
+  }
+
+  /**
+   * Bounded batch contents read. Every requested URL must be a distinct public
+   * HTTPS URL; returns only the readable sources actually returned, in
+   * requested order. Missing content is the caller's per-source outcome.
+   */
+  async fetchContents(rawUrls: readonly string[], signal: AbortSignal): Promise<ExaSource[]> {
+    if (!Number.isInteger(rawUrls.length) || rawUrls.length < 1 || rawUrls.length > 5) {
+      throw new ExaProviderError("EXA_FETCH_URL_INVALID", "Batch fetch requires 1-5 public HTTPS URLs.");
+    }
+    const urls = rawUrls.map((rawUrl) => publicExaUrl(rawUrl));
+    if (urls.some((url): url is null => url === null) || new Set(urls).size !== urls.length) {
+      throw new ExaProviderError("EXA_FETCH_URL_INVALID", "Batch fetch requires distinct public HTTPS URLs.");
+    }
+    const payload = await this.request("/contents", {
+      urls, text: true,
+    }, signal);
+    const returned = new Map(this.sources(payload, 10).map((source) => [source.url, source]));
+    return urls
+      .map((url) => returned.get(url!))
+      .filter((source): source is ExaSource => Boolean(source?.text));
+  }
+
+  /** Compatibility wrapper for a single bounded URL read. */
+  async fetchContent(rawUrl: string, signal: AbortSignal): Promise<ExaSource> {
+    const url = publicExaUrl(rawUrl);
+    if (!url) throw new ExaProviderError("EXA_FETCH_URL_INVALID", "Fetch requires one public HTTPS URL.");
+    const source = (await this.fetchContents([url], signal))[0];
+    if (!source) {
+      throw new ExaProviderError("EXA_CONTENT_UNAVAILABLE", "Exa returned no readable content for the requested source.");
+    }
+    return source;
+  }
+}

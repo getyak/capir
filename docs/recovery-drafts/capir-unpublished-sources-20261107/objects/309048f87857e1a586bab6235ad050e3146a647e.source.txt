@@ -1,0 +1,259 @@
+import XCTest
+@testable import TalentSignal
+
+/// Frame planning proof: paired source-associated units stay contiguous and
+/// bounded (never silent count clipping), every canonical prefix keeps the
+/// inherited source authorization, and the proposal emits exactly once after
+/// the turns it references.
+final class AgentSessionDeltaOperationsTests: XCTestCase {
+    private func ref(_ index: Int) -> String {
+        String(format: "10000000-0000-4000-8000-%012d", index)
+    }
+
+    private func skeleton(sessionID: String = "20000000-0000-4000-8000-000000000001") -> [String: Any] {
+        [
+            "id": sessionID,
+            "scopeKind": "unresolved_intent",
+            "personDisplayLabel": "New session",
+            "contextDisplayLabel": "Conversation",
+            "title": "Screenshot fork",
+            "updatedAt": "2026-10-08T03:07:24.000Z",
+            "isUnread": false,
+            "turns": [[String: Any]](),
+        ]
+    }
+
+    private func assertInheritancePrefixes(
+        before: [String: Any], frames: [[AgentSessionDeltaOperations.Operation]]
+    ) throws {
+        var cursor = before
+        var previousInherited = before["inheritedScreenshotTaskIDs"] as? [String] ?? []
+        var sawInherited = !(previousInherited.isEmpty)
+        for frame in frames {
+            cursor = try AgentSessionDeltaOperations.apply(base: cursor, operations: frame)
+            let live = cursor["screenshotTaskIDs"] as? [String] ?? []
+            let inherited = cursor["inheritedScreenshotTaskIDs"] as? [String] ?? []
+            for task in inherited {
+                XCTAssertTrue(live.contains(task), "inherited ⊆ live at every canonical prefix")
+            }
+            for task in previousInherited {
+                XCTAssertTrue(inherited.contains(task), "an inherited reference is never promoted away")
+            }
+            if !sawInherited, !inherited.isEmpty {
+                let liveBefore = before["screenshotTaskIDs"] as? [String] ?? []
+                for task in liveBefore {
+                    XCTAssertTrue(
+                        inherited.contains(task),
+                        "the frame introducing inherited refs covers every accepted reference"
+                    )
+                }
+                sawInherited = true
+            }
+            previousInherited = inherited
+        }
+    }
+
+    func test129ScreenshotPairsStayPairedAndBoundedWithoutCountClipping() throws {
+        var before = skeleton()
+        before["screenshotTaskIDs"] = [ref(1000)]
+        var after = before
+        let live = (0..<129).map { ref($0) }
+        after["screenshotTaskIDs"] = [ref(1000)] + live
+        after["inheritedScreenshotTaskIDs"] = [ref(1000)] + live
+
+        let all = try AgentSessionDeltaOperations.plan(before: before, after: after)
+        // 129 pairs plus the one coverage reference: nothing is clipped.
+        XCTAssertEqual(all.count, 259)
+
+        let bounded = try AgentSessionDeltaOperations.planFrames(
+            before: before, after: after,
+            transferID: UUID(), skeleton: nil,
+            maxOperationsPerFrame: 256, maxFrameBytes: 250 * 1024
+        )
+        var emitted = 0
+        for frame in bounded.frames {
+            XCTAssertLessThanOrEqual(frame.count, 256, "the contract's operation bound holds")
+            emitted += frame.count
+            // Paired units are contiguous: an inherited reference never
+            // separates from its live twin across a frame boundary.
+            let beforeLive = Set(before["screenshotTaskIDs"] as? [String] ?? [])
+            for (index, operation) in frame.enumerated()
+            where (operation["path"] as? String ?? "").hasPrefix("/inheritedScreenshotTaskIDs/") {
+                let twinValue = operation["value"] as? String
+                let previous = index > 0 ? frame[index - 1] : nil
+                let previousPath = previous?["path"] as? String ?? ""
+                let previousValue = previous?["value"] as? String
+                let covered = twinValue.map { beforeLive.contains($0) } ?? false
+                XCTAssertTrue(
+                    (previousPath.hasPrefix("/screenshotTaskIDs/") && previousValue == twinValue)
+                        || previousPath.hasPrefix("/inheritedScreenshotTaskIDs/")
+                        || (previous == nil && covered),
+                    "source-associated metadata stays in contiguous paired units"
+                )
+            }
+        }
+        XCTAssertEqual(emitted, all.count, "no silent count clipping")
+        XCTAssertGreaterThan(bounded.frames.count, 1, "129 pairs exceed one 256-operation frame")
+        try assertInheritancePrefixes(before: before, frames: bounded.frames)
+    }
+
+    func testByteBoundaryFramesStayBoundedAndPrefixValid() throws {
+        var before = skeleton()
+        var after = before
+        let live = (0..<40).map { ref($0) }
+        after["screenshotTaskIDs"] = live
+        after["inheritedScreenshotTaskIDs"] = live
+        for index in 0..<6 {
+            after["turns"] = ((after["turns"] as? [[String: Any]]) ?? []) + [[
+                "id": String(format: "30000000-0000-4000-8000-%012d", index),
+                "objective": "message \(index)",
+                "createdAt": "2026-10-08T03:07:24.123Z",
+                "response": [
+                    "contractVersion": TalentSignalAPIContract.version,
+                    "taskID": ref(9000 + index),
+                    "contextManifestID": "none-screenshot",
+                    "knowledgeSnapshotID": "none-screenshot",
+                    "disposition": "screenshot_processing",
+                    "savedBlocks": [[
+                        "id": "block-\(index)",
+                        "kind": "answer",
+                        "title": "Answer",
+                        "body": String(repeating: "x", count: 2_000),
+                        "status": "informational",
+                        "citation_dependency_ids": [Any](),
+                        "requires_user_decision": false,
+                    ] as [String: Any]],
+                ] as [String: Any],
+            ] as [String: Any]]
+        }
+        let bounded = try AgentSessionDeltaOperations.planFrames(
+            before: before, after: after,
+            transferID: UUID(), skeleton: nil,
+            maxOperationsPerFrame: 256, maxFrameBytes: 8 * 1024
+        )
+        XCTAssertGreaterThan(bounded.frames.count, 1)
+        for frame in bounded.frames {
+            XCTAssertLessThanOrEqual(
+                try AgentSessionDeltaOperations.requestBytes(
+                    transferID: UUID(), targetDigest: String(repeating: "0", count: 64),
+                    operations: frame, skeleton: nil
+                ),
+                8 * 1024
+            )
+        }
+        try assertInheritancePrefixes(before: before, frames: bounded.frames)
+    }
+
+    func testHugeAllowedUnitFailsExplicitlyWithoutPartialPlan() throws {
+        var before = skeleton()
+        var after = before
+        after["screenshotTaskIDs"] = [ref(0), ref(1)]
+        after["inheritedScreenshotTaskIDs"] = [ref(0), ref(1)]
+        for index in 0..<2 {
+            after["turns"] = ((after["turns"] as? [[String: Any]]) ?? []) + [[
+                "id": String(format: "30000000-0000-4000-8000-%012d", index),
+                "objective": "message \(index)",
+                "createdAt": "2026-10-08T03:07:24.123Z",
+                "response": [
+                    "contractVersion": TalentSignalAPIContract.version,
+                    "taskID": ref(9000 + index),
+                    "contextManifestID": "none-unbound-conversation",
+                    "knowledgeSnapshotID": "none-unbound-conversation",
+                    "disposition": "answered",
+                    "createdAt": "2026-10-08T03:07:24.200Z",
+                    "savedBlocks": [[
+                        "id": "block-\(index)",
+                        "kind": "answer",
+                        "title": "Answer",
+                        "body": String(repeating: "x", count: 40_000),
+                        "status": "informational",
+                        "citation_dependency_ids": [Any](),
+                        "requires_user_decision": false,
+                    ] as [String: Any]],
+                ] as [String: Any],
+            ] as [String: Any]]
+        }
+        // One individually allowed unit larger than any frame budget fails
+        // explicitly; the local original is preserved untouched.
+        XCTAssertThrowsError(
+            try AgentSessionDeltaOperations.planFrames(
+                before: before, after: after,
+                transferID: UUID(), skeleton: nil,
+                maxOperationsPerFrame: 256, maxFrameBytes: 16 * 1024
+            )
+        ) {
+            XCTAssertEqual($0 as? AgentSessionDeltaOperationsError, .frameUnpackable)
+        }
+    }
+
+    func testContactProposalEmitsOnceAfterTheTurnItReferences() throws {
+        let before = skeleton()
+        var after = before
+        let finalTurnID = "40000000-0000-4000-8000-000000000009"
+        for index in 0..<3 {
+            let id = index == 2
+                ? finalTurnID
+                : String(format: "40000000-0000-4000-8000-%012d", index)
+            after["turns"] = ((after["turns"] as? [[String: Any]]) ?? []) + [[
+                "id": id,
+                "objective": "message \(index)",
+                "createdAt": "2026-10-08T03:07:24.123Z",
+                "response": [
+                    "contractVersion": TalentSignalAPIContract.version,
+                    "taskID": ref(9000 + index),
+                    "contextManifestID": "none-unbound-conversation",
+                    "knowledgeSnapshotID": "none-unbound-conversation",
+                    "disposition": "answered",
+                    "createdAt": "2026-10-08T03:07:24.200Z",
+                ] as [String: Any],
+            ] as [String: Any]]
+        }
+        after["contactProposal"] = [
+            "idempotencyKey": "proposal-key",
+            "updatedAt": "2026-10-08T03:07:30.000Z",
+            "sessionID": after["id"]!,
+            "sourceMessageID": finalTurnID,
+            "draft": ["name": "Candidate", "relationshipContext": "Network"] as [String: Any],
+        ] as [String: Any]
+        after["pendingObjective"] = "resume the ask"
+
+        let operations = try AgentSessionDeltaOperations.plan(before: before, after: after)
+        let proposalIndexes = operations.enumerated()
+            .filter { ($0.element["path"] as? String) == "/contactProposal" }
+            .map(\.offset)
+        XCTAssertEqual(proposalIndexes.count, 1, "the proposal emits exactly once")
+        let turnIndexes = operations.enumerated()
+            .filter { ($0.element["path"] as? String ?? "").hasPrefix("/turns/") }
+            .map(\.offset)
+        XCTAssertFalse(turnIndexes.isEmpty)
+        XCTAssertGreaterThan(
+            proposalIndexes[0], turnIndexes.max() ?? 0,
+            "the proposal follows the source turns it references"
+        )
+        let pendingIndexes = operations.enumerated()
+            .filter { ($0.element["path"] as? String ?? "").hasPrefix("/pending") }
+            .map(\.offset)
+        for index in pendingIndexes {
+            XCTAssertGreaterThan(index, proposalIndexes[0], "pending execution metadata stays last")
+        }
+    }
+
+    func testMissingMetadataParentsAreCreatedLikeTypeScript() throws {
+        let base = skeleton()
+        let receipt: [String: Any] = [
+            "id": ref(0),
+            "operationKey": "receipt",
+            "outcome": "created_person",
+            "captureID": ref(1),
+            "resourceID": ref(2),
+            "personDisplayLabel": "Person",
+            "createdAt": "2026-10-08T03:07:24.123Z",
+        ]
+        let applied = try AgentSessionDeltaOperations.apply(base: base, operations: [
+            ["op": "add", "path": "/contactReceipts/0", "value": receipt],
+            ["op": "add", "path": "/screenshotTaskIDs/0", "value": ref(3)],
+        ])
+        XCTAssertEqual((applied["contactReceipts"] as? [Any])?.count, 1)
+        XCTAssertEqual((applied["screenshotTaskIDs"] as? [Any])?.count, 1)
+    }
+}

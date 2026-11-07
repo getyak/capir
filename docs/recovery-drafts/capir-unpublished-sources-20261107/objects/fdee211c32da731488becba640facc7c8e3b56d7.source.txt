@@ -1,0 +1,174 @@
+import { createHash } from "node:crypto";
+import { request as httpRequest } from "node:http";
+import { isAbsolute, resolve } from "node:path";
+
+import {
+  PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+  PersonResearchServiceResponseSchema,
+  type PersonResearchServiceResponse,
+} from "@talent-signal/agent";
+
+const MAX_RESPONSE_BYTES = 1_000_000;
+const DEFAULT_TIMEOUT_MS = 65_000;
+
+export interface PersonResearchAgentRequest {
+  runID: string;
+  objective: string;
+  image: {
+    mediaType: "image/png" | "image/jpeg" | "image/webp";
+    data: Uint8Array;
+  };
+}
+
+export interface PersonResearchAgentProviding {
+  research(
+    request: PersonResearchAgentRequest,
+    /** Real request cancellation; aborting destroys the in-flight socket. */
+    signal?: AbortSignal,
+  ): Promise<PersonResearchServiceResponse>;
+}
+
+export class LocalPersonResearchAgentClient
+  implements PersonResearchAgentProviding
+{
+  private readonly socketPath: string;
+  private readonly timeoutMs: number;
+
+  constructor(socketPath: string, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    if (!isAbsolute(socketPath)) {
+      throw new Error("The person-research Agent socket path must be absolute.");
+    }
+    if (
+      !Number.isInteger(timeoutMs) ||
+      timeoutMs < 1_000 ||
+      timeoutMs > 90_000
+    ) {
+      throw new Error("The person-research Agent timeout must be 1000-90000 ms.");
+    }
+    this.socketPath = resolve(socketPath);
+    this.timeoutMs = timeoutMs;
+  }
+
+  async research(
+    input: PersonResearchAgentRequest,
+    signal?: AbortSignal,
+  ): Promise<PersonResearchServiceResponse> {
+    if (input.image.data.byteLength < 1 || input.image.data.byteLength > 10_000_000) {
+      throw new Error("The person-research Agent accepts one image up to 10 MB.");
+    }
+    const contentHash = createHash("sha256")
+      .update(input.image.data)
+      .digest("hex");
+    const payload = Buffer.from(JSON.stringify({
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+      run_id: input.runID,
+      objective: input.objective,
+      authorization: {
+        allowed_platforms: ["douyin", "tiktok", "weibo", "threads"],
+        maximum_results_per_call: 5,
+      },
+      image: {
+        media_type: input.image.mediaType,
+        byte_size: input.image.data.byteLength,
+        content_hash: contentHash,
+        data_base64: Buffer.from(input.image.data).toString("base64"),
+      },
+    }));
+    const response = await new Promise<{
+      status: number;
+      body: Buffer;
+    }>((accept, reject) => {
+      const request = httpRequest(
+        {
+          socketPath: this.socketPath,
+          path: "/v1/person-research",
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": payload.byteLength,
+          },
+          timeout: this.timeoutMs,
+        },
+        (result) => {
+          const chunks: Buffer[] = [];
+          let size = 0;
+          result.on("data", (chunk: Buffer) => {
+            size += chunk.byteLength;
+            if (size > MAX_RESPONSE_BYTES) {
+              result.destroy(new Error("The person-research Agent response was too large."));
+              return;
+            }
+            chunks.push(chunk);
+          });
+          result.on("end", () => accept({
+            status: result.statusCode ?? 500,
+            body: Buffer.concat(chunks),
+          }));
+          result.on("error", reject);
+        },
+      );
+      request.once("timeout", () => {
+        request.destroy(new Error("The person-research Agent timed out."));
+      });
+      request.once("error", reject);
+      // The winning request owns cancellation: an abort destroys the actual
+      // Unix socket request so the Host observes the disconnect.
+      const abort = () => request.destroy(new Error("PERSON_RESEARCH_CANCELLED"));
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+      request.end(payload);
+    });
+    if (response.status !== 200) {
+      throw new Error(
+        `The person-research Agent rejected the Run with HTTP ${response.status}.`,
+      );
+    }
+    const parsed = PersonResearchServiceResponseSchema.parse(
+      JSON.parse(response.body.toString("utf8")) as unknown,
+    );
+    if (
+      parsed.run_id !== input.runID ||
+      parsed.receipt.run_id !== input.runID ||
+      parsed.receipt.external_effects.length !== 0
+    ) {
+      throw new Error(
+        "The person-research Agent response did not preserve Run identity and zero-effect authority.",
+      );
+    }
+    return parsed;
+  }
+}
+
+export function createEnvironmentPersonResearchAgentClient(
+  environment: NodeJS.ProcessEnv = process.env,
+): PersonResearchAgentProviding | null {
+  const enabled = environment.TALENT_SIGNAL_PERSON_RESEARCH_ENABLED
+    ?.trim()
+    .toLowerCase();
+  if (!enabled || enabled === "false") return null;
+  if (enabled !== "true") {
+    throw new Error(
+      "TALENT_SIGNAL_PERSON_RESEARCH_ENABLED must be true or false.",
+    );
+  }
+  if (
+    environment.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING
+      ?.trim()
+      .toLowerCase() !== "true"
+  ) {
+    throw new Error(
+      "Screenshot person research requires TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING=true.",
+    );
+  }
+  const socketPath = environment.TALENT_SIGNAL_PERSON_RESEARCH_SOCKET?.trim();
+  if (!socketPath) {
+    throw new Error(
+      "TALENT_SIGNAL_PERSON_RESEARCH_SOCKET is required when screenshot person research is enabled.",
+    );
+  }
+  const timeoutRaw = environment.TALENT_SIGNAL_PERSON_RESEARCH_TIMEOUT_MS?.trim();
+  return new LocalPersonResearchAgentClient(
+    socketPath,
+    timeoutRaw ? Number(timeoutRaw) : DEFAULT_TIMEOUT_MS,
+  );
+}

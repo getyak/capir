@@ -1,0 +1,881 @@
+import { captureCurrentReaderAuthority, assertServingAuthority, type ServingAuthorityResolver } from "./legacyChatAuthority.js";
+import { IMAGE_ONLY_OBJECTIVE_INSTRUCTION } from "./imageOnlyObjective.js";
+import { conversationRunDiagnostics } from "./conversationRunDiagnostics.js";
+import { recordProductEvent } from "@talent-signal/agent";
+import { calendarDraftContextForRequest } from "./calendarDraftContext.js";
+import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
+import { loadAgentResponsePreference } from "./agentPreferences.js";
+import { claudeHarnessInterruptionCode, type AgentProviderInputPart, type RuntimeObservationContext } from "@talent-signal/agent";
+import type { HarnessContinuationFactory } from "@talent-signal/agent";
+import { createHarnessContinuationController, type HarnessContinuationController } from "./harnessSessions.js";
+import {
+  admitAuthorityClocks,
+  admitLifecycleTask,
+  assertLifecycleAttemptCurrent,
+  assertOriginalAuthorityCurrent,
+  withOriginalAuthorityFinalization,
+  composeLifecycleSignals,
+  finishLifecycleAttempt,
+  lifecycleInProgressError,
+  lifecycleRecoveryRequiredError,
+  markLifecycleDispatched,
+  markLifecycleUsageUncertain,
+  registerLifecycleRun,
+  releaseLifecycleRun,
+  startLifecycleHeartbeat,
+} from "./legacyChatLifecycle.js";
+import type { ProductObservationHandle } from "./productRuns.js";
+import { fileWorkspaceImageAuthor } from "./workspaceImageAuthor.js";
+import { createChatMediaStorage } from "./chatMediaStorage.js";
+import { loadConfig } from "../config.js";
+import { measureLabServerStage } from "../lib/labDiagnostics.js";
+import { createHash, randomUUID } from "node:crypto";
+
+import {
+  CONTRACT_VERSION,
+  type ChatResponseBlock,
+  type UnscopedChatTaskRequest,
+  type UnscopedChatTaskResponse,
+} from "@talent-signal/contracts";
+import type { Pool, PoolClient } from "pg";
+
+import { inTransaction, type DatabaseClient } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import { appendAudit } from "../lib/audit.js";
+import {
+  claimIdempotency,
+  completeIdempotency,
+} from "../lib/idempotency.js";
+import type { AuthContext } from "./auth.js";
+import type {
+  RemoteChatAnswerProviding,
+  RemoteChatAnswerResult,
+} from "./chatAnswerProvider.js";
+import { selectConversationHistory } from "./chatAnswerProvider.js";
+import { readAgentSessionConversation } from "./agentSessions.js";
+import { firstTurnSessionTitle } from "./sessionTitles.js";
+import { productObservationContext } from "./runtimeObservationSources.js";
+import { assertSessionChatSourcesAvailable, assertSessionForChat, purgeUnavailableSessionChatSources, recordSessionChatSources, markSessionContextAnswer, type AgentSessionChatSource } from "./agentSessionSources.js";
+import { recordMeetingDraftsForTask } from "./meetingDrafts.js";
+import { executeWorkspaceConversationAgent,
+  isWorkspaceConversationAgentProvider,
+} from "./workspaceConversationAgent.js";
+import { inheritSavedMemoryDependencies } from "./savedMemoryLineage.js";
+import { stageMemoryProposal } from "./memoryReview.js";
+
+// Durable dispatch bookkeeping failure is tracked as REQUEST-OWNED state; the
+// thrown error object itself is preserved exactly (frozen/arbitrary values are
+// never wrapped, tagged or mutated).
+
+export interface UnscopedChatTaskMutationResult {
+  labProductOutcome?: "accepted" | "fallback";
+  body: UnscopedChatTaskResponse;
+  replayed: boolean;
+  status: number;
+}
+
+export interface UnscopedChatImage {
+  /** Originating immutable message id; carried into provider provenance. */
+  messageId: string;
+  imageIndex?: number;
+  attachmentId: string;
+  fileName: string;
+  mediaType: "image/png" | "image/jpeg" | "image/webp";
+  byteSize: number;
+  contentHash: string;
+  data: Uint8Array;
+}
+
+/** Host instruction used only when the user sent images with no text. */
+export { IMAGE_ONLY_OBJECTIVE_INSTRUCTION } from "./imageOnlyObjective.js";
+
+export interface UnscopedChatExecution {
+  body: UnscopedChatTaskResponse;
+  conversationMessageIDs: string[];
+  conversationSources?: AgentSessionChatSource[];
+  previousTaskIDs: string[];
+  remoteStatus: "agent_completed" | "completed" | "disabled" | "fallback";
+  /** Bounded operator diagnostic; never a raw provider error or user content. */
+  remoteFailureCode?: "MODEL_RUN_TIMEOUT" | "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED";
+  remoteDiagnostics?: Record<string, string | number | boolean | null>;
+  providerResult: RemoteChatAnswerResult | null;
+  /** Complete ephemeral Memory candidate intent; staged at the final boundary. */
+  memoryCandidate?: import("./workspaceConversationAgent.js").WorkspaceMemoryCandidateIntent | null;
+  agentProviderResult: {
+    providerID: string;
+    model: string;
+    providerRequestID: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    prompt?: import("@talent-signal/agent").PromptReference;
+    /** Genuine tool completions (name/time only) for execution readback. */
+    toolCompletions?: import("@talent-signal/agent").HarnessToolCompletion[];
+  } | null;
+}
+
+function isExecutionAuthorityFailure(error: unknown): boolean {
+  return error instanceof ApiError && [
+    "LEGACY_CHAT_AUTHORITY_EXPIRED", "LEGACY_CHAT_AUTHORITY_UNAVAILABLE", "LEGACY_CHAT_AUTHORITY_BUSY",
+    "DEPLOYMENT_WORKSPACE_NOT_ADMITTED",
+    "LEGACY_CHAT_ATTEMPT_FENCED", "LEGACY_CHAT_CANCELLED", "ACCOUNT_RETIRED", "ACCOUNT_NOT_FOUND",
+  ].includes(error.code);
+}
+
+function responseBlock(answer: RemoteChatAnswerResult): ChatResponseBlock {
+  return {
+    id: randomUUID(),
+    kind: answer.kind,
+    title: answer.title.slice(0, 240),
+    body: answer.body,
+    status: answer.kind === "clarification" ? "needs_review" : "informational",
+    citation_dependency_ids: [],
+    requires_user_decision: answer.kind === "clarification" || Boolean(answer.calendarDraft),
+    ...(answer.calendarDraft ? { calendar_draft: answer.calendarDraft, status: "needs_review" as const } : {}),
+  };
+}
+
+function localFallbackBlock(
+  objective: string,
+  remoteFailed: boolean,
+): ChatResponseBlock {
+  const usesChinese = /\p{Script=Han}/u.test(objective);
+  return {
+    id: randomUUID(),
+    kind: "answer",
+    title: remoteFailed
+      ? usesChinese ? "这次未完成" : "Request not completed"
+      : usesChinese ? "你好" : "Hello",
+    body: remoteFailed
+      ? usesChinese
+        ? "这次处理未完成，没有执行外部操作。请重试；如果仍未完成，可以保留这条请求稍后继续。"
+        : "This request did not complete. No external action was taken. Please retry, or keep this request to continue later."
+      : usesChinese
+      ? "你好，我在。你可以直接和我聊，或者告诉我想回顾哪段关系；涉及联系人资料或发送操作时，我会先请你确认范围和最终效果。"
+      : "Hello, I’m here. You can chat directly or tell me which relationship you want to revisit. I’ll ask you to confirm the scope and exact effect before using contact data or sending anything.",
+    status: "informational",
+    citation_dependency_ids: [],
+    requires_user_decision: false,
+  };
+}
+
+export async function executeUnscopedChatTask(input: {
+  request: UnscopedChatTaskRequest;
+  /** Host-owned queue attempt identity; never accepted from the public request. */
+  taskID?: string;
+  /** Host-only typed MCP human result; enters the run as host data. */
+  hostResult?: import("@talent-signal/contracts").McpHumanResult | null;
+  /** Live queue run claim; the only host staging authority. */
+  hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
+  provider: RemoteChatAnswerProviding | null;
+  database?: DatabaseClient;
+  probePool?: Pool;
+  auth?: AuthContext;
+  createdAt?: Date;
+  referenceTime?: Date;
+  continuation?: (sources: () => { expiresAt: Date; personIDs: readonly string[] }) => HarnessContinuationFactory;
+  /** Durable dispatch evidence recorded at the actual provider entry only. */
+  onProviderDispatch?: () => Promise<void>;
+  /** Original request-owned execution authority; composed with source guards. */
+  assertExecutionCurrent?: (client?: unknown) => Promise<void>;
+  assertServingCurrent?: () => void;
+  /** Entered producer failed without a usable receipt: monotonic uncertainty. */
+  onProducerFailure?: () => Promise<void>;
+  /** Host-observed forming text while the provider is still active. */
+  onVisibleText?: (text: string) => void;
+  /** Host-observed bounded stage code; never tool arguments. */
+  onProgress?: (stage: import("@talent-signal/agent").AgentVisibleProgressStage) => void;
+  /** External stop, composed with the governor's own abort. */
+  signal?: AbortSignal;
+  /** User-sent inline images for this message; untrusted conversation input. */
+  images?: readonly UnscopedChatImage[];
+  /** Honest host note about images omitted by the bounded image budget. */
+  imageContextNote?: string;
+  /** GET-128 steering: dynamic input for messages accepted while this task runs. */
+  steering?: import("@talent-signal/agent").HarnessSteeringFeed;
+  onToolCompletion?: (receipt: import("@talent-signal/agent").HarnessToolCompletion) => void;
+}): Promise<UnscopedChatExecution> {
+  const taskID = input.taskID ?? randomUUID();
+  const calendarContext = calendarDraftContextForRequest(taskID, input.request.time_zone, input.referenceTime ?? input.createdAt ?? new Date());
+  let observation: RuntimeObservationContext | undefined;
+  // Ephemeral contact reads also need authority, even without an observation
+  // retention owner or a persisted product Session.
+  const sourcePeople = new Set<string>();
+  const runExpiresAt = new Date(Date.now() + 7 * 86_400_000);
+  const sources = () => {
+    const refs = observation?.source_refs;
+    return { expiresAt: refs?.kind === "product" ? new Date(refs.expires_at) : runExpiresAt,
+      personIDs: [...new Set([...sourcePeople, ...(refs?.kind === "product" ? refs.person_ids : [])])] };
+  };
+  const assertSourceCurrent = input.provider?.providerId === "claude-agent-sdk" && input.database && input.auth
+    ? await createHarnessSourceGuard(input.database, input.auth, input.request.session_id, sources, input.probePool ?? input.database) : undefined;
+  let currentnessFailure: { error: unknown } | undefined;
+  const throwCurrentnessFailure = () => { if (currentnessFailure) throw currentnessFailure.error; };
+  const assertCurrent = input.assertExecutionCurrent || assertSourceCurrent || input.assertServingCurrent
+    ? async (client?: unknown) => {
+        if (currentnessFailure) throw currentnessFailure.error;
+        try {
+          await input.assertExecutionCurrent?.(client);
+          await assertSourceCurrent?.(client);
+          await input.assertExecutionCurrent?.(client);
+          input.assertServingCurrent?.();
+          throwCurrentnessFailure();
+        } catch (error) {
+          currentnessFailure ??= { error };
+          throw currentnessFailure.error;
+        }
+      }
+    : undefined;
+  await assertCurrent?.();
+  // Scope failures must escape before provider fallbacks; they are not model errors.
+  const responsePreference = assertCurrent && input.database && input.auth
+    ? await loadAgentResponsePreference(input.database, input.auth) : undefined;
+  const sessionConversation = input.request.session_id && input.database && input.auth
+    ? await readAgentSessionConversation(
+        input.database, input.auth, input.request.session_id,
+        { personId: null, relationshipContextId: null },
+      )
+    : { hasRecordedTurns: false, messages: [] };
+  const conversationHistory = selectConversationHistory(sessionConversation.messages, input.request.message_id);
+  // Durable inherited lineage commits on an independent short transaction
+  // BEFORE any provider branch (workspace adapter, ordinary answer, or the
+  // failure fallback) receives history text. A follow-up that reuses earlier
+  // memory-derived answers therefore carries their dependencies from the first
+  // read, so a mid-run source withdrawal or a crash before completion can
+  // never store the reused text. The account fence lives only inside these
+  // short transactions and is never held across provider or source-guard
+  // calls.
+  const lineagePool = input.probePool ?? (input.database && "connect" in input.database ? input.database as Pool : undefined);
+  const inheritedTaskIDs = conversationHistory
+    .filter((message) => message.role === "assistant")
+    .map((message) => message.message_id);
+  if (input.database && input.auth && inheritedTaskIDs.length) {
+    const inherit = (client: DatabaseClient, fence: boolean) =>
+      inheritSavedMemoryDependencies(client, input.auth!, taskID, inheritedTaskIDs, { fence });
+    if (lineagePool) await inTransaction(lineagePool, (client) => inherit(client, true));
+    // Narrow fallback for a caller-managed transaction without an independent
+    // pool: rows join that transaction and are only durable at its commit.
+    // No product entry point takes this branch.
+    else await inherit(input.database, false);
+  }
+  const sessionTitleRequested = !sessionConversation.hasRecordedTurns
+    && !sessionConversation.sources?.length;
+  observation = input.database && input.auth ? await productObservationContext(input.database, input.auth, taskID,
+    "unscoped_conversation", { sessionID: input.request.session_id,
+      screenshotTaskIDs: sessionConversation.sources?.map((source) => source.taskID) ?? [] }) : undefined;
+  if (sessionConversation.unavailableScreenshotContext && !sessionConversation.sources?.length)
+    throw new ApiError(409, "AGENT_SESSION_CONTEXT_UNAVAILABLE", "The screenshot summary is not currently available. Review its current task before continuing from it.");
+  const continuation = input.provider?.providerId === "claude-agent-sdk" && observation?.source_refs?.kind === "product"
+    ? input.continuation?.(sources) : undefined;
+  let providerResult: RemoteChatAnswerResult | null = null;
+  let proposedSessionTitle: string | null = null;
+  let agentProviderResult: UnscopedChatExecution["agentProviderResult"] = null;
+  const filedImageSources: AgentSessionChatSource[]=[];
+  const authorPool=input.probePool??(input.database&&"connect" in input.database?input.database as Pool:undefined);
+  const userImages = input.images ?? [];
+  // An images-only message keeps an empty visible objective while the model
+  // receives a nonempty host instruction. The stored objective stays truly
+  // empty; only the provider-facing copy carries this explanation.
+  const effectiveObjective = input.request.objective.trim()
+    ? input.request.objective
+    : userImages.length > 0
+      ? IMAGE_ONLY_OBJECTIVE_INSTRUCTION
+      : input.request.objective;
+  const agentInputParts: AgentProviderInputPart[] = userImages.map((image) => ({
+    kind: "image" as const,
+    artifactID: `conversation-image-${image.messageId}-${image.imageIndex ?? 0}-${image.attachmentId}`,
+    mimeType: image.mediaType,
+    byteSize: image.byteSize,
+    contentHash: image.contentHash,
+    dataBase64: Buffer.from(image.data).toString("base64"),
+  }));
+  if (input.imageContextNote) {
+    agentInputParts.push({
+      kind: "text" as const,
+      artifactID: "conversation-image-context-note",
+      mimeType: "text/plain",
+      byteSize: Buffer.byteLength(input.imageContextNote, "utf8"),
+      contentHash: createHash("sha256").update(input.imageContextNote).digest("hex"),
+      text: input.imageContextNote,
+    });
+  }
+  const remoteImages = userImages.map((image) => ({
+    file_name: image.fileName,
+    media_type: image.mediaType,
+    data: image.data,
+  }));
+  let remoteStatus: UnscopedChatExecution["remoteStatus"] = input.provider
+    ? "fallback"
+    : "disabled";
+  let remoteFailureCode: UnscopedChatExecution["remoteFailureCode"];
+  let remoteDiagnostics: UnscopedChatExecution["remoteDiagnostics"];
+  let block: ChatResponseBlock;
+  let agentEvent: UnscopedChatTaskResponse["agent_event"] = null;
+  let memoryProposalRef:
+    | { proposal_id: string; revision: number }
+    | null = null;
+  let memoryCandidate: import("./workspaceConversationAgent.js").WorkspaceMemoryCandidateIntent | null = null;
+  // Durable dispatch bookkeeping is an authority boundary, never a model
+  // error: a recording failure fails closed with zero paid entry and cannot be
+  // counted as producer failure.
+  let dispatchRecorded = false;
+  let dispatchRecordFailed = false;
+  const recordDispatch = async () => {
+    if (!input.onProviderDispatch) return;
+    try {
+      await input.onProviderDispatch();
+      input.assertServingCurrent?.();
+      dispatchRecorded = true;
+    } catch (error) {
+      dispatchRecordFailed = true;
+      throw error;
+    }
+  };
+  if (input.provider) {
+    try {
+      await assertCurrent?.();
+      if (
+        input.database &&
+        input.auth &&
+        isWorkspaceConversationAgentProvider(input.provider)
+      ) {
+        const execution = await executeWorkspaceConversationAgent({
+          ...(input.onProviderDispatch ? { onProviderEntry: recordDispatch } : {}),
+          ...(input.hostResult ? { hostResult: input.hostResult } : {}),
+          ...(input.hostAuthority ? { hostAuthority: input.hostAuthority } : {}),
+          database: input.database,
+          auth: input.auth,
+          objective: effectiveObjective,
+          sourceText: input.request.objective,
+          ...(authorPool&&input.request.session_id&&input.request.message_id&&input.provider.id==="claude-agent-sdk"&&process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING==="true"?{
+            fileImageAuthor:async(image,extraction,signal)=>{
+              const result=await fileWorkspaceImageAuthor({pool:authorPool,auth:input.auth!,storage:createChatMediaStorage(loadConfig()),
+                sessionID:input.request.session_id!,messageID:input.request.message_id!,image,extraction,signal,
+                assertCurrent:async()=>{await assertCurrent?.();}});
+              if(result.source&&!filedImageSources.some(source=>source.taskID===result.source!.taskID))filedImageSources.push(result.source);
+              if(result.response.contact)sourcePeople.add(result.response.contact.person_id);
+              return result.response;
+            },
+          }:{}),
+          provider: input.provider,
+          sessionID: input.request.session_id ?? null,
+          sessionTitleRequested,
+          ...(input.request.message_id ? { messageID: input.request.message_id } : {}),
+          conversationHistory,
+          taskID,
+          runID: taskID,
+          ...(lineagePool ? { durablePool: lineagePool } : {}),
+          ...(continuation ? { continuation } : {}),
+          ...(assertCurrent ? { assertCurrent } : {}),
+          ...(responsePreference ? { responsePreference } : {}),
+          ...(calendarContext ? { calendarContext } : {}),
+          ...(input.onVisibleText ? { onVisibleText: input.onVisibleText } : {}),
+          ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+          ...(input.signal ? { signal: input.signal } : {}),
+          ...(input.steering ? { steering: input.steering } : {}),
+        ...(input.onToolCompletion ? { onToolCompletion: input.onToolCompletion } : {}),
+          ...(agentInputParts.length > 0 ? { inputParts: agentInputParts } : {}),
+          recordSourcePerson: personID => { sourcePeople.add(personID); },
+          ...(observation ? { observation: { ...observation, authorization_scope: "workspace_conversation" } } : {}),
+        });
+        block = execution.providerResult.calendarDraft ? { ...execution.block, calendar_draft: execution.providerResult.calendarDraft,
+          status: "needs_review", requires_user_decision: true } : execution.block;
+        agentEvent = execution.event;
+        memoryProposalRef = execution.memoryProposal;
+        memoryCandidate = execution.memoryCandidate ?? null;
+        agentProviderResult = {
+          providerID: input.provider.id,
+          model: input.provider.model,
+          providerRequestID: execution.providerResult.sessionID ?? null,
+          inputTokens: execution.providerResult.inputTokens,
+          outputTokens: execution.providerResult.outputTokens,
+          ...(execution.providerResult.prompt ? { prompt: execution.providerResult.prompt } : {}),
+          ...(execution.providerResult.toolCompletions
+            ? { toolCompletions: execution.providerResult.toolCompletions }
+            : {}),
+        };
+        proposedSessionTitle = execution.providerResult.sessionTitle ?? null;
+        remoteStatus = "agent_completed";
+      } else {
+        await recordDispatch();
+        await assertCurrent?.();
+        input.signal?.throwIfAborted();
+        providerResult = await measureLabServerStage("model_adapter", () => input.provider!.answer({
+          mode: "unscoped_conversation",
+          ...(continuation ? { continuation } : {}),
+          ...(assertCurrent ? { assertCurrent } : {}),
+          ...(responsePreference ? { responsePreference } : {}),
+          ...(calendarContext ? { calendarContext } : {}),
+          objective: effectiveObjective,
+          session_title_requested: sessionTitleRequested,
+          ...(conversationHistory.length > 0 ? { conversation_history: conversationHistory } : {}),
+          context_blocks: [],
+          allowed_citation_ids: [],
+          images: remoteImages,
+          ...(observation ? { observation } : {}),
+          ...(input.signal ? { signal: input.signal } : {}),
+        }));
+        await assertCurrent?.();
+        if (providerResult.kind === "question_set") {
+          throw new Error("Unscoped Chat cannot return an evidence question set.");
+        }
+        block = responseBlock(providerResult);
+        proposedSessionTitle = providerResult.session_title ?? null;
+        remoteStatus = "completed";
+      }
+    } catch (error) {
+      // Bookkeeping failures are not producer failures: fail closed with the
+      // exact original error object and zero paid entry.
+      throwCurrentnessFailure();
+      if (dispatchRecordFailed || isExecutionAuthorityFailure(error)) throw error;
+      if (dispatchRecorded && input.onProducerFailure) await input.onProducerFailure();
+      remoteDiagnostics = conversationRunDiagnostics(error);
+      await recordProductEvent("conversation.model.failure", "context", undefined, undefined, remoteDiagnostics, { failed: true });
+      if (input.provider.providerId === "claude-agent-sdk") {
+        const interruption = claudeHarnessInterruptionCode(error);
+        if (["WORKSPACE_CONVERSATION_TIMEOUT", "CLAUDE_HARNESS_TIMEOUT"].includes(interruption)) {
+          remoteFailureCode = "MODEL_RUN_TIMEOUT";
+        } else if (interruption === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED") {
+          remoteFailureCode = "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED";
+        }
+      }
+      providerResult = null;
+      agentProviderResult = null;
+      if (input.provider.providerId === "claude-agent-sdk" || input.signal?.aborted) {
+        // The SDK owns retries within the admitted Run. A second remote call
+        // here would bypass its source/lease checks and reset the Run budget;
+        // a cancelled or revoked run must never start another provider call.
+        block = localFallbackBlock(input.request.objective, true);
+      } else {
+        // Every real answer entry, including this fallback entry, positively
+        // marks the SAME attempt and rechecks currentness before the call.
+        await recordDispatch();
+        try {
+          await assertCurrent?.();
+          input.signal?.throwIfAborted();
+        providerResult = await measureLabServerStage("model_adapter", () => input.provider!.answer({
+          mode: "unscoped_conversation",
+          ...(assertCurrent ? { assertCurrent } : {}),
+          objective: effectiveObjective,
+          session_title_requested: sessionTitleRequested,
+          ...(conversationHistory.length > 0 ? { conversation_history: conversationHistory } : {}),
+          context_blocks: [],
+          allowed_citation_ids: [],
+          images: remoteImages,
+          ...(observation ? { observation } : {}),
+          ...(input.signal ? { signal: input.signal } : {}),
+        }));
+        await assertCurrent?.();
+        if (providerResult.kind === "question_set") {
+          throw new Error("Unscoped Chat cannot return an evidence question set.");
+        }
+        block = responseBlock(providerResult);
+        proposedSessionTitle = providerResult.session_title ?? null;
+      } catch (fallbackError) {
+        throwCurrentnessFailure();
+        if (dispatchRecordFailed || isExecutionAuthorityFailure(fallbackError)) throw fallbackError;
+        if (dispatchRecorded && input.onProducerFailure) await input.onProducerFailure();
+        providerResult = null;
+        block = localFallbackBlock(input.request.objective, true);
+      }
+      }
+      remoteStatus = "fallback";
+    }
+  } else {
+    block = localFallbackBlock(input.request.objective, false);
+  }
+
+  // Prefer the title proposed by the current answer model call; otherwise use
+  // a bounded objective-derived fallback. Never generic, never over budget.
+  const firstTurnTitle = sessionTitleRequested
+    ? firstTurnSessionTitle(input.request.objective, proposedSessionTitle)
+    : null;
+
+  return {
+    conversationMessageIDs: conversationHistory.map((message) => message.message_id),
+    previousTaskIDs: conversationHistory.filter((message) => message.role === "assistant").map((message) => message.message_id),
+    ...((sessionConversation.sources?.length||filedImageSources.length)?{conversationSources:[...(sessionConversation.sources??[]),...filedImageSources]}:{}),
+    body: {
+      contract_version: CONTRACT_VERSION,
+      task_id: taskID,
+      disposition: block.kind === "clarification" ? "clarify" : "answer",
+      blocks: [sessionConversation.sources?.length ? markSessionContextAnswer(block, input.request.objective) : block],
+      agent_event: agentEvent,
+      ...(memoryProposalRef ? { memory_proposal: memoryProposalRef } : {}),
+      external_effects: [],
+      ...(firstTurnTitle ? { session_title: firstTurnTitle } : {}),
+      created_at: (input.createdAt ?? new Date()).toISOString(),
+    },
+    remoteStatus,
+    ...(remoteFailureCode ? { remoteFailureCode } : {}),
+    ...(remoteDiagnostics ? { remoteDiagnostics } : {}),
+    providerResult,
+    memoryCandidate,
+    agentProviderResult,
+  };
+}
+
+export interface LegacyChatRunOptions {
+  servingAuthority?: ServingAuthorityResolver;
+  /** Real request-aborted / unfinished-response-close cancellation. */
+  signal?: AbortSignal;
+  /** Host product observation; bound before dispatch, finalized without onSend. */
+  observation?: ProductObservationHandle;
+  /** Original admitted AuthSession/execution authority for this attempt. */
+  executionAuthorityExpiresAt?: Date | null;
+  /** Immutable original content/source retention; never renewed by retry. */
+  canonicalRetentionExpiresAt?: Date | null;
+  /** Attempt ownership liveness control; never a model/task deadline. */
+  leaseMs?: number;
+}
+
+export async function createUnscopedChatTask(
+  pool: Pool,
+  auth: AuthContext,
+  request: UnscopedChatTaskRequest,
+  provider: RemoteChatAnswerProviding | null,
+  selectRemoteProvider?: (client: DatabaseClient) => Promise<RemoteChatAnswerProviding | null>,
+  referenceTime?: Date,
+  options: LegacyChatRunOptions = {},
+): Promise<UnscopedChatTaskMutationResult> {
+  let servingSnapshot = await inTransaction(pool, client => captureCurrentReaderAuthority(client, auth, options.servingAuthority));
+  const assertServingCurrent = () => assertServingAuthority(servingSnapshot, options.servingAuthority);
+  if (request.session_id) await purgeUnavailableSessionChatSources(pool, auth);
+  const requestIdentity = {
+    objective_hash: createHash("sha256")
+      .update(request.objective)
+      .digest("hex"),
+    // Preserve the original request fingerprint so an in-flight retry from
+    // an older iOS build can still replay safely across this server upgrade.
+    context_scope: "none",
+    ...(request.time_zone ? { time_zone: request.time_zone } : {}),
+    external_effects: [],
+    ...(request.session_id ? { session_id: request.session_id } : {}),
+    ...(request.message_id ? { message_id: request.message_id } : {}),
+  };
+  // Phase 1: one short admission transaction. Durable intent and the product
+  // task/attempt identity exist before any provider sees content; the exact
+  // active duplicate returns the same identities without a second dispatch and
+  // the connection is released before execution.
+  const admission = await inTransaction(pool, async (client) => {
+    await captureCurrentReaderAuthority(client, auth, options.servingAuthority);
+    if (request.session_id) await assertSessionForChat(client, auth, request.session_id);
+    const admitted = await admitLifecycleTask(client, {
+      clocks: async () => {
+        const clocks = await admitAuthorityClocks(client, auth, { sessionID: request.session_id ?? null }, options.servingAuthority);
+        if (clocks.originalAuthority) servingSnapshot = clocks.originalAuthority;
+        return clocks;
+      },
+      auth,
+      operation: "create_unscoped_chat_task",
+      request: requestIdentity,
+      idempotencyKey: request.idempotency_key,
+      authSessionID: auth.sessionId,
+      ...(options.leaseMs ? { leaseMs: options.leaseMs } : {}),
+      replayCheck: async (replay) => {
+        if (request.session_id) await assertSessionForChat(client, auth, request.session_id, true);
+        const prior = replay.body as UnscopedChatTaskResponse;
+        if (prior?.task_id) await assertSessionChatSourcesAvailable(client, auth, prior.task_id);
+        if (
+          !prior ||
+          typeof prior !== "object" ||
+          !("external_effects" in prior) ||
+          prior.external_effects.length !== 0
+        ) {
+          throw new ApiError(
+            409,
+            "IDEMPOTENCY_STATE_UNAVAILABLE",
+            "The prior unscoped Chat task could not be resolved.",
+          );
+        }
+      },
+    });
+    await captureCurrentReaderAuthority(client, auth, options.servingAuthority);
+    if (admitted.replay || admitted.kind === "in_progress" || admitted.kind === "recovery_required") return admitted;
+    if (selectRemoteProvider) provider = await selectRemoteProvider(client);
+    if (options.observation) await options.observation.bindTask(client, admitted.identity.taskID, admitted.identity.attemptID);
+    return admitted;
+  });
+  assertServingCurrent();
+  if (admission.kind === "in_progress") throw lifecycleInProgressError(admission.identity);
+  if (admission.kind === "recovery_required") {
+    throw lifecycleRecoveryRequiredError(admission.identity, admission.reason ?? "execution_unknown");
+  }
+  if (admission.replay) {
+    return {
+      body: admission.replay.body as UnscopedChatTaskResponse,
+      replayed: true,
+      status: admission.replay.status,
+    };
+  }
+  const identity = admission.identity;
+  const runController = new AbortController();
+  let settle!: () => void;
+  const settled = new Promise<void>((resolve) => { settle = resolve; });
+  registerLifecycleRun(identity, runController, settled);
+  const stopHeartbeat = startLifecycleHeartbeat(pool, auth, identity, runController, options.leaseMs ?? 65_000, options.servingAuthority);
+  let ownerFinished = false;
+  const releaseOwner = () => {
+    if (ownerFinished) return;
+    ownerFinished = true;
+    stopHeartbeat();
+    releaseLifecycleRun(identity.attemptID);
+    composed.dispose();
+    settle();
+  };
+
+  let cancelling: Promise<void> | null = null;
+  const markCancelling = () => {
+    cancelling ??= inTransaction(pool, async (client) => {
+      await client.query(`UPDATE legacy_chat_task_attempts SET state='cancelling'
+        WHERE account_id=$1 AND id=$2 AND fencing_generation=$3 AND state IN ('admitted','running')`,
+        [auth.accountId, identity.attemptID, identity.fencingGeneration]);
+      await client.query(`UPDATE legacy_chat_task_intents SET state='cancelling',revision=revision+1,updated_at=now()
+        WHERE id=$1 AND current_attempt_id=$2 AND fencing_generation=$3 AND state IN ('admitted','running')`,
+        [identity.intentID, identity.attemptID, identity.fencingGeneration]);
+    }).catch(() => undefined);
+    return cancelling;
+  };
+  const composed = composeLifecycleSignals(
+    [options.signal, runController.signal],
+    () => { void markCancelling(); },
+  );
+  const assertExecutionCurrent = async (client?: unknown) => {
+    if (composed.signal.aborted) throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+    if (client !== undefined) await assertOriginalAuthorityCurrent(client as PoolClient, auth, identity, options.servingAuthority);
+    else await inTransaction(pool, (owned) => assertOriginalAuthorityCurrent(owned, auth, identity, options.servingAuthority));
+    assertServingCurrent();
+    if (composed.signal.aborted) throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+  };
+  let producerUncertain = false;
+  let continuationController: HarnessContinuationController | undefined;
+  const settleFailure = async (state: "cancelled" | "failed_retryable" | "interrupted_unknown", reason: string) => {
+    await markCancelling().catch(() => undefined);
+    await inTransaction(pool, async (client) => {
+      await finishLifecycleAttempt(client, {
+        accountID: auth.accountId,
+        identity,
+        state,
+        terminalReason: reason,
+      });
+      if (continuationController) await continuationController.finalize(client, false);
+    }).catch(() => undefined);
+    releaseOwner();
+  };
+  let execution: UnscopedChatExecution;
+  try {
+    // Dispatch evidence is recorded at the ACTUAL provider entry (below), not
+    // on configuration; the runtime slot is the in-process attempt ownership.
+    execution = await executeUnscopedChatTask({
+      assertExecutionCurrent,
+      assertServingCurrent,
+      onProviderDispatch: () => inTransaction(pool, async (client) => {
+        await assertExecutionCurrent(client);
+        await markLifecycleDispatched(client, auth.accountId, identity);
+      }),
+      onProducerFailure: async () => { producerUncertain = true; },
+      request,
+      taskID: identity.taskID,
+      provider,
+      database: pool,
+      probePool: pool,
+      auth,
+      ...(referenceTime ? { referenceTime } : {}),
+      signal: composed.signal,
+      ...(request.session_id
+        ? {
+            continuation: (sources: () => { expiresAt: Date; personIDs: readonly string[] }) => {
+              continuationController = createHarnessContinuationController(
+                pool,
+                auth,
+                request.session_id!,
+                { kind: "workspace_conversation" },
+                sources,
+                { attemptID: identity.attemptID, taskID: identity.taskID },
+              );
+              return continuationController.factory;
+            },
+          }
+        : {}),
+    });
+    // A failed SDK run must not consume this client intent with a cached 201.
+    // The same-key retry after the user chooses Retry is a new explicit attempt;
+    // this does not start an automatic second provider run.
+    if (provider?.providerId === "claude-agent-sdk" && execution.remoteStatus === "fallback") {
+      throw new ApiError(503, "CLAUDE_CHAT_RETRYABLE_FAILURE", "这次处理未完成，没有执行外部操作。请重试本次请求。");
+    }
+  } catch (error) {
+    const aborted = composed.signal.aborted || runController.signal.aborted;
+    if (aborted) await settleFailure("cancelled", "request_cancelled");
+    else if (error instanceof ApiError && error.code === "CLAUDE_CHAT_RETRYABLE_FAILURE")
+      await settleFailure("failed_retryable", "provider_failure");
+    else await settleFailure("failed_retryable", "execution_failed");
+    throw error;
+  }
+  if (composed.signal.aborted || runController.signal.aborted) {
+    // A late non-cancellable provider result can never create final output,
+    // audit, Memory proposals or files after the owner disconnected.
+    await settleFailure("cancelled", "request_cancelled");
+    throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+  }
+  // Phase 3: one short fenced final transaction commits the canonical result,
+  // the harness resume transition and the terminal lifecycle state together.
+  const finalizeTransaction = () =>
+    inTransaction(pool, async (client) => withOriginalAuthorityFinalization(client, auth, identity, async () => {
+      await assertLifecycleAttemptCurrent(client, auth.accountId, identity);
+      if (composed.signal.aborted || runController.signal.aborted) {
+        throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+      }
+      if (request.session_id) await assertSessionForChat(client, auth, request.session_id, true);
+      // The terminal lifecycle transition is part of this same atomic commit
+      // and precedes the transaction-local final source assertions.
+      const finished = await finishLifecycleAttempt(client, {
+        accountID: auth.accountId,
+        identity,
+        state: "completed",
+      });
+      if (!finished) throw new ApiError(409, "LEGACY_CHAT_ATTEMPT_FENCED", "A newer attempt owns this work. Reload its current state.");
+      // Request-owned source-free uncertainty is persisted OR-monotonically in
+      // the real final transaction: a failed write fails BEFORE success and
+      // never publishes a canonical completed receipt with false certainty.
+      if (producerUncertain) await markLifecycleUsageUncertain(client, auth.accountId, identity);
+      await recordUnscopedChatCompletionEvidence(client, auth, request, execution);
+      await completeIdempotency(client, { id: admission.idempotencyRecordID, replay: null }, 201, execution.body);
+      if (continuationController) await continuationController.finalize(client, true);
+      if (options.observation) {
+        await options.observation.finalize(client, {
+          taskID: identity.taskID,
+          status: execution.remoteStatus === "agent_completed" || execution.remoteStatus === "completed" ? "completed" : "fallback",
+          output: execution.body as unknown as Record<string, unknown>,
+        });
+      }
+      if (composed.signal.aborted || runController.signal.aborted) {
+        throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+      }
+      return {
+        body: execution.body,
+        replayed: false,
+        status: 201,
+        labProductOutcome: execution.remoteStatus === "agent_completed" || execution.remoteStatus === "completed" ? "accepted" as const : "fallback" as const,
+      };
+    }, () => {
+      if (composed.signal.aborted || runController.signal.aborted) throw new ApiError(499, "LEGACY_CHAT_CANCELLED", "The request was cancelled before completion.");
+    }, options.servingAuthority));
+  // SQL serialization/deadlock recovery retries only database finalization with
+  // the same validated ephemeral result; the provider is never rerun.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const outcome = await finalizeTransaction();
+      options.observation?.markCommitted?.();
+      releaseOwner();
+      return outcome;
+    } catch (error) {
+      lastError = error;
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      if (code !== "40001" && code !== "40P01") break;
+    }
+  }
+  if (composed.signal.aborted || runController.signal.aborted) {
+    await settleFailure("cancelled", "request_cancelled");
+  } else {
+    await settleFailure("failed_retryable", "finalization_failed");
+  }
+  throw lastError;
+}
+
+/**
+ * The single governed completion boundary shared by the synchronous endpoint
+ * and the durable queue runner: audit, Session chat-source lineage, and meeting
+ * draft registration. Callers own their surrounding transaction so a replay
+ * gate can make this exactly once.
+ */
+export async function recordUnscopedChatCompletionEvidence(
+  client: PoolClient,
+  auth: AuthContext,
+  request: UnscopedChatTaskRequest,
+  execution: UnscopedChatExecution,
+): Promise<void> {
+  // Final recheck under the account fence: the follow-up's inherited lineage
+  // was already durable before the model saw any history; this fenced boundary
+  // admits the derived text into audit/replay/idempotency writes only while the
+  // exact recorded sources and versions are still current.
+  await inheritSavedMemoryDependencies(
+    client,
+    auth,
+    execution.body.task_id,
+    execution.previousTaskIDs,
+  );
+  // Final Memory staging: the collected ephemeral candidate becomes one
+  // canonical proposal inside this transaction. Optional-stage failure rolls
+  // back only the proposal and keeps the source-valid answer with no Memory
+  // reference; a crash or quarantine before here left nothing visible.
+  if (execution.memoryCandidate) {
+    await client.query("SAVEPOINT memory_review_stage");
+    try {
+      const staged = await stageMemoryProposal(
+        client,
+        auth,
+        execution.memoryCandidate.stageRequest,
+        execution.memoryCandidate.authority,
+      );
+      await client.query("RELEASE SAVEPOINT memory_review_stage");
+      if (staged) {
+        execution.body.memory_proposal = {
+          proposal_id: staged.proposal.proposal_id,
+          revision: staged.proposal.revision,
+        };
+      }
+    } catch {
+      await client.query("ROLLBACK TO SAVEPOINT memory_review_stage");
+    }
+  }
+  await appendAudit(
+    client,
+    { accountId: auth.accountId, actorUserId: auth.userId },
+    "unscoped_chat_task.completed",
+    "unscoped_chat_task",
+    execution.body.task_id,
+    {
+      context_scope: "agent_bounded_contact_lookup",
+      conversation_session_id: request.session_id ?? null,
+      conversation_message_ids: execution.conversationMessageIDs,
+      current_message_id: request.message_id ?? null,
+      evidence_count: 0,
+      external_effect_count: 0,
+      disposition: execution.body.disposition,
+      remote_chat_status: execution.remoteStatus,
+      remote_chat_provider_id:
+        execution.agentProviderResult?.providerID
+          ?? execution.providerResult?.provider_id
+          ?? null,
+      remote_chat_model:
+        execution.agentProviderResult?.model
+          ?? execution.providerResult?.model
+          ?? null,
+      remote_chat_provider_request_id:
+        execution.agentProviderResult?.providerRequestID
+          ?? execution.providerResult?.provider_request_id
+          ?? null,
+      contact_agent_event_kind: execution.body.agent_event?.kind ?? null,
+      prompt: execution.agentProviderResult?.prompt ?? (execution.providerResult?.prompt_snapshot
+        ? { name: execution.providerResult.prompt_snapshot.name, revision: execution.providerResult.prompt_snapshot.revision,
+          versionId: execution.providerResult.prompt_snapshot.versionId, source: execution.providerResult.prompt_snapshot.source } : null),
+    },
+  );
+  await recordSessionChatSources(
+    client,
+    auth,
+    request.session_id,
+    execution.body.task_id,
+    execution.conversationSources ?? [],
+    execution.previousTaskIDs,
+  );
+  if (request.session_id) {
+    await recordMeetingDraftsForTask(client, auth, {
+      blocks: execution.body.blocks,
+      ...(request.message_id ? { messageID: request.message_id } : {}),
+      sessionID: request.session_id,
+      taskID: execution.body.task_id,
+    });
+  }
+}

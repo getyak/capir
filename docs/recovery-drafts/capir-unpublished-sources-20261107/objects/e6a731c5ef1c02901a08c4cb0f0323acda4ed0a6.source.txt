@@ -1,0 +1,96 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { contentHash, importSource, opikClient, promptModule, readSource, validateVersion } from "./library.mjs";
+
+const version = (template = "Source text") => ({ id: "version-1", commit: "commit-1", version_number: "v1", template, template_structure: "text", variables: [] });
+
+test("reads actual composed TypeScript prompts and matches the compiled application text", async () => {
+  for (const name of ["assistant-relationship", "assistant-workspace"]) {
+    const source = fileURLToPath(new URL(`../../apps/agent/src/prompts/${name}.ts`, import.meta.url));
+    const compiled = await import(new URL(`../../apps/agent/dist/prompts/${name}.js`, import.meta.url));
+    const { text } = await readSource(source);
+    assert.equal(text, compiled.default);
+    assert.ok(text.includes("conversation retention") || text.includes("Session history"));
+    const output = await readFile(new URL(`../../apps/agent/dist/prompts/${name}.js`, import.meta.url), "utf8");
+    assert.ok(output.includes('"./assistant-conversation.js"'));
+    assert.equal(output.includes('"./assistant-conversation.ts"'), false);
+  }
+});
+
+test("imports exact text as data, including interpolation, backticks and backslashes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ts-prompt-import-"));
+  try {
+    const path = join(directory, "prompt.ts");
+    const old = promptModule("Initial text");
+    await writeFile(path, old);
+    const text = "Unicode 中文\n` ${globalThis.promptInjection = true} \\n \\u0000\r\n";
+    assert.equal(await importSource(path, old, text), true);
+    assert.equal((await readSource(path)).text, text);
+    assert.equal(globalThis.promptInjection, undefined);
+    assert.equal(await importSource(path, await readFile(path, "utf8"), text), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("does not overwrite a source edited while downloading the draft", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ts-prompt-import-"));
+  try {
+    const path = join(directory, "prompt.ts");
+    await writeFile(path, promptModule("Owner's new edit"));
+    await assert.rejects(importSource(path, promptModule("Old source"), "Downloaded draft"), /changed during import/u);
+    assert.equal((await readSource(path)).text, "Owner's new edit");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("preserves complete prompt text beyond the former 32k authoring ceiling", async () => {
+  const text = `${"Synthetic source rules. ".repeat(2000)}Full ending.`;
+  assert.equal(validateVersion(version(text)).template, text);
+  const directory = await mkdtemp(join(tmpdir(), "ts-prompt-source-"));
+  try {
+    const path = join(directory, "prompt.ts");
+    await writeFile(path, promptModule(text));
+    assert.equal((await readSource(path)).text, text);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("rejects absent, empty, chat and unresolved-variable versions", () => {
+  for (const value of [null, {}, { ...version(), template: " " },
+    { ...version(), template_structure: "chat" }, { ...version(), variables: ["user"] }, { ...version(), variables: "invalid" }]) {
+    assert.throws(() => validateVersion(value), /Incompatible/u);
+  }
+});
+
+test("mirrors by exact source and reads back its version, without following production/latest", async () => {
+  const calls = []; let stored = null;
+  const client = opikClient({ base: "http://localhost/api/", project: "prompts", fetcher: async (url, request) => {
+    const body = request.body ? JSON.parse(request.body) : null;
+    calls.push({ url, body });
+    assert.equal(request.redirect, "error");
+    assert.equal(request.headers["Comet-Workspace"], "default");
+    if (url.endsWith("/retrieve")) {
+      assert.equal(body.project_name, "prompts");
+      assert.equal(body.environment, "repository");
+      return stored ? Response.json(stored) : new Response(null, { status: 404 });
+    }
+    if (url.endsWith("/environments")) return new Response(null, { status: 204 });
+    stored = version(body.version.template);
+    return Response.json(stored);
+  } });
+  const metadata = { content_sha256: contentHash("Source text"), git_commit: "abc", worktree_dirty: false };
+  assert.equal((await client.mirror("assistant/workspace", "Source text", metadata)).id, "version-1");
+  assert.equal((await client.mirror("assistant/workspace", "Source text", metadata)).id, "version-1");
+  assert.equal(calls.filter(call => call.url.endsWith("/versions")).length, 1);
+});
+
+test("fails instead of accepting legacy, failed, oversized or mismatched responses", async () => {
+  for (const response of [new Response("{}", { headers: { "X-Opik-Deprecation": "legacy" } }),
+    new Response(null, { status: 500 }), new Response("x".repeat(132_000))]) {
+    const client = opikClient({ base: "http://localhost/api", project: "prompts", fetcher: async () => response });
+    await assert.rejects(client.retrieve("assistant/workspace"));
+  }
+  const client = opikClient({ base: "http://localhost/api", project: "prompts", fetcher: async () => Response.json(version("Wrong content")) });
+  await assert.rejects(client.mirror("assistant/workspace", "Source text", { content_sha256: "abc" }), /mismatch/u);
+});

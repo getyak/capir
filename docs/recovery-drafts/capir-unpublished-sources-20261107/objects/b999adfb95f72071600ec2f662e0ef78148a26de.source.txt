@@ -1,0 +1,394 @@
+import "server-only";
+
+import { TalentSignalClient, type DesktopAuthContinuation } from "@talent-signal/contracts";
+import { cookies, headers } from "next/headers";
+import { decode, encode } from "next-auth/jwt";
+
+import {
+  DESKTOP_BROWSER_ATTEMPT_COOKIE_PREFIX,
+  DESKTOP_BROWSER_ATTEMPT_TTL_SECONDS,
+  DESKTOP_CONTINUATION_COOKIE_PREFIX,
+  browserAttemptCookieName,
+  continuationCookieName,
+  type DesktopBrowserAttempt,
+} from "@/lib/desktop-auth-protocol";
+import {
+  authSecret,
+  backendAuthBaseUrl,
+  readPrimaryBackendSessionClaims,
+} from "@/lib/server/backendAuth";
+import {
+  CREDENTIAL_ATTEMPT_COOKIE,
+  type SealedCredentialAttempt,
+} from "@/lib/server/loginMethods";
+import {
+  AUTH_OPERATION_COOKIE,
+  AUTH_ROUND_COOKIE,
+  readAuthOperation,
+  readAuthRound,
+  sessionFingerprint,
+  type AuthOperation,
+  type AuthRound,
+} from "@/lib/server/stagedAuth";
+
+/**
+ * Web transport layer of the macOS system authentication handoff (ADR 0019)
+ * and credential proof rounds (ADR 0020).
+ *
+ * The Web layer owns the short-lived transport state the backend deliberately
+ * cannot store: the attempt-specific HttpOnly WK pairing cookie, the
+ * attempt-specific sealed browser-attempt cookie carrying the raw native state
+ * through the system authentication browser (the backend keeps only its hash),
+ * and the server-sealed WK continuation for relay-created credential
+ * attempts. Both jar families use attempt-specific cookie names: a delayed
+ * response for A can never delete or overwrite B. Pure protocol policy lives
+ * in `lib/desktop-auth-protocol.ts`.
+ */
+
+export {
+  DESKTOP_AUTH_RETURN_PATHS,
+  DESKTOP_BROWSER_ATTEMPT_COOKIE,
+  DESKTOP_BROWSER_ATTEMPT_COOKIE_PREFIX,
+  DESKTOP_CONTINUATION_COOKIE_PREFIX,
+  browserAttemptCookieName,
+  continuationCookieName,
+  desktopCallbackURL,
+  desktopCancelCallbackURL,
+  desktopReturnPath,
+  formMatchesCurrentRound,
+  pairingCookieName,
+  parseDesktopCallback,
+  readSubmittedAttemptRef,
+  resolveDesktopProviderReturn,
+  type DesktopBrowserAttempt,
+  type DesktopProviderReturnDecision,
+  type DesktopParsedCallback,
+  type SubmittedAttemptRef,
+} from "@/lib/desktop-auth-protocol";
+
+export const DESKTOP_CONTINUATION_TTL_SECONDS = 600;
+
+/**
+ * The sealed browser-attempt cookie must survive Apple's cross-site form-post
+ * callback, exactly like the phase-one operation cookie.
+ */
+function browserAttemptCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: "none" as const,
+    secure: true,
+    path: "/",
+    maxAge: DESKTOP_BROWSER_ATTEMPT_TTL_SECONDS,
+  };
+}
+
+function continuationCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    path: "/",
+    secure: true,
+    maxAge: DESKTOP_CONTINUATION_TTL_SECONDS,
+  };
+}
+
+export async function sealDesktopBrowserAttempt(attempt: DesktopBrowserAttempt): Promise<void> {
+  const value = await encode({
+    secret: authSecret(),
+    salt: DESKTOP_BROWSER_ATTEMPT_COOKIE_PREFIX,
+    maxAge: DESKTOP_BROWSER_ATTEMPT_TTL_SECONDS,
+    token: attempt,
+  });
+  (await cookies()).set(browserAttemptCookieName(attempt.attempt_id), value, browserAttemptCookieOptions());
+}
+
+async function readAttemptCookie(name: string): Promise<DesktopBrowserAttempt | null> {
+  const jar = await cookies();
+  const value = jar.get(name)?.value;
+  try {
+    const attempt = value
+      ? await decode({ token: value, secret: authSecret(), salt: DESKTOP_BROWSER_ATTEMPT_COOKIE_PREFIX })
+      : null;
+    if (
+      !attempt ||
+      typeof attempt.attempt_id !== "string" ||
+      typeof attempt.state !== "string" ||
+      typeof attempt.challenge_id !== "string" ||
+      typeof attempt.web_origin !== "string" ||
+      (attempt.provider !== "apple" && attempt.provider !== "google") ||
+      (attempt.purpose !== "login" && attempt.purpose !== "credential_round") ||
+      (attempt.role !== "login" && attempt.role !== "current" && attempt.role !== "target")
+    ) {
+      return null;
+    }
+    return attempt as unknown as DesktopBrowserAttempt;
+  } catch {
+    // Tampered or foreign sealed bytes fail closed.
+    return null;
+  }
+}
+
+/** Read one attempt's own sealed browser state (attempt-specific cookie). */
+export async function readDesktopBrowserAttempt(attemptId?: string): Promise<DesktopBrowserAttempt | null> {
+  if (attemptId) return readAttemptCookie(browserAttemptCookieName(attemptId));
+  return readCurrentDesktopBrowserAttempt();
+}
+
+/** The Auth.js callback URL cookie names exactly one round: its attempt id. */
+export async function desktopAttemptFromCallback(): Promise<string | null> {
+  const jar = await cookies();
+  const value = jar.get("talent-signal.callback-url")?.value ?? jar.get("authjs.callback-url")?.value;
+  if (!value) return null;
+  try {
+    const url = new URL(value, "http://localhost");
+    const attemptId = url.searchParams.get("attempt");
+    return attemptId && /^[A-Za-z0-9-]{8,200}$/.test(attemptId) ? attemptId : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The CURRENT sealed round: the attempt named by the Auth.js callback URL
+ * cookie of the latest provider round. Its sealed state must exist in this
+ * jar; nothing else counts as current.
+ */
+export async function readCurrentDesktopBrowserAttempt(): Promise<DesktopBrowserAttempt | null> {
+  const attemptId = await desktopAttemptFromCallback();
+  return attemptId ? readAttemptCookie(browserAttemptCookieName(attemptId)) : null;
+}
+
+/** Owner-specific cleanup: only this attempt's own sealed cookie is cleared. */
+export async function clearDesktopBrowserAttempt(attemptId: string): Promise<void> {
+  (await cookies()).delete(browserAttemptCookieName(attemptId));
+}
+
+/** Sealed WK continuation for a relay-created credential attempt (ADR 0020). */
+export async function sealDesktopContinuation(
+  attemptId: string,
+  continuation: DesktopAuthContinuation,
+): Promise<void> {
+  const value = await encode({
+    secret: authSecret(),
+    salt: DESKTOP_CONTINUATION_COOKIE_PREFIX,
+    maxAge: DESKTOP_CONTINUATION_TTL_SECONDS,
+    token: continuation,
+  });
+  (await cookies()).set(continuationCookieName(attemptId), value, continuationCookieOptions());
+  // Late-response rule (ADR 0020): the shared phase-one credential-attempt
+  // cookie is written ONLY for the CURRENT sealed flow. A delayed response for
+  // an older flow can then update only its own per-flow continuation cookie
+  // and can never overwrite a newer operation's shared state.
+  const currentFlow = await readAuthOperation();
+  if (!currentFlow || currentFlow.ref !== continuation.flow_ref) return;
+  const sealed: SealedCredentialAttempt = {
+    attempt_id: continuation.credential_attempt_id,
+    attempt_secret: continuation.attempt_secret,
+    intent: continuation.intent,
+    provider: continuation.target_provider === "password" ? null : (continuation.target_provider ?? null),
+    client_label: "talent-signal-desktop",
+  };
+  const credentialValue = await encode({
+    secret: authSecret(),
+    salt: CREDENTIAL_ATTEMPT_COOKIE,
+    maxAge: DESKTOP_CONTINUATION_TTL_SECONDS,
+    token: sealed,
+  });
+  (await cookies()).set(CREDENTIAL_ATTEMPT_COOKIE, credentialValue, continuationCookieOptions());
+}
+
+export async function readDesktopContinuation(
+  attemptId: string,
+): Promise<DesktopAuthContinuation | null> {
+  const jar = await cookies();
+  const value = jar.get(continuationCookieName(attemptId))?.value;
+  try {
+    const continuation = value
+      ? await decode({ token: value, secret: authSecret(), salt: DESKTOP_CONTINUATION_COOKIE_PREFIX })
+      : null;
+    if (
+      !continuation ||
+      typeof continuation.credential_attempt_id !== "string" ||
+      typeof continuation.attempt_secret !== "string" ||
+      typeof continuation.flow_ref !== "string"
+    ) {
+      return null;
+    }
+    return continuation as unknown as DesktopAuthContinuation;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearDesktopContinuation(attemptId: string): Promise<void> {
+  (await cookies()).delete(continuationCookieName(attemptId));
+}
+
+/**
+ * The exact Web origin of the current request, derived from the real request
+ * headers. Client-supplied JSON is never authority for the binding.
+ */
+export async function requestWebOrigin(): Promise<string> {
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000";
+  const proto = requestHeaders.get("x-forwarded-proto") === "https" ? "https" : "http";
+  return `${proto}://${host}`;
+}
+
+/** Server-to-server backend client for the handoff (never a browser token reader). */
+export function desktopBackendClient(): TalentSignalClient {
+  const client = new TalentSignalClient(backendAuthBaseUrl());
+  client.setClientPlatform("web");
+  return client;
+}
+
+export async function desktopSessionToken(): Promise<string | null> {
+  const claims = await readPrimaryBackendSessionClaims();
+  return claims?.backendAccessToken ?? null;
+}
+
+/**
+ * Approve one desktop attempt from the provider callback of THIS round. The
+ * backend verifies and consumes the bound provider challenge (nonce and
+ * assertion anti-replay included) and records only a verified proof reference.
+ */
+export async function approveDesktopAuthAttempt(input: {
+  attempt: DesktopBrowserAttempt;
+  identityToken: string;
+}): Promise<void> {
+  await desktopBackendClient().approveDesktopAuth(
+    {
+      attempt_id: input.attempt.attempt_id,
+      state: input.attempt.state,
+      challenge_id: input.attempt.challenge_id,
+      identity_token: input.identityToken,
+    },
+    { origin: input.attempt.web_origin },
+  );
+}
+
+export type ResolvedCredentialFlow = {
+  operation: AuthOperation;
+  round: AuthRound;
+  /** Frozen rendered scope: immutable comparators, never proof. */
+  expected: {
+    expected_account_id: string;
+    expected_user_id: string;
+    expected_account_revision: number;
+    expected_user_revision: number;
+    flow_ref: string;
+    round_ref: string;
+    intent: AuthOperation["intent"];
+    target_provider: "apple" | "google" | "password" | undefined;
+    provider_challenge_id: string;
+    original_proof_at: string;
+    flow_deadline_at: string;
+  };
+};
+
+/**
+ * Resolve the WK-sealed flow/round state for one credential round (ADR 0020).
+ * The sealed operation and round carry the frozen actor scope, intent,
+ * provider, challenge and the ORIGINAL proof time/deadline; nothing here is
+ * taken from DOM identifiers or client claims. A missing, stale or
+ * wrong-purpose state fails closed.
+ */
+export async function resolveCredentialFlow(
+  role: "current" | "target",
+): Promise<ResolvedCredentialFlow | null> {
+  const operation = await readAuthOperation();
+  const round = await readAuthRound();
+  if (!operation || !round) return null;
+  if (round.flowRef !== operation.ref) return null;
+  if ((role === "current" && round.role !== "current") || (role === "target" && round.role !== "target")) {
+    return null;
+  }
+  const claims = await readPrimaryBackendSessionClaims();
+  if (!claims) return null;
+  if (sessionFingerprint(claims.backendAccessToken) !== operation.sessionFingerprint) return null;
+  if (claims.backendAccountId !== operation.accountId || claims.backendUserId !== operation.userId) {
+    return null;
+  }
+  // Only the four credential intents are relayable; recovery roles and
+  // duplicate-account proofs never enter the native handoff.
+  if (
+    operation.intent !== "link_provider" &&
+    operation.intent !== "unlink_provider" &&
+    operation.intent !== "set_password" &&
+    operation.intent !== "change_password"
+  ) {
+    return null;
+  }
+  const targetProvider =
+    operation.intent === "link_provider"
+      ? (operation.targetProvider ?? "apple")
+      : operation.intent === "unlink_provider"
+        ? (operation.unlinkProvider ?? "apple")
+        : "password";
+  if (role === "current") {
+    // The canonical credential round carries its own sealed challenge
+    // (created by the Server Action that froze this operation). A recovery
+    // `roleChallenges` shape is NOT required and must not be substituted: the
+    // sealed round, flow, provider, purpose and challenge must all agree.
+    if (
+      round.purpose !== "reauth" ||
+      round.provider !== operation.reauthProvider ||
+      round.challengeId !== operation.reauthChallengeId
+    ) {
+      return null;
+    }
+    return {
+      operation,
+      round,
+      expected: {
+        expected_account_id: operation.accountId,
+        expected_user_id: operation.userId,
+        expected_account_revision: operation.accountRevision,
+        expected_user_revision: operation.userRevision,
+        flow_ref: operation.ref,
+        round_ref: round.roundRef,
+        intent: operation.intent,
+        target_provider: targetProvider === "password" ? "password" : targetProvider,
+        provider_challenge_id: round.challengeId,
+        original_proof_at: operation.createdAt,
+        flow_deadline_at: flowDeadlineFor(operation),
+      },
+    };
+  }
+  const attempt = operation.attempt;
+  if (!attempt) return null;
+  // The target round must name the SAME sealed round's provider and the
+  // existing credential attempt's exact target challenge.
+  if (
+    round.purpose !== "target" ||
+    (operation.intent === "link_provider" && round.provider !== operation.targetProvider)
+  ) {
+    return null;
+  }
+  return {
+    operation,
+    round,
+    expected: {
+      expected_account_id: operation.accountId,
+      expected_user_id: operation.userId,
+      expected_account_revision: operation.accountRevision,
+      expected_user_revision: operation.userRevision,
+      flow_ref: operation.ref,
+      round_ref: round.roundRef,
+      intent: operation.intent,
+      target_provider: targetProvider === "password" ? undefined : targetProvider,
+      provider_challenge_id: attempt.challenge_id,
+      original_proof_at: operation.createdAt,
+      flow_deadline_at: flowDeadlineFor(operation),
+    },
+  };
+}
+
+/** Absolute flow deadline: the frozen creation time plus the fixed flow TTL. */
+export function flowDeadlineFor(operation: Pick<AuthOperation, "createdAt">): string {
+  return new Date(
+    Date.parse(operation.createdAt) + DESKTOP_CONTINUATION_TTL_SECONDS * 1_000,
+  ).toISOString();
+}
+
+export { AUTH_OPERATION_COOKIE, AUTH_ROUND_COOKIE };

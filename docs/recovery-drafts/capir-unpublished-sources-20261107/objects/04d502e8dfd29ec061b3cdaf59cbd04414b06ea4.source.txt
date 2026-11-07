@@ -1,0 +1,8 @@
+import { z } from "zod";
+
+/** Page bounds govern transport, not the number of searches in a Run. */
+export const SavedMemorySearchSchema = z.strictObject({
+  terms: z.array(z.string().trim().min(1).max(500)),
+  cursor: z.string().min(1).max(600).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});

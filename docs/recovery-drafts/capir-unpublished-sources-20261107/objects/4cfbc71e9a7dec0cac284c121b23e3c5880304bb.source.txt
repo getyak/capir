@@ -1,0 +1,93 @@
+/**
+ * Web handoff API: exchange a one-use capir handoff secret for the existing
+ * encrypted Auth.js HttpOnly session cookie of the verified Lab account, then
+ * navigate only to /workspace.
+ *
+ * Security boundary: the secret arrives in a private POST body (never a URL),
+ * the route authenticates to the backend as the trusted Web consumer with the
+ * server-only CAPIR_WEB_HANDOFF_KEY, cross-site requests are refused, and no
+ * bearer material is ever placed in a URL or response body.
+ */
+import { CAPIR_WORKSPACE_PATH, parseHandoffBody, requestOriginFrom } from "@/lib/capirHandoff";
+import {
+  buildCapirSessionCookie,
+  CapirHandoffError,
+  exchangeCapirHandoff,
+  type HandoffCookie,
+} from "@/lib/server/capirHandoff";
+
+function jsonError(status: number, code: string, message: string): Response {
+  return new Response(JSON.stringify({ error: { code, message } }), {
+    status,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
+}
+
+function denyCrossSite(request: Request, requestOrigin: string): Response | null {
+  const origin = request.headers.get("origin");
+  const fetchSite = request.headers.get("sec-fetch-site");
+  const sameOrigin = origin === null || origin === requestOrigin;
+  const sameSite = fetchSite === null || fetchSite === "same-origin" || fetchSite === "none";
+  if (!sameOrigin || !sameSite) {
+    return jsonError(403, "CAPIR_HANDOFF_CSRF", "Cross-site handoff requests are refused.");
+  }
+  return null;
+}
+
+export function serializeSessionCookie(cookie: HandoffCookie): string {
+  const parts = [
+    `${cookie.name}=${cookie.value}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${cookie.options.maxAge}`,
+  ];
+  if (cookie.options.secure) parts.push("Secure");
+  return parts.join("; ");
+}
+
+export async function POST(request: Request): Promise<Response> {
+  const webOrigin = requestOriginFrom(request);
+  const blocked = denyCrossSite(request, webOrigin);
+  if (blocked) return blocked;
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return jsonError(
+      415,
+      "CAPIR_HANDOFF_BODY_INVALID",
+      "A private JSON POST body is required.",
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    payload = undefined;
+  }
+  const parsed = parseHandoffBody(payload);
+  if (!parsed.ok) {
+    return jsonError(400, "CAPIR_HANDOFF_BODY_INVALID", parsed.reason);
+  }
+  try {
+    const session = await exchangeCapirHandoff(parsed.body.handoff_secret, webOrigin);
+    const cookie = await buildCapirSessionCookie(session);
+    // The only navigation target is the workspace; entry paths stay data.
+    return new Response(null, {
+      status: 303,
+      headers: {
+        location: CAPIR_WORKSPACE_PATH,
+        "cache-control": "no-store",
+        "set-cookie": serializeSessionCookie(cookie),
+      },
+    });
+  } catch (error) {
+    if (error instanceof CapirHandoffError) {
+      return jsonError(error.status, error.code, error.message);
+    }
+    return jsonError(
+      502,
+      "CAPIR_HANDOFF_EXCHANGE_FAILED",
+      "The handoff exchange did not complete.",
+    );
+  }
+}

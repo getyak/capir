@@ -1,0 +1,338 @@
+/**
+ * Pure behaviour for the shared workspace composer.
+ *
+ * Both the unscoped conversation canvas and the Session workbench render the
+ * same input. This module owns the parts that must not depend on React or on a
+ * particular store: caret-aware `/` and `@` trigger detection, filtering,
+ * insertion, character-limit state and the keyboard decision.
+ *
+ * Boundaries that this module never crosses:
+ * - It never turns a person reference into a scope, an id or evidence access.
+ * - It never invents a model mode, tool, private mode or auto-execution.
+ * - It never truncates a draft while inserting; overflow is reported instead.
+ */
+
+
+export const COMPOSER_DISCOVERY_HINT = "/ 能力 · @ 人物";
+export const COMPOSER_SLASH_MENU_LABEL = "能力建议";
+export const COMPOSER_MENTION_MENU_LABEL = "人物引用建议";
+export const COMPOSER_MENTION_DISCLOSURE =
+  "仅插入姓名与背景文字。查看这位联系人的私密资料，请打开人物页。";
+
+export type ComposerTriggerKind = "slash" | "mention";
+
+export type ComposerTrigger = {
+  kind: ComposerTriggerKind;
+  /** Text between the trigger character and the caret, used for filtering. */
+  query: string;
+  /** Index of the trigger character. */
+  start: number;
+  /** Exclusive end of the replaceable token (extends past the caret). */
+  end: number;
+};
+
+export type ComposerKeyAction =
+  | "next"
+  | "previous"
+  | "choose"
+  | "submit"
+  | "dismiss"
+  | "none";
+
+/** Han, Kana and Hangul count as a token boundary so `你好@陈` is a mention. */
+const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
+/** Letters, marks, numbers, `_`, `-`, `'`, `’`. CJK is part of `\p{L}`. */
+const TOKEN_CHAR = /[\p{L}\p{M}\p{N}'’_-]/u;
+/** Backward scan also crosses `.` so `@John.Smith` stays one mention token. */
+const BACKWARD_CHAR = /[\p{L}\p{M}\p{N}'’_.-]/u;
+/** Slash command names: letters/CJK plus `-` only, so paths and dates fail. */
+const SLASH_QUERY = /^[\p{L}\p{M}-]*$/u;
+/** `example.com`, `foo@example.com/path` — an address, not a person query. */
+const ADDRESS =
+  /^(?:[a-z0-9._%+-]+@)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|cn|org|net|io|co|dev|edu|gov|ai|app|me|info|biz|xyz|uk|jp|de|fr|au|ca)(?:\/\S*)?$/iu;
+const OPENING = "([{（【「『《\"'“”‘’";
+const SENTENCE = "。，、！？；,;!?…";
+
+function isTriggerBoundary(value: string, index: number): boolean {
+  if (index === 0) return true;
+  const previous = value[index - 1]!;
+  if (/\s/u.test(previous)) return true;
+  if (OPENING.includes(previous)) return true;
+  if (SENTENCE.includes(previous)) return true;
+  return CJK.test(previous);
+}
+
+/**
+ * Resolve the `/` or `@` token the caret currently sits in, or null.
+ * A trigger is only recognised at the start of a word-like token. That single
+ * rule already rejects `chen@example.com` (`@` is not a token start), URLs such
+ * as `https://example.com` (the token starts with `h`) and `9/20`. Slash tokens
+ * are additionally restricted to command-like text. CJK is treated as a word
+ * boundary so a mention typed after Chinese text still opens.
+ */
+export function detectComposerTrigger(
+  value: string,
+  caret: number,
+): ComposerTrigger | null {
+  const cursor = Math.max(0, Math.min(Number.isFinite(caret) ? caret : 0, value.length));
+  for (let index = cursor - 1; index >= 0; index -= 1) {
+    const char = value[index]!;
+    if (char !== "/" && char !== "@") {
+      if (!BACKWARD_CHAR.test(char)) break;
+      continue;
+    }
+    if (!isTriggerBoundary(value, index)) break;
+    const query = value.slice(index + 1, cursor);
+    if (char === "/") {
+      // `//` or `://` is a protocol, not a command; digits/paths are not commands.
+      if (value[index + 1] === "/" || !SLASH_QUERY.test(query)) break;
+    } else if (ADDRESS.test(query)) {
+      break;
+    }
+    let end = cursor;
+    while (end < value.length) {
+      if (TOKEN_CHAR.test(value[end]!)) { end += 1; continue; }
+      if (char === "@" && value[end] === "." && end + 1 < value.length && TOKEN_CHAR.test(value[end + 1]!)) {
+        end += 1; continue;
+      }
+      break;
+    }
+    return {
+      kind: char === "/" ? "slash" : "mention",
+      query,
+      start: index,
+      end,
+    };
+  }
+  return null;
+}
+
+export type SlashCommand = {
+  id: string;
+  title: string;
+  description: string;
+  keywords: readonly string[];
+  kind: "starter" | "navigate" | "capture";
+  /** Editable prompt starter staged by `starter` commands. */
+  insert?: string;
+  /** Existing governed route opened by `navigate`/`capture` commands. */
+  href?: string;
+};
+
+/**
+ * Only real capabilities this build already has. Starters stage editable text;
+ * navigation opens existing routes. Nothing here sends, scopes or executes.
+ */
+export const WORKSPACE_SLASH_COMMANDS: readonly SlashCommand[] = Object.freeze([
+  {
+    id: "organize",
+    title: "整理这段对话",
+    description: "梳理关键信息、结论与待办",
+    keywords: ["organize", "summary", "summarize", "整理", "总结", "梳理"],
+    kind: "starter",
+    insert: "帮我整理这段对话中的关键信息、结论和待办事项：\n",
+  },
+  {
+    id: "follow-up",
+    title: "起草跟进消息",
+    description: "写一条自然、简洁的跟进消息",
+    keywords: ["follow", "followup", "跟进", "回复", "消息", "起草"],
+    kind: "starter",
+    insert: "帮我起草一条给对方的跟进消息，语气自然、简洁，并说明下一步：\n",
+  },
+  {
+    id: "meeting-questions",
+    title: "准备会议问题",
+    description: "为下一次沟通准备问题",
+    keywords: ["meeting", "question", "会议", "问题", "面谈", "准备"],
+    kind: "starter",
+    insert: "帮我准备几个会议问题，围绕当前关系、已有证据和这次沟通的目标：\n",
+  },
+  {
+    id: "people",
+    title: "打开人物目录",
+    description: "查看账号内的人物与关系",
+    keywords: ["people", "person", "人物", "联系人", "目录"],
+    kind: "navigate",
+    href: "/workspace/people",
+  },
+  {
+    id: "meetings",
+    title: "查看日程",
+    description: "查看待审阅的会议草稿",
+    keywords: ["meeting", "calendar", "日程", "会议", "待审阅"],
+    kind: "navigate",
+    href: "/workspace/meetings",
+  },
+  {
+    id: "capture",
+    title: "导入截图",
+    description: "选择设备上的对话截图",
+    keywords: ["capture", "screenshot", "image", "截图", "导入", "图片"],
+    kind: "capture",
+    href: "/workspace/captures",
+  },
+]);
+
+function normalize(value: string): string {
+  return value.normalize("NFKC").trim().toLocaleLowerCase();
+}
+
+/**
+ * Filter slash choices in Chinese or English. An empty query shows everything;
+ * `capture: false` keeps the list honest on surfaces without a capture entry.
+ */
+export function filterSlashCommands(
+  query: string,
+  options: { capture?: boolean; commands?: readonly SlashCommand[] } = {},
+): SlashCommand[] {
+  const needle = normalize(query);
+  return (options.commands ?? WORKSPACE_SLASH_COMMANDS).filter((command) => {
+    if (command.kind === "capture" && options.capture === false) return false;
+    if (!needle) return true;
+    return [command.id, command.title, command.description, ...command.keywords].some(
+      (value) => normalize(value).includes(needle),
+    );
+  });
+}
+
+export type ComposerInsertion = {
+  value: string;
+  caret: number;
+  inserted: boolean;
+  overflow: boolean;
+};
+
+/**
+ * Replace `[start, end)` with `insert` while preserving the untouched prefix
+ * and suffix. If the result would exceed `maxLength` nothing is changed and
+ * `overflow` is reported, so a suggestion never silently truncates a draft.
+ */
+export function insertComposerText(input: {
+  value: string;
+  start: number;
+  end: number;
+  insert: string;
+  maxLength?: number | undefined;
+}): ComposerInsertion {
+  const value = input.value;
+  const start = Math.max(0, Math.min(input.start, value.length));
+  const end = Math.max(start, Math.min(input.end, value.length));
+  const nextLength = value.length - (end - start) + input.insert.length;
+  if (input.maxLength !== undefined && nextLength > input.maxLength) {
+    return { value, caret: start, inserted: false, overflow: true };
+  }
+  return {
+    value: value.slice(0, start) + input.insert + value.slice(end),
+    caret: start + input.insert.length,
+    inserted: true,
+    overflow: false,
+  };
+}
+
+/**
+ * A readable reference: the person label plus the first existing context label
+ * when present. No id, no scope, no hidden coercion.
+ */
+export function composerMentionInsertion(person: {
+  label: string;
+  contexts: readonly { label: string }[];
+}): string {
+  const label = person.label.trim();
+  const context = person.contexts
+    .map((entry) => entry.label.trim())
+    .find((entry) => entry.length > 0);
+  return context ? `@${label}（${context}） ` : `@${label} `;
+}
+
+export type ComposerLengthState = {
+  level: "ok" | "near" | "over-send" | "at-draft-limit";
+  message: string;
+  remainingToSend: number | null;
+};
+
+/** Only explicitly selected surface constraints produce a length warning. */
+export function composerLengthState(value: string | number, input: {
+  sendLimit?: number | undefined; draftLimit?: number | undefined; nearLimit?: number | undefined;
+} = {}): ComposerLengthState {
+  const { sendLimit, draftLimit } = input;
+  const nearLimit = input.nearLimit ?? (sendLimit === undefined ? undefined : Math.floor(sendLimit * 0.9));
+  const rawLength = Math.max(0, typeof value === "string" ? value.length : value);
+  const safeLength = typeof value === "string" ? value.trim().length : rawLength;
+  const remainingToSend = sendLimit === undefined ? null : Math.max(0, sendLimit - safeLength);
+  if (draftLimit !== undefined && rawLength >= draftLimit) return {
+    level: "at-draft-limit", message: `已达到 ${draftLimit} 字草稿上限，请精简后再继续。`, remainingToSend,
+  };
+  if (sendLimit !== undefined && safeLength > sendLimit) return {
+    level: "over-send", message: `已超过 ${sendLimit} 字，无法发送；草稿仍保留。`, remainingToSend: 0,
+  };
+  if (sendLimit !== undefined && nearLimit !== undefined && safeLength >= nearLimit) return {
+    level: "near", message: `还可输入 ${Math.max(0, sendLimit - safeLength)} 字，超过后无法发送。`, remainingToSend,
+  };
+  return { level: "ok", message: "", remainingToSend };
+}
+
+/**
+ * Accessible wiring for the suggestion popup. SSR renders the same labels the
+ * client uses, so the listbox and its disclosure are announced without JS.
+ */
+export type ComposerMenuA11y = {
+  listboxLabel: string;
+  disclosure: string | null;
+};
+
+export function composerMenuA11y(kind: ComposerTriggerKind): ComposerMenuA11y {
+  return {
+    listboxLabel:
+      kind === "slash" ? COMPOSER_SLASH_MENU_LABEL : COMPOSER_MENTION_MENU_LABEL,
+    disclosure: kind === "mention" ? COMPOSER_MENTION_DISCLOSURE : null,
+  };
+}
+
+/** Join present `aria-describedby` ids in order, dropping empty entries. */
+export function composerDescribedBy(
+  ids: readonly (string | null | undefined)[],
+): string {
+  return ids
+    .filter((id): id is string => typeof id === "string" && id.length > 0)
+    .join(" ");
+}
+
+/**
+ * The single keyboard decision used by both composers.
+ *
+ * Composition always wins: Safari reports `keyCode === 229` and some IMEs only
+ * set `isComposing`, so neither may submit or close a menu. Enter sends only
+ * when submission is actually allowed; otherwise it stays a newline so the
+ * scoped Session draft-only behaviour is preserved.
+ */
+export function resolveComposerKey(input: {
+  key: string;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  isComposing?: boolean;
+  keyCode?: number;
+  menuOpen: boolean;
+  canSubmit: boolean;
+}): ComposerKeyAction {
+  if (input.isComposing || input.keyCode === 229) return "none";
+  if (input.key === "Escape") return input.menuOpen ? "dismiss" : "none";
+  if (input.menuOpen) {
+    if (input.key === "ArrowDown") return "next";
+    if (input.key === "ArrowUp") return "previous";
+    if (input.key === "Enter") {
+      if (input.shiftKey) return "none";
+      if (input.metaKey || input.ctrlKey) {
+        return input.canSubmit ? "submit" : "none";
+      }
+      return "choose";
+    }
+    return "none";
+  }
+  if (input.key === "Enter" && !input.shiftKey && !input.altKey) {
+    return input.canSubmit ? "submit" : "none";
+  }
+  return "none";
+}

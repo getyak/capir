@@ -1,0 +1,138 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { writeFile, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { cli, setup, provider, fixture, binary, openai, anthropic } from './model-helpers.mjs';
+function pty(env,actions,args=[],options={}){return new Promise((resolve,reject)=>{const child=spawn('python3',[fileURLToPath(new URL('./model-pty.py',import.meta.url))],{env,stdio:['pipe','pipe','pipe']});let out='',err='';child.stdout.on('data',x=>out+=x);child.stderr.on('data',x=>err+=x);child.once('error',reject);child.once('close',code=>code!==0?reject(new Error(err)):resolve(JSON.parse(out)));child.stdin.end(JSON.stringify({node:process.execPath,binary,actions,args,...options}));});}
+const respond=(res,b,text='answer')=>{res.writeHead(200,{'content-type':b.stream?'text/event-stream':'application/json'});res.end(openai(text,'stop',b.stream));};
+const step=text=>[{write:text+'\n'},{wait:'capir> '}];
+test('actual ask/auto preserve complete >128KiB UTF8 stdin and complete system instruction',async t=>{
+  const f=await setup(t,(_,res,b)=>respond(res,b));const full='原'.repeat(50000)+'🙂完整输入尾部',system='s'.repeat(135000)+'系统尾部';
+  for(const args of [[],['ask','positional','--system',system,'--json']]) assert.equal((await cli(args,f.env,full)).code,0);
+  assert.equal(f.requests.length,2);assert.equal(f.requests[0].body.messages[0].content,full);assert.equal(f.requests[1].body.messages[0].content,system);assert.equal(f.requests[1].body.messages.at(-1).content,full+'\n\npositional');
+});
+test('actual positional argument above128KiB reaches configured endpoint intact',async t=>{
+  const f=await setup(t,(_,res,b)=>respond(res,b));const full='p'.repeat(135000)+'🙂尾部';const r=await cli(['ask',full,'--json'],f.env);assert.equal(r.code,0);assert.equal(f.requests[0].body.messages[0].content,full);
+});
+test('fatal invalid or incomplete UTF8 stdin never submits a valid prefix',async t=>{
+  const f=await setup(t,(_,res,b)=>respond(res,b));for(const bad of [Buffer.from([0xff]),Buffer.concat([Buffer.from('complete-looking prefix'),Buffer.from([0xf0,0x9f])])]){const r=await cli(['ask','--json'],f.env,bad);assert.equal(r.code,2);assert.equal(JSON.parse(r.stdout).response.text,'');}assert.equal(f.requests.length,0);
+});
+test('real PTY current slot accepts >128KiB and next request retains >256KiB original history',async t=>{
+  const f=await setup(t,(_,res,b)=>respond(res,b,'reply🙂'));const first='a'.repeat(140000)+'🙂first-tail',second='b'.repeat(140000)+'🙂second-tail';
+  const r=await pty(f.env,[{wait:'capir> '},...step(first),...step(second),...step('last'),{write:'/history\n'},{wait:'capir> '},{write:'/exit\n'}]);
+  assert.equal(r.code,0);assert.equal(f.requests.length,3);assert.deepEqual(f.requests[2].body.messages.map(x=>x.content),[first,'reply🙂',second,'reply🙂','last']);assert.ok(Buffer.byteLength(first+second)>256*1024);assert.equal(r.stdout.includes(first),true);assert.equal(r.stdout.includes(second),true);assert.equal(r.stderr.includes('CONTEXT_LIMIT'),false);
+});
+test('real PTY65 sequential completed turns remain in full next request without bulk paste',async t=>{
+  const f=await setup(t,(_,res,b)=>respond(res,b,'reply-'+b.messages.at(-1).content));const actions=[{wait:'capir> '}];for(let i=0;i<66;i++)actions.push(...step('turn-'+i));actions.push({write:'/exit\n'});
+  const r=await pty(f.env,actions);assert.equal(r.code,0);assert.equal(f.requests.length,66);const last=f.requests[65].body.messages;assert.equal(last.length,131);for(let i=0;i<65;i++){assert.equal(last[2*i].content,'turn-'+i);assert.equal(last[2*i+1].content,'reply-turn-'+i);}assert.equal(last.at(-1).content,'turn-65');
+});
+test('real PTY complete >2MiB answer remains in next request with Unicode ending',async t=>{
+  const full='z'.repeat(35*65536)+'🙂full-answer-tail';const f=await setup(t,(_,res,b)=>{
+    if(b.messages.at(-1).content!=='large'){respond(res,b,'done');return;}res.writeHead(200,{'content-type':'text/event-stream'});
+    for(let offset=0;offset<full.length;offset+=65536)res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:full.slice(offset,offset+65536)},finish_reason:null}]})}\n\n`);
+    res.end('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+  });
+  const r=await pty(f.env,[{wait:'capir> '},...step('large'),...step('next'),{write:'/exit\n'}]);assert.equal(r.code,0);assert.equal(r.stdout.includes(full),true);assert.equal(f.requests[1].body.messages[1].content,full);assert.equal(f.requests.length,2);
+});
+test('failed draft is explicitly retried, completed originals survive, new text replaces draft',async t=>{
+  let failure=true;const f=await setup(t,(_,res,b)=>{if(b.messages.at(-1).content==='exact failed🙂'&&failure){failure=false;res.writeHead(200,{'content-type':'text/event-stream'});res.end(openai('incomplete','length',true));}else respond(res,b,'saved');});
+  const r=await pty(f.env,[{wait:'capir> '},...step('previous'),...step('exact failed🙂'),...step('/history'),...step('/retry'),...step('/retry'),...step('new'),{write:'/exit\n'}]);assert.equal(r.code,0);assert.match(r.stderr,/CAPIR_MODEL_TOKEN_LIMIT/);assert.match(r.stderr,/No failed draft to retry/);assert.equal(f.requests.length,4);assert.deepEqual(f.requests[2].body.messages.map(x=>x.content),['previous','saved','exact failed🙂']);assert.deepEqual(f.requests[3].body.messages.map(x=>x.content),['previous','saved','exact failed🙂','saved','new']);assert.equal(r.stdout.includes('assistant:\nsaved'),true);
+});
+test('reset during delayed generation cancels immediately, retires waiting input, and new turn starts clean',async t=>{
+  const f=await setup(t,(_,res,b)=>{if(b.messages.at(-1).content==='old'){res.writeHead(200,{'content-type':'text/event-stream'});res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'provider-entered................................................'},finish_reason:null}]})}\n\n`);return;}respond(res,b,'new-answer');});
+  const r=await pty(f.env,[{wait:'capir> '},{write:'old\n'},{wait:'provider-entered'},{write:'queued-old\n/reset\n'},{wait:'Conversation reset.'},{wait:'capir> '},...step('new'),{write:'/exit\n'}]);assert.equal(r.code,0);assert.equal(f.requests.length,2);assert.deepEqual(f.requests[1].body.messages,[{role:'user',content:'new'}]);assert.equal(r.stdout.includes('new-answer'),true);
+});
+test('exit during hung generation closes actual child without another request',async t=>{
+  const f=await setup(t,(_,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'entered-exit................................................'},finish_reason:null}]})}\n\n`);});
+  const r=await pty(f.env,[{wait:'capir> '},{write:'old\n'},{wait:'entered-exit'},{write:'queued\n/exit\n'}]);assert.equal(r.code,0);assert.equal(f.requests.length,1);
+});
+test('fatal raw PTY UTF8 cancels current request instead of accepting a replacement-character input',async t=>{
+  const f=await setup(t,(_,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'utf8-entered................................................'},finish_reason:null}]})}\n\n`);});
+  const r=await pty(f.env,[{wait:'capir> '},{write:'old\n'},{wait:'utf8-entered'},{bytes:[0xf0]},{bytes:[0xff,10]}]);assert.equal(r.code,2);assert.match(r.stderr,/CAPIR_MODEL_INPUT/);assert.equal(f.requests.length,1);
+});
+test('valid split emoji raw PTY and CRLF become one complete logical input',async t=>{
+  const f=await setup(t,(_,res,b)=>respond(res,b));const r=await pty(f.env,[{wait:'capir> '},{bytes:[0x66,0xf0,0x9f]},{bytes:[0x99,0x82,0x0d,0x0a]},{wait:'capir> '},{write:'/exit\n'}]);assert.equal(r.code,0);assert.equal(f.requests.length,1);assert.equal(f.requests[0].body.messages[0].content,'f🙂');
+});
+test('unfinished excessive waiting line cancels a hung provider before newline',async t=>{
+  const f=await setup(t,(_,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'waiting-entered................................................'},finish_reason:null}]})}\n\n`);});
+  const r=await pty(f.env,[{wait:'capir> '},{write:'old\n'},{wait:'waiting-entered'},{write:'w'.repeat(138000),allow_input_close:true}]);assert.equal(r.code,2);assert.match(r.stderr,/CAPIR_MODEL_INPUT_LIMIT/);assert.equal(f.requests.length,1);
+});
+test('full waiting-byte queue permits edited Ctrl-U reset without reauthorizing queued text',async t=>{
+  const f=await setup(t,(_,res,b)=>{if(b.messages.at(-1).content==='old'){res.writeHead(200,{'content-type':'text/event-stream'});res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'edit-entered................................................'},finish_reason:null}]})}\n\n`);return;}respond(res,b);});
+  const r=await pty({...f.env,TERM:'xterm'},[{wait:'capir> '},{write:'old\n'},{wait:'edit-entered'},{write:('q'.repeat(2048)+'\n').repeat(64)},{write:'wrong\u0015/reset\n'},{wait:'Conversation reset.'},{wait:'capir> '},...step('new'),{write:'/exit\n'}]);assert.equal(r.code,0);assert.equal(f.requests.length,2);assert.equal(f.requests[1].body.messages[0].content,'new');
+});
+test('real reset during delayed metadata prevents that old generation, then resolves fresh current turn',async t=>{
+  const f=await fixture(t);const admitted=join(f.root,'metadata-admitted');let gets=0;const p=await provider(t,async(req,res,b)=>{if(req.url.endsWith('/count_tokens')){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({input_tokens:100}));return;}if(req.method==='GET'){gets++;if(gets===1){res.writeHead(200,{'content-type':'application/json'});res.flushHeaders();await writeFile(admitted,'metadata admitted\n');return;}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({type:'model',id:'fixture',max_input_tokens:1000000,max_tokens:128000}));}else{res.writeHead(200,{'content-type':'text/event-stream'});res.end(anthropic('fresh-answer','end_turn',true));}});
+  assert.equal((await cli(['models','add','work','--provider','anthropic','--base-url',p.url,'--model','fixture','--auth','none','--default'],f.env)).code,0);
+  // A method-aware synthetic provider ACK proves actual metadata admission.
+  const r=await pty(f.env,[{wait:'capir> '},{write:'old\n'},{wait_file:admitted},{write:'/reset\n'},{wait:'Conversation reset.'},{wait:'capir> '},...step('new'),{write:'/exit\n'}]);assert.equal(r.code,0);assert.equal(p.requests.filter(x=>x.method==='POST'&&!x.path.endsWith('/count_tokens')).length,1);assert.equal(p.requests.find(x=>x.method==='POST'&&!x.path.endsWith('/count_tokens')).body.messages[0].content,'new');assert.equal(gets,2);
+});
+async function blockedWriterProbe(f,fd=1){
+  const mark=join(f.root,'pending-owned-write'),closed=join(f.root,'owned-writer-closed'),loader=join(f.root,'pending-write-probe.mjs');
+  await writeFile(loader,`import fs from 'node:fs';
+import cp from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
+const original=cp.spawn;const marker=${JSON.stringify(mark)},closed=${JSON.stringify(closed)};
+cp.spawn=(command,args,options)=>{
+ const child=original(command,args,options);
+ if(!args?.[0]?.endsWith('/ttyWriter.js')||options?.stdio?.[3]!==${fd})return child;
+ let ack='',timer,pending;
+ child.stdout.on('data',chunk=>{
+  ack+=chunk.toString('ascii');
+  while(ack.includes('\\n')){
+   const end=ack.indexOf('\\n'),line=ack.slice(0,end);ack=ack.slice(end+1);
+   const [id,state]=line.split(':');
+   if(state==='start'){pending=id;timer=setTimeout(()=>{if(pending===id)fs.writeFileSync(marker,'actual TTY completion ACK pending after50ms\\n');},50);}
+   if(state==='done'&&pending===id){pending=undefined;clearTimeout(timer);fs.rmSync(marker,{force:true});}
+  }
+ });
+ child.once('close',(code,signal)=>{clearTimeout(timer);fs.writeFileSync(closed,JSON.stringify({pid:child.pid,code,signal}));});
+ return child;
+};syncBuiltinESMExports();\n`);
+  return {mark,closed,env:{...f.env,NODE_OPTIONS:[f.env.NODE_OPTIONS,'--import='+new URL('file://'+loader).href].filter(Boolean).join(' ')}};
+}
+async function assertPhysicalWriterClosed(probe){
+  const receipt=JSON.parse(await readFile(probe.closed,'utf8'));
+  assert.equal(receipt.signal,'SIGKILL');assert.ok(receipt.pid>0);
+  assert.throws(()=>process.kill(receipt.pid,0),error=>error.code==='ESRCH');
+}
+for(const command of ['/reset','/exit'])test(`actual ${command} during proved pending stdout write closes without another generation`,{timeout:20000},async t=>{
+  const f=await setup(t,(_,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});for(let i=0;i<40;i++)res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'z'.repeat(65536)},finish_reason:null}]})}\n\n`);res.end('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');});
+  const probe=await blockedWriterProbe(f);const start=Date.now();const r=await pty(probe.env,[{wait:'capir> '},{pause_stdout:true},{write:'old\n'},{wait_file:probe.mark},{write:command+'\n'}]);
+  await assertPhysicalWriterClosed(probe);assert.equal(r.code,command==='/exit'?0:3);assert.equal(f.requests.length,1);assert.ok(Date.now()-start<7000);if(command==='/reset'){assert.equal(r.stderr.includes('Conversation reset.'),false);assert.match(r.stderr,/CAPIR_MODEL_OUTPUT/);}
+});
+test('history display blocked on real stdout participates in reset retirement without a model call',{timeout:20000},async t=>{
+  const long='h'.repeat(150000)+'history-tail';const f=await setup(t,(_,res,b)=>respond(res,b,'saved'));const probe=await blockedWriterProbe(f);
+  const r=await pty(probe.env,[{wait:'capir> '},...step(long),{pause_stdout:true},{write:'/history\n'},{wait_file:probe.mark},{write:'/reset\n'}]);await assertPhysicalWriterClosed(probe);assert.equal(r.code,3);assert.equal(f.requests.length,1);assert.equal(r.stderr.includes('Conversation reset.'),false);
+});
+test('reset preserves a new input after its epoch while retiring older pasted entries',async t=>{
+  const f=await setup(t,(_,res,b)=>{if(b.messages.at(-1).content==='old'){res.writeHead(200,{'content-type':'text/event-stream'});res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'epoch-entered................................................'},finish_reason:null}]})}\n\n`);return;}respond(res,b,'new-result');});
+  const r=await pty(f.env,[{wait:'capir> '},{write:'old\n'},{wait:'epoch-entered'},{write:'older-queued\n/reset\nnew\n'},{wait:'Conversation reset.'},{wait:'capir> '},{wait:'capir> '},{write:'/exit\n'}]);assert.equal(r.code,0);assert.equal(f.requests.length,2);assert.deepEqual(f.requests[1].body.messages,[{role:'user',content:'new'}]);
+});
+
+for(const command of ['/reset','/exit'])test(`real stderr TTY blocked readline echo still admits ${command} and physically reaps owned helper`,{timeout:20000},async t=>{
+  const f=await setup(t,(_,res,b)=>respond(res,b,'answer'));
+  const probe=await blockedWriterProbe(f,2);const start=Date.now();
+  const r=await pty(probe.env,[{wait:'capir> '},{pause_stderr:true},{write:'e'.repeat(80000)},{wait_file:probe.mark},{write:'\n'+command+'\n'}],[],{stderr_tty:true});
+  await assertPhysicalWriterClosed(probe);assert.equal(r.code,command==='/exit'?0:3);assert.equal(f.requests.length,0);assert.ok(Date.now()-start<7000);assert.equal(r.stderr.includes('Conversation reset.'),false);
+});
+test('real stderr TTY readline echo queue failure cancels active work before an unbounded redraw queue',{timeout:20000},async t=>{
+  const f=await setup(t,(_,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'echo-active-entered................................................'},finish_reason:null}]})}\n\n`);});
+  const probe=await blockedWriterProbe(f,2);const start=Date.now();
+  const r=await pty({...probe.env,TERM:'xterm'},[{wait:'capir> '},{write:'old\n'},{wait:'echo-active-entered'},{pause_stderr:true},{write:'w'.repeat(80000)},{wait_file:probe.mark},{write:'\u000c'.repeat(80),allow_input_close:true}],[],{stderr_tty:true});
+  await assertPhysicalWriterClosed(probe);assert.equal(r.code,3);assert.equal(f.requests.length,1);assert.ok(Date.now()-start<7000);
+});
+
+test('actual stderr TTY Ctrl-C retires blocked echo and current provider with exit130',{timeout:20000},async t=>{
+  const f=await setup(t,(_,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'ctrlc-owner-entered................................................'},finish_reason:null}]})}\n\n`);});
+  const probe=await blockedWriterProbe(f,2);const start=Date.now();
+  const r=await pty({...probe.env,TERM:'dumb'},[{wait:'capir> '},{write:'old\n'},{wait:'ctrlc-owner-entered'},{pause_stderr:true},{write:'w'.repeat(80000)},{wait_file:probe.mark},{bytes:[3]}],[],{stderr_tty:true});
+  await assertPhysicalWriterClosed(probe);assert.equal(r.code,130);assert.equal(f.requests.length,1);assert.ok(Date.now()-start<7000);
+});
+test('all real PTYs preserve complete long Unicode current input and exact original next-turn history',async t=>{
+  const f=await setup(t,(_,res,b)=>respond(res,b,'完整回答🙂'));const full='真实'.repeat(45000)+'🙂终端输入尾部';
+  const r=await pty({...f.env,TERM:'dumb'},[{wait:'capir> '},...step(full),...step('next'),{write:'/exit\n'}],[],{stderr_tty:true});
+  assert.equal(r.code,0);assert.equal(f.requests.length,2);assert.ok(Buffer.byteLength(full)>256*1024);assert.deepEqual(f.requests[1].body.messages.map(x=>x.content),[full,'完整回答🙂','next']);assert.equal(r.stderr.includes(full),true);
+});

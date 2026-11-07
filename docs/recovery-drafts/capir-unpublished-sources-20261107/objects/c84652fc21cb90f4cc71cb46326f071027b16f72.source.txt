@@ -1,0 +1,54 @@
+import { randomUUID } from "node:crypto";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { loadAgentResponsePreference, readAgentPreference, saveAgentPreference } from "./agentPreferences.js";
+import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
+import { createHarnessContinuationController } from "./harnessSessions.js";
+import { mutateAgentSession } from "./agentSessions.js";
+import { inTransaction } from "../database/pool.js";
+import type { AuthContext } from "./auth.js";
+
+const url = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+const pool = url ? new Pool({ connectionString: url, idleTimeoutMillis: 0, max: 2 }) : null;
+const auth: AuthContext = { accountId: randomUUID(), accountSlug: `preferences-${randomUUID()}`, userId: randomUUID(),
+  userEmail: "preferences@synthetic.local", userKind: "simulated_human", sessionId: randomUUID() };
+const second = { ...auth, userId: randomUUID(), userEmail: "second@synthetic.local" };
+beforeAll(async () => {
+  if (!pool) return;
+  await pool.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic preferences')", [auth.accountId, auth.accountSlug]);
+  for (const user of [auth, second]) await pool.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic owner','simulated_human')", [user.userId, user.accountId, user.userEmail]);
+}, 30_000);
+afterAll(async () => { await pool?.end(); });
+
+describe.skipIf(!pool)("user-owned response preference", () => {
+  it("persists only the authenticated user's setting with revisions and exact retry semantics", async () => {
+    expect((await readAgentPreference(pool!, auth)).preference).toMatchObject({ response_style: "default", revision: 0, provenance: null });
+    const mutation = { idempotency_key: randomUUID(), expected_revision: 0, response_style: "conclusion_first" as const };
+    const saved = await saveAgentPreference(pool!, auth, mutation);
+    expect(saved.preference).toMatchObject({ response_style: "conclusion_first", revision: 1, provenance: { kind: "user_setting", user_id: auth.userId } });
+    expect(await saveAgentPreference(pool!, auth, mutation)).toEqual(saved);
+    expect((await readAgentPreference(pool!, second)).preference.response_style).toBe("default");
+    expect(await loadAgentResponsePreference(pool!, auth)).toMatchObject({ responseStyle: "conclusion_first", sourceID: saved.preference.provenance!.source_id });
+    await expect(saveAgentPreference(pool!, auth, { ...mutation, idempotency_key: randomUUID() })).rejects.toThrow("Read the current preference");
+    const id = randomUUID();
+    await mutateAgentSession(pool!, auth, id, { expected_revision: 0, idempotency_key: randomUUID(), payload: {
+      id, scopeKind: "unresolved_intent", personDisplayLabel: "New session", contextDisplayLabel: "Conversation", title: "Preference check",
+      updatedAt: new Date().toISOString(), isUnread: false, turns: [],
+    } });
+    const controller = createHarnessContinuationController(pool!, auth, id, { kind: "workspace_conversation" },
+      () => ({ expiresAt: new Date(Date.now() + 86_400_000), personIDs: [] }), { attemptID: randomUUID(), taskID: randomUUID() });
+    const lease = await controller.factory("a".repeat(64));
+    await lease.store.append({ projectKey: "synthetic", sessionId: lease.sessionID }, [{ type: "user", uuid: randomUUID(), message: "Saved reply preference" }]);
+    await lease.finish(true);
+    // The successful resume transition commits atomically with the product
+    // result in its final transaction.
+    await inTransaction(pool!, client => controller.finalize(client, true));
+    const guard = await createHarnessSourceGuard(pool!, auth, id, () => undefined);
+    const reset = await saveAgentPreference(pool!, auth, { idempotency_key: randomUUID(), expected_revision: 1, response_style: "default" });
+    expect(reset.preference).toMatchObject({ response_style: "default", revision: 2 });
+    expect(await loadAgentResponsePreference(pool!, auth)).toBeUndefined();
+    await expect(guard()).rejects.toThrow("source context changed");
+    expect((await pool!.query("SELECT count(*)::int AS count FROM harness_session_entries WHERE account_id=$1", [auth.accountId])).rows[0].count).toBe(0);
+    await expect(saveAgentPreference(pool!, auth, mutation)).rejects.toThrow("changed after that request");
+  });
+});

@@ -1,0 +1,162 @@
+import { resolveProductPrompt } from "@talent-signal/agent/prompt-registry";
+import "server-only";
+
+import {
+  parseScreenshotCaptureDraft,
+  type ScreenshotCaptureDraft,
+  type ScreenshotOwnerRole,
+} from "../screenshot-capture";
+import { screenshotPrompt } from "./ark";
+
+const DEFAULT_BIGMODEL_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
+export const DEFAULT_BIGMODEL_SCREENSHOT_MODEL = "glm-5.3-flash";
+
+type BigModelChatResponse = {
+  id?: string;
+  model?: string;
+  choices?: Array<{
+    finish_reason?: string;
+    message?: {
+      content?: string;
+    };
+  }>;
+};
+
+export type BigModelScreenshotAnalysis = {
+  draft: ScreenshotCaptureDraft;
+  meta: {
+    provider: "Zhipu BigModel";
+    model: string;
+    request_id?: string;
+    raw_image_stored_by_talent_signal: false;
+  };
+};
+
+function sensitiveProcessingAllowed() {
+  return process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING === "true";
+}
+
+function bigModelBaseUrl() {
+  const configured = (
+    process.env.ZHIPU_BASE_URL ?? DEFAULT_BIGMODEL_BASE_URL
+  ).replace(/\/+$/, "");
+  const parsed = new URL(configured);
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname !== "open.bigmodel.cn" ||
+    parsed.pathname.replace(/\/+$/, "") !== "/api/paas/v4"
+  ) {
+    throw new Error(
+      "ZHIPU_BASE_URL must use the official BigModel v4 API endpoint.",
+    );
+  }
+  return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+}
+
+function configuredModel() {
+  const model = (
+    process.env.TALENT_SIGNAL_ZHIPU_SCREENSHOT_MODEL ??
+    DEFAULT_BIGMODEL_SCREENSHOT_MODEL
+  ).trim();
+  if (!/^glm-[a-z0-9.-]+$/u.test(model) || /(?:latest|auto)/u.test(model)) {
+    throw new Error("请配置一个明确固定版本的 GLM 视觉模型。");
+  }
+  return model;
+}
+
+export function getBigModelAvailability() {
+  return {
+    enabled:
+      process.env.TALENT_SIGNAL_AI_ENABLED === "true" &&
+      Boolean(process.env.ZHIPU_API_KEY) &&
+      sensitiveProcessingAllowed(),
+    provider: "Zhipu BigModel" as const,
+    screenshot_model: configuredModel(),
+  };
+}
+
+export async function analyzeScreenshotWithBigModel(input: {
+  bytes: Uint8Array;
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  contactName: string;
+  assignmentLabel: string;
+  screenshotOwner: ScreenshotOwnerRole;
+  fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+}): Promise<BigModelScreenshotAnalysis> {
+  const availability = getBigModelAvailability();
+  const apiKey = process.env.ZHIPU_API_KEY;
+  if (!availability.enabled || !apiKey) {
+    throw new Error("尚未配置 BigModel 截图分析。");
+  }
+
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const imageDataUrl = `data:${input.mimeType};base64,${Buffer.from(input.bytes).toString("base64")}`;
+  const response = await fetchImpl(
+    `${bigModelBaseUrl()}/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: availability.screenshot_model,
+        messages: [
+          {
+            role: "system",
+            content: (await resolveProductPrompt("capture/screenshot")).text,
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: screenshotPrompt(input) },
+              {
+                type: "image_url",
+                image_url: { url: imageDataUrl },
+              },
+            ],
+          },
+        ],
+        thinking: { type: "enabled" },
+        response_format: { type: "json_object" },
+        }),
+      cache: "no-store",
+      signal: input.signal
+        ? AbortSignal.any([input.signal, AbortSignal.timeout(45_000)])
+        : AbortSignal.timeout(45_000),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `BigModel screenshot analysis failed with ${response.status}.`,
+    );
+  }
+  const payload = (await response.json()) as BigModelChatResponse;
+  if (payload.model && payload.model !== availability.screenshot_model) {
+    throw new Error(
+      "BigModel returned a model different from the immutable configured model.",
+    );
+  }
+  if (payload.choices?.[0]?.finish_reason === "length") {
+    throw new Error("MODEL_OUTPUT_TRUNCATED: provider stopped before completing the evidence response.");
+  }
+  const content = payload.choices?.[0]?.message?.content;
+  if (typeof content !== "string") {
+    throw new Error("BigModel 未返回结构化截图分析。");
+  }
+
+  return {
+    draft: parseScreenshotCaptureDraft(content, {
+      require_visual_direction: true,
+      screenshot_owner: input.screenshotOwner,
+    }),
+    meta: {
+      provider: "Zhipu BigModel",
+      model: payload.model ?? availability.screenshot_model,
+      ...(payload.id ? { request_id: payload.id } : {}),
+      raw_image_stored_by_talent_signal: false,
+    },
+  };
+}

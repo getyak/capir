@@ -1,0 +1,62 @@
+/**
+ * Narrow redaction gate over the formal capir proof receipts.
+ *
+ * Formal evidence must never contain authorization codes, states, handoff
+ * secrets, or bearer material — only redaction markers, public scenario
+ * digests, request UUIDs, and safe origin/path/query-name observations.
+ */
+import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
+
+const RECEIPT_DIR = fileURLToPath(
+  new URL("../../../docs/evaluations/2026-10-01-capir-cli-proof/cli-web", import.meta.url),
+);
+
+const FORBIDDEN = [
+  {
+    name: "authorization code or state in a URL query",
+    pattern: /[?&](?:code|state|token|secret|handoff_secret)=[A-Za-z0-9._~-]{8,}/i,
+  },
+  {
+    name: "unredacted token-shaped value",
+    pattern: /\b(?![a-f0-9]{64}\b)[A-Za-z0-9._~-]{43,128}\b/,
+  },
+  {
+    name: "unredacted bearer material",
+    // Credential-shaped values only: real tokens are long base64url/JWT
+    // strings; prose such as "bearer material" must not trip the gate.
+    pattern: /Bearer\s+(?!\[REDACTED\])(?![a-f0-9]{64}\b)[A-Za-z0-9._~+\/=\-]{24,}/i,
+  },
+];
+
+describe("formal capir receipts redaction", () => {
+  it("contain no authorization codes, states, or bearer material", () => {
+    const files = ["", "fix-1/full", "fix-1/backend", "fix-2"].flatMap((directory) =>
+      readdirSync(join(RECEIPT_DIR, directory)).filter((name) =>
+        /\.(json|txt|md)$/.test(name),
+      ).map((name) => join(directory, name)),
+    );
+    assert.ok(files.length >= 5, `expected formal receipts, found ${files.join(", ")}`);
+    const violations = [];
+    for (const name of files) {
+      const text = readFileSync(join(RECEIPT_DIR, name), "utf8");
+      for (const rule of FORBIDDEN) {
+        const match = text.match(rule.pattern);
+        if (match) violations.push(`${name}: ${rule.name}`);
+      }
+    }
+    assert.deepEqual(violations, [], `receipt redaction violations: ${violations.join("; ")}`);
+  });
+
+  it("keeps one readable PASS line per full-tier proof check", () => {
+    const full = join(RECEIPT_DIR, "fix-1/full");
+    const proof = JSON.parse(readFileSync(join(full, "proof.json"), "utf8"));
+    const lines = readFileSync(join(full, "verification.txt"), "utf8").split(/\r?\n/);
+    assert.equal(lines.filter((line) => line.startsWith("[PASS] ")).length, proof.checks.length);
+    assert.ok(lines.some((line) => line.includes("browser ran in an isolated context")));
+    assert.ok(lines.some((line) => line.includes("sandbox id recorded")));
+  });
+});

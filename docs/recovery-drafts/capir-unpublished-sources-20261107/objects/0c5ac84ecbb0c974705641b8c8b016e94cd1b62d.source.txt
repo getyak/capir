@@ -1,0 +1,410 @@
+import XCTest
+@testable import TalentSignalMac
+
+final class FollowUpReminderTests: XCTestCase {
+    @MainActor
+    func testPreviewOnlyServiceCannotReachAnyExternalReminderOperation() async {
+        let service = PreviewOnlyFollowUpReminderService()
+        let proposal = FollowUpReminderProposal.make(
+            sourceItemID: UUID(uuidString: "10000000-0000-4000-8000-000000000001")!,
+            sourceDigest: "source-digest",
+            title: "Follow up on decision timing",
+            dueAt: Date(timeIntervalSince1970: 1_788_000_000),
+            timeZone: TimeZone(identifier: "Asia/Shanghai")!,
+            evidenceQuote: "I need to decide by Friday.",
+            destination: FollowUpReminderDestination(identifier: "list-a", title: "Reminders")
+        )
+        let receipt = FollowUpReminderReceipt(
+            idempotencyKey: proposal.idempotencyKey,
+            reminderIdentifier: "reminder-a",
+            title: proposal.title,
+            dueAt: proposal.dueAt,
+            destinationIdentifier: proposal.destination.identifier,
+            destinationTitle: proposal.destination.title,
+            verifiedAt: Date(timeIntervalSince1970: 1_788_000_100)
+        )
+
+        let preview = await service.previewDestination()
+        let execute = await service.execute(proposal)
+        let reconcile = await service.reconcile(proposal)
+        let remove = await service.remove(receipt)
+        let reconcileRemoval = await service.reconcileRemoval(receipt)
+
+        guard case .failure(.previewOnly) = preview else {
+            return XCTFail("Preview-only fixture unexpectedly reached destination preview")
+        }
+        guard case .failure(.previewOnly) = execute else {
+            return XCTFail("Preview-only fixture unexpectedly reached reminder creation")
+        }
+        guard case .failure(.previewOnly) = reconcile else {
+            return XCTFail("Preview-only fixture unexpectedly reached reminder reconciliation")
+        }
+        guard case .failure(.previewOnly) = remove else {
+            return XCTFail("Preview-only fixture unexpectedly reached reminder removal")
+        }
+        guard case .failure(.previewOnly) = reconcileRemoval else {
+            return XCTFail("Preview-only fixture unexpectedly reached removal reconciliation")
+        }
+    }
+
+    func testIdenticalProposalHasStableIdempotencyKey() {
+        let sourceID = UUID(uuidString: "10000000-0000-4000-8000-000000000001")!
+        let destination = FollowUpReminderDestination(identifier: "list-a", title: "Reminders")
+        let dueAt = Date(timeIntervalSince1970: 1_788_000_000)
+
+        let first = FollowUpReminderProposal.make(
+            sourceItemID: sourceID,
+            sourceDigest: "source-digest",
+            title: "Follow up on decision timing",
+            dueAt: dueAt,
+            timeZone: TimeZone(identifier: "Asia/Shanghai")!,
+            evidenceQuote: "I need to decide by Friday.",
+            destination: destination
+        )
+        let retry = FollowUpReminderProposal.make(
+            sourceItemID: sourceID,
+            sourceDigest: "source-digest",
+            title: "Follow up on decision timing",
+            dueAt: dueAt,
+            timeZone: TimeZone(identifier: "Asia/Shanghai")!,
+            evidenceQuote: "I need to decide by Friday.",
+            destination: destination
+        )
+
+        XCTAssertEqual(first.idempotencyKey, retry.idempotencyKey)
+    }
+
+    func testMaterialEditCreatesNewOperationAuthority() {
+        let sourceID = UUID(uuidString: "10000000-0000-4000-8000-000000000001")!
+        let destination = FollowUpReminderDestination(identifier: "list-a", title: "Reminders")
+        let first = FollowUpReminderProposal.make(
+            sourceItemID: sourceID,
+            sourceDigest: "source-digest",
+            title: "Follow up on Friday",
+            dueAt: Date(timeIntervalSince1970: 1_788_000_000),
+            timeZone: TimeZone(identifier: "Asia/Shanghai")!,
+            evidenceQuote: "I need to decide by Friday.",
+            destination: destination
+        )
+        let edited = FollowUpReminderProposal.make(
+            sourceItemID: sourceID,
+            sourceDigest: "source-digest",
+            title: "Follow up before Friday",
+            dueAt: Date(timeIntervalSince1970: 1_788_003_600),
+            timeZone: TimeZone(identifier: "Asia/Shanghai")!,
+            evidenceQuote: "I need to decide by Friday.",
+            destination: destination
+        )
+
+        XCTAssertNotEqual(first.idempotencyKey, edited.idempotencyKey)
+    }
+
+
+    // MARK: Real EventKit producer with injected permission/fetch/save seams
+
+    @MainActor
+    func testRealProducerWritesLateOutcomeOnlyUnderItsOriginalAccountNamespace() async {
+        let store = ControlledReminderEventStore()
+        store.losesReadback = true
+        store.holdsFetch = true
+        let (service, defaults, ledger) = makeProducer(store: store)
+        service.setLocalRecoveryAccount("account-a")
+        let proposal = makeProposal(title: "Account A reminder")
+
+        let execute = Task { await service.execute(proposal) }
+        await waitUntil { store.fetchCallCount == 1 }
+        XCTAssertEqual(store.saveCallCount, 1)
+
+        // Account replacement while the real producer is paused in readback.
+        service.setLocalRecoveryAccount("account-b")
+        store.completeFetch(with: [Self.record(for: proposal, listTitle: "Follow Up")])
+
+        let result = await execute.value
+        guard case .success(let receipt) = result else {
+            return XCTFail("An already dispatched write must keep its truthful verified outcome: \(result)")
+        }
+        XCTAssertEqual(receipt.idempotencyKey, proposal.idempotencyKey)
+        XCTAssertNotNil(defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-a")))
+        XCTAssertNil(
+            defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-b")),
+            "An old callback must never persist account A source under account B."
+        )
+        ledger.setAccountScope("account-a")
+        XCTAssertEqual(ledger.events().map(\.state), [.pending, .verified])
+        ledger.setAccountScope("account-b")
+        XCTAssertTrue(ledger.events().isEmpty, "Ledger events stay in the original account namespace.")
+    }
+
+    @MainActor
+    func testRealProducerDeniesNewExternalSaveAfterAuthorityWithdrawal() async {
+        let store = ControlledReminderEventStore()
+        store.authorization = .notDetermined
+        store.holdsPermission = true
+        let (service, defaults, ledger) = makeProducer(store: store)
+        service.setLocalRecoveryAccount("account-a")
+        let proposal = makeProposal(title: "Never-dispatched reminder")
+
+        let execute = Task { await service.execute(proposal) }
+        await waitUntil { store.permissionRequestCount == 1 }
+
+        // Authority is withdrawn while the permission await is still pending:
+        // the external save has not been dispatched yet and must not be.
+        service.clearLocalRecovery()
+        store.completePermission(with: true)
+
+        let result = await execute.value
+        guard case .failure(.permissionDenied) = result else {
+            return XCTFail("A revoked producer must deny the not-yet-dispatched write: \(result)")
+        }
+        XCTAssertEqual(store.saveCallCount, 0, "No external save may be dispatched after revocation.")
+        XCTAssertNil(defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-a")))
+        ledger.setAccountScope("account-a")
+        XCTAssertTrue(ledger.events().isEmpty)
+    }
+
+    @MainActor
+    func testObsoleteProducerCannotRecreateClearedRecoveryOrLedger() async {
+        let store = ControlledReminderEventStore()
+        store.losesReadback = true
+        store.holdsFetch = true
+        let (service, defaults, ledger) = makeProducer(store: store)
+        service.setLocalRecoveryAccount("account-a")
+        let proposal = makeProposal(title: "Cleared-account reminder")
+
+        let execute = Task { await service.execute(proposal) }
+        await waitUntil { store.fetchCallCount == 1 }
+        XCTAssertNotNil(defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-a")))
+
+        // Sign-out clears the original account recovery while readback is
+        // still in flight.
+        service.clearLocalRecovery()
+        store.completeFetch(with: [Self.record(for: proposal, listTitle: "Follow Up")])
+
+        let result = await execute.value
+        guard case .success = result else {
+            return XCTFail("The already dispatched external write stays truthfully verified, never canceled: \(result)")
+        }
+        XCTAssertNil(
+            defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-a")),
+            "An obsolete callback must not recreate recovery that sign-out already cleared."
+        )
+        ledger.setAccountScope("account-a")
+        XCTAssertTrue(ledger.events().isEmpty, "A cleared old ledger is never recreated.")
+    }
+
+    @MainActor
+    func testReconcileAndRemovalUseTheCapturedOriginalNamespaceAfterAwaits() async {
+        let store = ControlledReminderEventStore()
+        let (service, defaults, ledger) = makeProducer(store: store)
+        service.setLocalRecoveryAccount("account-a")
+        let proposal = makeProposal(title: "Namespace-pinned reminder")
+        guard case .success(let receipt) = await service.execute(proposal) else {
+            return XCTFail("Expected the seeded execute to verify")
+        }
+        XCTAssertEqual(store.saveCallCount, 1)
+
+        // Reconcile pauses in its readback search; the account is replaced
+        // meanwhile. The late outcome must land under the ORIGINAL account.
+        store.losesReadback = true
+        store.holdsFetch = true
+        store.fetched = [Self.record(for: proposal, listTitle: "Follow Up")]
+        let reconcile = Task { await service.reconcile(proposal) }
+        await waitUntil { store.fetchCallCount >= 1 }
+        service.setLocalRecoveryAccount("account-b")
+        store.completeFetch()
+        _ = await reconcile.value
+        XCTAssertNotNil(defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-a")))
+        XCTAssertNil(defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-b")))
+
+        // Removal phase explicitly rebinds the ORIGINAL account A before it
+        // starts, waits for that phase's exact new continuation (never the
+        // prior seeded fetch count), and only then replaces the account during
+        // the await.
+        service.setLocalRecoveryAccount("account-a")
+        store.holdsFetch = true
+        store.fetched = []
+        store.saved = [:]
+        let fetchCountBeforeRemoval = store.fetchCallCount
+        let removal = Task { await service.remove(receipt) }
+        await waitUntil { store.fetchCallCount > fetchCountBeforeRemoval }
+        service.setLocalRecoveryAccount("account-c")
+        store.completeFetch()
+        let removalResult = await removal.value
+        guard case .success = removalResult else {
+            return XCTFail("Expected verified absence: \(removalResult)")
+        }
+        XCTAssertNil(defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-a")))
+        XCTAssertNil(defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-c")))
+    }
+
+    @MainActor
+    func testAlreadyDispatchedRemovalFailureStaysUnknownNotCanceled() async {
+        let store = ControlledReminderEventStore()
+        let (service, defaults, ledger) = makeProducer(store: store)
+        service.setLocalRecoveryAccount("account-a")
+        let proposal = makeProposal(title: "Uncertain removal reminder")
+        guard case .success(let receipt) = await service.execute(proposal) else {
+            return XCTFail("Expected the seeded execute to verify")
+        }
+
+        store.removeError = ControlledReminderStoreError.transport
+        let removal = await service.remove(receipt)
+
+        guard case .failure(.saveFailed) = removal else {
+            return XCTFail("An uncertain removal must stay unknown, never canceled: \(removal)")
+        }
+        ledger.setAccountScope("account-a")
+        XCTAssertEqual(ledger.events().map(\.state), [.pending, .verified, .removalRequested, .removalUnknown])
+        XCTAssertNotNil(
+            defaults.data(forKey: Self.receiptKey(ledger, accountID: "account-a")),
+            "An unknown removal keeps its recovery for reconciliation instead of deleting it."
+        )
+    }
+
+    // MARK: Producer test fixtures (injected seams; never a real calendar)
+
+    @MainActor
+    private func makeProducer(
+        store: ControlledReminderEventStore
+    ) -> (EventKitFollowUpReminderService, UserDefaults, ReminderLifecycleLedger) {
+        let suiteName = "FollowUpReminderTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        addTeardownBlock {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let ledger = ReminderLifecycleLedger(defaults: defaults)
+        let service = EventKitFollowUpReminderService(
+            eventStore: store,
+            defaults: defaults,
+            lifecycleLedger: ledger
+        )
+        return (service, defaults, ledger)
+    }
+
+    private func makeProposal(title: String) -> FollowUpReminderProposal {
+        FollowUpReminderProposal.make(
+            sourceItemID: UUID(uuidString: "10000000-0000-4000-8000-000000000042")!,
+            sourceDigest: "producer-source-digest",
+            title: title,
+            dueAt: Date(timeIntervalSince1970: 1_788_000_000),
+            timeZone: TimeZone(identifier: "Asia/Shanghai")!,
+            evidenceQuote: "not persisted in recovery",
+            destination: .init(identifier: "list-a", title: "Follow Up")
+        )
+    }
+
+    @MainActor
+    private func waitUntil(
+        timeoutIterations: Int = 1_000,
+        _ condition: @MainActor () -> Bool
+    ) async {
+        for _ in 0..<timeoutIterations {
+            if condition() { return }
+            await Task.yield()
+        }
+        XCTFail("Controlled producer seam never reached the expected state")
+    }
+
+    private static func record(
+        for proposal: FollowUpReminderProposal,
+        listTitle: String
+    ) -> FollowUpReminderRecord {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: proposal.timeZoneIdentifier) ?? .current
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: proposal.dueAt)
+        components.timeZone = calendar.timeZone
+        return FollowUpReminderRecord(
+            identifier: "seeded-reminder",
+            title: proposal.title,
+            dueComponents: components,
+            recoveryURL: URL(string: "talentsignal://follow-up-reminder/\(proposal.idempotencyKey)"),
+            listIdentifier: proposal.destination.identifier,
+            listTitle: listTitle
+        )
+    }
+
+    @MainActor
+    private static func receiptKey(_ ledger: ReminderLifecycleLedger, accountID: String) -> String {
+        ledger.setAccountScope(accountID)
+        return "talent-signal.macos.follow-up-reminder-receipts.v2.\(ledger.currentAccountScopeDigest)"
+    }
+}
+
+private enum ControlledReminderStoreError: Error {
+    case transport
+}
+
+/// Controlled dependency/permission/fetch/save seam for the real producer.
+/// Tests drive it directly; it can never touch a user's reminders or calendar.
+@MainActor
+private final class ControlledReminderEventStore: FollowUpReminderEventStore {
+    var authorization: FollowUpReminderAuthorizationStatus = .fullAccess
+    var lists: [String: FollowUpReminderList] = ["list-a": .init(identifier: "list-a", title: "Follow Up")]
+    var saved: [String: FollowUpReminderRecord] = [:]
+    var fetched: [FollowUpReminderRecord] = []
+    var losesReadback = false
+    var holdsPermission = false
+    var holdsFetch = false
+    var saveError: Error?
+    var removeError: Error?
+    private(set) var permissionRequestCount = 0
+    private(set) var saveCallCount = 0
+    private(set) var removeCallCount = 0
+    private(set) var fetchCallCount = 0
+    private var permissionContinuation: CheckedContinuation<Bool, Never>?
+    private var fetchContinuation: CheckedContinuation<[FollowUpReminderRecord], Never>?
+
+    func reminderAuthorizationStatus() -> FollowUpReminderAuthorizationStatus { authorization }
+
+    func requestReminderAccess() async -> Bool {
+        permissionRequestCount += 1
+        guard holdsPermission else { return true }
+        return await withCheckedContinuation { permissionContinuation = $0 }
+    }
+
+    func completePermission(with granted: Bool) {
+        permissionContinuation?.resume(returning: granted)
+        permissionContinuation = nil
+    }
+
+    func defaultReminderList() -> FollowUpReminderList? { lists["list-a"] }
+
+    func reminderList(withIdentifier identifier: String) -> FollowUpReminderList? { lists[identifier] }
+
+    func savedReminder(withIdentifier identifier: String) -> FollowUpReminderRecord? {
+        losesReadback ? nil : saved[identifier]
+    }
+
+    func saveReminder(_ write: FollowUpReminderWrite) throws -> String {
+        saveCallCount += 1
+        if let saveError { throw saveError }
+        let identifier = "saved-reminder-\(saveCallCount)"
+        saved[identifier] = FollowUpReminderRecord(
+            identifier: identifier,
+            title: write.title,
+            dueComponents: write.dueComponents,
+            recoveryURL: write.recoveryURL,
+            listIdentifier: write.listIdentifier,
+            listTitle: lists[write.listIdentifier]?.title ?? "Unknown"
+        )
+        return identifier
+    }
+
+    func removeReminder(withIdentifier identifier: String) throws {
+        removeCallCount += 1
+        if let removeError { throw removeError }
+        saved.removeValue(forKey: identifier)
+    }
+
+    func fetchReminders(listIdentifier: String, recoveryURL: URL?) async -> [FollowUpReminderRecord] {
+        fetchCallCount += 1
+        guard holdsFetch else { return fetched }
+        return await withCheckedContinuation { fetchContinuation = $0 }
+    }
+
+    func completeFetch(with reminders: [FollowUpReminderRecord]? = nil) {
+        if let reminders { fetched = reminders }
+        fetchContinuation?.resume(returning: fetched)
+        fetchContinuation = nil
+    }
+}

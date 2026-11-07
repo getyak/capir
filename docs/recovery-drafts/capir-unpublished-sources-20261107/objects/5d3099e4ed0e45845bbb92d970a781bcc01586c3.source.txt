@@ -1,0 +1,32 @@
+import "server-only";
+import type { MailProvider } from "../mail-integration";
+
+export const MAIL_SCOPES = {
+  gmail: ["https://www.googleapis.com/auth/gmail.metadata"],
+  outlook: ["User.Read", "Mail.ReadBasic"],
+} satisfies Record<MailProvider, string[]>;
+
+export type MailConfig = { origin: string; key: Buffer; clientId: string; clientSecret: string };
+export function mailConfig(provider: MailProvider, env: Record<string, string | undefined> = process.env): MailConfig | null {
+  if (env.TALENT_SIGNAL_MAIL_TEST_ENABLED !== "true") return null;
+  try {
+    const raw = env.TALENT_SIGNAL_INTEGRATIONS_ORIGIN?.trim();
+    if (!raw) return null;
+    const url = new URL(raw);
+    if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) return null;
+    if (url.protocol !== "https:" && !(url.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) && env.NODE_ENV !== "production")) return null;
+    const encoded = env.TALENT_SIGNAL_INTEGRATIONS_KEY?.trim() ?? "";
+    if (!/^[A-Za-z0-9+/]{43}=$/.test(encoded)) return null;
+    const key = Buffer.from(encoded, "base64");
+    if (key.length !== 32) return null;
+    const prefix = provider === "gmail" ? "TALENT_SIGNAL_GMAIL" : "TALENT_SIGNAL_OUTLOOK";
+    const clientId = env[`${prefix}_CLIENT_ID`]?.trim();
+    const clientSecret = env[`${prefix}_CLIENT_SECRET`]?.trim();
+    if (!clientId || !clientSecret) return null;
+    return { origin: url.origin, key, clientId, clientSecret };
+  } catch { return null; }
+}
+export function mailCallbackUrl(provider: MailProvider, config: MailConfig): string {
+  return `${config.origin}/api/integrations/mail/${provider}/callback`;
+}

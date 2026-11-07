@@ -1,0 +1,782 @@
+#!/usr/bin/env node
+/**
+ * capir Stage A proof harness (CLI + Web + real backend).
+ *
+ * Tiers:
+ *   --tier full    (default) disposable backend + Web + built CLI + owned
+ *                  browsers: real loopback login consent, real Web handoff,
+ *                  isolated sandbox entry with rendered synthetic people and
+ *                  demo expiry banner, TTL stability, real stop cleanup and
+ *                  grant-revocation binding.
+ *   --tier backend disposable real backend + PostgreSQL + built CLI (no
+ *                  browser/Web): preprovisioned CAPIR_TOKEN grant, discovery,
+ *                  sandbox lifecycle, stop cleanup, handoff fences and logout.
+ *
+ * The CLI never accesses SQL. This harness uses SQL only for disposable
+ * fixture setup and readback assertions on a uniquely named disposable
+ * database that is dropped afterwards. Existing databases, containers and
+ * processes are preserved; only harness-owned processes are stopped.
+ */
+import { spawn } from "node:child_process";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Sanitized recovery source: credentials belong only to an explicitly selected
+// disposable fixture. No built-in login or password is retained here.
+function requiredFixtureCredential(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required for the disposable seeded fixture.`);
+  return value;
+}
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(HERE, "../../..");
+const CLI = join(ROOT, "apps/cli/dist/cli.js");
+const BACKEND = join(ROOT, "apps/backend/dist/server.js");
+const BACKEND_MIGRATE = join(ROOT, "apps/backend/dist/database/migrate.js");
+const BACKEND_SEED = join(ROOT, "apps/backend/dist/database/seed.js");
+const NEXT = join(ROOT, "apps/web/node_modules/next/dist/bin/next");
+
+const argv = process.argv.slice(2);
+const tier = argv.includes("--tier") ? argv[argv.indexOf("--tier") + 1] : "full";
+if (!["full", "backend"].includes(tier)) {
+  console.error("usage: node apps/cli/scripts/capir-proof.mjs [--tier full|backend]");
+  process.exit(2);
+}
+
+const artifactDir = process.env.CAPIR_PROOF_ARTIFACT_DIR;
+const receiptDir = process.env.CAPIR_PROOF_RECEIPT_DIR;
+if (!artifactDir?.trim() || !receiptDir?.trim()) {
+  throw new Error("Explicit CAPIR_PROOF_ARTIFACT_DIR and CAPIR_PROOF_RECEIPT_DIR are required.");
+}
+const adminUrl = process.env.CAPIR_PROOF_DATABASE_URL;
+if (!adminUrl) {
+  console.error("CAPIR_PROOF_DATABASE_URL (loopback PostgreSQL admin URL) is required.");
+  process.exit(2);
+}
+const admin = new URL(adminUrl);
+if (!["127.0.0.1", "localhost"].includes(admin.hostname)) {
+  console.error("The proof database must live on literal loopback.");
+  process.exit(2);
+}
+
+mkdirSync(artifactDir, { recursive: true });
+const log = createWriteStream(join(artifactDir, "evaluation.log"), { flags: "a" });
+const say = (...parts) => {
+  const line = parts.join(" ");
+  log.write(`${new Date().toISOString()} ${line}\n`);
+  console.log(line);
+};
+
+const TOKEN_LIKE = /(?<![A-Za-z0-9._~-])(?![a-f0-9]{64}(?![A-Za-z0-9._~-]))[A-Za-z0-9._~-]{43,128}(?![A-Za-z0-9._~-])/g;
+const sanitize = (value) =>
+  JSON.stringify(value, null, 2)
+    .replace(/Bearer[ \t]+[^\r\n \t]+/gi, "Bearer [REDACTED]")
+    .replace(TOKEN_LIKE, "[REDACTED]");
+
+const checks = [];
+const cliOutputs = [];
+const owned = [];
+const runnerPids = [];
+const dbNotes = [];
+let grantTokenSource = "keyring";
+
+function check(id, ok, detail) {
+  checks.push({ id, ok, detail });
+  say(`check ${ok ? "PASS" : "FAIL"} ${id}${detail ? ` — ${detail}` : ""}`);
+  if (!ok) throw new Error(`proof check failed: ${id}`);
+}
+
+function run(command, commandArgs, options = {}) {
+  return new Promise((resolveRun) => {
+    const child = spawn(command, commandArgs, {
+      cwd: options.cwd ?? ROOT,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, ...options.env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    const childLog = options.name
+      ? createWriteStream(join(artifactDir, `${options.name}.log`), { flags: "a" })
+      : null;
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      childLog?.write(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      childLog?.write(chunk);
+    });
+    child.on("close", (code) => {
+      childLog?.end();
+      resolveRun({ code, stdout, stderr });
+    });
+    if (options.name) owned.push({ name: options.name, child });
+  });
+}
+
+async function runCli(commandArgs, extraEnv = {}) {
+  const result = await run(process.execPath, [CLI, ...commandArgs], {
+    env: {
+      CAPIR_CONFIG_DIR: join(artifactDir, "cli-config"),
+      ...extraEnv,
+    },
+  });
+  let envelope;
+  try {
+    envelope = JSON.parse(result.stdout);
+  } catch {
+    envelope = { unparsed_stdout: result.stdout.slice(0, 2000) };
+  }
+  cliOutputs.push({ args: commandArgs, exit_code: result.code, envelope });
+  say(`cli exit=${result.code} ${commandArgs.join(" ")}`);
+  return { exit_code: result.code, stdout: result.stdout, stderr: result.stderr, envelope };
+}
+
+function freePort() {
+  return new Promise((resolvePort) => {
+    const probe = createServer();
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolvePort(port));
+    });
+  });
+}
+
+async function waitFor(what, url, timeoutMs, expectStatus = 200) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "no attempt";
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url);
+      if (response.status === expectStatus) return;
+      lastError = `HTTP ${response.status}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(`${what} did not become ready: ${lastError}`);
+}
+
+const startedAt = new Date().toISOString();
+const dbName = `capir_cli_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomBytes(3).toString("hex")}`;
+const disposableUrl = new URL(adminUrl);
+disposableUrl.pathname = `/${dbName}`;
+const webHandoffKey = randomBytes(32).toString("base64url");
+const authSecret = randomBytes(32).toString("base64url");
+const backendPort = await freePort();
+const webPort = await freePort();
+const backendOrigin = `http://127.0.0.1:${backendPort}`;
+const webOrigin = `http://127.0.0.1:${webPort}`;
+
+let pool;
+let poolClosed = false;
+
+async function cleanup() {
+  for (const pid of runnerPids) {
+    if (!pid) continue;
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      /* already gone */
+    }
+  }
+  // A failed run must not leave a scoped grant or keyring entry behind.
+  if (loggedInKeyring && !succeeded) {
+    await run(process.execPath, [CLI, "auth", "logout", "--env", "proof"], {
+      env: { CAPIR_CONFIG_DIR: join(artifactDir, "cli-config") },
+    }).catch(() => {});
+    dbNotes.push("best-effort auth logout of the leftover proof grant");
+  }
+  for (const entry of [...owned].reverse()) {
+    try {
+      entry.child.kill("SIGTERM");
+    } catch {
+      /* already gone */
+    }
+  }
+  if (pool && !poolClosed) {
+    poolClosed = true;
+    await pool.end().catch(() => {});
+  }
+  if (!process.env.CAPIR_PROOF_KEEP_DB) {
+    try {
+      const { Pool } = await import("pg");
+      const adminPool = new Pool({ connectionString: adminUrl, max: 1 });
+      await adminPool.query(`DROP DATABASE IF EXISTS ${dbName}`);
+      dbNotes.push(`dropped disposable database ${dbName}`);
+      const leftover = await adminPool.query(
+        "SELECT datname FROM pg_database WHERE datname = $1",
+        [dbName],
+      );
+      dbNotes.push(`post-drop lookup rows: ${leftover.rowCount}`);
+      await adminPool.end();
+    } catch (error) {
+      dbNotes.push(`drop failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  writeFileSync(join(artifactDir, "database-cleanup.txt"), `${dbNotes.join("\n")}\n`);
+}
+
+let succeeded = false;
+let loggedInKeyring = false;
+try {
+  say(`capir proof start tier=${tier} db=${dbName}`);
+  // ---- prerequisites: real built backend + built CLI ----
+  for (const [label, file, build] of [
+    ["backend", BACKEND, ["--filter", "@talent-signal/backend", "build"]],
+    ["cli", CLI, ["--filter", "@talent-signal/cli", "build"]],
+  ]) {
+    if (!existsSync(file)) {
+      say(`building ${label}…`);
+      const built = await run("pnpm", build);
+      if (built.code !== 0) throw new Error(`${label} build failed:\n${built.stderr}`);
+    }
+  }
+
+  // ---- disposable database + real migrations + development fixture account ----
+  {
+    const { Pool } = await import("pg");
+    const adminPool = new Pool({ connectionString: adminUrl, max: 1 });
+    await adminPool.query(`CREATE DATABASE ${dbName}`);
+    await adminPool.end();
+    dbNotes.push(`created disposable database ${dbName}`);
+  }
+  const migrate = await run(process.execPath, [BACKEND_MIGRATE], {
+    env: { DATABASE_URL: disposableUrl.toString() },
+  });
+  if (migrate.code !== 0) throw new Error(`migrations failed:\n${migrate.stderr}`);
+  const seed = await run(process.execPath, [BACKEND_SEED], {
+    env: { DATABASE_URL: disposableUrl.toString(), SIMULATED_AUTH_ENABLED: "true" },
+  });
+  if (seed.code !== 0) throw new Error(`fixture seed failed:\n${seed.stderr}`);
+  say("migrations and development fixture account seeded on the disposable database");
+
+  // ---- real backend on loopback ----
+  run(process.execPath, [BACKEND], {
+    name: "backend",
+    env: {
+      DATABASE_URL: disposableUrl.toString(),
+      HOST: "127.0.0.1",
+      PORT: String(backendPort),
+      ALLOWED_ORIGINS: webOrigin,
+      CAPIR_BACKEND_ORIGINS: backendOrigin,
+      CAPIR_WEB_HANDOFF_KEY: webHandoffKey,
+      TALENT_SIGNAL_INTERNAL_LAB_ENABLED: "true",
+      SIMULATED_AUTH_ENABLED: "true",
+      PASSWORD_AUTH_ENABLED: "true",
+      SESSION_TTL_SECONDS: "3600",
+      CHAT_MEDIA_STORAGE_PROVIDER: "local",
+      CHAT_MEDIA_LOCAL_DIRECTORY: join(artifactDir, "media"),
+    },
+  }).catch(() => {});
+  await waitFor("backend", `${backendOrigin}/v1/capir/capabilities`, 60_000);
+  say(`backend ready at ${backendOrigin}`);
+
+  if (tier === "full") {
+    run(process.execPath, [NEXT, "dev", "-p", String(webPort)], {
+      name: "web",
+      cwd: join(ROOT, "apps/web"),
+      env: {
+        TALENT_SIGNAL_BACKEND_URL: backendOrigin,
+        AUTH_SECRET: authSecret,
+        CAPIR_WEB_HANDOFF_KEY: webHandoffKey,
+        NEXT_TELEMETRY_DISABLED: "1",
+      },
+    }).catch(() => {});
+    await waitFor("web", `${webOrigin}/login`, 240_000);
+    say(`web ready at ${webOrigin}`);
+  }
+
+  // ---- CLI environment: explicit named test environment ----
+  mkdirSync(join(artifactDir, "cli-config"), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    join(artifactDir, "cli-config/environments.json"),
+    JSON.stringify({
+      environments: { proof: { backend_origin: backendOrigin, web_origin: webOrigin } },
+    }),
+  );
+
+  // ---- discovery reads the ACTUAL capability surface ----
+  const help = await runCli(["help", "--env", "proof"]);
+  check("discovery schema", help.envelope.schema_version === "capir.v1", "");
+  const discovery = help.envelope.discovery ?? {};
+  check(
+    "discovery reports actual scenarios",
+    ["daily", "empty"].every((id) =>
+      (discovery.scenarios ?? []).some((s) => s.id === id && /^[a-f0-9]{64}$/.test(s.digest)),
+    ),
+    JSON.stringify((discovery.scenarios ?? []).map((s) => s.id)),
+  );
+  check(
+    "discovery reports quota and unsupported stages",
+    discovery.max_active_sandboxes === 3 &&
+      Array.isArray(discovery.unsupported) &&
+      discovery.unsupported.includes("live") &&
+      discovery.model_policy === "strict_replay" &&
+      (discovery.approved_recordings ?? []).length === 0,
+    `quota=${discovery.max_active_sandboxes} unsupported=${JSON.stringify(discovery.unsupported)}`,
+  );
+
+  let cliEnv = tier === "full" ? {
+    CAPIR_PROOF_HEADLESS: "1",
+    ...(process.env.CAPIR_TEST_CHROME_EXECUTABLE
+      ? { CAPIR_TEST_CHROME_EXECUTABLE: process.env.CAPIR_TEST_CHROME_EXECUTABLE } : {}),
+  } : {};
+  if (tier === "full") {
+    // ---- real loopback login with owned substitute browser ----
+    const login = await runCli(
+      ["auth", "login", "--env", "proof", "--client-label", "capir-proof", "--timeout", "180"],
+      {
+        CAPIR_BROWSER_OPEN: join(HERE, "proof-login-browser.mjs"),
+        CAPIR_PROOF_LOGIN_IDENTIFIER: requiredFixtureCredential("CAPIR_PROOF_LOGIN_IDENTIFIER"),
+        CAPIR_PROOF_LOGIN_PASSWORD: requiredFixtureCredential("CAPIR_PROOF_LOGIN_PASSWORD"),
+        CAPIR_PROOF_ARTIFACT_DIR: artifactDir,
+        ...(process.env.CAPIR_TEST_CHROME_EXECUTABLE
+          ? { CAPIR_TEST_CHROME_EXECUTABLE: process.env.CAPIR_TEST_CHROME_EXECUTABLE } : {}),
+      },
+    );
+    check(
+      "built CLI loopback login stored a scoped grant",
+      login.exit_code === 0 && Boolean(login.envelope.grant?.id),
+      login.envelope.error?.code ?? `grant ${login.envelope.grant?.id}`,
+    );
+    loggedInKeyring = login.exit_code === 0;
+  } else {
+    // ---- preprovisioned scope-limited token (fixture owner via real API) ----
+    const session = await fetch(`${backendOrigin}/v1/auth/password/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        identifier: requiredFixtureCredential("CAPIR_PROOF_LOGIN_IDENTIFIER"),
+        password: requiredFixtureCredential("CAPIR_PROOF_LOGIN_PASSWORD"),
+        client_label: "capir-proof-harness",
+      }),
+    });
+    const sessionBody = await session.json();
+    if (!session.ok) throw new Error(`fixture login failed: ${session.status}`);
+    const ownerToken = sessionBody.access_token;
+    const verifier = randomBytes(32).toString("base64url");
+    const state = randomBytes(32).toString("base64url");
+    const redirectUri = "http://127.0.0.1:54321/capir/callback";
+    const authorized = await fetch(`${backendOrigin}/v1/capir/auth/authorize`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${ownerToken}`,
+      },
+      body: JSON.stringify({
+        redirect_uri: redirectUri,
+        state,
+        code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+        code_challenge_method: "S256",
+        web_origin: webOrigin,
+        backend_origin: backendOrigin,
+        consent: true,
+        client_label: "capir-proof-harness",
+      }),
+    });
+    const authorizedBody = await authorized.json();
+    if (!authorized.ok) throw new Error(`authorize failed: ${JSON.stringify(authorizedBody)}`);
+    const exchanged = await fetch(`${backendOrigin}/v1/capir/auth/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        code: authorizedBody.code,
+        code_verifier: verifier,
+        state,
+        redirect_uri: redirectUri,
+        web_origin: webOrigin,
+        backend_origin: backendOrigin,
+      }),
+    });
+    const exchangedBody = await exchanged.json();
+    if (!exchanged.ok) throw new Error(`exchange failed: ${JSON.stringify(exchangedBody)}`);
+    grantTokenSource = "CAPIR_TOKEN (preprovisioned, harness-minted)";
+    cliEnv = { CAPIR_TOKEN: exchangedBody.access_token };
+    check("preprovisioned scoped grant minted via real authorization+exchange", true, "");
+  }
+
+  // ---- sandbox 1 (daily): entry (full), TTL stability, stop cleanup ----
+  let sandboxId;
+  if (tier === "full") {
+    const entryReceiptDir = join(artifactDir, "entry");
+    const start = await runCli(
+      [
+        "sandbox",
+        "start",
+        "--env",
+        "proof",
+        "--scenario",
+        "daily",
+        "--open",
+        "web",
+        "--receipt-dir",
+        entryReceiptDir,
+      ],
+      cliEnv,
+    );
+    sandboxId = start.envelope.sandbox?.id;
+    check(
+      "sandbox start --open web reached ready and verified the rendered workspace",
+      start.exit_code === 0 &&
+        start.envelope.sandbox?.state === "ready" &&
+        start.envelope.browser?.verification?.passed === true,
+      `people_links=${start.envelope.browser?.verification?.people_links}`,
+    );
+    runnerPids.push(start.envelope.browser?.pid);
+    const excerpt = JSON.parse(readFileSync(join(entryReceiptDir, "rendered-excerpt.json"), "utf8"));
+    const peopleText = `${excerpt.people_section_text ?? ""} ${excerpt.rendered_text_excerpt ?? ""}`;
+    const fixtureNames = ["陈夏", "林舟", "周宁", "许棠", "方远", "沈禾"];
+    const seen = fixtureNames.filter((name) => peopleText.includes(name));
+    check(
+      "actual rendered synthetic people observed",
+      seen.length >= 2,
+      `daily fixture names in rendered text: ${seen.join(",") || "none"}`,
+    );
+    check(
+      "demo expiry banner observed in the rendered workspace",
+      peopleText.includes("合成演示空间") && peopleText.includes("沙箱有效期至") &&
+        start.envelope.browser?.verification?.demo_expiry === start.envelope.sandbox?.expires_at &&
+        start.envelope.browser?.browser?.headless === true,
+      "",
+    );
+    check(
+      "browser ran in an isolated context with no parent Web bearer",
+      start.envelope.browser?.verification?.banner_state === "active" &&
+        !JSON.stringify(start.envelope).includes("access_token"),
+      "",
+    );
+  } else {
+    const start = await runCli(
+      ["sandbox", "start", "--env", "proof", "--scenario", "daily"],
+      cliEnv,
+    );
+    sandboxId = start.envelope.sandbox?.id;
+    check("sandbox start (daily) reached ready", start.envelope.sandbox?.state === "ready", "");
+    check(
+      "sandbox scenario digest comes from discovery",
+      (discovery.scenarios ?? []).some(
+        (s) => s.id === "daily" && s.digest === start.envelope.sandbox?.scenario?.digest,
+      ),
+      "",
+    );
+  }
+  check("sandbox id recorded", Boolean(sandboxId), String(sandboxId));
+
+  // ---- status is read-only and never renews TTL ----
+  const status1 = await runCli(["sandbox", "status", sandboxId, "--env", "proof"], cliEnv);
+  const status2 = await runCli(["sandbox", "status", sandboxId, "--env", "proof"], cliEnv);
+  check(
+    "status TTL unchanged across reads",
+    status1.envelope.sandbox?.expires_at === status2.envelope.sandbox?.expires_at &&
+      status1.envelope.read_only === true,
+    String(status1.envelope.sandbox?.expires_at),
+  );
+
+  if (tier === "backend") {
+    // ---- handoff fences on the real backend (server-only consumer key) ----
+    // Runs while the sandbox is ready: handoff is refused on closed sandboxes.
+    const grantHeaders = {
+      "content-type": "application/json",
+      authorization: `Bearer ${cliEnv.CAPIR_TOKEN}`,
+    };
+    const handoff = await fetch(`${backendOrigin}/v1/capir/sandboxes/${sandboxId}/handoffs`, {
+      method: "POST",
+      headers: grantHeaders,
+      body: JSON.stringify({ id: randomUUID() }),
+    });
+    const handoffBody = await handoff.json();
+    check("handoff created for the ready sandbox", handoff.status === 200, String(handoff.status));
+    const exchange = await fetch(`${backendOrigin}/v1/capir/handoffs/exchange`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-capir-web-handoff-key": webHandoffKey,
+      },
+      body: JSON.stringify({ handoff_secret: handoffBody.handoff_secret, web_origin: webOrigin }),
+    });
+    const exchangeBody = await exchange.json();
+    check(
+      "handoff exchange returned only the verified Lab account",
+      exchange.status === 200 &&
+        exchangeBody.session?.user?.kind === "lab_human" &&
+        exchangeBody.session?.account?.slug?.startsWith("lab-"),
+      exchangeBody.session?.account?.slug,
+    );
+    const replay = await fetch(`${backendOrigin}/v1/capir/handoffs/exchange`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-capir-web-handoff-key": webHandoffKey,
+      },
+      body: JSON.stringify({ handoff_secret: handoffBody.handoff_secret, web_origin: webOrigin }),
+    });
+    check("handoff secret is single-use", replay.status === 401, String(replay.status));
+    const freshHandoff = await fetch(`${backendOrigin}/v1/capir/sandboxes/${sandboxId}/handoffs`, {
+      method: "POST", headers: grantHeaders, body: JSON.stringify({ id: randomUUID() }),
+    });
+    const freshHandoffBody = await freshHandoff.json();
+    check("fresh handoff created for wrong-origin fence", freshHandoff.status === 200, String(freshHandoff.status));
+    const wrongOrigin = await fetch(`${backendOrigin}/v1/capir/handoffs/exchange`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-capir-web-handoff-key": webHandoffKey,
+      },
+      body: JSON.stringify({
+        handoff_secret: freshHandoffBody.handoff_secret,
+        web_origin: "https://example.com",
+      }),
+    });
+    check("wrong Web origin is refused", wrongOrigin.status === 401, String(wrongOrigin.status));
+  }
+
+  // ---- stop: deleted only from real readback, then real zero-row cleanup ----
+  // The real backend performs zero-row cleanup inside the stop request; when
+  // cleanup is deferred or slow the CLI reports deleting/failed distinctly and
+  // only claims deleted from a readback (unit tests cover the deferred case).
+  const stopRequestId = randomUUID();
+  const early = await runCli(
+    ["sandbox", "stop", sandboxId, "--env", "proof", "--request-id", stopRequestId, "--wait", "0"],
+    cliEnv,
+  );
+  const earlyState =
+    early.exit_code === 0
+      ? early.envelope.cleanup?.observed_state
+      : early.envelope.run?.cleanup?.observed_state;
+  check(
+    "stop reports only observed cleanup states",
+    ["deleted", "deleting"].includes(earlyState) &&
+      (earlyState === "deleted" ? early.exit_code === 0 : early.exit_code === 3),
+    `first readback state=${earlyState} (backend cleanup is synchronous inside stop when it succeeds)`,
+  );
+  const stopped = await runCli(
+    ["sandbox", "stop", sandboxId, "--env", "proof", "--request-id", stopRequestId, "--wait", "240"],
+    cliEnv,
+  );
+  check(
+    "same stop operation retries to real deleted cleanup",
+    stopped.exit_code === 0 && stopped.envelope.cleanup?.observed_state === "deleted",
+    `polls=${stopped.envelope.cleanup?.polls}`,
+  );
+
+  {
+    const { Pool } = await import("pg");
+    pool = new Pool({ connectionString: disposableUrl.toString(), max: 2 });
+    const workspace = await pool.query(
+      "SELECT state, deleted_at FROM lab_test_workspaces WHERE id=$1",
+      [sandboxId],
+    );
+    check(
+      "database readback confirms the workspace is deleted",
+      workspace.rows[0]?.state === "deleted" && Boolean(workspace.rows[0]?.deleted_at),
+      JSON.stringify(workspace.rows[0] ?? null),
+    );
+    const residual = await pool.query(
+      `SELECT
+         (SELECT count(*) FROM lab_test_workspace_entries WHERE workspace_id=$1 AND revoked_at IS NULL) AS live_entries,
+         (SELECT count(*) FROM subjects WHERE account_id=(SELECT target_account_id FROM lab_test_workspaces WHERE id=$1)) AS people,
+         (SELECT count(*) FROM sessions WHERE account_id=(SELECT target_account_id FROM lab_test_workspaces WHERE id=$1)) AS sessions,
+         (SELECT count(*) FROM subjects WHERE external_ref LIKE 'capir:daily:person:%') AS daily_people`,
+      [sandboxId],
+    );
+    check(
+      "deleted workspace leaves zero product rows and sessions behind",
+      Number(residual.rows[0].live_entries) === 0 &&
+        Number(residual.rows[0].people) === 0 &&
+        Number(residual.rows[0].sessions) === 0 &&
+        Number(residual.rows[0].daily_people) === 0,
+      `live_entries=${residual.rows[0].live_entries} people=${residual.rows[0].people} sessions=${residual.rows[0].sessions} daily_people=${residual.rows[0].daily_people}`,
+    );
+  }
+
+  if (tier === "full") {
+    // ---- revocation binding: live entry session vs grant revocation ----
+    const sandbox2 = await runCli(["sandbox", "start", "--env", "proof", "--scenario", "empty"], cliEnv);
+    const sandbox2Id = sandbox2.envelope.sandbox?.id;
+    check("second sandbox (empty) reached ready", sandbox2.envelope.sandbox?.state === "ready", "");
+    const open = await runCli(
+      [
+        "sandbox",
+        "status",
+        sandbox2Id,
+        "--env",
+        "proof",
+        "--open",
+        "web",
+        "--receipt-dir",
+        join(artifactDir, "revocation"),
+      ],
+      cliEnv,
+    );
+    check(
+      "status --open web entered the second sandbox",
+      open.exit_code === 0 && open.envelope.browser?.verification?.passed === true &&
+        open.envelope.browser?.verification?.demo_expiry === open.envelope.sandbox?.expires_at &&
+        open.envelope.browser?.verification?.people_links === 0,
+      `people_links=${open.envelope.browser?.verification?.people_links}`,
+    );
+    runnerPids.push(open.envelope.browser?.pid);
+
+    const logout = await runCli(["auth", "logout", "--env", "proof"], cliEnv);
+    check(
+      "logout revoked the scoped grant and removed its keyring entry",
+      logout.exit_code === 0 &&
+        logout.envelope.remote_revoked === true &&
+        logout.envelope.local_credential_removed === true,
+      logout.envelope.remote_status ?? "",
+    );
+    const afterLogout = await runCli(["auth", "status", "--env", "proof"], cliEnv);
+    check(
+      "credential is gone after logout",
+      afterLogout.exit_code === 4 &&
+        afterLogout.envelope.error?.code === "CAPIR_CREDENTIAL_MISSING",
+      afterLogout.envelope.error?.code,
+    );
+    const entries = await pool.query(
+      "SELECT count(*) AS live FROM lab_test_workspace_entries WHERE workspace_id=$1 AND revoked_at IS NULL",
+      [sandbox2Id],
+    );
+    check(
+      "grant revocation revoked the browser entry sessions",
+      Number(entries.rows[0].live) === 0,
+      `live entries=${entries.rows[0].live}`,
+    );
+    // The owned runner rechecks every 20s and exits when the rendered session
+    // state turns non-active after revocation.
+    const revocationReceipt = join(artifactDir, "revocation/runner-receipt.json");
+    const deadline = Date.now() + 90_000;
+    let observed = false;
+    while (Date.now() < deadline && !observed) {
+      await new Promise((r) => setTimeout(r, 5000));
+      if (!existsSync(revocationReceipt)) continue;
+      const receipt = JSON.parse(readFileSync(revocationReceipt, "utf8"));
+      observed = (receipt.observations ?? []).some((line) =>
+        String(line).includes('became "revoked"'),
+      );
+    }
+    check(
+      "live browser session rendered revoked after grant revocation",
+      observed,
+      "runner recheck observed the rendered revoked state",
+    );
+  } else {
+    const logout = await runCli(["auth", "logout", "--env", "proof"], cliEnv);
+    check(
+      "logout revoked the scoped grant (ephemeral token never persisted)",
+      logout.exit_code === 0 &&
+        logout.envelope.remote_revoked === true &&
+        logout.envelope.local_credential_removed === false,
+      "",
+    );
+    const afterLogout = await runCli(["auth", "status", "--env", "proof"], cliEnv);
+    check(
+      "scoped grant unusable after logout",
+      afterLogout.exit_code === 4,
+      afterLogout.envelope.error?.code,
+    );
+  }
+
+  succeeded = true;
+} catch (error) {
+  say(`proof failed: ${error instanceof Error ? error.message : String(error)}`);
+} finally {
+  // ---- sanitized receipts are saved BEFORE DB drop and process shutdown ----
+  const proof = {
+    schema_version: "capir-cli-proof.v1",
+    tier,
+    passed: succeeded && checks.every((entry) => entry.ok),
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    credential_source: grantTokenSource,
+    workspace_quota: 3,
+    model_calls: 0,
+    checks,
+    observation_classes: {
+      actual: [
+        "built CLI JSON envelopes and exit codes (subprocess)",
+        "real backend routes against real PostgreSQL",
+        "real Lab scenario load, real zero-row stop cleanup, real grant revocation",
+      ],
+      test_adapter: [
+        "owned headless Chromium substituted for the system browser opener during login",
+        "owned headless Chromium sandbox entry contexts (no real user profile)",
+        "seeded development fixture account on a disposable database",
+        grantTokenSource.includes("CAPIR_TOKEN")
+          ? "preprovisioned CAPIR_TOKEN grant minted by the harness"
+          : "OS keyring credential store (macOS) used by auth login/logout",
+      ],
+      unverified: [
+        "human-operated system browser login and profile behavior",
+        "non-macOS keyring availability (Linux Secret Service, Windows Credential Manager)",
+        "headed (non-headless) browser rendering",
+      ],
+    },
+    note: "model_policy is strict_replay with zero approved recordings; no model endpoints were invoked.",
+  };
+  writeFileSync(join(artifactDir, "proof.json"), sanitize(proof));
+  writeFileSync(
+    join(artifactDir, "verification.txt"),
+    [
+      `capir Stage A CLI/Web proof (${tier} tier)`,
+      "",
+      `checks: ${checks.filter((c) => c.ok).length} passed / ${checks.length} total`,
+      ...checks.map((c) => `[${c.ok ? "PASS" : "FAIL"}] ${c.id}${c.detail ? ` — ${c.detail}` : ""}`),
+      "",
+      "Observation classes and unsimulated boundaries are recorded in proof.json.",
+    ].join("\n"),
+  );
+  writeFileSync(join(artifactDir, "cli-outputs.json"), sanitize(cliOutputs));
+  // Copy sanitized receipts before dropping the disposable database and
+  // closing the harness-owned servers/browser processes.
+  mkdirSync(receiptDir, { recursive: true });
+  // Every text receipt passes the sanitizer again at the copy boundary; images
+  // are copied verbatim (headless page captures contain DOM text only).
+  const copyReceipt = (source, target = source) => {
+    const absolute = join(artifactDir, source);
+    if (!existsSync(absolute)) return;
+    const bytes = readFileSync(absolute);
+    const text = bytes.toString("utf8");
+    if (target.endsWith(".png")) {
+      writeFileSync(join(receiptDir, target), bytes);
+    } else if (target.endsWith(".json")) {
+      writeFileSync(join(receiptDir, target), sanitize(JSON.parse(text)));
+    } else {
+      writeFileSync(
+        join(receiptDir, target),
+        text
+          .replace(/Bearer[ \t]+[^\r\n \t]+/gi, "Bearer [REDACTED]")
+          .replace(/([?&](?:code|state|token|secret)=)[^&\s"']+/gi, "$1[REDACTED]")
+          .replace(TOKEN_LIKE, "[REDACTED]"),
+      );
+    }
+  };
+  for (const name of [
+    "proof.json",
+    "verification.txt",
+    "cli-outputs.json",
+    "login-browser-receipt.json",
+    "authorize-consent.png",
+    "authorize-callback.png",
+  ]) {
+    copyReceipt(name);
+  }
+  for (const [source, target] of [
+    ["entry/runner-receipt.json", "entry-runner-receipt.json"],
+    ["entry/rendered-excerpt.json", "entry-rendered-excerpt.json"],
+    ["entry/workspace-entry.png", "workspace-entry.png"],
+    ["revocation/runner-receipt.json", "revocation-runner-receipt.json"],
+  ]) {
+    copyReceipt(source, target);
+  }
+  await cleanup();
+  writeFileSync(join(receiptDir, "database-cleanup.txt"), readFileSync(join(artifactDir, "database-cleanup.txt")));
+  log.end();
+  console.log(`receipts: ${receiptDir}`);
+  process.exit(succeeded ? 0 : 1);
+}

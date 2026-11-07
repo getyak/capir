@@ -1,0 +1,31 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  PEOPLE_DIRECTORY_COUNT_ATTRIBUTE,
+  PEOPLE_DIRECTORY_STATE_ATTRIBUTE,
+  peopleDirectoryStateAttributes,
+  workspaceDirectoryLoadState,
+} from "./workspace-directory";
+
+describe("workspace directory load-state producer", () => {
+  it("reports loading before anything else while a read is in flight", () => {
+    expect(workspaceDirectoryLoadState({ loading: true, failed: false })).toBe("loading");
+    expect(workspaceDirectoryLoadState({ loading: true, failed: true })).toBe("loading");
+  });
+
+  it("keeps a failed read distinct from a settled ready state", () => {
+    expect(workspaceDirectoryLoadState({ loading: false, failed: true })).toBe("error");
+    expect(workspaceDirectoryLoadState({ loading: false, failed: false })).toBe("ready");
+  });
+
+  it("publishes one stable inspectable attribute pair", () => {
+    expect(peopleDirectoryStateAttributes("ready", 0)).toEqual({
+      [PEOPLE_DIRECTORY_STATE_ATTRIBUTE]: "ready",
+      [PEOPLE_DIRECTORY_COUNT_ATTRIBUTE]: "0",
+    });
+    expect(peopleDirectoryStateAttributes("loading", 3)["data-people-directory-state"]).toBe("loading");
+    expect(peopleDirectoryStateAttributes("error", 0)["data-people-count"]).toBe("0");
+    // The attribute names are the DOM contract with apps/cli/src/browser-runner.ts.
+    expect(PEOPLE_DIRECTORY_STATE_ATTRIBUTE).toBe("data-people-directory-state");
+  });
+});

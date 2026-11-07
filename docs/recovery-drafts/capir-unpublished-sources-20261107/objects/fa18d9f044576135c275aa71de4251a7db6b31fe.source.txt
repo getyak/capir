@@ -1,0 +1,276 @@
+import { createHash, randomUUID } from "node:crypto";
+import { resolveProductPrompt } from "@talent-signal/agent/prompt-registry";
+import type { LabExperiment, LabExperimentRequest, LabModelResult } from "@talent-signal/contracts";
+import type { Pool } from "pg";
+import { inTransaction } from "../database/pool.js";
+import {
+  assertLabOperationClaim,
+  claimLabOperation,
+  readLabOperationClaim,
+  renewLabOperationClaim,
+  settleLabOperationClaim,
+  type LabClaimRow,
+} from "./legacyChatLeases.js";
+import { ApiError } from "../lib/apiError.js";
+import type { AuthContext } from "./auth.js";
+import { configuredChatPrompt, createEnvironmentChatAnswerProvider, type RemoteChatAnswerProviding,
+  type RemoteChatAnswerRequest } from "./chatAnswerProvider.js";
+import { getLabScenario } from "./labScenarios.js";
+
+const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const CASE_IDS = ["conflicting-evidence", "ambiguous-identity", "source-authorization-revoked"];
+// Resolve the registered ID rather than copying scenario evidence into a second catalog.
+export function experimentCases() {
+  return CASE_IDS.map(getLabScenario).filter((x) => x !== null).map((scenario) => ({
+    id: scenario.id, title: scenario.title,
+    input: scenario.candidate_output.evidence.map((x) => `${x.id} · ${x.excerpt}`).join("\n"),
+    expected: scenario.expected_behavior,
+  }));
+}
+
+export function experimentInput(caseID: string): RemoteChatAnswerRequest {
+  if (!experimentCases().some((x) => x.id === caseID)) {
+    throw new ApiError(422, "LAB_CASE_INVALID", "Choose a registered synthetic case.");
+  }
+  const scenario = getLabScenario(caseID)!;
+  const evidence = scenario.candidate_output.evidence;
+  return {
+    objective: "请根据这些合成测试证据回答：目前能够确认什么、哪些仍需澄清？请引用依据，不执行任何动作。",
+    context_blocks: evidence.map((x) => ({
+      block_id: x.id, block_key: x.id, type: "evidence", status: x.status,
+      headline: x.label, summary: x.excerpt, items: [`Observed at ${x.observed_at}`],
+      evidence_fragment_ids: x.status === "unavailable" ? [] : [x.id],
+    })),
+    allowed_citation_ids: evidence.filter((x) => x.status !== "unavailable").map((x) => x.id),
+  };
+}
+
+export function labModelProviders(current: RemoteChatAnswerProviding | null,
+  environment: NodeJS.ProcessEnv = process.env): Map<string, RemoteChatAnswerProviding> {
+  const providers = new Map<string, RemoteChatAnswerProviding>();
+  if (current) providers.set(current.model, current);
+  if (environment.TALENT_SIGNAL_INTERNAL_LAB_ENABLED !== "true") return providers;
+  const models = new Set((environment.TALENT_SIGNAL_LAB_CHAT_MODELS ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+  for (const model of models) {
+    if (providers.has(model)) continue;
+    const provider = createEnvironmentChatAnswerProvider({ ...environment, TALENT_SIGNAL_CHAT_MODEL: model });
+    if (provider && !providers.has(provider.model)) providers.set(provider.model, provider);
+  }
+  return providers;
+}
+
+export async function executeLabModel(provider: RemoteChatAnswerProviding,
+  input: RemoteChatAnswerRequest): Promise<LabModelResult> {
+  const start = performance.now();
+  try {
+    const result = await provider.answer(structuredClone(input));
+    if ((input.prompt_snapshot && provider.supportsPromptPresets && result.prompt_revision !== configuredChatPrompt("relationship", "baseline", input.prompt_snapshot.text).revision)
+      || result.model !== provider.model || !result.body.trim()
+      || result.title.length > 1000
+      || result.citation_ids.some((id) => !input.allowed_citation_ids.includes(id))) {
+      throw new Error("Unverifiable provider output");
+    }
+    return { model: result.model, status: "completed", duration_ms: Math.round(performance.now() - start),
+      answer: result.body, title: result.title, kind: result.kind, citation_ids: result.citation_ids,
+      provider_request_id: result.provider_request_id,
+      input_tokens: result.usage_reported ? result.input_tokens : null,
+      output_tokens: result.usage_reported ? result.output_tokens : null, error_code: null };
+  } catch {
+    // Provider errors may contain upstream content or credentials. Only a closed code crosses this boundary.
+    return { model: provider.model, status: "failed", duration_ms: Math.round(performance.now() - start),
+      answer: null, title: null, kind: null, citation_ids: [], provider_request_id: null,
+      input_tokens: null, output_tokens: null, error_code: "PROVIDER_REQUEST_FAILED_OR_UNVERIFIED" };
+  }
+}
+
+export class LabExperimentService {
+  constructor(private readonly pool: Pool,
+    readonly providers: Map<string, RemoteChatAnswerProviding>,
+    readonly backendRevision: string | null) {}
+
+  /**
+   * One durable account claim decides busy/admission for the simple and batch
+   * Lab entrypoints. Run age never decides eligibility, and a live authorized
+   * run stays honestly running beyond 120 seconds while its owner renews.
+   */
+  private async liveClaims(): Promise<Set<string>> {
+    const rows = await this.pool.query<{ operation_id: string; state: string; lease_until: Date }>(
+      `SELECT operation_id,state,lease_until FROM lab_operation_claims
+       WHERE state IN ('claimed','running','cancelling') AND lease_until>clock_timestamp()`);
+    return new Set(rows.rows.map((row) => row.operation_id));
+  }
+
+  async list(auth: AuthContext): Promise<LabExperiment[]> {
+    await this.scrubExpired();
+    const live = await this.liveClaims();
+    const rows = await this.pool.query<{ record: LabExperiment }>(
+      `SELECT record FROM lab_experiments WHERE account_id=$1 AND user_id=$2
+       AND expires_at > now() ORDER BY created_at DESC LIMIT 10`, [auth.accountId, auth.userId]);
+    return rows.rows.map((x) => this.stale(x.record, live));
+  }
+
+  /**
+   * A running record is unknown only when its durable owner is gone. Age alone
+   * never flips a legitimate long run, and read/list never mutate state.
+   */
+  private stale(record: LabExperiment, live: ReadonlySet<string>): LabExperiment {
+    if (record.status === "running" && !live.has(record.id)) {
+      return { ...record, status: "unknown" };
+    }
+    return record;
+  }
+
+  async read(auth: AuthContext, id: string): Promise<LabExperiment> {
+    const result = await this.pool.query<{ record: LabExperiment; expired: boolean }>(
+      `SELECT record, expires_at <= now() AS expired FROM lab_experiments
+       WHERE account_id=$1 AND user_id=$2 AND id=$3`, [auth.accountId, auth.userId, id]);
+    if (!result.rows[0]) throw new ApiError(404, "LAB_EXPERIMENT_NOT_FOUND", "This experiment was not found.");
+    if (result.rows[0].expired) throw new ApiError(410, "LAB_EXPERIMENT_EXPIRED", "This experiment has expired.");
+    return this.stale(result.rows[0].record, await this.liveClaims());
+  }
+
+  async start(auth: AuthContext, request: LabExperimentRequest): Promise<LabExperiment> {
+    // JSON object key order may change between mobile retries. Hash semantic settings only.
+    const requestHash = hash({ case_id: request.case_id, models: request.models });
+    // First read an existing ID even when the model catalog changed. A replay never calls a provider.
+    const existing = await this.pool.query<{ request_hash: string }>(
+      `SELECT request_hash FROM lab_experiments WHERE account_id=$1 AND user_id=$2 AND id=$3`,
+      [auth.accountId, auth.userId, request.id]);
+    if (existing.rows[0]) {
+      if (existing.rows[0].request_hash !== requestHash) throw new ApiError(409, "LAB_EXPERIMENT_CONFLICT", "This experiment ID belongs to different settings.");
+      return this.read(auth, request.id);
+    }
+    const input = experimentInput(request.case_id);
+    const snapshot = await resolveProductPrompt("assistant/relationship");
+    const selected = request.models.map((id) => this.providers.get(id));
+    if (selected.some((x) => !x)) throw new ApiError(422, "LAB_MODEL_UNAVAILABLE", "Choose a configured model.");
+    const now = new Date();
+    const record: LabExperiment = {
+      id: request.id, case_id: request.case_id, case_revision: getLabScenario(request.case_id)!.revision,
+      snapshot_hash: hash(input), prompt_version: configuredChatPrompt("relationship", "baseline", snapshot.text).revision,
+      prompt_snapshot: snapshot,
+      backend_revision: this.backendRevision, models: [...request.models], status: "running", results: [],
+      review: "unreviewed", created_at: now.toISOString(), expires_at: new Date(+now + 7 * 86400_000).toISOString(),
+      provider_call_limit: 2, business_write_count: 0, cost_status: "unavailable",
+    };
+    const admission = await inTransaction(this.pool, async (client) => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`lab-experiment:${auth.accountId}`]);
+      const duplicate = await client.query<{ request_hash: string }>(
+        `SELECT request_hash FROM lab_experiments WHERE account_id=$1 AND user_id=$2 AND id=$3`,
+        [auth.accountId, auth.userId, request.id]);
+      if (duplicate.rows[0]) {
+        if (duplicate.rows[0].request_hash !== requestHash) throw new ApiError(409, "LAB_EXPERIMENT_CONFLICT", "This experiment ID belongs to different settings.");
+        return { inserted: false as const, claim: null };
+      }
+      // Shared durable account claim: age-based busy membership is gone and the
+      // batch entrypoint registers through the same registry.
+      const active = await client.query<{ count: string }>(
+        `SELECT count(*) FROM (
+         SELECT id FROM lab_experiment_jobs WHERE account_id=$1 AND status IN ('queued','running','cancelling') AND expires_at > now()
+         UNION ALL SELECT id FROM lab_experiments WHERE account_id=$1 AND record->>'status'='running'
+           AND id IN (SELECT operation_id FROM lab_operation_claims WHERE state IN ('claimed','running','cancelling') AND lease_until>clock_timestamp())
+         ) active`, [auth.accountId]);
+      if (Number(active.rows[0]?.count) > 0) throw new ApiError(409, "LAB_EXPERIMENT_BUSY", "An experiment is still running in this workspace.");
+      // The exact operation/attempt claim is retained for this run: ownership
+      // is never re-read as "whatever claim is latest" and never optional.
+      const claim = await claimLabOperation(client, {
+        accountID: auth.accountId,
+        operationKind: "lab_experiment",
+        operationID: record.id,
+        actorUserID: auth.userId,
+        attemptID: randomUUID(),
+        leaseMs: 90_000,
+        canonicalRetentionExpiresAt: new Date(record.expires_at),
+      });
+      await client.query(`INSERT INTO lab_experiments(id,account_id,user_id,request_hash,record,expires_at)
+        VALUES($1,$2,$3,$4,$5::jsonb,$6)`, [record.id, auth.accountId, auth.userId, requestHash, JSON.stringify(record), record.expires_at]);
+      return { inserted: true as const, claim };
+    });
+    if (!admission.inserted) return this.read(auth, record.id);
+    // The committed ID survives phone disconnection. A process crash becomes unknown; it is never auto-replayed.
+    void this.execute(auth, record, selected as RemoteChatAnswerProviding[], { ...input, prompt_snapshot: snapshot }, admission.claim).catch(() => {});
+    return record;
+  }
+
+  private async execute(auth: AuthContext, record: LabExperiment,
+    providers: RemoteChatAnswerProviding[], input: RemoteChatAnswerRequest, claim: LabClaimRow): Promise<void> {
+    const results: LabModelResult[] = [];
+    let ownershipLost = false;
+    // Ownership heartbeat: lease duration is a crash control, never a model
+    // deadline. Losing the exact claim or the original authority fences all
+    // late work and stops arm 2; it is never swallowed as optional.
+    const heartbeat = setInterval(() => {
+      if (ownershipLost) return;
+      void inTransaction(this.pool, async (client) => {
+        await assertLabOperationClaim(client, claim, auth.accountId);
+        await renewLabOperationClaim(client, claim, auth.accountId, 90_000);
+      }).catch(() => {
+        ownershipLost = true;
+      });
+    }, 10_000);
+    heartbeat.unref();
+    try {
+      for (const provider of providers) {
+        if (ownershipLost) break;
+        // Independent short guard before every arm; no transaction spans the
+        // provider await and a fenced owner never dispatches again.
+        try {
+          await inTransaction(this.pool, (client) => assertLabOperationClaim(client, claim, auth.accountId));
+        } catch {
+          ownershipLost = true;
+          break;
+        }
+        results.push(await executeLabModel(provider, input));
+        const successes = results.filter((x) => x.status === "completed").length;
+        const status = results.length < 2 ? "running" : successes === 2 ? "completed" : successes === 1 ? "partial" : "failed";
+        await inTransaction(this.pool, async (client) => {
+          // Final guard is transaction-local: a stale/lost owner cannot append.
+          await assertLabOperationClaim(client, claim, auth.accountId);
+          await client.query(`UPDATE lab_experiments SET record = record || $4::jsonb
+            WHERE account_id=$1 AND user_id=$2 AND id=$3 AND expires_at > now()`,
+            [auth.accountId, auth.userId, record.id, JSON.stringify({ results, status })]);
+        }).catch(() => { ownershipLost = true; });
+      }
+    } finally {
+      clearInterval(heartbeat);
+      const successes = results.filter((x) => x.status === "completed").length;
+      const status = results.length < 2 ? "running" : successes === 2 ? "completed" : successes === 1 ? "partial" : "failed";
+      if (ownershipLost) {
+        // The uncertain outcome stays honest; no automatic paid replay.
+        await inTransaction(this.pool, async (client) => {
+          await settleLabOperationClaim(client, claim, auth.accountId, "unknown").catch(() => undefined);
+          await client.query(`UPDATE lab_experiments SET record = record || $4::jsonb
+            WHERE account_id=$1 AND user_id=$2 AND id=$3 AND expires_at > now()`,
+            [auth.accountId, auth.userId, record.id,
+              JSON.stringify({ results, status: results.length < 2 ? "unknown" : status })]);
+        }).catch(() => undefined);
+      } else {
+        await inTransaction(this.pool, (client) => settleLabOperationClaim(client, claim, auth.accountId, "settled")).catch(() => undefined);
+      }
+    }
+  }
+
+  async review(auth: AuthContext, id: string, review: LabExperiment["review"]): Promise<LabExperiment> {
+    const record = await this.read(auth, id);
+    // A live writer's result is never reviewable A/B content: the review binds
+    // the terminal fenced version, and a stale reviewer cannot change it.
+    const live = await this.liveClaims();
+    if (record.status === "running" || live.has(id)) throw new ApiError(409, "LAB_EXPERIMENT_RUNNING", "Wait until the experiment stops before reviewing.");
+    const current = await this.pool.query<{ record: LabExperiment }>(
+      "SELECT record FROM lab_experiments WHERE account_id=$1 AND user_id=$2 AND id=$3 AND expires_at > now() FOR UPDATE",
+      [auth.accountId, auth.userId, id]);
+    const row = current.rows[0]?.record;
+    if (!row || row.status !== record.status || JSON.stringify(row.results) !== JSON.stringify(record.results)) {
+      throw new ApiError(409, "LAB_EXPERIMENT_CONFLICT", "The experiment changed while it was being reviewed. Reload its current state.");
+    }
+    await this.pool.query(`UPDATE lab_experiments SET record=jsonb_set(record,'{review}',to_jsonb($4::text))
+      WHERE account_id=$1 AND user_id=$2 AND id=$3 AND expires_at > now()`, [auth.accountId, auth.userId, id, review]);
+    return this.read(auth, id);
+  }
+
+  async scrubExpired(): Promise<void> {
+    // Keep ID tombstones to prevent an old request from starting another paid run after content expiry.
+    await this.pool.query(`UPDATE lab_experiments SET record=jsonb_set(record,'{results}','[]'::jsonb)
+      WHERE expires_at <= now() AND record->'results' <> '[]'::jsonb`);
+  }
+}

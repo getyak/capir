@@ -1,0 +1,757 @@
+import XCTest
+@testable import TalentSignalMac
+
+/// Native handoff controller, response-receipt policy, navigation ownership,
+/// deadline and lifecycle (ADR 0019 / ADR 0020). Provider proofs here are
+/// structural fixtures only; live Apple/Google and real-window rounds are
+/// parent checkpoints.
+final class DesktopAuthenticationSessionTests: XCTestCase {
+    private func origin() throws -> WorkspaceOrigin {
+        try XCTUnwrap(WorkspaceOrigin("https://workspace.example.com"))
+    }
+
+    private func context(
+        provider: DesktopAuthProvider = .apple,
+        purpose: DesktopAuthPurpose = .login,
+        role: DesktopAuthRole = .login,
+        intent: DesktopCredentialIntent? = nil,
+        target: String? = nil,
+        continuation: String? = nil
+    ) -> DesktopAuthRequestContext {
+        DesktopAuthRequestContext(
+            provider: provider,
+            purpose: purpose,
+            role: role,
+            intent: intent,
+            targetProvider: target,
+            continuationAttemptID: continuation
+        )
+    }
+
+    /// A persistent fake navigation object returned by the SAME loadRequest
+    /// seam production uses, so ownership is tested on real returned objects.
+    final class FakeNavigation {}
+
+    final class StubBrowserSession: DesktopAuthBrowserSession {
+        var started = false
+        var cancelled = false
+        var ephemeral: Bool?
+        var refuseStart = false
+        private(set) var retained: ((URL?, Error?) -> Void)?
+        func start(callback: @escaping (URL?, Error?) -> Void) -> Bool {
+            retained = callback
+            started = true
+            return !refuseStart
+        }
+        func cancel() { cancelled = true }
+        func deliver(_ url: URL?, error: Error? = nil) { retained?(url, error) }
+    }
+
+    struct LoadedRequest {
+        let request: URLRequest
+        let navigation: FakeNavigation
+    }
+
+    /// Build a controller whose loadRequest returns REAL persistent objects.
+    @MainActor
+    private func makeSession(
+        clock: Ref<Date>,
+        scheduler: Ref<[(Date, () -> Void)]>,
+        stubs: Ref<[StubBrowserSession]>,
+        loads: Ref<[LoadedRequest]>,
+        launchOptions: DesktopAuthLaunchOptions = .standard
+    ) throws -> DesktopAuthenticationSession {
+        try DesktopAuthenticationSession(
+            origin: origin(),
+            launchOptions: launchOptions,
+            now: { clock.value },
+            schedule: { deadline, fire in scheduler.value.append((deadline, fire)) },
+            loadRequest: { request in
+                let navigation = FakeNavigation()
+                loads.value.append(LoadedRequest(request: request, navigation: navigation))
+                return navigation
+            },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, ephemeral in
+                let stub = StubBrowserSession()
+                stub.ephemeral = ephemeral
+                stubs.value.append(stub)
+                return stub
+            }
+        )
+    }
+
+    final class Ref<T> {
+        var value: T
+        init(_ value: T) { self.value = value }
+    }
+
+    private func body(of request: URLRequest) throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any] ?? [:]
+    }
+
+    private func ref(of request: URLRequest) -> String {
+        URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "ref" })?.value ?? ""
+    }
+
+    private func receipt(
+        ref: String,
+        attempt: String,
+        purpose: DesktopAuthPurpose = .credentialRound,
+        role: DesktopAuthRole = .current,
+        outcome: DesktopAuthReceipt.Outcome,
+        grant: String? = nil,
+        flow: String? = nil,
+        path: String = "/api/desktop-auth/consume"
+    ) throws -> HTTPURLResponse {
+        var headers = [
+            "Content-Type": "text/html; charset=utf-8",
+            "X-Desktop-Receipt-Version": "1",
+            "X-Desktop-Request-Ref": ref,
+            "X-Desktop-Attempt-Ref": attempt,
+            "X-Desktop-Purpose": purpose.rawValue,
+            "X-Desktop-Role": role.rawValue,
+            "X-Desktop-Outcome": outcome.rawValue,
+            // The actual producer emits the full immutable context for every
+            // credential receipt: flow, grant and the original deadline.
+            "X-Desktop-Flow-Ref": flow ?? "flow-aaaaaaaa",
+            "X-Desktop-Grant-Ref": grant ?? "grant-1",
+            "X-Desktop-Deadline": "2033-05-18T03:38:20.000Z",
+        ]
+        return try XCTUnwrap(HTTPURLResponse(
+            url: URL(string: "https://workspace.example.com\(path)?ref=\(ref)")!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: headers
+        ))
+    }
+
+    // MARK: - Pure protocol pieces
+
+    func testS256ChallengeMatchesRFC7636Vector() {
+        XCTAssertEqual(
+            DesktopAuthSecrets.codeChallenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        )
+    }
+
+    func testRequestReferencesAreCorrelationOnlyAndNeverCarrySecrets() throws {
+        let requests = DesktopAuthRequests(origin: try origin())
+        var state = DesktopAuthHandoffState()
+        let attempt = state.begin(context: context(), deadline: Date().addingTimeInterval(300))
+        let request = requests.prepareRequest(attempt: attempt, ref: "xchg-test-1")
+        let url = try XCTUnwrap(request.url)
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+                       [URLQueryItem(name: "ref", value: "xchg-test-1")])
+        let body = try body(of: request)
+        XCTAssertEqual(body["request_ref"] as? String, "xchg-test-1")
+        XCTAssertFalse(String(data: try XCTUnwrap(request.httpBody), encoding: .utf8)!.contains(attempt.verifier))
+        let consume = requests.consumeRequest(
+            attemptID: "attempt-1", code: "code-1", verifier: attempt.verifier, ref: "xchg-test-2",
+            purpose: .login, role: .login
+        )
+        XCTAssertFalse(consume.url!.absoluteString.contains(attempt.verifier))
+    }
+
+    func testCallbackParserAcceptsBothVariantsAndRejectsTampering() {
+        let success = "com.talentsignal.macos.auth://complete?attempt=attempt-12345678&code=code-1&state=state-0123456789"
+        XCTAssertEqual(DesktopAuthCallback.parse(success),
+                       .success(attemptID: "attempt-12345678", code: "code-1", state: "state-0123456789"))
+        let cancelled = "com.talentsignal.macos.auth://complete?attempt=attempt-12345678&state=state-0123456789&outcome=cancelled"
+        XCTAssertEqual(DesktopAuthCallback.parse(cancelled),
+                       .cancelled(attemptID: "attempt-12345678", state: "state-0123456789"))
+        XCTAssertNil(DesktopAuthCallback.parse(success + "#frag"))
+        XCTAssertNil(DesktopAuthCallback.parse(success.replacingOccurrences(of: "?", with: "/?")))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete?attempt=attempt-12345678&attempt=attempt-12345678&code=code-1&state=state-0123456789"))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete?attempt=attempt-12345678&code=&state=state-0123456789"))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete?attempt=attempt-12345678&code=code-1&state=state-0123456789&outcome=cancelled"))
+        XCTAssertNil(DesktopAuthCallback.parse("https://evil.example/complete?attempt=attempt-12345678&code=code-1&state=state-0123456789"))
+    }
+
+    func testEntryBoundaryRequiresSourceAndTargetMainFrame() throws {
+        let origin = try origin()
+        let source = try XCTUnwrap(URL(string: "https://workspace.example.com/login"))
+        let request = try XCTUnwrap(URL(string: "https://workspace.example.com/desktop-auth/request?provider=apple&purpose=login"))
+        XCTAssertNotNil(DesktopAuthRequests.interception(
+            url: request, source: source, sourceIsMainFrame: true, targetIsMainFrame: true, userActivated: true, origin: origin))
+        // Same-origin iframe -> _top never enters native auth.
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: request, source: source, sourceIsMainFrame: false, targetIsMainFrame: true, userActivated: true, origin: origin))
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: request, source: source, sourceIsMainFrame: true, targetIsMainFrame: false, userActivated: true, origin: origin))
+    }
+
+    // MARK: - Response receipt policy (N4)
+
+    func testReceiptPolicyRequiresExactContractAndRejectsEverythingElse() throws {
+        var state = DesktopAuthHandoffState()
+        let attempt = state.begin(context: context(purpose: .credentialRound, role: .current, intent: .setPassword), deadline: Date().addingTimeInterval(300))
+        _ = state.acceptPending(attemptID: "attempt-1", state: attempt.state)
+        let exchange = DesktopAuthExchange(
+            ref: "xchg-1-1-1-abcdefgh", kind: .consume, generation: state.generation,
+            hostEpoch: state.hostEpoch, attemptID: "attempt-1", phase: .consuming,
+            purpose: .credentialRound, role: .current, intent: .setPassword,
+            flowRef: "flow-aaaaaaaa", grantRef: "grant-1"
+        )
+        let origin = try origin()
+        let good = try receipt(ref: exchange.ref, attempt: "attempt-1", outcome: .continuePassword, grant: "grant-1")
+        XCTAssertEqual(
+            DesktopAuthResponsePolicy.evaluate(response: good, isForMainFrame: true, expected: exchange, origin: origin),
+            .receipt(DesktopAuthReceipt(ref: exchange.ref, attemptRef: "attempt-1", purpose: .credentialRound, role: .current, outcome: .continuePassword, flowRef: "flow-aaaaaaaa", grantRef: "grant-1", deadline: Date(timeIntervalSince1970: 2_000_000_300)))
+        )
+        // Non-200, wrong MIME, wrong endpoint, iframe, stale ref and missing or
+        // duplicated headers are never a receipt.
+        let serverError = try XCTUnwrap(HTTPURLResponse(url: good.url!, statusCode: 500, httpVersion: nil, headerFields: nil))
+        XCTAssertEqual(DesktopAuthResponsePolicy.evaluate(response: serverError, isForMainFrame: true, expected: exchange, origin: origin), .failure)
+        // A JSON (or otherwise non-HTML) body is never a receipt.
+        let jsonMIME = try XCTUnwrap(HTTPURLResponse(url: good.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json", "X-Desktop-Receipt-Version": "1", "X-Desktop-Request-Ref": exchange.ref, "X-Desktop-Attempt-Ref": "attempt-1", "X-Desktop-Purpose": "credential_round", "X-Desktop-Role": "current", "X-Desktop-Outcome": "continue-password"]))
+        XCTAssertEqual(DesktopAuthResponsePolicy.evaluate(response: jsonMIME, isForMainFrame: true, expected: exchange, origin: origin), .failure)
+        XCTAssertEqual(DesktopAuthResponsePolicy.evaluate(response: good, isForMainFrame: false, expected: exchange, origin: origin), .unrelated)
+        let stale = try receipt(ref: "xchg-other-1-1-zzzzzzzz", attempt: "attempt-1", outcome: .continuePassword)
+        XCTAssertEqual(DesktopAuthResponsePolicy.evaluate(response: stale, isForMainFrame: true, expected: exchange, origin: origin), .failure)
+        let missing = try XCTUnwrap(HTTPURLResponse(url: good.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Desktop-Outcome": "continue-password"]))
+        XCTAssertEqual(DesktopAuthResponsePolicy.evaluate(response: missing, isForMainFrame: true, expected: exchange, origin: origin), .failure)
+    }
+
+    // MARK: - Real navigation ownership across operations (N3)
+
+    @MainActor
+    func testRealNavigationObjectsStayOwnedAcrossSecondStartAndTarget() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"))
+        let first = loads.value[0]
+        XCTAssertTrue(session.ownsNavigation(ObjectIdentifier(first.navigation)))
+        let firstBody = try body(of: first.request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(firstBody["state"] as! String)"
+        ))))
+        let consume = loads.value[1]
+        XCTAssertTrue(session.ownsNavigation(ObjectIdentifier(consume.navigation)))
+
+        // A second start supersedes; the FIRST operation's navigation objects
+        // lose ownership while the second's are owned.
+        session.start(context: context(provider: .google, purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"))
+        let second = loads.value[2]
+        XCTAssertFalse(session.ownsNavigation(ObjectIdentifier(first.navigation)))
+        XCTAssertFalse(session.ownsNavigation(ObjectIdentifier(consume.navigation)))
+        XCTAssertTrue(session.ownsNavigation(ObjectIdentifier(second.navigation)))
+    }
+
+    @MainActor
+    func testTargetEntryIsGatedOnTheConfirmedServerAck() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .linkProvider, target: "google"))
+        let firstBody = try body(of: loads.value[0].request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(firstBody["state"] as! String)"
+        ))))
+        let consumeExchange = loads.value[1]
+        // A pending continuation receipt dispatches the paired ACK but does NOT
+        // confirm it; a target click must not start.
+        let responseObject = NSObject()
+        XCTAssertTrue(session.classifyNavigationResponse(
+            response: try receipt(ref: ref(of: consumeExchange.request), attempt: "attempt-1", outcome: .continueTarget, grant: "grant-1", flow: "flow-1"),
+            isForMainFrame: true
+        ), "the response object identity is irrelevant; correlation is by request reference")
+        _ = responseObject
+        session.performPendingAdvance()
+        let ackExchange = loads.value[2]
+        XCTAssertEqual(ackExchange.request.url?.path, "/api/desktop-auth/ack")
+        session.start(context: context(provider: .google, purpose: .credentialRound, role: .target, intent: .linkProvider, target: "google", continuation: "attempt-1"))
+        XCTAssertEqual(loads.value.count, 3, "target must not start before the server ACK is confirmed")
+        XCTAssertNotNil(session.recovery)
+
+        // Only the correlated ACK response advances the ACK state.
+        let badAck = try receipt(ref: "xchg-other-9-9-zzzzzzzz", attempt: "attempt-1", outcome: .acknowledged, grant: "grant-1", path: "/api/desktop-auth/ack")
+        XCTAssertFalse(session.classifyNavigationResponse(response: badAck, isForMainFrame: true))
+        XCTAssertEqual(loads.value.count, 3)
+        let goodAck = try receipt(ref: ref(of: ackExchange.request), attempt: "attempt-1", outcome: .acknowledged, grant: "grant-1", flow: "flow-1", path: "/api/desktop-auth/ack")
+        XCTAssertTrue(session.classifyNavigationResponse(response: goodAck, isForMainFrame: true))
+        session.performPendingAdvance()
+        // After the confirmed ACK exactly one target round may begin.
+        session.start(context: context(provider: .google, purpose: .credentialRound, role: .target, intent: .linkProvider, target: "google", continuation: "attempt-1"))
+        XCTAssertEqual(loads.value.count, 4)
+        // A DIFFERENT target provider can never borrow this acknowledgment.
+        let session2 = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        session2.start(context: context(purpose: .credentialRound, role: .current, intent: .linkProvider, target: "google"))
+        let secondBody = try body(of: loads.value.last!.request)
+        XCTAssertTrue(session2.acceptPending(attemptID: "attempt-2", state: secondBody["state"] as! String))
+        XCTAssertTrue(session2.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-2&code=code-2&state=\(secondBody["state"] as! String)"
+        ))))
+        let consume2 = loads.value.last!
+        XCTAssertTrue(session2.classifyNavigationResponse(
+            response: try receipt(ref: ref(of: consume2.request), attempt: "attempt-2", outcome: .continueTarget, grant: "grant-2", flow: "flow-2"),
+            isForMainFrame: true
+        ))
+        session2.performPendingAdvance()
+        let ack2 = loads.value.last!
+        XCTAssertTrue(session2.classifyNavigationResponse(
+            response: try receipt(ref: ref(of: ack2.request), attempt: "attempt-2", outcome: .acknowledged, grant: "grant-2", flow: "flow-2", path: "/api/desktop-auth/ack"),
+            isForMainFrame: true
+        ))
+        session2.performPendingAdvance()
+        let countBefore = loads.value.count
+        session2.start(context: context(provider: .apple, purpose: .credentialRound, role: .target, intent: .linkProvider, target: "apple", continuation: "attempt-2"))
+        XCTAssertEqual(loads.value.count, countBefore, "a different target provider must not borrow the gate")
+        XCTAssertNotNil(session2.recovery)
+    }
+
+    // MARK: - Deadline (N5)
+
+    @MainActor
+    func testInjectedDeadlineIsRetainedThroughConsumeAndNeverRenewed() async throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"))
+        let startDeadline = session.retainedDeadline
+        XCTAssertNotNil(startDeadline)
+        let firstBody = try body(of: loads.value[0].request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(firstBody["state"] as! String)"
+        ))))
+        // The browser session is retired at the callback but the OPERATION
+        // deadline survives through consume.
+        XCTAssertEqual(session.retainedDeadline, startDeadline)
+        XCTAssertFalse(scheduler.value.isEmpty)
+
+        // Advancing the injected clock past the deadline executes the
+        // scheduled check and classifies a dispatched mutation as UNCONFIRMED.
+        clock.value = startDeadline!.addingTimeInterval(1)
+        scheduler.value.forEach { $0.1() }
+        await Task.yield()
+        XCTAssertEqual(session.recovery?.claim, .unconfirmedMutation)
+        XCTAssertEqual(session.recovery?.ambiguous, true)
+    }
+
+    @MainActor
+    func testDeadlineBeforeDispatchCancelsUnusedAuthorization() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        session.start(context: context())
+        let deadline = session.retainedDeadline!
+        clock.value = deadline.addingTimeInterval(1)
+        session.checkDeadline()
+        XCTAssertEqual(session.recovery?.claim, .cancelledUnusedAuthorization)
+        XCTAssertEqual(session.recovery?.ambiguous, false)
+    }
+
+    // MARK: - Teardown discrimination (N6)
+
+    @MainActor
+    func testWindowTeardownNeverClaimsACancelledDispatchedMutation() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+
+        // Before any consume dispatch the authorization is simply unused.
+        session.start(context: context())
+        session.windowWillClose()
+        XCTAssertEqual(session.recovery?.claim, .cancelledUnusedAuthorization)
+        XCTAssertEqual(session.recovery?.ambiguous, false)
+
+        // During a held consume the outcome is UNKNOWN, never "cancelled".
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"))
+        let firstBody = try body(of: loads.value.last!.request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-2", state: firstBody["state"] as! String))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-2&code=code-2&state=\(firstBody["state"] as! String)"
+        ))))
+        session.windowWillClose()
+        XCTAssertEqual(session.recovery?.claim, .unconfirmedMutation)
+        XCTAssertEqual(session.recovery?.ambiguous, true)
+    }
+
+    @MainActor
+    func testCancellationReturnUsesTheCapturedPurpose() async throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"))
+        let firstBody = try body(of: loads.value[0].request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        stubs.value[0].deliver(nil, error: nil)
+        await Task.yield()
+        // The captured context purpose routes the return to Settings, never a
+        // default login route.
+        XCTAssertEqual(session.recovery?.returnURL.path, "/workspace/settings")
+    }
+
+    // MARK: - Result recovery (N4)
+
+    @MainActor
+    func testCheckResultPostsOnceAndNeverReplaysConsume() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"))
+        let firstBody = try body(of: loads.value[0].request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(firstBody["state"] as! String)"
+        ))))
+        let consume = loads.value[1]
+        // The consume response is lost: the exchange fails unconfirmed and the
+        // retained context stays available for the read-only result check.
+        session.navigationFailed(ObjectIdentifier(consume.navigation))
+        XCTAssertEqual(session.recovery?.ambiguous, true)
+        let before = loads.value.count
+        session.checkResult()
+        XCTAssertEqual(loads.value.count, before + 1)
+        XCTAssertEqual(loads.value.last?.request.url?.path, "/api/desktop-auth/result")
+        // The result POST carries the retained verifier only in its body.
+        let resultBody = try body(of: loads.value.last!.request)
+        XCTAssertEqual(resultBody["attempt_id"] as? String, "attempt-1")
+        XCTAssertFalse(loads.value.last!.request.url!.absoluteString.contains(resultBody["verifier"] as! String))
+        // Nothing ever replays the one-use consume.
+        XCTAssertEqual(loads.value.filter { $0.request.url?.path == "/api/desktop-auth/consume" }.count, 1)
+    }
+
+    // MARK: - P2 launch override through the production path
+
+    func testEphemeralFlagIsReadFromProcessArgumentsNotPersistentDefaults() {
+        XCTAssertFalse(DesktopAuthLaunchOptions.standard.prefersEphemeralBrowserSession)
+        XCTAssertTrue(DesktopAuthLaunchOptions.fromProcessInfo(
+            ProcessInfo.processInfo
+        ).prefersEphemeralBrowserSession == ProcessInfo.processInfo.arguments.contains("--desktop-auth-ephemeral"))
+        XCTAssertTrue(DesktopAuthLaunchOptions(arguments: ["/App", "--desktop-auth-ephemeral"]).prefersEphemeralBrowserSession)
+        XCTAssertFalse(DesktopAuthLaunchOptions(arguments: ["/App", "--web-workspace-testing"]).prefersEphemeralBrowserSession)
+        // The bare requested flag never touches persistent defaults.
+        let suite = UserDefaults(suiteName: "test-desktop-auth-ephemeral-\(UUID().uuidString)")!
+        XCTAssertFalse(DesktopAuthLaunchOptions.from(defaults: suite).prefersEphemeralBrowserSession)
+    }
+
+    @MainActor
+    func testEphemeralPreferenceReachesTheBrowserFactory() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(
+            clock: clock, scheduler: scheduler, stubs: stubs, loads: loads,
+            launchOptions: DesktopAuthLaunchOptions(arguments: ["--desktop-auth-ephemeral"])
+        )
+        session.start(context: context())
+        let firstBody = try body(of: loads.value[0].request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        XCTAssertEqual(stubs.value.last?.ephemeral, true)
+    }
+}
+
+extension DesktopAuthenticationSessionTests {
+    /// JavaScript Date.toISOString fractional timestamps must parse.
+    func testReceiptParsesFractionalUTCTimestamps() throws {
+        var state = DesktopAuthHandoffState()
+        _ = state.begin(context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"), deadline: Date().addingTimeInterval(300))
+        let exchange = DesktopAuthExchange(
+            ref: "xchg-9-9-1-abcdefgh", kind: .consume, generation: state.generation,
+            hostEpoch: state.hostEpoch, attemptID: "attempt-1", phase: .consuming,
+            purpose: .credentialRound, role: .current, intent: .setPassword,
+            flowRef: "flow-aaaaaaaa", grantRef: "grant-1"
+        )
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: URL(string: "https://workspace.example.com/api/desktop-auth/consume?ref=xchg-9-9-1-abcdefgh")!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: [
+                "Content-Type": "text/html; charset=utf-8",
+                "X-Desktop-Receipt-Version": "1",
+                "X-Desktop-Request-Ref": "xchg-9-9-1-abcdefgh",
+                "X-Desktop-Attempt-Ref": "attempt-1",
+                "X-Desktop-Purpose": "credential_round",
+                "X-Desktop-Role": "current",
+                "X-Desktop-Outcome": "continue-password",
+                "X-Desktop-Flow-Ref": "flow-aaaaaaaa",
+                "X-Desktop-Grant-Ref": "grant-1",
+                "X-Desktop-Deadline": "2033-05-18T03:38:20.000Z",
+            ]
+        ))
+        guard case let .receipt(parsed) = DesktopAuthResponsePolicy.evaluate(
+            response: response, isForMainFrame: true, expected: exchange, origin: try origin()
+        ) else {
+            return XCTFail("fractional timestamp must parse")
+        }
+        XCTAssertEqual(try XCTUnwrap(parsed.deadline).timeIntervalSince1970, 2_000_000_300, accuracy: 1)
+    }
+
+    /// A committed consume DISPATCHES and RECEIVES its final committed ACK
+    /// before any retirement of verifier/recovery context.
+    @MainActor
+    func testCommittedConsumeAwaitsFinalCommittedAck() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .unlinkProvider, target: "password"))
+        let firstBody = try body(of: loads.value[0].request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(firstBody["state"] as! String)"
+        ))))
+        let consume = loads.value[1]
+        XCTAssertTrue(session.classifyNavigationResponse(
+            response: try receipt(
+                ref: ref(of: consume.request), attempt: "attempt-1", outcome: .committed,
+                grant: "grant-1", flow: "flow-1"
+            ),
+            isForMainFrame: true
+        ))
+        session.performPendingAdvance()
+        // The final committed ACK is dispatched but the round is NOT retired.
+        XCTAssertEqual(loads.value.last?.request.url?.path, "/api/desktop-auth/ack")
+        XCTAssertEqual(loads.value.count, 3)
+        let ack = loads.value[2]
+        XCTAssertTrue(session.classifyNavigationResponse(
+            response: try receipt(
+                ref: ref(of: ack.request), attempt: "attempt-1", outcome: .committed,
+                grant: "grant-1", flow: "flow-1", path: "/api/desktop-auth/ack"
+            ),
+            isForMainFrame: true
+        ))
+        session.performPendingAdvance()
+        XCTAssertFalse(session.hasActiveAttempt)
+    }
+
+    /// The original flow deadline survives a target start; a shorter server
+    /// deadline is applied and a later one never renews authority.
+    @MainActor
+    func testTargetStartPreservesTheOriginalFlowDeadline() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .linkProvider, target: "google"))
+        let rootDeadline = try XCTUnwrap(session.retainedDeadline)
+        XCTAssertEqual(rootDeadline.timeIntervalSince1970, 1_300, accuracy: 1)
+
+        // Complete the current round through a pending continuation and its
+        // confirmed ACK, then start a target at t=1290.
+        let firstBody = try body(of: loads.value[0].request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(firstBody["state"] as! String)"
+        ))))
+        let consume = loads.value[1]
+        XCTAssertTrue(session.classifyNavigationResponse(
+            response: try receipt(ref: ref(of: consume.request), attempt: "attempt-1", outcome: .continueTarget, grant: "grant-1", flow: "flow-1"),
+            isForMainFrame: true
+        ))
+        session.performPendingAdvance()
+        let ack = loads.value[2]
+        XCTAssertTrue(session.classifyNavigationResponse(
+            response: try receipt(ref: ref(of: ack.request), attempt: "attempt-1", outcome: .acknowledged, grant: "grant-1", flow: "flow-1", path: "/api/desktop-auth/ack"),
+            isForMainFrame: true
+        ))
+        session.performPendingAdvance()
+
+        clock.value = Date(timeIntervalSince1970: 1_290)
+        session.start(context: context(provider: .google, purpose: .credentialRound, role: .target, intent: .linkProvider, target: "google", continuation: "attempt-1"))
+        // The target inherits the ORIGINAL flow deadline, never now+300.
+        XCTAssertEqual(session.retainedDeadline?.timeIntervalSince1970 ?? 0, 1_300, accuracy: 1)
+    }
+
+    /// A fresh PASSWORD-FIRST target enters the server-validated sealed grant
+    /// without any prior native ACK; a provider-current target still needs one.
+    @MainActor
+    func testPasswordFirstTargetNeedsNoFabricatedNativeAck() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        // Fresh controller: no native current round ever ran here.
+        session.start(context: context(provider: .google, purpose: .credentialRound, role: .target, intent: .linkProvider, target: "google", continuation: "grant-password-first"))
+        XCTAssertEqual(loads.value.count, 1)
+        XCTAssertEqual(loads.value[0].request.url?.path, "/api/desktop-auth/prepare")
+
+        // A provider-current flow without its ACK stays blocked.
+        let session2 = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        session2.start(context: context(purpose: .credentialRound, role: .current, intent: .linkProvider, target: "apple"))
+        session2.start(context: context(provider: .google, purpose: .credentialRound, role: .target, intent: .linkProvider, target: "google", continuation: "attempt-1"))
+        XCTAssertNotNil(session2.recovery)
+    }
+
+    /// Unused-authorization cancel dispatches its captured cleanup authority.
+    @MainActor
+    func testCancelCapturesCleanupAuthorityBeforeTeardown() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"))
+        let firstBody = try body(of: loads.value[0].request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-9", state: firstBody["state"] as! String))
+        session.cancel(reason: "已取消。")
+        // The cleanup POST carries the captured attempt even though the local
+        // state has already been torn down.
+        XCTAssertEqual(loads.value.last?.request.url?.path, "/api/desktop-auth/cancel")
+        let cancelBody = try body(of: loads.value.last!.request)
+        XCTAssertEqual(cancelBody["attempt_id"] as? String, "attempt-9")
+    }
+
+    /// A correlated HTTP 500 enters a recoverable state even though the
+    /// WKNavigationResponse object is NOT a registered navigation.
+    @MainActor
+    func testCorrelatedFailureResponseEntersRecoveryWithoutNavigationIdentity() throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"))
+        let firstBody = try body(of: loads.value[0].request)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(firstBody["state"] as! String)"
+        ))))
+        let consume = loads.value[1]
+        let serverError = try XCTUnwrap(HTTPURLResponse(
+            url: consume.request.url!,
+            statusCode: 500,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        ))
+        XCTAssertFalse(session.classifyNavigationResponse(response: serverError, isForMainFrame: true))
+        XCTAssertEqual(session.recovery?.claim, .unconfirmedMutation)
+    }
+}
+
+extension DesktopAuthenticationSessionTests {
+    /// N5: a REAL start -> prepare request -> prepared receipt advances the
+    /// round (the server-assigned attempt ID is bound from the receipt; a nil
+    /// attempt ID never rejects a legitimate prepared response) and the AS
+    /// callback then carries it through to consume.
+    @MainActor
+    func testFreshPreparedReceiptIsAcceptedAndCarriedThroughConsume() async throws {
+        let clock = Ref(Date(timeIntervalSince1970: 1_000))
+        let scheduler = Ref<[(Date, () -> Void)]>([])
+        let stubs = Ref<[StubBrowserSession]>([])
+        let loads = Ref<[LoadedRequest]>([])
+        let session = try makeSession(clock: clock, scheduler: scheduler, stubs: stubs, loads: loads)
+
+        // Ordinary login round.
+        session.start(context: context())
+        let prepare = loads.value[0]
+        XCTAssertFalse(
+            prepare.request.url?.query?.contains("attempt=") ?? true,
+            "a fresh prepare carries no attempt ID"
+        )
+        let stateValue = try XCTUnwrap((try body(of: prepare.request))["state"] as? String)
+        // The PREPARED receipt (real producer shape: no grant yet) is accepted
+        // and binds the server-assigned attempt ID for this round.
+        let preparedReceipt = try receipt(
+            ref: ref(of: prepare.request),
+            attempt: "attempt-server-1",
+            purpose: .login,
+            role: .login,
+            outcome: .prepared,
+            path: "/api/desktop-auth/prepare"
+        )
+        XCTAssertTrue(session.classifyNavigationResponse(response: preparedReceipt, isForMainFrame: true))
+        session.performPendingAdvance()
+        XCTAssertEqual(stubs.value.count, 1, "prepared receipt starts the system authorization round")
+        // The AS callback carries the server-assigned attempt through to consume.
+        stubs.value[0].deliver(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-server-1&code=code-1&state=\(stateValue)"
+        )))
+        await Task.yield()
+        XCTAssertEqual(loads.value.last?.request.url?.path, "/api/desktop-auth/consume")
+        let consumeBody = try body(of: loads.value.last!.request)
+        XCTAssertEqual(consumeBody["attempt_id"] as? String, "attempt-server-1")
+    }
+
+    /// N5: a credential PREPARE stage carries flow+deadline but NO grant; the
+    /// stage-specific contract accepts it, while a consume/ACK without its
+    /// grant is still rejected.
+    @MainActor
+    func testStageSpecificReceiptRequirements() throws {
+        var state = DesktopAuthHandoffState()
+        _ = state.begin(
+            context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"),
+            deadline: Date().addingTimeInterval(300)
+        )
+        let exchange = DesktopAuthExchange(
+            ref: "xchg-stage-1-1-abcdefgh", kind: .prepare, generation: state.generation,
+            hostEpoch: state.hostEpoch, attemptID: nil, phase: .preparing,
+            purpose: .credentialRound, role: .current, intent: .setPassword,
+            flowRef: "flow-aaaaaaaa", grantRef: nil
+        )
+        // Prepare stage: flow + deadline present, grant absent — valid.
+        let prepareHeaders = try XCTUnwrap(HTTPURLResponse(
+            url: URL(string: "https://workspace.example.com/api/desktop-auth/prepare?ref=xchg-stage-1-1-abcdefgh")!,
+            statusCode: 200, httpVersion: "HTTP/1.1",
+            headerFields: [
+                "Content-Type": "text/html; charset=utf-8",
+                "X-Desktop-Receipt-Version": "1",
+                "X-Desktop-Request-Ref": "xchg-stage-1-1-abcdefgh",
+                "X-Desktop-Attempt-Ref": "attempt-server-2",
+                "X-Desktop-Purpose": "credential_round",
+                "X-Desktop-Role": "current",
+                "X-Desktop-Outcome": "prepared",
+                "X-Desktop-Flow-Ref": "flow-aaaaaaaa",
+                "X-Desktop-Deadline": "2033-05-18T03:38:20.000Z",
+            ]
+        ))
+        guard case .receipt = DesktopAuthResponsePolicy.evaluate(
+            response: prepareHeaders, isForMainFrame: true, expected: exchange, origin: try origin()
+        ) else {
+            return XCTFail("prepare-stage receipt without a grant must be accepted")
+        }
+        // An ACK without its grant is still refused.
+        let ackExchange = DesktopAuthExchange(
+            ref: "xchg-stage-2-1-abcdefgh", kind: .ack, generation: state.generation,
+            hostEpoch: state.hostEpoch, attemptID: "attempt-server-2", phase: .awaitingAck,
+            purpose: .credentialRound, role: .current, intent: .setPassword,
+            flowRef: "flow-aaaaaaaa", grantRef: "grant-1"
+        )
+        let noGrant = try XCTUnwrap(HTTPURLResponse(
+            url: URL(string: "https://workspace.example.com/api/desktop-auth/ack?ref=xchg-stage-2-1-abcdefgh")!,
+            statusCode: 200, httpVersion: "HTTP/1.1",
+            headerFields: [
+                "Content-Type": "text/html; charset=utf-8",
+                "X-Desktop-Receipt-Version": "1",
+                "X-Desktop-Request-Ref": "xchg-stage-2-1-abcdefgh",
+                "X-Desktop-Attempt-Ref": "attempt-server-2",
+                "X-Desktop-Purpose": "credential_round",
+                "X-Desktop-Role": "current",
+                "X-Desktop-Outcome": "acknowledged",
+                "X-Desktop-Flow-Ref": "flow-aaaaaaaa",
+                "X-Desktop-Deadline": "2033-05-18T03:38:20.000Z",
+            ]
+        ))
+        XCTAssertEqual(
+            DesktopAuthResponsePolicy.evaluate(response: noGrant, isForMainFrame: true, expected: ackExchange, origin: try origin()),
+            .failure
+        )
+    }
+}

@@ -1,0 +1,13 @@
+import { safeRedirectTarget } from "./auth-config";
+
+export function integrationReturnTarget(value: string | null | undefined) {
+  const safe = safeRedirectTarget(value);
+  return /^\/workspace(?:[/?#]|$)/.test(safe) && !/^\/workspace\/connect(?:[/?#]|$)/.test(safe) ? safe : "/workspace";
+}
+export function integrationOnboardingTarget(callbackUrl: string) {
+  const safe = safeRedirectTarget(callbackUrl);
+  // Native browser approval and other safe protocol callbacks must complete
+  // directly; carrying their temporary proofs through mailbox OAuth loses them.
+  if (!/^\/workspace(?:[/?#]|$)/.test(safe)) return safe;
+  return `/workspace/connect?returnTo=${encodeURIComponent(integrationReturnTarget(safe))}`;
+}

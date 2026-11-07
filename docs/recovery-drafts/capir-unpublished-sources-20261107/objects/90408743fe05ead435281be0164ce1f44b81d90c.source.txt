@@ -1,0 +1,109 @@
+/**
+ * capir Web handoff (cookie) exchange helpers.
+ *
+ * The handoff secret arrives in a private POST body, is exchanged on the
+ * backend with the server-only CAPIR_WEB_HANDOFF_KEY, and the verified Lab
+ * account session becomes the existing encrypted Auth.js HttpOnly cookie.
+ * There is no fallback to the main account and no bearer material in URLs,
+ * stdout, or local storage.
+ */
+import type { SessionResponse } from "@talent-signal/contracts";
+
+export const CAPIR_WORKSPACE_PATH = "/workspace";
+
+const HANDOFF_SECRET_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * The Web origin as this server sees it.
+ *
+ * Next's `request.url` can normalize the host (127.0.0.1 becomes localhost),
+ * while capabilities, grants and handoffs bind the exact configured origin.
+ * The Host header carries the origin the caller actually addressed; it is
+ * preferred over the normalized URL and fails closed when it is absent.
+ */
+export function requestOriginFrom(request: {
+  url: string;
+  headers: { get(name: string): string | null };
+}): string {
+  const host = request.headers.get("host");
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  const proto =
+    forwardedProto?.split(",")[0]?.trim() ||
+    (process.env.NODE_ENV === "production" ? "https" : "http");
+  if (!host) return new URL(request.url).origin;
+  return `${proto}://${host}`;
+}
+
+export interface CapirHandoffBody {
+  handoff_secret: string;
+}
+
+export function parseHandoffBody(
+  value: unknown,
+): { ok: true; body: CapirHandoffBody } | { ok: false; reason: string } {
+  if (!value || typeof value !== "object")
+    return { ok: false, reason: "A JSON handoff body is required." };
+  const secret = (value as { handoff_secret?: unknown }).handoff_secret;
+  if (typeof secret !== "string" || !HANDOFF_SECRET_SHAPE.test(secret))
+    return { ok: false, reason: "handoff_secret must be a 43-character secret." };
+  return { ok: true, body: { handoff_secret: secret } };
+}
+
+/**
+ * Only a verified Lab account may be turned into a Web session: the scoped
+ * exchange account (slug `lab-<sandbox>`), member role, lab user kind. A main
+ * or fixture account can never reach the cookie.
+ */
+export function assertLabSession(session: SessionResponse): asserts session is SessionResponse {
+  const lab =
+    session.user.kind === "lab_human" &&
+    session.user.role === "member" &&
+    session.account.slug.startsWith("lab-");
+  if (!lab) {
+    throw new Error("The handoff exchange did not return a scoped Lab account.");
+  }
+}
+
+export interface CapirSessionClaims {
+  sub: string;
+  email: string;
+  name: string;
+  backendAccessToken: string;
+  backendAccountId: string;
+  backendAccountName: string;
+  backendAccountSlug: string;
+  backendExpiresAt: string;
+  backendRole: "admin" | "member";
+  backendUserId: string;
+  backendUsername: string | null;
+  capir: {
+    sandbox_id: string;
+    entry_path: string;
+  };
+}
+
+export function capirSessionClaims(session: SessionResponse): CapirSessionClaims {
+  assertLabSession(session);
+  const sandboxId = session.account.slug.slice("lab-".length);
+  return {
+    sub: session.user.id,
+    email: session.user.email,
+    name: session.user.display_name,
+    backendAccessToken: session.access_token,
+    backendAccountId: session.account.id,
+    backendAccountName: session.account.name,
+    backendAccountSlug: session.account.slug,
+    backendExpiresAt: session.expires_at,
+    backendRole: session.user.role,
+    backendUserId: session.user.id,
+    backendUsername: session.user.username ?? null,
+    capir: {
+      sandbox_id: sandboxId,
+      entry_path: `/capir/sandboxes/${sandboxId}`,
+    },
+  };
+}
+
+export function secondsUntil(expiresAt: string, now: number): number {
+  return Math.max(1, Math.floor((Date.parse(expiresAt) - now) / 1000));
+}

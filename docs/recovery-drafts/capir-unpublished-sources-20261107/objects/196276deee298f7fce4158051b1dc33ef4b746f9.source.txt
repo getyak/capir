@@ -1,0 +1,178 @@
+import XCTest
+@testable import TalentSignal
+
+/// Durable uncertain-frame identity: exact replay across process restarts,
+/// hard account/endpoint/user partitioning, and retention-bound cleanup. No
+/// bearer token is ever used as durable identity.
+final class AgentSessionDeltaTransferTests: XCTestCase {
+    private func makeFrame(
+        sessionID: UUID, body: String = #"{"probe":1}"#,
+        createdAt: Date = Date(),
+        sessionExpiresAt: Date? = Date(timeIntervalSinceNow: 600)
+    ) -> AgentSessionDeltaInFlightFrame {
+        AgentSessionDeltaInFlightFrame(
+            sessionID: sessionID,
+            transferID: UUID(),
+            frameIndex: 1,
+            idempotencyKey: UUID(),
+            expectedRevision: 3,
+            targetPayloadDigest: String(repeating: "a", count: 64),
+            requestBody: Data(body.utf8),
+            isFinal: false,
+            createdAt: createdAt,
+            sessionExpiresAt: sessionExpiresAt
+        )
+    }
+
+    func testRetainedFrameSurvivesRestartWithExactBytes() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-transfer-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sessionID = UUID()
+        let frame = makeFrame(sessionID: sessionID)
+        try AgentSessionDeltaTransferStore(directory: directory).retain(
+            frame, accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a"
+        )
+        // A fresh process reads the identical frame intent back.
+        let restored = try AgentSessionDeltaTransferStore(directory: directory).inFlightFrame(
+            accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a",
+            sessionID: sessionID
+        )
+        XCTAssertEqual(restored, frame)
+        XCTAssertEqual(restored?.requestBody, frame.requestBody)
+    }
+
+    private func assertProtected(_ directory: URL, file: URL, fileName: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true, file: fileName, line: line)
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        let protection = (attributes[.protectionKey] as? FileProtectionType)?.rawValue
+            ?? attributes[.protectionKey] as? String
+#if targetEnvironment(simulator)
+        if protection == nil { throw XCTSkip("Simulator does not expose iOS hardware file-protection attributes; backup exclusion was verified. Physical-device protection remains unverified.") }
+#endif
+        XCTAssertEqual(protection, FileProtectionType.completeUnlessOpen.rawValue, file: fileName, line: line)
+    }
+
+    func testFirstWriteAndAtomicReplacementProtectPrivateBodyAndExcludeBackup() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "delta-protection-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentSessionDeltaTransferStore(directory: directory)
+        var frame = makeFrame(sessionID: UUID())
+        try store.retain(frame, accountID: "a", userID: "u", endpointScope: "e")
+        let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
+        XCTAssertEqual(try store.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: frame.sessionID), frame)
+        XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        frame.requestBody = Data(#"{"probe":"replacement"}"#.utf8)
+        try store.retain(frame, accountID: "a", userID: "u", endpointScope: "e")
+        XCTAssertEqual(try store.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: frame.sessionID), frame)
+        try assertProtected(directory, file: file)
+    }
+
+    func testExistingUnprotectedFrameUpgradesBeforeReplayAndIdleSweep() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "delta-protection-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentSessionDeltaTransferStore(directory: directory)
+        let frame = makeFrame(sessionID: UUID())
+        try store.retain(frame, accountID: "a", userID: "u", endpointScope: "e")
+        let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
+        func downgrade() throws {
+            var values = URLResourceValues(); values.isExcludedFromBackup = false
+            var legacy = directory; try legacy.setResourceValues(values)
+            try JSONEncoder().encode(frame).write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.none], ofItemAtPath: file.path)
+        }
+        try downgrade()
+        XCTAssertEqual(try AgentSessionDeltaTransferStore(directory: directory).inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: frame.sessionID), frame)
+        XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        try downgrade()
+        try AgentSessionDeltaTransferStore(directory: directory).sweepExpired()
+        try assertProtected(directory, file: file)
+    }
+
+    func testPartitionsNeverLeakAcrossAccountsUsersOrEndpoints() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-transfer-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sessionID = UUID()
+        let frame = makeFrame(sessionID: sessionID)
+        let store = AgentSessionDeltaTransferStore(directory: directory)
+        try store.retain(frame, accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a")
+        XCTAssertNil(try store.inFlightFrame(accountID: "account-b", userID: "user-a", endpointScope: "endpoint-a", sessionID: sessionID))
+        XCTAssertNil(try store.inFlightFrame(accountID: "account-a", userID: "user-b", endpointScope: "endpoint-a", sessionID: sessionID))
+        XCTAssertNil(try store.inFlightFrame(accountID: "account-a", userID: "user-a", endpointScope: "endpoint-b", sessionID: sessionID))
+        // Account retirement clears only its own partition.
+        try store.releasePartition(accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a")
+        XCTAssertNil(try store.inFlightFrame(accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a", sessionID: sessionID))
+    }
+
+    func testInFlightLifetimeIsBoundToTheOriginalSessionDeadline() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-transfer-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sessionID = UUID()
+        // A refresh/retry of an old frame never extends the ORIGINAL deadline.
+        let frame = makeFrame(
+            sessionID: sessionID,
+            createdAt: Date(timeIntervalSince1970: 0),
+            sessionExpiresAt: Date(timeIntervalSinceNow: 120)
+        )
+        let store = AgentSessionDeltaTransferStore(directory: directory)
+        try store.retain(frame, accountID: "a", userID: "u", endpointScope: "e")
+        XCTAssertEqual(
+            try store.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: sessionID),
+            frame
+        )
+        let later = AgentSessionDeltaTransferStore(
+            directory: directory, now: { Date(timeIntervalSinceNow: 300) }
+        )
+        XCTAssertNil(try later.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: sessionID))
+    }
+
+    func testLegacyFrameWithoutTrustworthyDeadlineFailsClosed() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-transfer-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sessionID = UUID()
+        let legacy = makeFrame(sessionID: sessionID, sessionExpiresAt: nil)
+        let store = AgentSessionDeltaTransferStore(directory: directory)
+        try store.retain(legacy, accountID: "a", userID: "u", endpointScope: "e")
+        // No fresh retention window is granted: the frame is wiped.
+        XCTAssertNil(try store.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: sessionID))
+    }
+
+    func testIdleSweepExpiresPrivateFramesWithoutReread() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-transfer-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let expiredID = UUID()
+        let liveID = UUID()
+        let store = AgentSessionDeltaTransferStore(directory: directory)
+        try store.retain(
+            makeFrame(sessionID: expiredID, sessionExpiresAt: Date(timeIntervalSinceNow: -1)),
+            accountID: "a", userID: "u", endpointScope: "e"
+        )
+        try store.retain(
+            makeFrame(sessionID: liveID, sessionExpiresAt: Date(timeIntervalSinceNow: 600)),
+            accountID: "a", userID: "u", endpointScope: "e"
+        )
+        // The governed sweep runs without any per-frame reread.
+        try store.sweepExpired()
+        XCTAssertNil(try store.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: expiredID))
+        XCTAssertEqual(
+            try store.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: liveID)?.sessionID,
+            liveID
+        )
+    }
+
+    func testReleasedFrameIsGoneAndReleaseIsIdempotent() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-transfer-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sessionID = UUID()
+        let store = AgentSessionDeltaTransferStore(directory: directory)
+        try store.retain(makeFrame(sessionID: sessionID), accountID: "a", userID: "u", endpointScope: "e")
+        try store.release(accountID: "a", userID: "u", endpointScope: "e", sessionID: sessionID)
+        XCTAssertNil(try store.inFlightFrame(accountID: "a", userID: "u", endpointScope: "e", sessionID: sessionID))
+        XCTAssertNoThrow(try store.release(accountID: "a", userID: "u", endpointScope: "e", sessionID: sessionID))
+    }
+}

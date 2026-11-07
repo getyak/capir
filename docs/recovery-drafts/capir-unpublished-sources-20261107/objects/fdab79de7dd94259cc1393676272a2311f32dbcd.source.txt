@@ -1,0 +1,22 @@
+import assert from "node:assert/strict";
+import { scryptSync } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const script = fileURLToPath(new URL("./hash-password.mjs", import.meta.url));
+
+test("hash tool rejects five-character passwords", () => {
+  const result = spawnSync(process.execPath, [script, "short"], { encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+});
+
+test("hash tool accepts six characters without composition requirements", () => {
+  for (const password of ["simple", "123456", "      ", "密码测试专用"]) {
+    const result = spawnSync(process.execPath, [script, password], { encoding: "utf8" });
+    assert.equal(result.status, 0);
+    const [, salt, hash] = result.stdout.trim().split("$");
+    assert.equal(scryptSync(password, salt, 64).toString("hex"), hash);
+  }
+});

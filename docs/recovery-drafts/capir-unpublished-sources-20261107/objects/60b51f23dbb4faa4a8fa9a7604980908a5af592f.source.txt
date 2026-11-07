@@ -1,0 +1,277 @@
+import Foundation
+
+struct AgentSessionRemoteSyncState: Decodable {
+    let state: String
+    let transferID: UUID?
+    let targetPayloadDigest: String?
+    let startedAt: Date?
+    let frameCount: Int
+    enum CodingKeys: String, CodingKey {
+        case state
+        case transferID = "transfer_id"
+        case targetPayloadDigest = "target_payload_digest"
+        case startedAt = "started_at"
+        case frameCount = "frame_count"
+    }
+    var isIncomplete: Bool { state == "incomplete" }
+}
+
+struct AgentSessionRemoteRecord: Decodable {
+    let sessionID: UUID
+    let revision: Int
+    let updatedAt: Date
+    let expiresAt: Date
+    let deletedAt: Date?
+    let payload: PersistedAgentSession?
+    /// Durable partial status: a record is visibly incomplete until its
+    /// transfer verifies the whole declared intent. Decoding always keeps the
+    /// produced state (never silently ignored); construction defaults to nil
+    /// only for legacy callers and legacy stored shapes.
+    let sync: AgentSessionRemoteSyncState?
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id", revision, updatedAt = "updated_at"
+        case expiresAt = "expires_at", deletedAt = "deleted_at", payload, sync
+    }
+    var isRemotelyIncomplete: Bool { sync?.isIncomplete == true }
+
+    init(
+        sessionID: UUID,
+        revision: Int,
+        updatedAt: Date,
+        expiresAt: Date,
+        deletedAt: Date?,
+        payload: PersistedAgentSession?,
+        sync: AgentSessionRemoteSyncState? = nil
+    ) {
+        self.sessionID = sessionID
+        self.revision = revision
+        self.updatedAt = updatedAt
+        self.expiresAt = expiresAt
+        self.deletedAt = deletedAt
+        self.payload = payload
+        self.sync = sync
+    }
+}
+
+struct AgentSessionRemotePage: Decodable {
+    let contractVersion: String
+    let sessions: [AgentSessionRemoteRecord]
+    let complete: Bool
+    let nextCursor: String?
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version", sessions, complete, nextCursor = "next_cursor"
+    }
+}
+
+protocol AgentSessionDeltaServing {
+    /// `isCurrent` is the caller's live lease/generation fence. It is checked
+    /// before every retain, dispatch, read and replay and after every await:
+    /// a released scope never writes another frame, and an already dispatched
+    /// result stays truthful unknown.
+    func synchronizeSessionDelta(
+        sessionID: UUID, desired: [String: Any], skeleton: [String: Any]?,
+        isCurrent: @escaping () -> Bool,
+        isSessionCurrent: @escaping (UUID) -> Bool
+    ) async throws -> AgentSessionDeltaClient.Progress
+    /// Scope retirement: drop every retained frame of this partition.
+    func releaseDeltaTransferPartition() throws
+    /// One Session's retained frame is released on deletion, expiry, tombstone
+    /// or source withdrawal so it can never resurrect data.
+    func releaseSessionFrame(sessionID: UUID) throws
+    /// Governed sweep: idle private frames expire against their original
+    /// Session deadline. Failures stay visible to the caller.
+    func sweepExpiredFrames() throws
+}
+
+protocol AgentSessionSyncServing {
+    func list(after: String?) async throws -> AgentSessionRemotePage
+    func put(_ payload: PersistedAgentSession, expectedRevision: Int, idempotencyKey: UUID) async throws -> AgentSessionRemoteRecord
+    func delete(id: UUID, expectedRevision: Int, idempotencyKey: UUID) async throws -> AgentSessionRemoteRecord
+    /// Incremental synchronization for histories that cannot fit one request.
+    /// Legacy mock constructors have no durable transfer store and report nil.
+    func deltaServing() async throws -> AgentSessionDeltaServing?
+}
+
+extension AgentSessionSyncServing {
+    func deltaServing() async throws -> AgentSessionDeltaServing? { nil }
+}
+
+extension AgentSessionDeltaServing {
+    /// Compatibility entry for callers without a per-Session fence.
+    func synchronizeSessionDelta(
+        sessionID: UUID, desired: [String: Any], skeleton: [String: Any]?,
+        isCurrent: @escaping () -> Bool
+    ) async throws -> AgentSessionDeltaClient.Progress {
+        try await synchronizeSessionDelta(
+            sessionID: sessionID, desired: desired, skeleton: skeleton,
+            isCurrent: isCurrent, isSessionCurrent: { _ in true }
+        )
+    }
+}
+
+enum AgentSessionSyncError: LocalizedError {
+    case conflict
+    case invalidResponse
+    case unavailable(Int)
+    case transcriptConflict
+    var errorDescription: String? {
+        switch self {
+        case .conflict: return "This session changed on another device. Sync again to keep both updates."
+        case .invalidResponse: return "Session sync returned an unreadable response. Your local history is preserved."
+        case .unavailable: return "Session sync is unavailable. Your changes remain on this device."
+        case .transcriptConflict: return "Two devices have incompatible versions of this message. Both saved histories need review."
+        }
+    }
+}
+
+struct AgentSessionSyncClient: AgentSessionSyncServing {
+    let baseURL: URL
+    let bearerToken: String
+    /// Stable durable namespace (RuntimeEndpoint/account/user). The rotating
+    /// bearer token is never durable identity and is never persisted.
+    var deltaNamespace: (endpointScope: String, accountID: String, userID: String)? = nil
+    var transferStore: AgentSessionDeltaTransferStoring? = nil
+    var session: URLSession = TalentSignalNetworking.session
+
+    var deltaServing: AgentSessionDeltaServing? {
+        guard let namespace = deltaNamespace, let store = transferStore else { return nil }
+        return AgentSessionDeltaClient(
+            transport: self, store: store,
+            accountID: namespace.accountID, userID: namespace.userID,
+            endpointScope: namespace.endpointScope
+        )
+    }
+
+    func deltaServing() async throws -> AgentSessionDeltaServing? { deltaServing }
+
+    func list(after: String? = nil) async throws -> AgentSessionRemotePage {
+        var components = URLComponents(url: baseURL.appending(path: "v1/agent-sessions"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "limit", value: "50")]
+        if let after { components.queryItems?.append(URLQueryItem(name: "after", value: after)) }
+        let page: AgentSessionRemotePage = try await request(url: components.url!, method: "GET", body: Optional<DeleteBody>.none)
+        guard page.contractVersion == TalentSignalAPIContract.version,
+              page.complete || page.nextCursor != nil else { throw AgentSessionSyncError.invalidResponse }
+        return page
+    }
+
+    func put(_ payload: PersistedAgentSession, expectedRevision: Int, idempotencyKey: UUID) async throws -> AgentSessionRemoteRecord {
+        let response: Envelope = try await request(
+            url: baseURL.appending(path: "v1/agent-sessions/\(payload.id.uuidString.lowercased())"), method: "PUT",
+            body: PutBody(expectedRevision: expectedRevision, idempotencyKey: idempotencyKey, payload: payload)
+        )
+        guard response.contractVersion == TalentSignalAPIContract.version, response.session.sessionID == payload.id else {
+            throw AgentSessionSyncError.invalidResponse
+        }
+        return response.session
+    }
+
+    func delete(id: UUID, expectedRevision: Int, idempotencyKey: UUID) async throws -> AgentSessionRemoteRecord {
+        let response: Envelope = try await request(
+            url: baseURL.appending(path: "v1/agent-sessions/\(id.uuidString.lowercased())"), method: "DELETE",
+            body: DeleteBody(expectedRevision: expectedRevision, idempotencyKey: idempotencyKey)
+        )
+        guard response.contractVersion == TalentSignalAPIContract.version, response.session.sessionID == id,
+              response.session.payload == nil else { throw AgentSessionSyncError.invalidResponse }
+        return response.session
+    }
+
+    private struct Envelope: Decodable {
+        let contractVersion: String
+        let session: AgentSessionRemoteRecord
+        enum CodingKeys: String, CodingKey { case contractVersion = "contract_version", session }
+    }
+    private struct PutBody: Encodable {
+        let expectedRevision: Int
+        let idempotencyKey: UUID
+        let payload: PersistedAgentSession
+        enum CodingKeys: String, CodingKey { case expectedRevision = "expected_revision", idempotencyKey = "idempotency_key", payload }
+    }
+    private struct DeleteBody: Encodable {
+        let expectedRevision: Int
+        let idempotencyKey: UUID
+        enum CodingKeys: String, CodingKey { case expectedRevision = "expected_revision", idempotencyKey = "idempotency_key" }
+    }
+    private func request<Response: Decodable, Body: Encodable>(url: URL, method: String, body: Body?) async throws -> Response {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        if let body {
+            request.httpBody = try JSONEncoder.agentSession.encode(body)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await TalentSignalNetworking.data(for: request, using: session)
+        guard let http = response as? HTTPURLResponse else { throw AgentSessionSyncError.invalidResponse }
+        if http.statusCode == 409 { throw AgentSessionSyncError.conflict }
+        guard (200...299).contains(http.statusCode) else { throw AgentSessionSyncError.unavailable(http.statusCode) }
+        return try JSONDecoder.agentSession.decode(Response.self, from: data)
+    }
+
+    private func rawBodyRequest<Response: Decodable>(
+        url: URL, method: String, bodyData: Data?
+    ) async throws -> (response: Response, data: Data) {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        if let bodyData {
+            request.httpBody = bodyData
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await TalentSignalNetworking.data(for: request, using: session)
+        guard let http = response as? HTTPURLResponse else { throw AgentSessionSyncError.invalidResponse }
+        if http.statusCode == 409 { throw AgentSessionSyncError.conflict }
+        guard (200...299).contains(http.statusCode) else { throw AgentSessionSyncError.unavailable(http.statusCode) }
+        return (try JSONDecoder.agentSession.decode(Response.self, from: data), data)
+    }
+}
+
+/// Raw canonical GET + exact-byte frame PATCH for incremental synchronization.
+/// Unknown server fields survive through the raw overlay instead of being
+/// dropped by the typed DTO.
+extension AgentSessionSyncClient: AgentSessionDeltaTransport {
+    func rawSession(id: UUID) async throws -> AgentSessionDeltaRawRecord? {
+        do {
+            let pair: (response: AgentSessionDeltaWireRecordEnvelope, data: Data) =
+                try await rawBodyRequest(
+                    url: baseURL.appending(path: "v1/agent-sessions/\(id.uuidString.lowercased())"),
+                    method: "GET", bodyData: nil
+                )
+            let raw = ((try? JSONSerialization.jsonObject(with: pair.data)) as? [String: Any]) ?? [:]
+            return AgentSessionDeltaRawRecord(
+                record: pair.response.session, raw: raw["session"] as? [String: Any] ?? [:]
+            )
+        } catch AgentSessionSyncError.unavailable(404) {
+            // First creation: there is no remote record yet.
+            return nil
+        }
+    }
+
+    func sendDeltaFrame(id: UUID, requestBody: Data) async throws -> AgentSessionDeltaWireResponse {
+        let pair: (response: AgentSessionDeltaWireResponse, data: Data) =
+            try await rawBodyRequest(
+                url: baseURL.appending(path: "v1/agent-sessions/\(id.uuidString.lowercased())/delta"),
+                method: "PATCH", bodyData: requestBody
+            )
+        return pair.response
+    }
+
+    func abandonDelta(id: UUID, requestBody: Data) async throws -> AgentSessionDeltaWireResponse {
+        let pair: (response: AgentSessionDeltaWireResponse, data: Data) =
+            try await rawBodyRequest(
+                url: baseURL.appending(
+                    path: "v1/agent-sessions/\(id.uuidString.lowercased())/delta/abandon"
+                ),
+                method: "POST", bodyData: requestBody
+            )
+        return pair.response
+    }
+}
+
+private struct AgentSessionDeltaWireRecordEnvelope: Decodable {
+    let contractVersion: String
+    let session: AgentSessionRemoteRecord
+    enum CodingKeys: String, CodingKey { case contractVersion = "contract_version", session }
+}

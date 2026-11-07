@@ -1,0 +1,102 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const directory = vi.hoisted(() => ({
+  data: null as unknown,
+  loading: false,
+  failed: false,
+  retry: vi.fn(),
+}));
+vi.mock("./workspace-search", () => ({ useWorkspaceDirectory: () => directory }));
+vi.mock("./person-directory-avatar", () => ({
+  PersonDirectoryAvatar: (props: { label: string }) => createElement("span", { className: props.label }),
+}));
+
+import { WorkspaceSidebarPeople } from "./workspace-sidebar-people";
+
+function snapshot(people: unknown[], sessions: unknown[] = []) {
+  return {
+    people: { people },
+    sessions: { session_version: "v-1", sessions },
+  };
+}
+
+function person(id: string, label: string) {
+  return {
+    id,
+    display_label: label,
+    contexts: [{ id: `ctx-${id}`, display_label: "合作方" }],
+    avatar: null,
+  };
+}
+
+beforeEach(() => {
+  directory.data = null;
+  directory.loading = false;
+  directory.failed = false;
+});
+
+describe("people sidebar settled load state", () => {
+  it("settles an already-empty directory to ready with zero people and hides the group", () => {
+    directory.data = snapshot([]);
+    const html = renderToStaticMarkup(createElement(WorkspaceSidebarPeople, { binding: "v-1" }));
+    expect(html).toContain('data-people-directory-state="ready"');
+    expect(html).toContain('data-people-count="0"');
+    expect(html).not.toContain('aria-label="常用人物"');
+    expect(html).not.toContain("正在读取");
+    expect(html).not.toContain("暂时无法读取");
+  });
+
+  it("keeps delayed hydration visible as loading, never as verified empty", () => {
+    directory.loading = true;
+    const hydrating = renderToStaticMarkup(createElement(WorkspaceSidebarPeople, { binding: "v-1" }));
+    expect(hydrating).toContain('data-people-directory-state="loading"');
+    expect(hydrating).not.toContain('data-people-directory-state="ready"');
+    expect(hydrating).toContain("正在读取");
+
+    // Hydration settles afterwards: the same surface must flip to ready-empty.
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => {
+      root.render(createElement(WorkspaceSidebarPeople, { binding: "v-1" }));
+    });
+    expect(host.innerHTML).toContain('data-people-directory-state="loading"');
+    directory.loading = false;
+    directory.data = snapshot([]);
+    act(() => {
+      root.render(createElement(WorkspaceSidebarPeople, { binding: "v-1" }));
+    });
+    expect(host.innerHTML).toContain('data-people-directory-state="ready"');
+    expect(host.innerHTML).toContain('data-people-count="0"');
+    expect(host.innerHTML).not.toContain('aria-label="常用人物"');
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("fails a read-error directory as error, never as an empty directory", () => {
+    directory.failed = true;
+    const html = renderToStaticMarkup(createElement(WorkspaceSidebarPeople, { binding: "v-1" }));
+    expect(html).toContain('data-people-directory-state="error"');
+    expect(html).not.toContain('data-people-directory-state="ready"');
+    expect(html).toContain("人物目录暂时无法读取");
+    expect(html).toContain('aria-label="常用人物"');
+  });
+
+  it("publishes settled state and people count beside a nonempty directory", () => {
+    directory.data = snapshot(
+      [person("p-1", "陈夏"), person("p-2", "林舟")],
+      [{ session_id: "s-1", title: "初次沟通", person_id: "p-1", state: "active" }],
+    );
+    const html = renderToStaticMarkup(createElement(WorkspaceSidebarPeople, { binding: "v-1" }));
+    expect(html).toContain('data-people-directory-state="ready"');
+    expect(html).toContain('data-people-count="2"');
+    expect(html).toContain('aria-label="常用人物"');
+    expect(html).toContain("陈夏");
+    expect(html).toContain("林舟");
+  });
+});

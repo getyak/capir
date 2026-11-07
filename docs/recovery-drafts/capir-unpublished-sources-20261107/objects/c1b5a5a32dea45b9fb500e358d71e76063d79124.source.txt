@@ -1,0 +1,401 @@
+import { createHash, randomUUID } from "node:crypto";
+
+import {
+  ClaudeChatProvider,
+  claudeHarnessConfiguration,
+  runClaudeHarness,
+  z,
+  type AgentProviderInputPart,
+  type HarnessSteeringFeed,
+  type HarnessSteeringMessage,
+} from "@talent-signal/agent";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  CONVERSATION_STEER_IMAGE_UNSUPPORTED,
+  CONVERSATION_STEER_MAX_FOLDED,
+  CONVERSATION_STEER_QUIET_MS,
+  createConversationQueueSteeringFeed,
+  type ConversationQueuePendingSteeringMessage,
+  type ConversationQueueSteeringSource,
+} from "./conversationQueueSteering.js";
+
+const config = claudeHarnessConfiguration({
+  ANTHROPIC_API_KEY: "synthetic-secret",
+  TALENT_SIGNAL_AGENT_MODEL: "synthetic-model",
+});
+
+const messageA = "11111111-1111-4111-8111-111111111111";
+const messageB = "22222222-2222-4222-8222-222222222222";
+const messageC = "33333333-3333-4333-8333-333333333333";
+
+type Pending = ConversationQueuePendingSteeringMessage;
+
+/**
+ * Deterministic stand-in for the durable queue's fenced SQL state. It mirrors
+ * exactly the admission/steering contract the production source implements:
+ * accepted messages attach to an open run intake and become next tasks once
+ * intake durably closed, delivery is one-shot and ordered, unsupported
+ * messages keep their identity for the next task.
+ */
+function syntheticQueue() {
+  const events: string[] = [];
+  const state = {
+    pending: [] as Pending[],
+    delivered: [] as Pending[],
+    unsupported: [] as { entryId: string; failureCode: string }[],
+    nextTasks: [] as { messageId: string }[],
+    closed: false,
+    lost: null as null | "USER_CANCELLED" | "LEASE_LOST" | "SOURCE_REVOKED",
+    loaded: [] as string[],
+  };
+  const admit = (message: Omit<Pending, "steerState">) => {
+    // The real admission path routes on the durable intake flag under the
+    // same session advisory lock as the close below.
+    if (state.closed) state.nextTasks.push({ messageId: message.messageId });
+    else state.pending.push({ ...message, steerState: "awaiting" });
+  };
+  const source: ConversationQueueSteeringSource & {
+    admit: typeof admit;
+    state: typeof state;
+    events: typeof events;
+  } = {
+    admit,
+    state,
+    events,
+    async readAwaiting() {
+      events.push("read");
+      return [...state.pending];
+    },
+    async deliver(entryIds) {
+      events.push(`deliver:${entryIds.join(",")}`);
+      const rows = state.pending.filter((entry) => entryIds.includes(entry.entryId));
+      state.pending = state.pending.filter((entry) => !entryIds.includes(entry.entryId));
+      state.delivered.push(...rows);
+      return rows.map((row) => ({ ...row, steerState: "delivered" as const }));
+    },
+    async markUnsupported(entryIds, failureCode) {
+      events.push(`unsupported:${entryIds.join(",")}`);
+      for (const entryId of entryIds) {
+        const row = state.pending.find((entry) => entry.entryId === entryId);
+        if (row) state.unsupported.push({ entryId, failureCode });
+      }
+      state.pending = state.pending.filter((entry) => !entryIds.includes(entry.entryId));
+    },
+    async closeIntake(options) {
+      if (state.closed) return true;
+      if (!options?.force && state.pending.length > 0) return false;
+      events.push("close");
+      state.closed = true;
+      return true;
+    },
+    async assertLive() {
+      if (state.lost) throw new Error(state.lost);
+    },
+    async loadImages(member) {
+      state.loaded.push(member.entryId);
+      const row = state.pending.find((entry) => entry.entryId === member.entryId)
+        ?? state.delivered.find((entry) => entry.entryId === member.entryId);
+      return row?.images.map((image) => ({
+        kind: "image" as const,
+        artifactID: `conversation-image-${member.messageId}-0-${image.attachment_id}`,
+        mimeType: image.media_type,
+        byteSize: image.byte_size,
+        contentHash: image.content_hash,
+        dataBase64: Buffer.from(`pixels:${image.attachment_id}`).toString("base64"),
+      })) ?? [];
+    },
+  };
+  return source;
+}
+
+function manifest(byteSize = 128) {
+  return {
+    attachment_id: randomUUID(),
+    file_name: "synthetic.png",
+    media_type: "image/png" as const,
+    byte_size: byteSize,
+    content_hash: createHash("sha256").update("x".repeat(byteSize)).digest("hex"),
+  };
+}
+
+function virtualClock(startMs = Date.parse("2026-09-30T10:00:00.000Z")) {
+  let clock = startMs;
+  return {
+    now: () => new Date(clock),
+    async sleep(ms: number) {
+      clock += ms;
+    },
+    advance(ms: number) {
+      clock += ms;
+    },
+    get current() {
+      return clock;
+    },
+  };
+}
+
+function pendingMessage(
+  entryId: string,
+  messageId: string,
+  acceptedAt: string,
+  text: string,
+  images: Pending["images"] = [],
+): Omit<Pending, "steerState"> {
+  return { entryId, messageId, objective: text, acceptedAt, images };
+}
+
+describe("conversation queue steering feed policy", () => {
+  it("combines rapid fragments within the quiet interval into one batch preserving every original identity", async () => {
+    const queue = syntheticQueue();
+    const clock = virtualClock();
+    const feed = createConversationQueueSteeringFeed(queue, {
+      now: clock.now,
+      sleep: clock.sleep,
+    });
+    queue.admit(pendingMessage("entry-b", messageB, "2026-09-30T10:00:00.000Z", "fragment one"));
+    queue.admit(pendingMessage("entry-c", messageC, "2026-09-30T10:00:00.200Z", "fragment two"));
+    const first = await feed.nextBatchAtSafePoint();
+    // One processing batch for both fragments, in accepted order, with the
+    // original message ids and timestamps intact.
+    expect(first!.messages.map((message) => message.messageID)).toEqual([messageB, messageC]);
+    expect(first!.messages.map((message) => message.acceptedAt)).toEqual([
+      "2026-09-30T10:00:00.000Z",
+      "2026-09-30T10:00:00.200Z",
+    ]);
+    // The quiet window held release until 750ms after the newest fragment.
+    expect(clock.current).toBe(Date.parse("2026-09-30T10:00:00.200Z") + CONVERSATION_STEER_QUIET_MS);
+    // Intake closes only after everything accepted was delivered.
+    expect(await feed.nextBatchAtSafePoint()).toBeNull();
+    expect(queue.state.delivered.map((entry) => entry.messageId)).toEqual([messageB, messageC]);
+    expect(queue.state.nextTasks).toEqual([]);
+  });
+
+  it("routes a message accepted after the run's final intake closure to the next task", async () => {
+    const queue = syntheticQueue();
+    const clock = virtualClock();
+    const feed = createConversationQueueSteeringFeed(queue, { now: clock.now, sleep: clock.sleep });
+    queue.admit(pendingMessage("entry-b", messageB, "2026-09-30T10:00:00.000Z", "steering"));
+    expect((await feed.nextBatchAtSafePoint())!.messages).toHaveLength(1);
+    expect(await feed.nextBatchAtSafePoint()).toBeNull();
+    // The run produced its standalone final answer; a late message is the
+    // next task, never silently folded into history it never shaped.
+    queue.admit(pendingMessage("entry-c", messageC, "2026-09-30T10:01:00.000Z", "late"));
+    expect(queue.state.nextTasks).toEqual([{ messageId: messageC }]);
+    expect(queue.state.delivered.map((entry) => entry.messageId)).toEqual([messageB]);
+  });
+
+  it("keeps delivery atomic when a message races the intake close", async () => {
+    const queue = syntheticQueue();
+    const clock = virtualClock();
+    const feed = createConversationQueueSteeringFeed(queue, { now: clock.now, sleep: clock.sleep });
+    let reads = 0;
+    const originalRead = queue.readAwaiting.bind(queue);
+    queue.readAwaiting = async () => {
+      reads += 1;
+      const rows = await originalRead();
+      if (reads === 1 && rows.length === 0) {
+        // A message was admitted between the empty read and the close; the
+        // conditional close loses that race and the loop delivers it instead.
+        queue.admit(pendingMessage("entry-b", messageB, "2026-09-30T10:00:00.000Z", "raced"));
+      }
+      return rows;
+    };
+    const batch = await feed.nextBatchAtSafePoint();
+    expect(batch!.messages.map((message) => message.messageID)).toEqual([messageB]);
+    expect(await feed.nextBatchAtSafePoint()).toBeNull();
+    expect(queue.state.delivered.map((entry) => entry.messageId)).toEqual([messageB]);
+    expect(queue.state.nextTasks).toEqual([]);
+    queue.readAwaiting = originalRead;
+  });
+
+  it("marks an over-budget image message explicitly unsupported and still delivers the rest with grouped images", async () => {
+    const queue = syntheticQueue();
+    const clock = virtualClock();
+    const feed = createConversationQueueSteeringFeed(queue, {
+      now: clock.now,
+      sleep: clock.sleep,
+      usedImageCount: 9,
+      usedImageBytes: 0,
+    });
+    const big = manifest(40_000_000);
+    const small = manifest(512);
+    queue.admit(pendingMessage("entry-b", messageB, "2026-09-30T10:00:00.000Z", "big images", [big]));
+    queue.admit(pendingMessage("entry-c", messageC, "2026-09-30T10:00:00.100Z", "small images", [small]));
+    const batch = await feed.nextBatchAtSafePoint();
+    // Image grouping is atomic and bounded: the fitting message carries its
+    // grouped image, and the over-budget message is never silently dropped.
+    expect(batch!.messages.map((message) => message.messageID)).toEqual([messageC]);
+    expect((batch!.messages[0] as HarnessSteeringMessage).images?.[0]).toMatchObject({
+      kind: "image",
+      contentHash: small.content_hash,
+    });
+    expect(queue.state.unsupported).toEqual([
+      { entryId: "entry-b", failureCode: CONVERSATION_STEER_IMAGE_UNSUPPORTED },
+    ]);
+    expect(queue.state.nextTasks).toEqual([]);
+  });
+
+  it("caps one combined final answer's fold and keeps overflow messages for their own next task", async () => {
+    const queue = syntheticQueue();
+    const clock = virtualClock();
+    const feed = createConversationQueueSteeringFeed(queue, { now: clock.now, sleep: clock.sleep });
+    for (let index = 0; index <= CONVERSATION_STEER_MAX_FOLDED; index += 1) {
+      queue.admit(pendingMessage(`entry-${index}`, randomUUID(), `2026-09-30T10:00:00.${String(index).padStart(3, "0")}Z`, `fragment ${index}`));
+    }
+    const batch = await feed.nextBatchAtSafePoint();
+    expect(batch!.messages).toHaveLength(CONVERSATION_STEER_MAX_FOLDED);
+    const rest = await feed.nextBatchAtSafePoint();
+    expect(rest).toBeNull();
+    expect(queue.state.unsupported).toHaveLength(1);
+    expect(queue.state.unsupported[0]!.failureCode).toBe("STEER_MESSAGE_LIMIT");
+  });
+
+  it("never delivers or folds a supplement after stop, stale lease or revoked source authority", async () => {
+    for (const lost of ["USER_CANCELLED", "LEASE_LOST", "SOURCE_REVOKED"] as const) {
+      const queue = syntheticQueue();
+      const clock = virtualClock();
+      const feed = createConversationQueueSteeringFeed(queue, { now: clock.now, sleep: clock.sleep });
+      queue.admit(pendingMessage("entry-b", messageB, "2026-09-30T10:00:00.000Z", "steering"));
+      queue.state.lost = lost;
+      await expect(feed.nextBatchAtSafePoint()).rejects.toThrow(lost);
+      expect(queue.state.delivered).toEqual([]);
+      expect(queue.state.loaded).toEqual([]);
+    }
+  });
+});
+
+describe("producer steering dispatch through the real provider and harness", () => {
+  it("does not dispatch a supplement until the in-flight tool safely completes, then answers once at the end", async () => {
+    const queue = syntheticQueue();
+    const clock = virtualClock();
+    const feed = createConversationQueueSteeringFeed(queue, {
+      now: clock.now,
+      sleep: clock.sleep,
+    });
+    queue.admit(pendingMessage("entry-b", messageB, "2026-09-30T10:00:00.000Z", "steering fragment one"));
+    queue.admit(pendingMessage("entry-c", messageC, "2026-09-30T10:00:00.100Z", "steering fragment two"));
+    const events: string[] = [];
+    let releaseTool!: () => void;
+    const toolGate = new Promise<void>((resolve) => { releaseTool = resolve; });
+    let toolStarted!: () => void;
+    const started = new Promise<void>((resolve) => { toolStarted = resolve; });
+    const probe = {
+      name: "workspace_probe",
+      description: "Synthetic probe",
+      schema: z.strictObject({}) as any,
+      readOnly: true,
+      execute: async () => {
+        events.push("tool-start");
+        toolStarted();
+        await toolGate;
+        events.push("tool-end");
+        return { content: [{ type: "text" as const, text: "Synthetic tool receipt." }] };
+      },
+    };
+    let postToolUse: (input: any) => Promise<unknown>;
+    const sdk = (({ prompt, options }: any) => ({
+      close: vi.fn(),
+      async *[Symbol.asyncIterator]() {
+        postToolUse = options.hooks.PostToolUse[0].hooks[0];
+        const toolHandler = options.mcpServers.talent_signal.instance.server._requestHandlers.get("tools/call");
+        const frames: any[] = [(await prompt.next()).value];
+        // The producer's real dispatch: one tool is genuinely in flight while
+        // two steering fragments wait in the queue.
+        const inFlight = toolHandler(
+          { method: "tools/call", params: { name: "workspace_probe", arguments: {} } },
+          { signal: new AbortController().signal },
+        );
+        await started;
+        const pending = prompt.next();
+        const raced = await Promise.race([pending.then(() => "yielded"), new Promise((r) => setTimeout(() => r("held"), 60))]);
+        expect(raced).toBe("held");
+        expect(queue.events.filter((event) => event.startsWith("deliver"))).toEqual([]);
+        releaseTool();
+        await inFlight;
+        await postToolUse({ hook_event_name: "PostToolUse", tool_name: "mcp__talent_signal__workspace_probe", tool_input: {}, tool_response: {} });
+        frames.push((await pending).value);
+        for (;;) {
+          const step = await prompt.next();
+          if (step.done) break;
+          frames.push(step.value);
+        }
+        events.push("final");
+        (sdk as any).captured = frames;
+        yield {
+          type: "result",
+          subtype: "success",
+          result: "Synthetic combined final answer.",
+          is_error: false,
+          modelUsage: {
+            synthetic: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+          },
+          total_cost_usd: 0.01,
+          num_turns: 1,
+          session_id: "synthetic-session",
+          permission_denials: [],
+        };
+      },
+    })) as any;
+    const provider = new ClaudeChatProvider(
+      config,
+      (configuration, request, signal) => runClaudeHarness(configuration, request, signal, sdk, null),
+    );
+    const outcome = await provider.run({
+      runID: "11111111-1111-4111-8111-111111111100",
+      messageID: messageA,
+      objective: "Synthetic objective.",
+      systemPrompt: "Synthetic system prompt.",
+      scopeSummary: {
+        kind: "workspace_conversation",
+        workspaceID: "synthetic-workspace",
+        sessionID: messageA,
+        currentPersonID: null,
+        currentRelationshipContextID: null,
+      },
+      toolManifest: [],
+      supplementalTools: [probe],
+      steering: feed as HarnessSteeringFeed,
+      budget: {
+        maxTurns: 8,
+        maxToolCalls: 10,
+        maxDurationMs: 30_000,
+        maxTaskTokens: 4_000,
+        maxEstimatedUsd: 1,
+      },
+    }, async () => ({ ok: true as const, callID: "synthetic", name: "workspace_probe" }), new AbortController().signal);
+    const frames = (sdk as any).captured as any[];
+    // Tool-safe dispatch: the batch was delivered only after tool completion,
+    // combined into one processing step before the next work, and the single
+    // final answer came last with every original message id retained.
+    expect(events.indexOf("tool-end")).toBeLessThan(events.indexOf("final"));
+    expect(frames.map((frame) => frame.uuid)).toEqual([messageA, messageB, messageC]);
+    expect(frames[1].shouldQuery).toBe(false);
+    expect(frames[2].shouldQuery).toBeUndefined();
+    expect(queue.state.delivered.map((entry) => entry.messageId)).toEqual([messageB, messageC]);
+    expect(queue.state.nextTasks).toEqual([]);
+    const completions = outcome.toolCompletions ?? [];
+    expect(completions).toHaveLength(1);
+    expect(completions[0]!.name).toBe("workspace_probe");
+    expect(JSON.stringify(completions)).not.toContain("PRIVATE");
+  });
+});
+
+describe("synthetic steering image integrity", () => {
+  it("keeps image bytes grouped with their message and validated before dispatch", async () => {
+    const queue = syntheticQueue();
+    const clock = virtualClock();
+    const feed = createConversationQueueSteeringFeed(queue, { now: clock.now, sleep: clock.sleep });
+    const image = manifest(64);
+    queue.admit(pendingMessage("entry-b", messageB, "2026-09-30T10:00:00.000Z", "with image", [image]));
+    const batch = await feed.nextBatchAtSafePoint();
+    const parts = (batch!.messages[0] as HarnessSteeringMessage).images as AgentProviderInputPart[];
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      kind: "image",
+      mimeType: "image/png",
+      byteSize: 64,
+      contentHash: image.content_hash,
+    });
+  });
+});

@@ -1,0 +1,54 @@
+import {createHash,randomUUID} from "node:crypto";
+import {describe,it,expect,vi} from "vitest";
+import {runFileTools,type RunFileAdmission} from "./runFileTools.js";
+const signal=()=>new AbortController().signal;
+function fixture(){
+  const content='{"rows":[["hours",2],["hours",5]]}',id=randomUUID(),evidence=randomUUID();
+  const admission:RunFileAdmission={files:[{id,name:"memory.json",media_type:"application/json",content,
+    content_hash:createHash("sha256").update(content).digest("hex"),evidence_ids:[evidence]}],
+    assertCurrent:vi.fn(async()=>{}),saveArtifact:vi.fn(async file=>({id:randomUUID(),name:file.name,media_type:file.media_type,
+      content_hash:createHash("sha256").update(file.content).digest("hex"),byte_size:Buffer.byteLength(file.content),expires_at:new Date(Date.now()+60000).toISOString()}))};
+  const value=runFileTools(admission);return {admission,id,evidence,...value};
+}
+const body=(result:any)=>JSON.parse(result.content[0].text);
+describe("Run files and derived computation",()=>{
+  it("requires host admission and validates content integrity",()=>{
+    expect(runFileTools(undefined).tools).toEqual([]);
+    const f=fixture();f.admission.files[0]!.content="changed";
+    expect(()=>runFileTools(f.admission)).toThrow("RUN_FILE_MANIFEST_INVALID");
+  });
+  it("paginates exact file text and denies unknown IDs",async()=>{
+    const f=fixture(),read=f.tools[0]!;
+    const first=body(await read.execute({file_id:f.id,max_chars:10},signal()));
+    const rest=body(await read.execute({file_id:f.id,offset:first.next_offset},signal()));
+    expect(first.text+rest.text).toBe(f.admission.files[0]!.content);expect(rest.next_offset).toBeNull();
+    expect(body(await read.execute({file_id:randomUUID()},signal())).error).toBe("RUN_FILE_OUTSIDE_SCOPE");
+  });
+  it("computes in a real VM and saves an inherited-source artifact",async()=>{
+    const f=fixture();const result=body(await f.tools[1]!.execute({source_file_ids:[f.id],
+      code:"return {hours:JSON.parse(input.files[0].text).rows.reduce((sum,row)=>sum+row[1],0)}",output_name:"hours",output_format:"json"},signal()));
+    expect(JSON.parse(result.preview)).toEqual({hours:7});expect(result.source_evidence_ids).toEqual([f.evidence]);
+    expect(result.status).toBe("derived_unconfirmed");expect(f.artifacts()).toHaveLength(1);
+    expect(f.admission.saveArtifact).toHaveBeenCalledWith(expect.objectContaining({source_file_ids:[f.id],name:"hours.json"}),expect.any(AbortSignal));
+  });
+  it("escapes spreadsheet formulas and rejects malformed CSV without saving",async()=>{
+    const f=fixture(),args={source_file_ids:[f.id],output_name:"rows",output_format:"csv"};
+    const result=body(await f.tools[1]!.execute({...args,code:'return [["=1+1","quoted \\\" text"],[" @SUM(A1)",2]]'},signal()));
+    expect(result.preview).toContain('"\'=1+1"');expect(result.preview).toContain('"\' @SUM(A1)"');
+    const bad=await f.tools[1]!.execute({...args,code:'return [[1],[2,3]]'},signal());
+    expect(bad.isError).toBe(true);expect(f.admission.saveArtifact).toHaveBeenCalledTimes(1);
+  });
+  it("rechecks authority after computation before artifact persistence",async()=>{
+    const f=fixture();vi.mocked(f.admission.assertCurrent).mockResolvedValueOnce(undefined).mockRejectedValue(new Error("SOURCE_REVOKED"));
+    await expect(f.tools[1]!.execute({source_file_ids:[f.id],code:"return 1",output_name:"answer",output_format:"json"},signal())).rejects.toThrow("SOURCE_REVOKED");
+    expect(f.admission.saveArtifact).not.toHaveBeenCalled();expect(f.artifacts()).toEqual([]);
+  });
+  it("allows corrected computations after repeated failures and retains every successful artifact",async()=>{
+    const f=fixture(),args={source_file_ids:[f.id],code:"return Promise.resolve(1)",output_name:"answer",output_format:"json"};
+    for(let i=0;i<4;i++)expect(body(await f.tools[1]!.execute(args,signal())).error).toBe("RUN_CODE_ASYNC_NOT_SUPPORTED");
+    expect(f.admission.saveArtifact).not.toHaveBeenCalled();
+    for(let i=0;i<6;i++)expect(body(await f.tools[1]!.execute({...args,code:`return ${i}`,output_name:`answer-${i}`},signal())).preview).toBe(String(i));
+    expect(f.admission.saveArtifact).toHaveBeenCalledTimes(6);
+    expect(f.artifacts().map(artifact=>artifact.name)).toEqual(Array.from({length:6},(_,i)=>`answer-${i}.json`));
+  });
+});

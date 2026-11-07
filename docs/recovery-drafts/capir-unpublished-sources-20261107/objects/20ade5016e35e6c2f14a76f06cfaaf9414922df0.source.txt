@@ -1,0 +1,399 @@
+import { clearConversationLocal, pruneConversationLocal } from "../../lib/conversation-local";
+import { clearConversationImageStore, sweepConversationImageStore } from "../../lib/conversation-image-lifecycle";
+import type { SaveRequestBody, SessionDetail } from "./session-detail-state";
+
+const PREFIX = "talent-signal:session-draft-pending:v1:";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const STORAGE_SCOPE = /^[0-9a-f]{64}$/u;
+const MAX_RETENTION_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * The exact composer draft identity captured immediately before a Session send
+ * asks the Agent. Cleanup may only empty a server draft whose value and
+ * updated-at still match this pair; a missing identity fails closed.
+ */
+export type SessionSendCleanupIdentity = {
+  readonly composerDraft: string;
+  readonly composerDraftUpdatedAt: string;
+};
+
+export type PendingSessionDraft = {
+  readonly v: 1;
+  readonly storageScope: string;
+  readonly sessionId: string;
+  readonly baseRevision: number;
+  readonly latest: {
+    readonly draft: string;
+    readonly idempotencyKey: string;
+    readonly updatedAt: string;
+    readonly expectedRevision: number | null;
+  };
+  readonly predecessor: SaveRequestBody | null;
+  readonly savedAt: string;
+  readonly expiresAt: string;
+  /** Present on send records so a reload can still decide safe cleanup. */
+  readonly purpose?: string;
+  readonly cleanup?: SessionSendCleanupIdentity;
+};
+
+export type PendingSessionDraftResolution =
+  | { readonly kind: "settled" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "conflict" }
+  | {
+      readonly kind: "continue";
+      readonly pending: PendingSessionDraft;
+    };
+
+function storage(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 32) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+function revision(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1;
+}
+
+function mutation(value: unknown): value is SaveRequestBody {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<SaveRequestBody>;
+  return revision(item.expected_revision) &&
+    typeof item.idempotency_key === "string" && UUID.test(item.idempotency_key) &&
+    typeof item.composer_draft === "string" &&
+    canonicalTimestamp(item.composer_draft_updated_at);
+}
+
+function cleanupIdentity(value: unknown): value is SessionSendCleanupIdentity {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<SessionSendCleanupIdentity>;
+  return typeof item.composerDraft === "string" &&
+    canonicalTimestamp(item.composerDraftUpdatedAt);
+}
+
+function valid(value: unknown): value is PendingSessionDraft {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<PendingSessionDraft>;
+  const latest = item.latest as Partial<PendingSessionDraft["latest"]> | undefined;
+  if (
+    item.v !== 1 ||
+    typeof item.storageScope !== "string" || !STORAGE_SCOPE.test(item.storageScope) ||
+    typeof item.sessionId !== "string" || !UUID.test(item.sessionId) ||
+    !revision(item.baseRevision) ||
+    !latest ||
+    typeof latest.draft !== "string" ||
+    typeof latest.idempotencyKey !== "string" || !UUID.test(latest.idempotencyKey) ||
+    !canonicalTimestamp(latest.updatedAt) ||
+    !(latest.expectedRevision === null || revision(latest.expectedRevision)) ||
+    !(item.predecessor === null || mutation(item.predecessor)) ||
+    !(item.cleanup === undefined || cleanupIdentity(item.cleanup)) ||
+    !canonicalTimestamp(item.savedAt) ||
+    !canonicalTimestamp(item.expiresAt)
+  ) {
+    return false;
+  }
+  const savedAt = Date.parse(item.savedAt);
+  const expiresAt = Date.parse(item.expiresAt);
+  return expiresAt > savedAt && expiresAt - savedAt <= MAX_RETENTION_MS;
+}
+
+function validAt(value: unknown, now: number): value is PendingSessionDraft {
+  if (!valid(value)) return false;
+  const savedAt = Date.parse(value.savedAt);
+  const expiresAt = Date.parse(value.expiresAt);
+  return savedAt <= now && expiresAt <= now + MAX_RETENTION_MS;
+}
+
+function safeRemove(target: Storage, itemKey: string): void {
+  try {
+    target.removeItem(itemKey);
+  } catch {
+    // An unavailable browser storage boundary must not crash the workbench.
+  }
+}
+
+function key(storageScope: string, sessionId: string): string {
+  return `${PREFIX}${storageScope}:${sessionId}`;
+}
+
+function exactDraft(
+  detail: Pick<SessionDetail, "composer_draft" | "composer_draft_updated_at">,
+  draft: string,
+  updatedAt: string,
+): boolean {
+  return (detail.composer_draft ?? "") === draft &&
+    detail.composer_draft_updated_at === updatedAt;
+}
+
+export function createPendingSessionDraft(input: {
+  storageScope: string;
+  sessionId: string;
+  baseRevision: number;
+  draft: string;
+  idempotencyKey: string;
+  updatedAt: string;
+  predecessor: SaveRequestBody | null;
+  now?: number;
+}): PendingSessionDraft {
+  const now = input.now ?? Date.now();
+  return {
+    v: 1,
+    storageScope: input.storageScope,
+    sessionId: input.sessionId,
+    baseRevision: input.baseRevision,
+    latest: {
+      draft: input.draft,
+      idempotencyKey: input.idempotencyKey,
+      updatedAt: input.updatedAt,
+      expectedRevision: null,
+    },
+    predecessor: input.predecessor,
+    savedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + MAX_RETENTION_MS).toISOString(),
+  };
+}
+
+export function beginPendingSessionDraft(
+  pending: PendingSessionDraft,
+  expectedRevision: number,
+  now = Date.now(),
+): PendingSessionDraft {
+  return {
+    ...pending,
+    baseRevision: expectedRevision,
+    latest: { ...pending.latest, expectedRevision },
+    predecessor: null,
+    savedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + MAX_RETENTION_MS).toISOString(),
+  };
+}
+
+export function rebasePendingSessionDraft(
+  pending: PendingSessionDraft,
+  baseRevision: number,
+  now = Date.now(),
+): PendingSessionDraft {
+  return {
+    ...pending,
+    baseRevision,
+    latest: { ...pending.latest, expectedRevision: null },
+    predecessor: null,
+    savedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + MAX_RETENTION_MS).toISOString(),
+  };
+}
+
+export function pendingSessionDraftRequest(
+  pending: PendingSessionDraft,
+  expectedRevision: number,
+): SaveRequestBody {
+  return {
+    composer_draft: pending.latest.draft,
+    composer_draft_updated_at: pending.latest.updatedAt,
+    expected_revision: expectedRevision,
+    idempotency_key: pending.latest.idempotencyKey,
+  };
+}
+
+export function resolvePendingSessionDraft(
+  pending: PendingSessionDraft,
+  detail: SessionDetail,
+  now = Date.now(),
+): PendingSessionDraftResolution {
+  if (Date.parse(pending.expiresAt) <= now || detail.state !== "active") {
+    return { kind: "unavailable" };
+  }
+  if (
+    detail.revision > pending.baseRevision &&
+    exactDraft(detail, pending.latest.draft, pending.latest.updatedAt)
+  ) {
+    return { kind: "settled" };
+  }
+  if (detail.revision === pending.baseRevision) {
+    return {
+      kind: "continue",
+      pending: rebasePendingSessionDraft(pending, detail.revision, now),
+    };
+  }
+  const predecessor = pending.predecessor;
+  if (
+    predecessor &&
+    detail.revision === predecessor.expected_revision + 1 &&
+    exactDraft(
+      detail,
+      predecessor.composer_draft,
+      predecessor.composer_draft_updated_at,
+    )
+  ) {
+    return {
+      kind: "continue",
+      pending: rebasePendingSessionDraft(pending, detail.revision, now),
+    };
+  }
+  return { kind: "conflict" };
+}
+
+export function readPendingSessionDraft(
+  storageScope: string,
+  sessionId: string,
+  target = storage(),
+  now = Date.now(),
+): PendingSessionDraft | null {
+  if (!target) return null;
+  const itemKey = key(storageScope, sessionId);
+  try {
+    const value = JSON.parse(target.getItem(itemKey) ?? "null");
+    if (
+      !validAt(value, now) ||
+      value.storageScope !== storageScope ||
+      value.sessionId !== sessionId ||
+      Date.parse(value.expiresAt) <= now
+    ) {
+      safeRemove(target, itemKey);
+      return null;
+    }
+    return value;
+  } catch {
+    safeRemove(target, itemKey);
+    return null;
+  }
+}
+
+/**
+ * The newest still-valid pending intent for a storage partition, across every
+ * session it may belong to. The unscoped conversation canvas uses this to
+ * restore an unsent objective after a reload; it never reads another account's
+ * partition, and expired or foreign records are pruned rather than returned.
+ */
+export function findPendingSessionDraft(
+  storageScope: string,
+  target = storage(),
+  now = Date.now(),
+  purpose?: string,
+): PendingSessionDraft | null {
+  if (!target) return null;
+  let newest: PendingSessionDraft | null = null;
+  try {
+    for (let index = target.length - 1; index >= 0; index -= 1) {
+      const itemKey = target.key(index);
+      if (!itemKey?.startsWith(PREFIX)) continue;
+      let value: unknown;
+      try {
+        value = JSON.parse(target.getItem(itemKey) ?? "null");
+      } catch {
+        safeRemove(target, itemKey);
+        continue;
+      }
+      if (
+        !validAt(value, now) ||
+        value.storageScope !== storageScope ||
+        Date.parse(value.expiresAt) <= now
+      ) {
+        safeRemove(target, itemKey);
+        continue;
+      }
+      if (purpose && (value as PendingSessionDraft & {purpose?: string}).purpose !== purpose) continue;
+      if (
+        !newest ||
+        Date.parse(value.latest.updatedAt) >
+          Date.parse(newest.latest.updatedAt)
+      ) {
+        newest = value;
+      }
+    }
+  } catch {
+    return newest;
+  }
+  return newest;
+}
+
+export function writePendingSessionDraft(
+  pending: PendingSessionDraft,
+  target = storage(),
+  now = Date.now(),
+): boolean {
+  if (!target) return false;
+  const itemKey = key(pending.storageScope, pending.sessionId);
+  try {
+    if (!validAt(pending, now) || Date.parse(pending.expiresAt) <= now) {
+      safeRemove(target, itemKey);
+      return false;
+    }
+    target.setItem(itemKey, JSON.stringify(pending));
+    return true;
+  } catch {
+    // Web Storage setItem is atomic. Keep the previously durable predecessor
+    // if quota or storage availability prevents replacing it.
+    return false;
+  }
+}
+
+export function clearPendingSessionDraft(
+  storageScope: string,
+  sessionId: string,
+  expectedIdempotencyKey?: string,
+  target = storage(),
+): void {
+  if (!target) return;
+  const itemKey = key(storageScope, sessionId);
+  if (!expectedIdempotencyKey) {
+    safeRemove(target, itemKey);
+    return;
+  }
+  const pending = readPendingSessionDraft(storageScope, sessionId, target);
+  if (pending?.latest.idempotencyKey === expectedIdempotencyKey) {
+    safeRemove(target, itemKey);
+  }
+}
+
+export function prunePendingSessionDrafts(
+  storageScope: string,
+  target = storage(),
+  now = Date.now(),
+): void {
+  sweepConversationImageStore(storageScope);
+  if (!target) return;
+  pruneConversationLocal(storageScope, target);
+  try {
+    for (let index = target.length - 1; index >= 0; index -= 1) {
+      const itemKey = target.key(index);
+      if (!itemKey?.startsWith(PREFIX)) continue;
+      try {
+        const value = JSON.parse(target.getItem(itemKey) ?? "null");
+        if (
+          !validAt(value, now) ||
+          value.storageScope !== storageScope ||
+          Date.parse(value.expiresAt) <= now
+        ) {
+          safeRemove(target, itemKey);
+        }
+      } catch {
+        safeRemove(target, itemKey);
+      }
+    }
+  } catch {
+    // Inventory access can itself be blocked by browser privacy settings.
+  }
+}
+
+export function clearAllPendingSessionDrafts(target = storage()): void {
+  clearConversationImageStore();
+  if (!target) return;
+  clearConversationLocal(undefined, undefined, target);
+  try {
+    for (let index = target.length - 1; index >= 0; index -= 1) {
+      const itemKey = target.key(index);
+      if (itemKey?.startsWith(PREFIX)) safeRemove(target, itemKey);
+    }
+  } catch {
+    // Logout still proceeds if the browser denies inventory access.
+  }
+}

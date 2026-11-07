@@ -1,0 +1,147 @@
+import "server-only";
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import type { MailItem, MailPreview, MailProvider } from "../mail-integration";
+import { MAIL_SCOPES, mailCallbackUrl, type MailConfig } from "./mail-integration-config";
+
+export class MailProviderError extends Error {
+  constructor(public readonly kind: "unauthorized" | "denied" | "timeout" | "unavailable" | "invalid") {
+    super(`MAIL_${kind.toUpperCase()}`);
+  }
+}
+const MAX_BYTES = 256 * 1024;
+const MAX_ITEMS = 3;
+async function providerJson(url: string, init: RequestInit, signal: AbortSignal): Promise<unknown> {
+  try {
+    const response = await fetch(url, { ...init, signal, redirect: "error", cache: "no-store" });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new MailProviderError(response.status === 401 ? "unauthorized" : response.status === 403 ? "denied" : "unavailable");
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new MailProviderError("invalid");
+    let bytes = 0;
+    const chunks: Uint8Array[] = [];
+    try {
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.length;
+        if (bytes > MAX_BYTES) { await reader.cancel(); throw new MailProviderError("invalid"); }
+        chunks.push(part.value);
+      }
+      return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+    } finally { reader.releaseLock(); }
+  } catch (error) {
+    if (error instanceof MailProviderError) throw error;
+    throw new MailProviderError(signal.aborted ? "timeout" : "unavailable");
+  }
+}
+export function mailAuthorizationUrl(provider: MailProvider, config: MailConfig, state: string, verifier: string) {
+  const url = new URL(provider === "gmail" ? "https://accounts.google.com/o/oauth2/v2/auth" :
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize");
+  url.searchParams.set("client_id", config.clientId);
+  url.searchParams.set("redirect_uri", mailCallbackUrl(provider, config));
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", MAIL_SCOPES[provider].join(" "));
+  url.searchParams.set("state", state);
+  url.searchParams.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
+  url.searchParams.set("code_challenge_method", "S256");
+  url.searchParams.set("prompt", "select_account consent");
+  if (provider === "gmail") {
+    url.searchParams.set("access_type", "online");
+    url.searchParams.set("include_granted_scopes", "false");
+    // Google supports one prompt or the documented space-separated values.
+    url.searchParams.set("prompt", "consent select_account");
+  } else url.searchParams.set("prompt", "select_account");
+  return url.toString();
+}
+const tokenSchema = z.object({
+  access_token: z.string().min(1).max(2500), token_type: z.string(),
+  expires_in: z.number().int().positive().max(86400), scope: z.string().max(4000),
+});
+export async function exchangeMailCode(provider: MailProvider, config: MailConfig, code: string, verifier: string) {
+  const body = new URLSearchParams({
+    client_id: config.clientId, client_secret: config.clientSecret, code,
+    code_verifier: verifier, redirect_uri: mailCallbackUrl(provider, config), grant_type: "authorization_code",
+  });
+  const result = tokenSchema.safeParse(await providerJson(provider === "gmail" ? "https://oauth2.googleapis.com/token" :
+    "https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body.toString(),
+  }, AbortSignal.timeout(12_000)));
+  if (!result.success || result.data.token_type.toLowerCase() !== "bearer") throw new MailProviderError("invalid");
+  const scopes = new Set(result.data.scope.split(/\s+/).filter(Boolean).map(scope =>
+    provider === "outlook" ? scope.replace(/^https:\/\/graph\.microsoft\.com\//, "") : scope));
+  const expectedScopes = new Set<string>(MAIL_SCOPES[provider]);
+  if (scopes.size !== expectedScopes.size || [...expectedScopes].some(scope => !scopes.has(scope))) throw new MailProviderError("denied");
+  return { accessToken: result.data.access_token, expiresIn: result.data.expires_in };
+}
+
+const googleProfile = z.object({ emailAddress: z.email().max(320) });
+const googleList = z.object({ messages: z.array(z.object({ id: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/) })).max(MAX_ITEMS).optional() });
+const googleMessage = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/), threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/),
+  internalDate: z.string().regex(/^\d{1,15}$/),
+  payload: z.object({ headers: z.array(z.object({ name: z.string().max(100), value: z.string().max(8000) })).max(30).optional() }).optional(),
+});
+const microsoftProfile = z.object({ id: z.string().min(1).max(200), mail: z.email().max(320).nullable().optional(), userPrincipalName: z.email().max(320).optional() });
+const graphAddress = z.object({ emailAddress: z.object({ name: z.string().max(500).optional(), address: z.email().max(320) }) });
+const microsoftList = z.object({ value: z.array(z.object({
+  id: z.string().min(1).max(500), subject: z.string().max(8000).nullable().optional(),
+  from: graphAddress.nullable().optional(), toRecipients: z.array(graphAddress).max(500).optional(),
+  receivedDateTime: z.iso.datetime({ offset: true }).nullable().optional(), webLink: z.string().max(3000).nullable().optional(),
+})).max(MAX_ITEMS) });
+function checked<T>(schema: z.ZodType<T>, value: unknown): T {
+  const result = schema.safeParse(value);
+  if (!result.success) throw new MailProviderError("invalid");
+  return result.data;
+}
+function text(value: string | undefined | null, max: number) {
+  return (value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max);
+}
+function outlookSource(value: string | null | undefined) {
+  try {
+    const url = new URL(value ?? "");
+    return url.protocol === "https:" && !url.username && !url.password &&
+      ["outlook.office.com", "outlook.office365.com", "outlook.live.com"].includes(url.hostname) ? url.toString() : null;
+  } catch { return null; }
+}
+export async function testMailRead(provider: MailProvider, accessToken: string, expiresAt: number): Promise<MailPreview> {
+  const signal = AbortSignal.timeout(12_000);
+  const init = { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } };
+  let account: string;
+  let items: MailItem[];
+  if (provider === "gmail") {
+    const root = "https://gmail.googleapis.com/gmail/v1/users/me";
+    account = checked(googleProfile, await providerJson(`${root}/profile`, init, signal)).emailAddress;
+    // gmail.metadata forbids q. This is a three-item sample, not a time-window import.
+    const list = checked(googleList, await providerJson(`${root}/messages?maxResults=3&labelIds=INBOX&includeSpamTrash=false`, init, signal));
+    items = await Promise.all((list.messages ?? []).map(async reference => {
+      const parameters = new URLSearchParams({ format: "metadata" });
+      for (const name of ["Subject", "From", "To", "Date"]) parameters.append("metadataHeaders", name);
+      const message = checked(googleMessage, await providerJson(`${root}/messages/${reference.id}?${parameters}`, init, signal));
+      if (message.id !== reference.id) throw new MailProviderError("invalid");
+      const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name)?.value;
+      const date = Number(message.internalDate);
+      const occurredAt = Number.isFinite(date) && date > 0 && date <= Date.now() ? new Date(date).toISOString() : null;
+      return {
+        id: message.id, subject: text(header("Subject"), 280) || "（无标题）",
+        participants: text([header("From"), header("To")].filter(Boolean).join(" → "), 600), occurredAt,
+        sourceUrl: `https://mail.google.com/mail/?authuser=${encodeURIComponent(account)}#all/${message.threadId}`,
+      };
+    }));
+  } else {
+    const root = "https://graph.microsoft.com/v1.0";
+    const profile = checked(microsoftProfile, await providerJson(`${root}/me?$select=id,mail,userPrincipalName`, init, signal));
+    account = profile.mail ?? profile.userPrincipalName ?? "Microsoft 账号";
+    const parameters = new URLSearchParams({ "$top": "3", "$select": "id,subject,from,toRecipients,receivedDateTime,webLink", "$orderby": "receivedDateTime desc" });
+    const list = checked(microsoftList, await providerJson(`${root}/me/mailFolders/inbox/messages?${parameters}`, init, signal));
+    items = list.value.map(message => ({
+      id: message.id, subject: text(message.subject, 280) || "（无标题）",
+      participants: text([message.from?.emailAddress.address, ...(message.toRecipients ?? []).map(r => r.emailAddress.address)].filter(Boolean).join(" → "), 600),
+      occurredAt: message.receivedDateTime ?? null, sourceUrl: outlookSource(message.webLink),
+    }));
+  }
+  return { provider, account, items, checkedAt: new Date().toISOString(), expiresAt: new Date(expiresAt).toISOString(),
+    scope: "inbox_metadata_sample", status: items.length ? "verified" : "empty" };
+}

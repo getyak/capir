@@ -1,0 +1,67 @@
+/**
+ * Truthful demo/expiry chrome for a direct CLI-created Lab primary session.
+ *
+ * A capir session has no parent test-workspace cookie and must never borrow
+ * parent credentials: it renders as a synthetic demo sandbox with its real
+ * expiry. When the backing grant is revoked or expires, the rendered state
+ * flips to `revoked` instead of pretending the workspace is still live.
+ */
+import styles from "./capirSandboxBanner.module.css";
+
+export function formatDemoExpiry(expiresAt: string): string {
+  const parsed = Date.parse(expiresAt);
+  if (Number.isNaN(parsed)) return expiresAt;
+  return `${new Date(parsed).toISOString().replace("T", " ").slice(0, 16)} UTC`;
+}
+
+export function CapirDemoBanner({
+  sandboxId,
+  sandboxExpiresAt,
+  sessionExpiresAt,
+}: {
+  sandboxId: string;
+  sandboxExpiresAt: string;
+  sessionExpiresAt: string;
+}) {
+  return (
+    <div
+      className={styles.banner}
+      data-capir-session-state="active"
+      data-capir-sandbox-id={sandboxId}
+      role="status"
+    >
+      <span>合成演示空间 · CAPIR CLI 演示会话</span>
+      <span>
+        沙箱有效期至{" "}
+        <time data-capir-demo-expiry={sandboxExpiresAt} dateTime={sandboxExpiresAt}>
+          {formatDemoExpiry(sandboxExpiresAt)}
+        </time>
+      </span>
+      <span>
+        浏览器会话有效期至 {formatDemoExpiry(sessionExpiresAt)}
+      </span>
+      <span>仅含合成测试数据，不是真实招聘记录</span>
+    </div>
+  );
+}
+
+export function CapirSessionRevokedBanner() {
+  return (
+    <div className={styles.banner} data-capir-session-state="revoked" role="status">
+      <span>此 CAPIR 演示会话已失效</span>
+      <span>对应 CLI 授权已撤销或到期，演示空间不再可用。</span>
+    </div>
+  );
+}
+
+/**
+ * Render decision for a capir demo session: bound sessions show the truthful
+ * demo banner; anything the backend no longer confirms renders as revoked.
+ */
+export function capirSessionRenderState(
+  capirSession: unknown,
+  backendBound: boolean,
+): "active" | "revoked" | null {
+  if (!capirSession) return null;
+  return backendBound ? "active" : "revoked";
+}

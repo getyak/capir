@@ -1,0 +1,227 @@
+import { Type } from "@sinclair/typebox";
+import {
+  CAPIR_SCHEMA_VERSION,
+  CapirCapabilitiesResponseSchema,
+  CapirAuthorizationRequestSchema,
+  CapirAuthorizationResponseSchema,
+  CapirExchangeRequestSchema,
+  CapirExchangeResponseSchema,
+  CapirAuthStatusResponseSchema,
+  CapirSandboxRequestSchema,
+  CapirSandboxResponseSchema,
+  CapirOperationRequestSchema,
+  CapirHandoffResponseSchema,
+  CapirHandoffExchangeRequestSchema,
+  CapirHandoffExchangeResponseSchema,
+  ErrorResponseSchema,
+  type CapirAuthorizationRequest,
+  type CapirExchangeRequest,
+  type CapirSandboxRequest,
+} from "@talent-signal/contracts";
+import type {
+  FastifyInstance,
+  FastifyRequest,
+  preHandlerHookHandler,
+} from "fastify";
+import { ApiError } from "../lib/apiError.js";
+import { CapirService, type CapirIdentity } from "./capir.js";
+export function registerCapirRoutes(
+  app: FastifyInstance,
+  service: CapirService,
+  authenticate: preHandlerHookHandler,
+): void {
+  const identities = new WeakMap<FastifyRequest, CapirIdentity>();
+  const gate: preHandlerHookHandler = async (_request, reply) => {
+    reply.header("cache-control", "no-store");
+    if (!service.config.internalLabEnabled)
+      throw new ApiError(
+        403,
+        "CAPIR_DISABLED",
+        "capir is available only on the internal test backend.",
+      );
+  };
+  const cli: preHandlerHookHandler = async (request) => {
+    const value = request.headers.authorization;
+    if (!value?.startsWith("Bearer "))
+      throw new ApiError(
+        401,
+        "CAPIR_AUTH_REQUIRED",
+        "A scoped capir grant is required.",
+      );
+    identities.set(request, await service.identity(value.slice(7)));
+  };
+  const identity = (request: FastifyRequest) => identities.get(request)!;
+  const preHandler = [gate, cli],
+    responseErrors = { "4xx": ErrorResponseSchema, "5xx": ErrorResponseSchema };
+  const params = Type.Object(
+    { id: Type.String({ format: "uuid" }) },
+    { additionalProperties: false },
+  );
+  const rate = { rateLimit: { max: 30, timeWindow: "1 minute" } };
+  app.get(
+    "/v1/capir/capabilities",
+    {
+      config: rate,
+      schema: { response: { 200: CapirCapabilitiesResponseSchema } },
+    },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store");
+      return service.capabilities();
+    },
+  );
+  app.post<{
+    Body: CapirAuthorizationRequest;
+  }>(
+    "/v1/capir/auth/authorize",
+    {
+      preHandler: [gate, authenticate],
+      config: rate,
+      schema: {
+        body: CapirAuthorizationRequestSchema,
+        response: { 200: CapirAuthorizationResponseSchema, ...responseErrors },
+      },
+    },
+    (request) => service.authorize(request.auth, request.body),
+  );
+  app.post<{
+    Body: CapirExchangeRequest;
+  }>(
+    "/v1/capir/auth/exchange",
+    {
+      preHandler: gate,
+      config: rate,
+      schema: {
+        body: CapirExchangeRequestSchema,
+        response: { 200: CapirExchangeResponseSchema, ...responseErrors },
+      },
+    },
+    (request) => service.exchange(request.body),
+  );
+  app.get(
+    "/v1/capir/auth/status",
+    {
+      preHandler,
+      schema: {
+        response: { 200: CapirAuthStatusResponseSchema, ...responseErrors },
+      },
+    },
+    (request) => ({
+      schema_version: CAPIR_SCHEMA_VERSION,
+      grant: service.describeGrant(identity(request).grant),
+    }),
+  );
+  app.post("/v1/capir/auth/logout", { preHandler, config: rate }, (request) =>
+    service.logout(identity(request)),
+  );
+  app.post<{
+    Body: CapirSandboxRequest;
+  }>(
+    "/v1/capir/sandboxes",
+    {
+      preHandler,
+      config: rate,
+      schema: {
+        body: CapirSandboxRequestSchema,
+        response: { 200: CapirSandboxResponseSchema, ...responseErrors },
+      },
+    },
+    async (request) => ({
+      schema_version: CAPIR_SCHEMA_VERSION,
+      sandbox: await service.prepare(identity(request), request.body),
+    }),
+  );
+  app.get<{
+    Params: {
+      id: string;
+    };
+  }>(
+    "/v1/capir/sandboxes/:id",
+    {
+      preHandler,
+      schema: {
+        params,
+        response: { 200: CapirSandboxResponseSchema, ...responseErrors },
+      },
+    },
+    async (request) => ({
+      schema_version: CAPIR_SCHEMA_VERSION,
+      sandbox: await service.read(identity(request), request.params.id),
+    }),
+  );
+  app.post<{
+    Params: {
+      id: string;
+    };
+    Body: {
+      id: string;
+    };
+  }>(
+    "/v1/capir/sandboxes/:id/stop",
+    {
+      preHandler,
+      config: rate,
+      schema: {
+        params,
+        body: CapirOperationRequestSchema,
+        response: { 200: CapirSandboxResponseSchema, ...responseErrors },
+      },
+    },
+    async (request) => ({
+      schema_version: CAPIR_SCHEMA_VERSION,
+      sandbox: await service.stop(
+        identity(request),
+        request.params.id,
+        request.body.id,
+      ),
+    }),
+  );
+  app.post<{
+    Params: {
+      id: string;
+    };
+    Body: {
+      id: string;
+    };
+  }>(
+    "/v1/capir/sandboxes/:id/handoffs",
+    {
+      preHandler,
+      config: rate,
+      schema: {
+        params,
+        body: CapirOperationRequestSchema,
+        response: { 200: CapirHandoffResponseSchema, ...responseErrors },
+      },
+    },
+    (request) =>
+      service.handoff(identity(request), request.params.id, request.body.id),
+  );
+  app.post<{
+    Body: {
+      handoff_secret: string;
+      web_origin: string;
+    };
+  }>(
+    "/v1/capir/handoffs/exchange",
+    {
+      preHandler: [
+        gate,
+        async (request) =>
+          service.assertWebConsumer(request.headers["x-capir-web-handoff-key"]),
+      ],
+      config: rate,
+      schema: {
+        body: CapirHandoffExchangeRequestSchema,
+        response: {
+          200: CapirHandoffExchangeResponseSchema,
+          ...responseErrors,
+        },
+      },
+    },
+    (request) =>
+      service.handoffExchange(
+        request.body.handoff_secret,
+        request.body.web_origin,
+      ),
+  );
+}

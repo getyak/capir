@@ -1,0 +1,114 @@
+"use server";
+
+import { redirect } from "next/navigation";
+import {
+  CapirAuthorizationRequestSchema,
+  CapirAuthorizationResponseSchema,
+} from "@talent-signal/contracts";
+import { Value } from "@sinclair/typebox/value";
+
+import {
+  authorizedCallbackUrl,
+  deniedCallbackUrl,
+  openConsent,
+  type CapirConsentRequest,
+} from "@/lib/capirAuthorize";
+import { registerContractFormats } from "@/lib/capirContractFormats";
+import { authSecret, backendAuthBaseUrl, readPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
+
+registerContractFormats();
+
+function authorizePath(request: CapirConsentRequest, note?: string): string {
+  const query = new URLSearchParams({
+    redirect_uri: request.redirect_uri,
+    state: request.state,
+    code_challenge: request.code_challenge,
+    code_challenge_method: request.code_challenge_method,
+    web_origin: request.web_origin,
+    backend_origin: request.backend_origin,
+    client_label: request.client_label,
+    ...(note ? { consent_error: note } : {}),
+  });
+  return `/capir/authorize?${query.toString()}`;
+}
+
+/**
+ * Explicit Allow/Deny consent for one CLI authorization request.
+ *
+ * The framework Server Action CSRF check (Origin vs Host) applies on top of
+ * the server-sealed request envelope. Allow forwards the consent to the
+ * backend with the user's ordinary session and redirects only to the
+ * validated loopback callback with the one-use code and public state.
+ */
+export async function submitCapirConsent(formData: FormData): Promise<void> {
+  const sealed = String(formData.get("sealed") ?? "");
+  const decision = String(formData.get("decision") ?? "");
+  const request = openConsent(authSecret(), sealed, Date.now());
+  if (!request) {
+    // Fail closed on tampered or stale consent envelopes.
+    redirect("/capir/authorize?consent_error=stale");
+  }
+  if (decision !== "allow") {
+    // Explicit denial reaches the CLI promptly; no code is ever created.
+    redirect(deniedCallbackUrl(request));
+  }
+  const claims = await readPrimaryBackendSessionClaims();
+  if (!claims || claims.backendAccountSlug.startsWith("lab-")) {
+    redirect(authorizePath(request, "auth"));
+  }
+  const body = {
+    redirect_uri: request.redirect_uri,
+    state: request.state,
+    code_challenge: request.code_challenge,
+    code_challenge_method: request.code_challenge_method,
+    web_origin: request.web_origin,
+    backend_origin: request.backend_origin,
+    consent: true as const,
+    client_label: request.client_label,
+  };
+  if (!Value.Check(CapirAuthorizationRequestSchema, body)) {
+    redirect(authorizePath(request, "stale"));
+  }
+  let response: Response;
+  try {
+    response = await fetch(new URL("/v1/capir/auth/authorize", backendAuthBaseUrl()), {
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        authorization: `Bearer ${claims.backendAccessToken}`,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    redirect(authorizePath(request, "backend_unavailable"));
+  }
+  let text: string;
+  try { text = await response.text(); }
+  catch { redirect(authorizePath(request, "backend_unavailable")); }
+  let parsed: unknown;
+  try {
+    parsed = text ? JSON.parse(text) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  if (!response.ok) {
+    // The backend re-verifies the active session, account state, origins and
+    // loopback callback; its denial is reflected honestly to the CLI owner.
+    redirect(authorizePath(request, "authorization_denied"));
+  }
+  if (!Value.Check(CapirAuthorizationResponseSchema, parsed)) {
+    redirect(authorizePath(request, "backend_unavailable"));
+  }
+  const authorized = parsed as { code: string; state: string; redirect_uri: string };
+  if (
+    authorized.redirect_uri !== request.redirect_uri ||
+    authorized.state !== request.state
+  ) {
+    redirect(authorizePath(request, "authorization_denied"));
+  }
+  // Success: one-use code + public state to the validated loopback callback.
+  redirect(authorizedCallbackUrl(request, authorized.code));
+}

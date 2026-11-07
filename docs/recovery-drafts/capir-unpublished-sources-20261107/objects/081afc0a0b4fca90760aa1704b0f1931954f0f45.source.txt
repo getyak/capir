@@ -1,0 +1,52 @@
+import {createHash} from "node:crypto";
+import {isBoundedAuthorLabel} from "./authoredImage.js";
+
+export interface AuthorizedPublicSubject {id:string;name:string;isCurrent?:()=>Promise<boolean>}
+// A name field cannot carry arbitrary instructions, contact details, or a
+// sentence. A single English first name is deliberately insufficient.
+export function isBoundedPublicName(value:string):boolean {
+  return /^(?:[\p{Script=Han}]{2,4}|[A-Z][\p{Script=Latin}'’-]{1,24}(?: [A-Z][\p{Script=Latin}'’-]{1,24}){1,3})$/u.test(value);
+}
+export function publicSubjectRegistry(objective:string) {
+  const subjects=new Map<string,AuthorizedPublicSubject>();
+  const register=(name:string,binding:string,isCurrent?:()=>Promise<boolean>,author=false)=>{
+    if(!(author?isBoundedAuthorLabel(name):isBoundedPublicName(name)))return null;
+    const id=createHash("sha256").update(binding+"\0"+name).digest("hex").slice(0,24);
+    const item={id,name,...(isCurrent?{isCurrent}:{})};subjects.set(id,item);return {id,name};
+  };
+  // Bind text subjects to an explicit positive research clause. Names elsewhere
+  // in the note (including a private contact) are not research authorization.
+  const prohibited=/(?:不要|不许|别|禁止)[^，。！？;；\n]{0,12}(?:搜|查|检索|研究)|(?:do not|don['’]t|never)\s+(?:search|research|look up)/iu.test(objective);
+  if(!prohibited){
+    for(const clause of objective.split(/[，。！？;；\n]/u)){
+      // Parse bounded clauses in separate linear steps. Overlapping whitespace
+      // and optional suffix patterns can otherwise backtrack on hostile input.
+      if(clause.length>512)continue;
+      let request=clause.trim();
+      for(const prefix of ["请","帮我"])if(request.startsWith(prefix)){
+        request=request.slice(prefix.length).trimStart();break;
+      }
+      const verb=["查一下","查查","搜索","研究","了解一下","介绍一下","look up","research"]
+        .find(prefix=>request.toLowerCase().startsWith(prefix));
+      if(!verb)continue;
+      request=request.slice(verb.length).trimStart();
+      if(request.startsWith("聊天提到的"))request=request.slice("聊天提到的".length).trimStart();
+      const suffixes=["的背景","的作品","的文章"].map(suffix=>request.indexOf(suffix)).filter(index=>index>=0);
+      if(suffixes.length)request=request.slice(0,Math.min(...suffixes));
+      const names=request.replace(/\s+/gu," ").trim().split(/ and | 和 |、|与/u);
+      // Every token must be a complete bounded name. Reject a whole ambiguous
+      // target phrase instead of finding capitalized substrings within it.
+      if(names.every(name=>/[\p{Script=Latin}]/u.test(name) && isBoundedPublicName(name.trim())))for(const name of names)register(name.trim(),"objective");
+    }
+  }
+  return {subjects:()=>[...subjects.values()],registerAuthor(input:{name:string;artifactID:string;isCurrent:()=>Promise<boolean>}){
+    if(prohibited)return null;
+    return register(input.name,input.artifactID,input.isCurrent,true);
+  },registerImage(input:{name:string;excerpt:string;visibleText:readonly string[];artifactID:string;isCurrent:()=>Promise<boolean>;counterparty?:string|null}){
+    if(prohibited || input.name===input.counterparty||!input.excerpt.includes(input.name)||!input.visibleText.some(text=>text.includes(input.excerpt)))return null;
+    // The inspector supplies only third-party public topics; this additional
+    // evidence gate excludes arbitrary isolated private-name observations.
+    if(!/读|文章|作品|作者|访谈|课程|博客|写|推荐|blog|read|writ|course|author|book|paper/iu.test(input.excerpt))return null;
+    return register(input.name,input.artifactID,input.isCurrent);
+  }};
+}

@@ -1,0 +1,99 @@
+import { randomUUID } from "node:crypto";
+import { access } from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
+import { runClaudeHarness, type ClaudeHarnessRequest } from "./claudeHarness.js";
+import { harnessContinuationFingerprint, type HarnessContinuation } from "./claudeHarnessContinuation.js";
+import { claudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
+import { ClaudeChatProvider } from "./claudeChatProvider.js";
+import { bundledPrompt } from "./promptRegistry.js";
+
+const configuration = claudeHarnessConfiguration({ ANTHROPIC_API_KEY: "synthetic-key", TALENT_SIGNAL_AGENT_MODEL: "synthetic-model" });
+const request: ClaudeHarnessRequest = { objective: "Synthetic follow-up", systemPrompt: "Synthetic system", tools: [],
+  assertCurrent: async () => {}, budget: { maxTurns: 3, maxToolCalls: 3, maxDurationMs: 5000, maxTaskTokens: 1000, maxEstimatedUsd: 1 } };
+function lease(resume = false): HarnessContinuation {
+  return { sessionID: randomUUID(), resume, store: { append: vi.fn(), load: vi.fn(), delete: vi.fn(), listSubkeys: vi.fn() },
+    assertCurrent: vi.fn(async () => {}), finish: vi.fn(async () => {}) };
+}
+function sdk(session: HarnessContinuation, before?: (options: any) => Promise<void>, mirrorFailure = false) {
+  return vi.fn(({ options }) => ({ close: vi.fn(), async *[Symbol.asyncIterator]() {
+    await before?.(options);
+    if (mirrorFailure) yield { type: "system", subtype: "mirror_error", error: "Synthetic failure" };
+    else yield { type: "result", subtype: "success", result: "Synthetic answer", is_error: false,
+      modelUsage: { synthetic: { inputTokens: 10, outputTokens: 2, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } },
+      total_cost_usd: 0.001, num_turns: 1, session_id: session.sessionID, permission_denials: [] };
+  } }));
+}
+
+describe("host-issued SDK continuation", () => {
+  it.each([false, true])("reads giant canonical history through the real harness tool seam (resume=%s)", async resume => {
+    const session = lease(resume);
+    const text = "OLDER_CANONICAL_TEXT ".repeat(20_000) + " UNIQUE_OLD_TAIL";
+    const query = sdk(session, async options => {
+      expect(options.resume).toBe(resume ? session.sessionID : undefined);
+      expect(options.sessionId).toBe(resume ? undefined : session.sessionID);
+      const call = options.mcpServers.talent_signal.instance.server._requestHandlers.get("tools/call");
+      const result = await call({ method: "tools/call", params: { name: "read_session_history", arguments: {
+        operation: "read", message_id: "old-message", offset: text.length - 15,
+      } } }, { signal: new AbortController().signal });
+      const body = JSON.parse(result.content[0].text);
+      expect(body.message.text).toBe(text.slice(-15));
+      expect(body.message.next_offset_utf16).toBeNull();
+    });
+    const provider = new ClaudeChatProvider(configuration, async (config, input, signal) => {
+      expect(input.context).not.toContain("OLDER_CANONICAL_TEXT");
+      expect(input.context!.length).toBeLessThan(5_000);
+      return runClaudeHarness(config, input, signal, query as any, null);
+    });
+    await provider.answer({ mode: "unscoped_conversation", objective: "Continue the earlier discussion",
+      prompt_snapshot: bundledPrompt("assistant/conversation"),
+      conversation_history: [{ message_id: "old-message", role: "assistant", text }],
+      context_blocks: [], allowed_citation_ids: [], continuation: async () => session });
+    expect(session.finish).toHaveBeenCalledWith(true);
+  });
+  it("uses the exact leased identity and removes local copies before releasing it", async () => {
+    for (const resume of [false, true]) {
+      const session = lease(resume);
+      let directory = "";
+      session.finish = vi.fn(async completed => { expect(completed).toBe(true); await expect(access(directory)).rejects.toThrow(); });
+      const query = sdk(session, async options => {
+        directory = options.cwd; await access(directory);
+        expect(options.persistSession).toBe(true);
+        const key = { projectKey: "synthetic-project", sessionId: session.sessionID };
+        await options.sessionStore.load(key);
+        expect(session.store.load).toHaveBeenCalledWith(key);
+        expect(options.resume).toBe(resume ? session.sessionID : undefined);
+        expect(options.sessionId).toBe(resume ? undefined : session.sessionID);
+        expect(options.env.CLAUDE_CONFIG_DIR.startsWith(directory)).toBe(true);
+      });
+      await runClaudeHarness(configuration, { ...request, continuation: async () => session }, new AbortController().signal, query as any);
+      expect(session.finish).toHaveBeenCalledOnce();
+    }
+  });
+  it("fails mirroring and revoked generations without reporting a completed continuation", async () => {
+    const session = lease();
+    const query = sdk(session, undefined, true);
+    await expect(runClaudeHarness(configuration, { ...request, continuation: async () => session }, new AbortController().signal, query as any)).rejects.toThrow("SESSION_MIRROR_FAILED");
+    expect(session.finish).toHaveBeenCalledWith(false);
+    const revoked = lease();
+    revoked.assertCurrent = vi.fn(async () => { throw new Error("GENERATION_REVOKED"); });
+    const never = sdk(revoked);
+    await expect(runClaudeHarness(configuration, { ...request, continuation: async () => revoked }, new AbortController().signal, never as any)).rejects.toThrow("GENERATION_REVOKED");
+    expect(never).not.toHaveBeenCalled();
+    expect(revoked.finish).toHaveBeenCalledWith(false);
+  });
+  it("never turns a failed store finalization into a successful product reply", async () => {
+    const session = lease();
+    session.finish = vi.fn(async () => { throw new Error("SESSION_STORE_UNAVAILABLE"); });
+    await expect(runClaudeHarness(configuration, { ...request, continuation: async () => session }, new AbortController().signal, sdk(session) as any)).rejects.toThrow("SESSION_STORE_UNAVAILABLE");
+  });
+  it("binds continuation to prompt, model endpoint and credential rotation", () => {
+    const fingerprint = harnessContinuationFingerprint(configuration, request);
+    expect(harnessContinuationFingerprint({ ...configuration, httpsProxy: "http://127.0.0.1:18080/" }, request)).not.toBe(fingerprint);
+    expect(harnessContinuationFingerprint(configuration, { ...request, objective: "Next turn" })).toBe(fingerprint);
+    expect(harnessContinuationFingerprint(configuration, { ...request, systemPrompt: "Changed policy" })).not.toBe(fingerprint);
+    expect(harnessContinuationFingerprint(configuration, { ...request, effort: "medium" })).not.toBe(fingerprint);
+    expect(harnessContinuationFingerprint(configuration, { ...request, effort: "high" })).not.toBe(fingerprint);
+    expect(harnessContinuationFingerprint({ ...configuration, credential: { ...configuration.credential, value: "rotated-synthetic-key" } }, request)).not.toBe(fingerprint);
+    expect(fingerprint).not.toContain("synthetic-key");
+  });
+});

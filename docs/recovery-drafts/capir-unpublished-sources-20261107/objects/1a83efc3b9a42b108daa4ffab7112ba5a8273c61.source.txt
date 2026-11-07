@@ -1,0 +1,892 @@
+-- 101: metadata-only request-owned lifecycle for the legacy Chat/Unscoped/Person
+-- short-transaction execution, the shared durable Harness Session lease, and the
+-- shared Lab account admission registry.
+--
+-- Hard boundaries preserved by this migration:
+--   * no raw request body, image bytes, tool arguments, provider prompt or model
+--     output is stored here (metadata references only);
+--   * the frozen 001-105 migrations are untouched; this is additive forward-only;
+--   * completed results stay in their existing governed stores (idempotency
+--     receipts, product runs, Session payloads, Lab canonical records);
+--   * a pending manifest never grants completed provenance and never writes the
+--     permanent withdrawn-completed tombstone used for genuine source loss.
+
+-- ---------------------------------------------------------------------------
+-- Durable intent / attempt identity.
+-- One stable intent per (account, actor, operation scope, idempotency key).
+-- Every explicit attempt gets its own product task_id/run_id, attempt id and a
+-- monotonic fencing generation. Failed lineage and permanent tombstones are
+-- never reused or cleared to permit retry.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE legacy_chat_task_intents (
+  id uuid PRIMARY KEY,
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  actor_user_id uuid NOT NULL,
+  operation_scope text NOT NULL CHECK (operation_scope IN (
+    'create_chat_task', 'create_unscoped_chat_task', 'create_person_research_task')),
+  idempotency_key text NOT NULL,
+  request_hash text NOT NULL,
+  task_id uuid NOT NULL,
+  state text NOT NULL CHECK (state IN (
+    'admitted', 'running', 'cancelling', 'cancelled', 'completed',
+    'revoked', 'interrupted_unknown', 'failed_retryable')),
+  revision integer NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  current_attempt_id uuid NOT NULL,
+  fencing_generation bigint NOT NULL DEFAULT 1 CHECK (fencing_generation >= 1),
+  -- Original admitted AuthSession identity only; never a credential.
+  auth_session_id uuid,
+  execution_authority_expires_at timestamptz,
+  canonical_retention_expires_at timestamptz,
+  -- Metadata fingerprint of the admitted provider/model/prompt/policy config.
+  provider_fingerprint text,
+  manifest_id uuid,
+  idempotency_record_id uuid,
+  product_observation_id uuid,
+  terminal_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (account_id, actor_user_id, operation_scope, idempotency_key),
+  UNIQUE (account_id, id),
+  UNIQUE (account_id, id, actor_user_id),
+  FOREIGN KEY (account_id, actor_user_id) REFERENCES users(account_id, id),
+  FOREIGN KEY (account_id, manifest_id) REFERENCES context_manifests(account_id, id),
+  CHECK (state = 'completed' OR terminal_reason IS NULL OR state IN (
+    'cancelled', 'revoked', 'interrupted_unknown', 'failed_retryable', 'cancelling'))
+);
+
+CREATE INDEX legacy_chat_task_intent_task_idx
+  ON legacy_chat_task_intents(account_id, task_id);
+CREATE INDEX legacy_chat_task_intent_open_idx
+  ON legacy_chat_task_intents(account_id, state)
+  WHERE state NOT IN ('completed', 'cancelled', 'revoked', 'failed_retryable');
+
+-- Strict versioned identity metadata only; NULL state-only historical rows do
+-- not receive execution authority. This draft migration is not a backfill.
+CREATE FUNCTION legacy_chat_original_authority_valid(value jsonb)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE kind text; expected text[]; section text; item jsonb; keys text[]; field text;
+  uuid_pattern text := '^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$';
+BEGIN
+  IF jsonb_typeof(value) IS DISTINCT FROM 'object' OR value->'version' IS DISTINCT FROM '1'::jsonb THEN RETURN false; END IF;
+  kind := value->>'kind';
+  expected := CASE kind
+    WHEN 'ordinary' THEN ARRAY['version','kind','session']
+    WHEN 'human_parent' THEN ARRAY['version','kind','session','workspace','entry','parent']
+    WHEN 'capir_parent' THEN ARRAY['version','kind','session','workspace','entry','parent','grant']
+    WHEN 'operator' THEN ARRAY['version','kind','session','workspace','entry','runID','principal'] END;
+  IF expected IS NULL OR NOT value ?& expected OR value - expected <> '{}'::jsonb THEN RETURN false; END IF;
+  IF kind='operator' AND (jsonb_typeof(value->'runID') IS DISTINCT FROM 'string' OR value->>'runID' !~ uuid_pattern) THEN RETURN false; END IF;
+  FOREACH section IN ARRAY expected LOOP
+    IF section IN ('version','kind','runID') THEN CONTINUE; END IF;
+    item := value->section;
+    keys := CASE section
+      WHEN 'session' THEN ARRAY['accountID','userID','id','actorKind','expiresAt']
+      WHEN 'parent' THEN ARRAY['accountID','userID','id','actorKind','expiresAt']
+      WHEN 'workspace' THEN ARRAY['id','expiresAt']
+      WHEN 'entry' THEN ARRAY['id','expiresAt']
+      WHEN 'grant' THEN ARRAY['id','expiresAt','entitlementID','generation','webOrigin','backendOrigin']
+      WHEN 'principal' THEN ARRAY['id','generation','webOrigin','backendOrigin'] END;
+    IF jsonb_typeof(item) IS DISTINCT FROM 'object' OR NOT item ?& keys OR item - keys <> '{}'::jsonb THEN RETURN false; END IF;
+    FOREACH field IN ARRAY keys LOOP
+      IF field IN ('id','accountID','userID','entitlementID') THEN
+        IF jsonb_typeof(item->field) IS DISTINCT FROM 'string' OR item->>field !~ uuid_pattern THEN RETURN false; END IF;
+      ELSIF field IN ('expiresAt','generation') THEN
+        IF jsonb_typeof(item->field) IS DISTINCT FROM 'number' OR (item->>field)::numeric < 1 THEN RETURN false; END IF;
+        IF field='generation' AND (item->>field)::numeric <> trunc((item->>field)::numeric) THEN RETURN false; END IF;
+      ELSIF jsonb_typeof(item->field) IS DISTINCT FROM 'string' THEN RETURN false;
+      END IF;
+    END LOOP;
+    IF section='session' AND kind<>'ordinary' THEN
+      IF item->>'actorKind' IS DISTINCT FROM 'lab_human' THEN RETURN false; END IF;
+    ELSIF section IN ('parent','session') AND item->>'actorKind' NOT IN ('simulated_human','password_human','apple_human','google_human') THEN RETURN false;
+    END IF;
+  END LOOP;
+  RETURN true;
+EXCEPTION WHEN OTHERS THEN RETURN false;
+END $$;
+
+CREATE TABLE legacy_chat_task_attempts (
+  id uuid PRIMARY KEY,
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  intent_id uuid NOT NULL,
+  actor_user_id uuid NOT NULL,
+  -- Each explicit attempt owns a distinct product task identity.
+  task_id uuid NOT NULL,
+  run_id uuid NOT NULL,
+  -- Exact host-admitted earlier parent; metadata only, immutable per attempt.
+  observation_parent_run_id uuid,
+  fencing_generation bigint NOT NULL CHECK (fencing_generation >= 1),
+  state text NOT NULL CHECK (state IN (
+    'admitted', 'running', 'cancelling', 'cancelled', 'completed',
+    'revoked', 'interrupted_unknown', 'failed_retryable')),
+  auth_session_id uuid,
+  -- Trusted actor kind at admission. NULL legacy/state-only rows have no
+  -- upgraded execution authority; never backfill from a later live grant.
+  auth_actor_kind text CHECK (auth_actor_kind IN (
+    'simulated_human','apple_human','password_human','google_human','lab_human')),
+  execution_authority_expires_at timestamptz,
+  original_authority jsonb CHECK (original_authority IS NULL OR (
+    legacy_chat_original_authority_valid(original_authority)
+    AND original_authority->'session'->>'accountID'=account_id::text
+    AND original_authority->'session'->>'userID'=actor_user_id::text
+    AND original_authority->'session'->>'id'=auth_session_id::text
+    AND original_authority->'session'->>'actorKind'=auth_actor_kind
+    AND auth_session_id IS NOT NULL AND auth_actor_kind IS NOT NULL)),
+  -- Provider dispatch evidence: not_dispatched rows are known never-started.
+  dispatch_state text NOT NULL DEFAULT 'not_dispatched'
+    CHECK (dispatch_state IN ('not_dispatched', 'dispatched', 'dispatch_uncertain')),
+  dispatched_at timestamptz,
+  usage_uncertain boolean NOT NULL DEFAULT false,
+  -- Owner liveness: lease expiry means ownership lost, never that the remote
+  -- provider stopped. A late fenced writer fails its CAS.
+  runtime_boot_id uuid,
+  lease_until timestamptz,
+  heartbeat_at timestamptz,
+  terminal_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  ended_at timestamptz,
+  UNIQUE (account_id, intent_id, fencing_generation),
+  UNIQUE (account_id, id, intent_id, actor_user_id, task_id, fencing_generation),
+  CONSTRAINT legacy_chat_attempt_intent_owner_fk
+    FOREIGN KEY (account_id, intent_id, actor_user_id)
+    REFERENCES legacy_chat_task_intents(account_id, id, actor_user_id) ON DELETE CASCADE,
+  FOREIGN KEY (account_id, actor_user_id) REFERENCES users(account_id, id)
+);
+
+-- Admission inserts an intent before its attempt; explicit retry updates the
+-- pointer before inserting the new attempt. Validate the exact current tuple
+-- at COMMIT. Deferred NO ACTION also permits canonical same-transaction graph
+-- deletion, while a dangling current attempt cannot be deleted independently.
+ALTER TABLE legacy_chat_task_intents ADD CONSTRAINT legacy_chat_current_attempt_identity_fk
+  FOREIGN KEY (account_id, current_attempt_id, id, actor_user_id, task_id, fencing_generation)
+  REFERENCES legacy_chat_task_attempts(account_id, id, intent_id, actor_user_id, task_id, fencing_generation)
+  DEFERRABLE INITIALLY DEFERRED;
+
+CREATE FUNCTION legacy_chat_intent_identity_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF ROW(NEW.id,NEW.account_id,NEW.actor_user_id,NEW.operation_scope,NEW.idempotency_key,
+      NEW.request_hash,NEW.created_at,NEW.canonical_retention_expires_at)
+    IS DISTINCT FROM ROW(OLD.id,OLD.account_id,OLD.actor_user_id,OLD.operation_scope,OLD.idempotency_key,
+      OLD.request_hash,OLD.created_at,OLD.canonical_retention_expires_at)
+    OR NEW.fencing_generation < OLD.fencing_generation THEN
+    RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='LEGACY_CHAT_INTENT_IDENTITY_IMMUTABLE';
+  END IF;
+  -- Manifest binding and provider fingerprint remain mutable for the actual
+  -- post-admission compilation, retry and source-free metadata scrub paths.
+  RETURN NEW;
+END $$;
+CREATE TRIGGER legacy_chat_intent_identity_immutable BEFORE UPDATE ON legacy_chat_task_intents
+  FOR EACH ROW EXECUTE FUNCTION legacy_chat_intent_identity_immutable();
+
+CREATE FUNCTION legacy_chat_attempt_identity_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF ROW(NEW.id,NEW.account_id,NEW.intent_id,NEW.actor_user_id,NEW.task_id,NEW.run_id,
+      NEW.fencing_generation,NEW.auth_session_id,NEW.auth_actor_kind,NEW.original_authority,
+      NEW.execution_authority_expires_at,NEW.observation_parent_run_id,NEW.created_at)
+    IS DISTINCT FROM ROW(OLD.id,OLD.account_id,OLD.intent_id,OLD.actor_user_id,OLD.task_id,OLD.run_id,
+      OLD.fencing_generation,OLD.auth_session_id,OLD.auth_actor_kind,OLD.original_authority,
+      OLD.execution_authority_expires_at,OLD.observation_parent_run_id,OLD.created_at) THEN
+    RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='LEGACY_CHAT_ATTEMPT_IDENTITY_IMMUTABLE';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER legacy_chat_attempt_identity_immutable BEFORE UPDATE ON legacy_chat_task_attempts
+  FOR EACH ROW EXECUTE FUNCTION legacy_chat_attempt_identity_immutable();
+
+CREATE INDEX legacy_chat_task_attempt_task_idx
+  ON legacy_chat_task_attempts(account_id, task_id);
+
+-- ---------------------------------------------------------------------------
+-- Durable Harness Session-exclusive execution lease.
+-- Coordinated by every queue/legacy/checkpoint writer: the real product Session
+-- is the exclusivity domain, regardless of the attempt's unique task id.
+-- ---------------------------------------------------------------------------
+-- Unpublished disposable checkpoint state is owned by exactly one attempt. A
+-- binding left behind by a failed/unknown attempt is invalidated on the next
+-- acquire; committed canonical product history is never stored here.
+ALTER TABLE harness_sessions ADD COLUMN pending_attempt_id uuid;
+ALTER TABLE harness_sessions ADD COLUMN pending_fencing_generation bigint;
+
+CREATE TABLE harness_session_leases (
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  product_session_id uuid NOT NULL,
+  owner_user_id uuid NOT NULL,
+  lease_owner_attempt_id uuid NOT NULL,
+  lease_task_id uuid,
+  lease_fencing_generation bigint NOT NULL CHECK (lease_fencing_generation >= 1),
+  scope_fingerprint text NOT NULL,
+  lease_until timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  renewed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, product_session_id),
+  FOREIGN KEY (account_id, owner_user_id) REFERENCES users(account_id, id)
+);
+
+CREATE INDEX harness_session_lease_expiry_idx
+  ON harness_session_leases(lease_until);
+
+-- ---------------------------------------------------------------------------
+-- Shared Lab account admission registry (simple + batch entrypoints).
+-- One live claim per account decides busy/admission; run age never does.
+-- ---------------------------------------------------------------------------
+CREATE TABLE lab_operation_claims (
+  account_id uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  operation_kind text NOT NULL CHECK (operation_kind IN ('lab_experiment', 'lab_job')),
+  operation_id uuid NOT NULL,
+  actor_user_id uuid NOT NULL,
+  attempt_id uuid NOT NULL,
+  fencing_generation bigint NOT NULL CHECK (fencing_generation >= 1),
+  state text NOT NULL CHECK (state IN ('claimed', 'running', 'cancelling', 'settled', 'unknown')),
+  lease_until timestamptz NOT NULL,
+  execution_authority_expires_at timestamptz,
+  canonical_retention_expires_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  renewed_at timestamptz NOT NULL DEFAULT now(),
+  settled_at timestamptz,
+  FOREIGN KEY (account_id, actor_user_id) REFERENCES users(account_id, id),
+  CHECK (state <> 'settled' OR settled_at IS NOT NULL)
+);
+
+-- New account-scoped tables join the Lab cleanup manifest and write guard.
+INSERT INTO lab_test_workspace_table_manifest(table_name, scope) VALUES
+ ('legacy_chat_task_intents', 'account'),
+ ('legacy_chat_task_attempts', 'account'),
+ ('harness_session_leases', 'account'),
+ ('lab_operation_claims', 'account');
+-- Preserve the original policy on both account scopes, while these four
+-- metadata writers fail promptly on a contested workspace rather than waiting
+-- before their original-authority guard. Other tables retain original045.
+CREATE FUNCTION legacy_chat_metadata_workspace_write_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE scope_id uuid; workspace record;
+BEGIN
+  FOR scope_id IN SELECT DISTINCT x FROM unnest(
+    CASE WHEN TG_OP='UPDATE' THEN ARRAY[OLD.account_id,NEW.account_id]
+    ELSE ARRAY[NEW.account_id] END) AS x
+  LOOP
+    SELECT state,expires_at INTO workspace FROM lab_test_workspaces
+      WHERE target_account_id=scope_id FOR SHARE NOWAIT;
+    IF FOUND AND (workspace.state<>'active' OR workspace.expires_at<=clock_timestamp()) THEN
+      RAISE EXCEPTION USING ERRCODE='P0001', MESSAGE='LAB_TEST_WORKSPACE_CLOSED';
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END $$;
+
+DO $$ DECLARE item text; BEGIN
+  FOREACH item IN ARRAY ARRAY['legacy_chat_task_intents','legacy_chat_task_attempts',
+    'harness_session_leases','lab_operation_claims'] LOOP
+    EXECUTE format('CREATE TRIGGER lab_test_workspace_write_guard BEFORE INSERT OR UPDATE ON %I
+      FOR EACH ROW EXECUTE FUNCTION legacy_chat_metadata_workspace_write_guard()', item);
+  END LOOP;
+END $$;
+
+-- Product observation binds task/attempt before dispatch; terminal state comes
+-- from the authoritative finalizer, never from an HTTP onSend hook alone.
+ALTER TABLE product_runs ADD COLUMN attempt_id uuid;
+
+-- ---------------------------------------------------------------------------
+-- Pending manifest visibility. Pending is neither completed provenance nor a
+-- genuine source withdrawal: it is an unpublished attempt-owned state promoted
+-- to active only inside the fenced final transaction.
+-- ---------------------------------------------------------------------------
+ALTER TABLE context_manifests DROP CONSTRAINT context_manifests_status_check;
+ALTER TABLE context_manifests ADD CONSTRAINT context_manifests_status_check
+  CHECK (status IN ('pending', 'active', 'superseded', 'expired', 'deleted'));
+
+-- Exact attempt-owned, metadata-only selected context. Historical manifests
+-- stay unbound; current producers must bind and seal before any model exposure.
+CREATE FUNCTION legacy_chat_manifest_seal_valid(value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE item jsonb; uuid_pattern constant text='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+BEGIN
+  IF NOT COALESCE(jsonb_typeof(value)='object' AND value->'version'='1'::jsonb
+    AND jsonb_typeof(value->'blocks')='array' AND jsonb_typeof(value->'media')='array'
+    AND jsonb_typeof(value->'sources')='array' AND jsonb_typeof(value->'snapshot_hash')='string' AND value->>'snapshot_hash' ~ '^[0-9a-f]{64}$'
+    AND value-ARRAY['version','blocks','snapshot_hash','media','sources']='{}'::jsonb,false) THEN RETURN false; END IF;
+  FOR item IN SELECT * FROM jsonb_array_elements(value->'blocks') LOOP
+    IF NOT COALESCE(jsonb_typeof(item)='object' AND item->>'id' ~ uuid_pattern
+      AND jsonb_typeof(item->'hash')='string' AND item->>'hash' ~ '^[0-9a-f]{64}$' AND item-ARRAY['id','hash']='{}'::jsonb,false) THEN RETURN false; END IF;
+  END LOOP;
+  FOR item IN SELECT * FROM jsonb_array_elements(value->'sources') LOOP
+    IF NOT COALESCE(jsonb_typeof(item)='object' AND item->>'id' ~ uuid_pattern
+      AND item->>'table'=ANY(ARRAY['subjects','assignments','knowledge_snapshots','knowledge_blocks','knowledge_dependencies',
+        'evidence_fragments','source_resources','captures','source_retention_receipts','chat_media_assets','confirmed_states','proposed_assertions'])
+      AND item-ARRAY['table','id']='{}'::jsonb,false) THEN RETURN false; END IF;
+  END LOOP;
+  FOR item IN SELECT * FROM jsonb_array_elements(value->'media') LOOP
+    IF NOT COALESCE(jsonb_typeof(item)='string' AND item#>>'{}' ~ uuid_pattern,false) THEN RETURN false; END IF;
+  END LOOP;
+  RETURN jsonb_array_length(value->'blocks')=(SELECT count(DISTINCT entries.entry->>'id') FROM jsonb_array_elements(value->'blocks') entries(entry))
+    AND jsonb_array_length(value->'sources')=(SELECT count(DISTINCT entries.entry) FROM jsonb_array_elements(value->'sources') entries(entry))
+    AND jsonb_array_length(value->'media')=(SELECT count(DISTINCT entries.entry) FROM jsonb_array_elements(value->'media') entries(entry));
+END $$;
+
+ALTER TABLE context_manifests
+  ADD COLUMN lifecycle_intent_id uuid,
+  ADD COLUMN lifecycle_attempt_id uuid,
+  ADD COLUMN lifecycle_actor_user_id uuid,
+  ADD COLUMN lifecycle_fencing_generation bigint,
+  ADD COLUMN source_selection jsonb,
+  ADD COLUMN selected_source_expires_at timestamptz,
+  ADD COLUMN source_loss_at timestamptz,
+  ADD CONSTRAINT legacy_chat_manifest_binding_complete CHECK (
+    num_nonnulls(lifecycle_intent_id,lifecycle_attempt_id,lifecycle_actor_user_id,lifecycle_fencing_generation) IN (0,4)),
+  ADD CONSTRAINT legacy_chat_manifest_selection_bound CHECK (source_selection IS NULL OR
+    (lifecycle_attempt_id IS NOT NULL AND legacy_chat_manifest_seal_valid(source_selection))),
+  ADD CONSTRAINT legacy_chat_manifest_attempt_identity_fk
+    FOREIGN KEY (account_id,lifecycle_attempt_id,lifecycle_intent_id,lifecycle_actor_user_id,task_id,lifecycle_fencing_generation)
+    REFERENCES legacy_chat_task_attempts(account_id,id,intent_id,actor_user_id,task_id,fencing_generation)
+    DEFERRABLE INITIALLY DEFERRED,
+  ADD CONSTRAINT legacy_chat_manifest_one_attempt UNIQUE(account_id,lifecycle_attempt_id);
+
+-- Direct origins actually consumed by the selected compiler blocks. This is
+-- manifest-local ancestry, never the whole relationship's capture catalog.
+CREATE FUNCTION legacy_chat_manifest_direct_sources(owner uuid, selected_manifest uuid)
+RETURNS TABLE(relation text, id uuid) LANGUAGE sql STABLE AS $$
+  WITH selected_dependencies AS (
+    SELECT d.* FROM context_manifest_blocks mb JOIN knowledge_dependencies d
+      ON d.account_id=mb.account_id AND d.block_id=mb.block_id
+    WHERE mb.account_id=owner AND mb.manifest_id=selected_manifest),
+  selected_evidence AS (SELECT f.* FROM context_manifest_evidence me JOIN evidence_fragments f
+    ON f.account_id=me.account_id AND f.id=me.evidence_fragment_id WHERE me.account_id=owner AND me.manifest_id=selected_manifest),
+  selected_facts AS (SELECT DISTINCT f.* FROM selected_dependencies d JOIN confirmed_states f
+    ON f.account_id=d.account_id AND f.id=d.dependency_id WHERE d.dependency_type='fact_version'),
+  selected_assertions AS (SELECT DISTINCT a.* FROM selected_facts f JOIN proposed_assertions a
+    ON a.account_id=f.account_id AND a.id=f.source_assertion_id),
+  selected_resources AS (
+    SELECT r.* FROM selected_evidence f JOIN source_resources r ON r.account_id=f.account_id AND r.id=f.resource_id
+    UNION SELECT r.* FROM selected_dependencies d JOIN source_resources r ON r.account_id=d.account_id AND r.id=d.dependency_id
+      WHERE d.dependency_type='source_resource'),
+  selected_captures AS (
+    SELECT c.* FROM selected_resources r JOIN captures c ON c.account_id=r.account_id AND c.id=r.capture_id
+    UNION SELECT c.* FROM selected_assertions a JOIN captures c ON c.account_id=a.account_id AND c.id=a.capture_id)
+  SELECT 'evidence_fragments',id FROM selected_evidence
+  UNION SELECT 'confirmed_states',id FROM selected_facts
+  UNION SELECT 'proposed_assertions',id FROM selected_assertions
+  UNION SELECT 'source_resources',id FROM selected_resources
+  UNION SELECT 'captures',id FROM selected_captures
+  UNION SELECT 'source_retention_receipts',sr.receipt_id FROM selected_captures c JOIN source_retention_receipts sr
+    ON sr.account_id=c.account_id AND sr.capture_id=c.id
+$$;
+
+-- Missing direct targets cannot disappear through the closure's joins. Keep
+-- historical NULL seals compatible; new known manifests require every origin.
+CREATE FUNCTION legacy_chat_manifest_direct_sources_available(owner uuid, selected_manifest uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (SELECT 1 FROM context_manifests WHERE account_id=owner AND id=selected_manifest)
+    AND NOT EXISTS (
+      SELECT 1 FROM context_manifests m JOIN context_manifest_blocks mb ON mb.account_id=m.account_id AND mb.manifest_id=m.id
+      JOIN knowledge_dependencies d ON d.account_id=mb.account_id AND d.block_id=mb.block_id
+      LEFT JOIN source_resources r ON r.account_id=d.account_id AND r.id=d.dependency_id AND d.dependency_type='source_resource'
+      LEFT JOIN confirmed_states f ON f.account_id=d.account_id AND f.id=d.dependency_id AND d.dependency_type='fact_version'
+      LEFT JOIN proposed_assertions a ON a.account_id=f.account_id AND a.id=f.source_assertion_id
+      LEFT JOIN captures c ON c.account_id=m.account_id AND c.id=CASE WHEN d.dependency_type='source_resource' THEN r.capture_id ELSE a.capture_id END
+      LEFT JOIN source_retention_receipts sr ON sr.account_id=c.account_id AND sr.capture_id=c.id
+      WHERE m.account_id=owner AND m.id=selected_manifest AND d.dependency_type IN ('source_resource','fact_version')
+        AND ((d.dependency_type='source_resource' AND (r.id IS NULL OR r.processing_state='deleted'))
+          OR (d.dependency_type='fact_version' AND (f.id IS NULL OR f.status='deleted' OR f.deleted_at IS NOT NULL
+            OR f.subject_id IS DISTINCT FROM m.subject_id OR f.assignment_id IS DISTINCT FROM m.assignment_id
+            OR a.id IS NULL OR a.review_status='deleted' OR a.deleted_at IS NOT NULL))
+          OR c.id IS NULL OR c.status IS DISTINCT FROM 'active'
+          OR c.subject_id IS DISTINCT FROM m.subject_id OR c.assignment_id IS DISTINCT FROM m.assignment_id
+          OR c.retention_until<=statement_timestamp() OR sr.receipt_id IS NULL
+          OR sr.source_access_state IS NULL OR sr.source_access_state='deleted'
+          OR sr.authorization_state IS DISTINCT FROM 'authorized' OR sr.authorization_expires_at<=statement_timestamp()))
+$$;
+
+CREATE FUNCTION legacy_chat_manifest_source_witnesses(owner uuid, selected_manifest uuid)
+RETURNS jsonb LANGUAGE sql STABLE AS $$
+  WITH manifest AS (SELECT * FROM context_manifests WHERE account_id=owner AND id=selected_manifest),
+  selected_sources AS (SELECT * FROM legacy_chat_manifest_direct_sources(owner,selected_manifest)),
+  witnesses AS (
+    SELECT 'subjects' AS relation,subject_id AS id FROM manifest UNION SELECT 'assignments',assignment_id FROM manifest
+    UNION SELECT 'knowledge_snapshots',knowledge_snapshot_id FROM manifest
+    UNION SELECT 'knowledge_blocks',block_id FROM context_manifest_blocks WHERE account_id=owner AND context_manifest_blocks.manifest_id=selected_manifest
+    UNION SELECT 'knowledge_dependencies',d.id FROM context_manifest_blocks mb JOIN knowledge_dependencies d ON d.account_id=mb.account_id AND d.block_id=mb.block_id WHERE mb.account_id=owner AND mb.manifest_id=selected_manifest
+    UNION SELECT relation,id FROM selected_sources
+    UNION SELECT 'chat_media_assets',media_id FROM context_manifest_media WHERE account_id=owner AND context_manifest_media.manifest_id=selected_manifest)
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('table',relation,'id',id) ORDER BY relation,id),'[]'::jsonb) FROM witnesses WHERE id IS NOT NULL
+$$;
+
+CREATE FUNCTION legacy_chat_manifest_selection_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.lifecycle_attempt_id IS NOT NULL AND
+    ROW(NEW.id,NEW.account_id,NEW.task_id,NEW.subject_id,NEW.assignment_id,NEW.knowledge_snapshot_id,
+      NEW.objective,NEW.authorization_scope,NEW.policy_version,NEW.lab_feature_receipt,NEW.created_at,
+      NEW.lifecycle_intent_id,NEW.lifecycle_attempt_id,NEW.lifecycle_actor_user_id,NEW.lifecycle_fencing_generation)
+    IS DISTINCT FROM ROW(OLD.id,OLD.account_id,OLD.task_id,OLD.subject_id,OLD.assignment_id,OLD.knowledge_snapshot_id,
+      OLD.objective,OLD.authorization_scope,OLD.policy_version,OLD.lab_feature_receipt,OLD.created_at,
+      OLD.lifecycle_intent_id,OLD.lifecycle_attempt_id,OLD.lifecycle_actor_user_id,OLD.lifecycle_fencing_generation)
+    OR (OLD.source_selection IS NOT NULL AND ROW(NEW.source_selection,NEW.selected_source_expires_at)
+      IS DISTINCT FROM ROW(OLD.source_selection,OLD.selected_source_expires_at))
+    OR (OLD.source_loss_at IS NOT NULL AND NEW.source_loss_at IS DISTINCT FROM OLD.source_loss_at) THEN
+    RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='LEGACY_CHAT_MANIFEST_SELECTION_IMMUTABLE';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER legacy_chat_manifest_selection_immutable BEFORE UPDATE ON context_manifests
+  FOR EACH ROW EXECUTE FUNCTION legacy_chat_manifest_selection_immutable();
+
+-- Signatures contain only consumed/authority fields. A receipt extension does
+-- not invalidate lawful work or enlarge its separately captured original clock.
+CREATE FUNCTION legacy_chat_selected_source_signature(kind text, value jsonb)
+RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_object_agg(key,val) FROM jsonb_each(value) AS fields(key,val)
+  WHERE key=ANY(CASE kind
+    WHEN 'evidence_fragments' THEN ARRAY['id','account_id','capture_id','resource_id','text_content','status','review_status','attribution_status','attributed_actor','locator']
+    WHEN 'confirmed_states' THEN ARRAY['id','account_id','subject_id','assignment_id','source_assertion_id','field','value_text','status','valid_from','valid_until','deleted_at','confirmed_by_decision_id','supersedes_state_id']
+    WHEN 'proposed_assertions' THEN ARRAY['id','account_id','capture_id','evidence_id','evidence_fragment_id','analysis_proposal_id','field','proposed_value','evidence_quote','review_status','proposal_status','subject_kind','temporal_relation','supersedes_state_id','version','deleted_at']
+    WHEN 'source_resources' THEN ARRAY['id','account_id','capture_id','processing_state','resource_kind','retention_scope']
+    WHEN 'captures' THEN ARRAY['id','account_id','subject_id','assignment_id','status','purpose','identity_status']
+    WHEN 'source_retention_receipts' THEN ARRAY['receipt_id','account_id','capture_id','authorization_state','source_access_state','policy_version','effective_mode','source_scope']
+    WHEN 'knowledge_snapshots' THEN ARRAY['id','account_id','subject_id','assignment_id','quality','deleted_at','compiler_name','compiler_version','policy_version','source_state_cursor','compiled_at']
+    WHEN 'knowledge_blocks' THEN ARRAY['id','account_id','snapshot_id','block_key','block_type','status','structured_content','valid_from','valid_until','freshness_until','sensitivity','semantic_hash','deleted_at']
+    WHEN 'knowledge_dependencies' THEN ARRAY['id','account_id','block_id','dependency_type','dependency_id','inclusion_reason','authorization_scope','created_at']
+    WHEN 'chat_media_assets' THEN ARRAY['id','account_id','subject_id','assignment_id','created_by_user_id','file_name','media_type','byte_size','width','height','storage_provider','object_key','status','deleted_at','created_at']
+    WHEN 'subjects' THEN ARRAY['id','account_id','status']
+    WHEN 'assignments' THEN ARRAY['id','account_id','subject_id','status']
+    ELSE ARRAY[]::text[] END)
+$$;
+
+CREATE FUNCTION legacy_chat_selected_source_loss() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE previous jsonb; current_value jsonb; source_id text; owner uuid; changed boolean;
+BEGIN
+  previous=CASE WHEN TG_OP='INSERT' THEN NULL ELSE to_jsonb(OLD) END;
+  current_value=CASE WHEN TG_OP='DELETE' THEN NULL ELSE to_jsonb(NEW) END;
+  owner=COALESCE(previous->>'account_id',current_value->>'account_id')::uuid;
+  source_id=COALESCE(previous->>'id',previous->>'receipt_id',current_value->>'id',current_value->>'receipt_id');
+  changed=TG_OP<>'UPDATE' OR legacy_chat_selected_source_signature(TG_TABLE_NAME,previous)
+    IS DISTINCT FROM legacy_chat_selected_source_signature(TG_TABLE_NAME,current_value);
+  IF TG_OP='UPDATE' AND TG_TABLE_NAME='knowledge_snapshots' THEN
+    changed=changed OR (previous->>'status' IN ('published','superseded'))
+      IS DISTINCT FROM (current_value->>'status' IN ('published','superseded'));
+  END IF;
+  IF TG_OP='UPDATE' AND TG_TABLE_NAME IN ('captures','source_retention_receipts') THEN
+    changed=changed OR (COALESCE(current_value->>'authorization_expires_at',current_value->>'retention_until') IS NOT NULL
+      AND (COALESCE(previous->>'authorization_expires_at',previous->>'retention_until') IS NULL
+        OR COALESCE(current_value->>'authorization_expires_at',current_value->>'retention_until')::timestamptz
+          <COALESCE(previous->>'authorization_expires_at',previous->>'retention_until')::timestamptz));
+  END IF;
+  IF changed THEN
+    UPDATE context_manifests m SET source_loss_at=clock_timestamp()
+    WHERE m.account_id=owner AND m.source_selection IS NOT NULL AND m.source_loss_at IS NULL
+      AND (m.source_selection->'sources' @> jsonb_build_array(jsonb_build_object('table',TG_TABLE_NAME,'id',source_id))
+        OR (TG_TABLE_NAME='knowledge_dependencies' AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements(m.source_selection->'sources') witness
+          WHERE witness->>'table'='knowledge_blocks'
+            AND witness->>'id' IN (previous->>'block_id',current_value->>'block_id'))));
+  END IF;
+  RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $$;
+
+DO $$ DECLARE relation text; BEGIN
+  FOREACH relation IN ARRAY ARRAY['evidence_fragments','source_resources','captures','source_retention_receipts',
+    'knowledge_snapshots','knowledge_blocks','knowledge_dependencies','chat_media_assets','subjects','assignments','confirmed_states','proposed_assertions'] LOOP
+    EXECUTE format('CREATE TRIGGER legacy_chat_selected_source_loss AFTER UPDATE OR DELETE ON %I
+      FOR EACH ROW EXECUTE FUNCTION legacy_chat_selected_source_loss()',relation);
+  END LOOP;
+END $$;
+CREATE TRIGGER legacy_chat_selected_dependency_insert AFTER INSERT ON knowledge_dependencies
+  FOR EACH ROW EXECUTE FUNCTION legacy_chat_selected_source_loss();
+
+-- Selection-link edits never rewrite the seal. They retire it irreversibly;
+-- whole-graph cleanup remains allowed and rolls back its latch on failure.
+CREATE FUNCTION legacy_chat_selected_membership_loss() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE context_manifests m SET source_loss_at=clock_timestamp()
+  WHERE m.source_selection IS NOT NULL AND m.source_loss_at IS NULL
+    AND ((TG_OP<>'INSERT' AND m.account_id=OLD.account_id AND m.id=OLD.manifest_id)
+      OR (TG_OP<>'DELETE' AND m.account_id=NEW.account_id AND m.id=NEW.manifest_id));
+  RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $$;
+DO $$ DECLARE relation text; BEGIN
+  FOREACH relation IN ARRAY ARRAY['context_manifest_blocks','context_manifest_evidence','context_manifest_media'] LOOP
+    EXECUTE format('CREATE TRIGGER legacy_chat_selected_membership_loss AFTER INSERT OR UPDATE OR DELETE ON %I
+      FOR EACH ROW EXECUTE FUNCTION legacy_chat_selected_membership_loss()',relation);
+  END LOOP;
+END $$;
+
+-- A task id is publicly resolvable only when it has no unfinished lifecycle and
+-- no pending, withdrawn or expired selected manifest. Historical NULL selected
+-- metadata keeps old semantics;
+-- a known lifecycle task that is not completed is never legacy-available.
+CREATE FUNCTION legacy_chat_task_publicly_available(owner uuid, task text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT (NOT EXISTS (
+            SELECT 1 FROM legacy_chat_task_attempts a
+            WHERE a.account_id = owner AND a.task_id::text = canonical_agent_session_id(task))
+          OR EXISTS (
+            SELECT 1 FROM legacy_chat_task_attempts a
+            JOIN legacy_chat_task_intents i ON i.account_id = a.account_id AND i.id = a.intent_id
+            WHERE a.account_id = owner AND a.task_id::text = canonical_agent_session_id(task)
+              AND a.state = 'completed' AND i.state = 'completed'
+              AND (i.canonical_retention_expires_at IS NULL
+                OR i.canonical_retention_expires_at > statement_timestamp())))
+    AND NOT EXISTS (
+      SELECT 1 FROM context_manifests m
+      WHERE m.account_id = owner AND m.task_id::text = canonical_agent_session_id(task)
+        AND (m.status = 'pending' OR m.source_loss_at IS NOT NULL
+          OR m.selected_source_expires_at <= statement_timestamp()
+          OR (m.source_selection IS NOT NULL AND NOT legacy_chat_manifest_direct_sources_available(owner,m.id))))
+$$;
+
+-- Manifest-level gate for readers keyed by manifest id rather than task id.
+CREATE FUNCTION legacy_chat_manifest_public(owner uuid, manifest uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT NOT EXISTS (SELECT 1 FROM context_manifests m
+    WHERE m.account_id = owner AND m.id = manifest AND (m.status = 'pending' OR m.source_loss_at IS NOT NULL
+      OR m.selected_source_expires_at <= statement_timestamp()
+      OR (m.source_selection IS NOT NULL AND NOT legacy_chat_manifest_direct_sources_available(owner,m.id))))
+$$;
+
+-- Task availability for ordinary PUT / Delta / fork provenance. Body is the
+-- frozen 054 definition with the lifecycle/pending gate prepended; the existing
+-- manifest predicate already excludes the new 'pending' state.
+CREATE OR REPLACE FUNCTION agent_session_task_available(account uuid, task text, person text, context text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT legacy_chat_task_publicly_available(account,task) AND EXISTS (
+    SELECT 1 FROM context_manifests m
+    JOIN knowledge_snapshots s ON s.account_id=m.account_id AND s.id=m.knowledge_snapshot_id
+    JOIN subjects p ON p.account_id=m.account_id AND p.id=m.subject_id AND p.status='active'
+    JOIN assignments a ON a.account_id=m.account_id AND a.id=m.assignment_id AND a.status='active'
+    WHERE m.account_id=account AND m.task_id::text=canonical_agent_session_id(task) AND m.subject_id::text=canonical_agent_session_id(person)
+      AND m.assignment_id::text=canonical_agent_session_id(context) AND m.source_loss_at IS NULL AND m.status IN ('active','superseded') AND s.status IN ('published','superseded')
+      AND NOT EXISTS (SELECT 1 FROM agent_session_retracted_tasks rt WHERE rt.account_id=account AND rt.task_id=canonical_agent_session_id(task))
+      AND NOT EXISTS (
+        SELECT 1 FROM context_manifest_evidence me
+        LEFT JOIN evidence_fragments f ON f.account_id=me.account_id AND f.id=me.evidence_fragment_id
+        LEFT JOIN source_resources r ON r.account_id=f.account_id AND r.id=f.resource_id
+        LEFT JOIN captures c ON c.account_id=r.account_id AND c.id=r.capture_id
+        LEFT JOIN source_retention_receipts sr ON sr.account_id=c.account_id AND sr.capture_id=c.id
+        WHERE me.account_id=m.account_id AND me.manifest_id=m.id
+          AND (f.id IS NULL OR f.status IS DISTINCT FROM 'active' OR f.review_status IS DISTINCT FROM 'reviewed'
+            OR f.attribution_status IS DISTINCT FROM 'confirmed' OR f.text_content IS NULL OR length(trim(f.text_content))=0
+            OR c.subject_id IS DISTINCT FROM m.subject_id OR c.assignment_id IS DISTINCT FROM m.assignment_id
+            OR r.processing_state IS NOT DISTINCT FROM 'deleted' OR c.status IS DISTINCT FROM 'active'
+            OR sr.source_access_state IS NULL OR sr.source_access_state='deleted'
+            OR sr.authorization_state IS DISTINCT FROM 'authorized'
+            OR sr.authorization_expires_at<=statement_timestamp())
+      )
+  )
+$$;
+
+-- Private writer predicate deliberately admits pending context, never public readers.
+CREATE FUNCTION legacy_chat_manifest_selected_sources_available(account uuid, task text, person text, context text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM context_manifests m
+    JOIN knowledge_snapshots s ON s.account_id=m.account_id AND s.id=m.knowledge_snapshot_id
+    JOIN subjects p ON p.account_id=m.account_id AND p.id=m.subject_id AND p.status='active'
+    JOIN assignments a ON a.account_id=m.account_id AND a.id=m.assignment_id AND a.status='active'
+    WHERE m.account_id=account AND m.task_id::text=canonical_agent_session_id(task) AND m.subject_id::text=canonical_agent_session_id(person)
+      AND m.assignment_id::text=canonical_agent_session_id(context) AND m.source_loss_at IS NULL AND m.status IN ('pending','active','superseded') AND s.status IN ('published','superseded')
+      AND (m.source_selection IS NULL OR legacy_chat_manifest_direct_sources_available(account,m.id))
+      AND NOT EXISTS (SELECT 1 FROM agent_session_retracted_tasks rt WHERE rt.account_id=account AND rt.task_id=canonical_agent_session_id(task))
+      AND NOT EXISTS (
+        SELECT 1 FROM context_manifest_evidence me
+        LEFT JOIN evidence_fragments f ON f.account_id=me.account_id AND f.id=me.evidence_fragment_id
+        LEFT JOIN source_resources r ON r.account_id=f.account_id AND r.id=f.resource_id
+        LEFT JOIN captures c ON c.account_id=r.account_id AND c.id=r.capture_id
+        LEFT JOIN source_retention_receipts sr ON sr.account_id=c.account_id AND sr.capture_id=c.id
+        WHERE me.account_id=m.account_id AND me.manifest_id=m.id
+          AND (f.id IS NULL OR f.status IS DISTINCT FROM 'active' OR f.review_status IS DISTINCT FROM 'reviewed'
+            OR f.attribution_status IS DISTINCT FROM 'confirmed' OR f.text_content IS NULL OR length(trim(f.text_content))=0
+            OR c.subject_id IS DISTINCT FROM m.subject_id OR c.assignment_id IS DISTINCT FROM m.assignment_id
+            OR r.processing_state IS NOT DISTINCT FROM 'deleted' OR c.status IS DISTINCT FROM 'active'
+            OR sr.source_access_state IS NULL OR sr.source_access_state='deleted'
+            OR sr.authorization_state IS DISTINCT FROM 'authorized'
+            OR sr.authorization_expires_at<=statement_timestamp())
+      )
+  )
+$$;
+
+-- Chat-source availability is the shared completion gate used by Session turns,
+-- meeting drafts, replay and purge sweeps. Original 056 body with the
+-- lifecycle/pending gate prepended.
+CREATE OR REPLACE FUNCTION agent_session_chat_task_available(account uuid, task text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT legacy_chat_task_publicly_available(account,task)
+    AND NOT EXISTS (SELECT 1 FROM agent_session_chat_tasks t WHERE t.account_id=account AND t.task_id=canonical_agent_session_id(task)
+      AND (t.expires_at<=statement_timestamp() OR NOT EXISTS (
+        SELECT 1 FROM agent_sessions s WHERE s.account_id=t.account_id AND s.created_by_user_id=t.actor_user_id
+          AND s.deleted_at IS NULL AND s.expires_at>statement_timestamp()
+          AND (s.id=t.origin_session_id OR EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(s.payload->'turns','[]'::jsonb)) turn
+            WHERE canonical_agent_session_id(turn->'response'->>'taskID')=t.task_id)))))
+$$;
+
+-- Latest pre-101 authority is the 099 body (Saved Memory dependency currentness
+-- included); the lifecycle/pending gate is added without dropping any guard.
+CREATE OR REPLACE FUNCTION agent_session_chat_sources_available(account uuid, task text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT agent_session_chat_task_available(account,task)
+    AND agent_task_memory_dependencies_available(account,task)
+    AND legacy_chat_task_publicly_available(account,task)
+    AND NOT EXISTS (SELECT 1 FROM agent_session_retracted_tasks r WHERE r.account_id=account AND r.task_id=canonical_agent_session_id(task))
+    AND NOT EXISTS (SELECT 1 FROM agent_session_chat_sources d
+      LEFT JOIN screenshot_contact_tasks t ON t.account_id=d.account_id AND t.id=d.screenshot_task_id
+      WHERE d.account_id=account AND d.task_id=canonical_agent_session_id(task)
+      AND (t.id IS NULL OR t.created_by_user_id<>d.actor_user_id
+        OR NOT agent_session_screenshot_context_available(account,t.id)
+        OR agent_session_screenshot_fingerprint(t)<>d.source_fingerprint))
+$$;
+
+-- Product-run projection: a pending or unfinished lifecycle task never exposes
+-- its observation content as a completed answer.
+CREATE OR REPLACE FUNCTION product_run_source_available(run_id uuid)
+RETURNS boolean LANGUAGE sql VOLATILE AS $$
+SELECT COALESCE(r.task_id IS NOT NULL AND r.status<>'failed'
+  AND r.expires_at>clock_timestamp() AND r.source_generation=g.generation
+  AND (r.task_id IS NULL OR legacy_chat_task_publicly_available(r.account_id, r.task_id::text))
+  AND product_run_source_available_legacy(r.id),false)
+FROM product_runs r LEFT JOIN harness_source_generations g ON g.account_id=r.account_id WHERE r.id=run_id
+$$;
+
+-- Private source checks deliberately separate publication from retention. They
+-- cannot authorize a public body, execution, automatic retry, or a renewed clock.
+CREATE FUNCTION legacy_chat_observation_session_current(account uuid, task text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT NOT EXISTS (SELECT 1 FROM agent_session_chat_tasks t
+    WHERE t.account_id=account AND t.task_id=canonical_agent_session_id(task)
+      AND (t.expires_at<=statement_timestamp() OR NOT EXISTS (
+        SELECT 1 FROM agent_sessions s WHERE s.account_id=t.account_id AND s.created_by_user_id=t.actor_user_id
+          AND s.deleted_at IS NULL AND s.expires_at>statement_timestamp()
+          AND (s.id=t.origin_session_id OR EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(s.payload->'turns','[]'::jsonb)) turn
+              WHERE canonical_agent_session_id(turn->'response'->>'taskID')=t.task_id)))))
+$$;
+CREATE FUNCTION legacy_chat_observation_sources_current(account uuid, task text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT legacy_chat_observation_session_current(account,task)
+    AND agent_task_memory_dependencies_available(account,task)
+    AND NOT EXISTS (SELECT 1 FROM agent_session_retracted_tasks r
+      WHERE r.account_id=account AND r.task_id=canonical_agent_session_id(task))
+    AND NOT EXISTS (SELECT 1 FROM agent_session_chat_sources d
+      LEFT JOIN screenshot_contact_tasks t ON t.account_id=d.account_id AND t.id=d.screenshot_task_id
+      WHERE d.account_id=account AND d.task_id=canonical_agent_session_id(task)
+        AND (t.id IS NULL OR t.created_by_user_id<>d.actor_user_id
+          OR NOT agent_session_screenshot_context_available(account,t.id)
+          OR agent_session_screenshot_fingerprint(t)<>d.source_fingerprint))
+$$;
+
+-- Only an exact, sealed, current ordinary relationship attempt can defer.
+-- Historical and other families keep completed-only public semantics.
+CREATE FUNCTION legacy_chat_observation_task_state(account uuid, task text, actor uuid DEFAULT NULL)
+RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT CASE WHEN EXISTS (SELECT 1 FROM legacy_chat_task_attempts known
+      JOIN legacy_chat_task_intents owner ON owner.account_id=known.account_id AND owner.id=known.intent_id
+      WHERE known.account_id=account AND known.task_id::text=canonical_agent_session_id(task)
+        AND owner.operation_scope='create_chat_task' AND known.original_authority->>'kind'='ordinary') THEN COALESCE((
+    SELECT CASE
+      WHEN a.state='completed' AND i.state='completed' AND m.status IN ('active','superseded')
+        AND agent_session_task_available(account,task,m.subject_id::text,m.assignment_id::text)
+        AND agent_session_chat_sources_available(account,task) THEN 'current'
+      WHEN a.state IN ('admitted','running','cancelling','interrupted_unknown')
+        AND i.state IN ('admitted','running','cancelling','interrupted_unknown') AND m.status='pending' THEN 'defer_pending'
+      ELSE 'withdrawn' END
+    FROM legacy_chat_task_attempts a JOIN legacy_chat_task_intents i
+      ON i.account_id=a.account_id AND i.id=a.intent_id AND i.actor_user_id=a.actor_user_id
+        AND i.current_attempt_id=a.id AND i.task_id=a.task_id AND i.fencing_generation=a.fencing_generation
+    JOIN context_manifests m ON m.account_id=i.account_id AND m.id=i.manifest_id
+      AND m.lifecycle_intent_id=i.id AND m.lifecycle_attempt_id=a.id AND m.lifecycle_actor_user_id=a.actor_user_id
+      AND m.task_id=a.task_id AND m.lifecycle_fencing_generation=a.fencing_generation
+    WHERE a.account_id=account AND a.task_id::text=canonical_agent_session_id(task)
+      AND (actor IS NULL OR a.actor_user_id=actor) AND i.operation_scope='create_chat_task'
+      AND legacy_chat_original_authority_valid(a.original_authority) AND a.original_authority->>'kind'='ordinary'
+      AND i.canonical_retention_expires_at IS NOT NULL AND isfinite(i.canonical_retention_expires_at)
+      AND i.canonical_retention_expires_at>statement_timestamp()
+      AND legacy_chat_manifest_seal_valid(m.source_selection) AND m.source_loss_at IS NULL
+      AND (m.selected_source_expires_at IS NULL OR isfinite(m.selected_source_expires_at) AND m.selected_source_expires_at>statement_timestamp())
+      AND m.source_selection->'sources'=legacy_chat_manifest_source_witnesses(m.account_id,m.id)
+      AND jsonb_array_length(m.source_selection->'blocks')=(SELECT count(*) FROM context_manifest_blocks mb
+        WHERE mb.account_id=m.account_id AND mb.manifest_id=m.id)
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(m.source_selection->'blocks') block WHERE NOT EXISTS (
+        SELECT 1 FROM context_manifest_blocks mb WHERE mb.account_id=m.account_id AND mb.manifest_id=m.id AND mb.block_id::text=block->>'id'))
+      AND m.source_selection->'media'=COALESCE((SELECT jsonb_agg(mm.media_id ORDER BY mm.sequence)
+        FROM context_manifest_media mm WHERE mm.account_id=m.account_id AND mm.manifest_id=m.id),'[]'::jsonb)
+      AND legacy_chat_manifest_selected_sources_available(account,task,m.subject_id::text,m.assignment_id::text)
+      AND NOT EXISTS (SELECT 1 FROM context_manifest_media mm LEFT JOIN chat_media_assets media
+        ON media.account_id=mm.account_id AND media.id=mm.media_id WHERE mm.account_id=m.account_id AND mm.manifest_id=m.id
+          AND (media.id IS NULL OR media.status<>'ready' OR media.deleted_at IS NOT NULL))
+      AND legacy_chat_observation_sources_current(account,task)
+      AND (a.observation_parent_run_id IS NULL OR EXISTS (SELECT 1 FROM product_runs parent
+        WHERE parent.id=a.observation_parent_run_id AND parent.account_id=a.account_id AND parent.user_id=a.actor_user_id
+          AND parent.created_at<a.created_at AND product_run_source_available(parent.id)))
+  ),'withdrawn') ELSE CASE WHEN agent_session_chat_sources_available(account,task)
+    AND NOT EXISTS (SELECT 1 FROM context_manifests m WHERE m.account_id=account AND m.task_id::text=canonical_agent_session_id(task)
+      AND NOT agent_session_task_available(account,task,m.subject_id::text,m.assignment_id::text))
+    THEN 'current' ELSE 'withdrawn' END END
+$$;
+
+CREATE FUNCTION legacy_chat_observation_product_run_state(run uuid, expected_generation text DEFAULT NULL)
+RETURNS text LANGUAGE sql VOLATILE AS $$
+  SELECT COALESCE((SELECT CASE
+    WHEN (expected_generation IS NULL OR r.source_generation::text=expected_generation) AND product_run_source_available(r.id) THEN 'current'
+    WHEN r.status='running' AND r.task_id IS NOT NULL AND r.expires_at>clock_timestamp() AND isfinite(r.expires_at)
+      AND r.source_generation=g.generation AND (expected_generation IS NULL OR r.source_generation::text=expected_generation)
+      AND EXISTS (SELECT 1 FROM legacy_chat_task_attempts a JOIN legacy_chat_task_intents i ON i.account_id=a.account_id AND i.id=a.intent_id
+        WHERE a.account_id=r.account_id AND a.actor_user_id=r.user_id AND a.task_id=r.task_id AND a.id=r.attempt_id
+          AND i.operation_scope='create_chat_task'
+          -- NULL request content grants no authority by itself: the exact
+          -- attempt carries its immutable admitted parent reference.
+          AND legacy_chat_observation_task_state(r.account_id,r.task_id::text,r.user_id)='defer_pending')
+      AND (r.input->'value'->>'previous_task_id' IS NULL OR EXISTS(SELECT 1 FROM product_runs parent
+        WHERE parent.account_id=r.account_id AND parent.user_id=r.user_id AND parent.task_id::text=r.input->'value'->>'previous_task_id'
+          AND parent.created_at<r.created_at AND product_run_source_available(parent.id)))
+      AND (r.session_id IS NULL OR EXISTS(SELECT 1 FROM agent_sessions s WHERE s.account_id=r.account_id AND s.created_by_user_id=r.user_id
+        AND s.id=r.session_id AND s.deleted_at IS NULL AND s.expires_at>statement_timestamp()))
+      AND NOT EXISTS(SELECT 1 FROM screenshot_contact_tasks t WHERE t.account_id=r.account_id AND t.id=r.task_id
+        AND NOT agent_session_screenshot_context_available(r.account_id,t.id)) THEN 'defer_pending'
+    ELSE 'withdrawn' END FROM product_runs r LEFT JOIN harness_source_generations g ON g.account_id=r.account_id WHERE r.id=run),'withdrawn')
+$$;
+
+-- Meeting drafts derive from completed Chat answers only.
+-- Latest pre-101 authority is the 081 body (meeting image lineage included).
+CREATE OR REPLACE FUNCTION meeting_draft_source_available(account uuid, origin_session uuid, source_task text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+ SELECT agent_session_chat_sources_available(account,source_task)
+  AND EXISTS(SELECT 1 FROM agent_session_chat_tasks t WHERE t.account_id=account
+    AND t.task_id=canonical_agent_session_id(source_task) AND t.origin_session_id=origin_session
+    AND t.expires_at>statement_timestamp())
+  AND EXISTS(SELECT 1 FROM agent_sessions s WHERE s.account_id=account AND s.id=origin_session
+    AND s.deleted_at IS NULL AND s.expires_at>statement_timestamp())
+  AND NOT EXISTS(SELECT 1 FROM meeting_drafts d WHERE d.account_id=account
+    AND d.origin_session_id=origin_session AND d.source_task_id=canonical_agent_session_id(source_task)
+    AND NOT meeting_image_source_available(account,origin_session,d.source_message_id,d.source_image));
+$$;
+
+-- Permanent withdrawn-completed tombstones are written only for tasks that
+-- genuinely completed. An unfinished pending/unknown lifecycle task is never
+-- reclassified as a retracted completed answer, so a later lawful final commit
+-- remains possible and no false tombstone survives.
+CREATE OR REPLACE FUNCTION retract_agent_session_tasks(account uuid, body jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE turn jsonb; task text; manifest record;
+BEGIN
+  FOR turn IN SELECT value FROM jsonb_array_elements(body->'turns') LOOP
+    task:=canonical_agent_session_id(turn->'response'->>'taskID');
+    IF EXISTS (SELECT 1 FROM legacy_chat_task_attempts a WHERE a.account_id=account AND a.task_id::text=task AND a.state<>'completed') THEN
+      CONTINUE;
+    END IF;
+    IF EXISTS (SELECT 1 FROM context_manifests pending WHERE pending.account_id=account
+        AND pending.task_id::text=task AND pending.status='pending')
+      AND NOT EXISTS (SELECT 1 FROM legacy_chat_task_attempts a WHERE a.account_id=account AND a.task_id::text=task AND a.state='completed') THEN
+      CONTINUE;
+    END IF;
+    SELECT m.subject_id,m.assignment_id INTO manifest FROM context_manifests m
+      WHERE m.account_id=account AND m.task_id::text=canonical_agent_session_id(task);
+    -- A forged client scope must not poison a still-valid canonical task.
+    IF (FOUND AND NOT agent_session_task_available(account,task,manifest.subject_id::text,manifest.assignment_id::text))
+      OR (EXISTS (SELECT 1 FROM screenshot_contact_tasks t WHERE t.account_id=account AND t.id::text=canonical_agent_session_id(task))
+        AND NOT agent_session_screenshot_available(account,task)) THEN
+      INSERT INTO agent_session_retracted_tasks(account_id,task_id) VALUES(account,task) ON CONFLICT DO NOTHING;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION purge_agent_session_chat_tasks(account uuid) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO agent_session_retracted_tasks(account_id,task_id)
+    SELECT t.account_id,t.task_id FROM agent_session_chat_tasks t
+    WHERE t.account_id=account AND NOT agent_session_chat_task_available(account,t.task_id)
+      AND NOT EXISTS (SELECT 1 FROM legacy_chat_task_attempts a
+        WHERE a.account_id=account AND a.task_id::text=t.task_id AND a.state<>'completed')
+      AND NOT EXISTS (SELECT 1 FROM context_manifests m
+        WHERE m.account_id=account AND m.task_id::text=t.task_id AND m.status='pending'
+          AND NOT EXISTS (SELECT 1 FROM legacy_chat_task_attempts a WHERE a.account_id=account AND a.task_id::text=t.task_id AND a.state='completed'))
+    ON CONFLICT DO NOTHING;
+  UPDATE idempotency_records i SET response_body=jsonb_build_object('task_id',i.response_body->>'task_id','session_context_unavailable',true)
+    WHERE i.account_id=account AND i.operation_scope IN ('create_chat_task','create_unscoped_chat_task')
+      AND i.response_body IS NOT NULL AND NOT COALESCE((i.response_body->>'session_context_unavailable')::boolean,false)
+      AND EXISTS (SELECT 1 FROM agent_session_chat_tasks t WHERE t.account_id=account AND t.task_id=i.response_body->>'task_id')
+      AND NOT agent_session_chat_sources_available(account,i.response_body->>'task_id');
+  UPDATE agent_sessions SET payload=redact_agent_session_payload(account,payload),revision=revision+1,updated_at=now()
+    WHERE account_id=account AND deleted_at IS NULL AND payload IS DISTINCT FROM redact_agent_session_payload(account,payload);
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Retention sweep helpers. Source/account cleanup plus the runtime reaper use
+-- these; metadata tombstones keep their original expiry and never resurrect an
+-- uncertain intent as runnable work.
+-- ---------------------------------------------------------------------------
+-- Ordinary Chat retirement is owned by legacyChatMaintenance.ts: exact current
+-- tuple, attempt-first NOWAIT locks, original execution/canonical clocks, and
+-- post-COMMIT notification. No account-wide unfenced retirement helper exists.
+-- Lab and other operation scopes retain their existing policy boundaries.
+
+CREATE FUNCTION legacy_chat_lifecycle_scrub_expired(account uuid DEFAULT NULL)
+RETURNS void LANGUAGE sql AS $$
+  -- Source-free metadata only; nothing in these relations can resurrect content.
+  UPDATE legacy_chat_task_intents SET provider_fingerprint=NULL
+  WHERE (account IS NULL OR account_id=account)
+    AND state IN ('completed','cancelled','revoked','interrupted_unknown','failed_retryable')
+    AND canonical_retention_expires_at IS NOT NULL
+    AND canonical_retention_expires_at<=statement_timestamp();
+$$;
+
+-- The manifest/source sweep must distinguish never-completed pending content
+-- from genuine revoked completed content. An unfinished lifecycle task or a
+-- pending manifest is not a withdrawn completed answer: no permanent tombstone
+-- may be written for it, so a later lawful final commit stays possible.
+CREATE OR REPLACE FUNCTION invalidate_agent_session_derivatives() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  -- Publishing this exact unfinished sealed task is not a withdrawal. The
+  -- final writer still owns all source/authority fences and terminal CAS.
+  -- An account-wide sweep here would tombstone an unrelated expired answer,
+  -- advance SDK generation, and make this lawful publication reject itself.
+  IF TG_TABLE_NAME='context_manifests' THEN
+    IF OLD.status='pending' AND NEW.status='active'
+      AND (to_jsonb(NEW)-'status') IS NOT DISTINCT FROM (to_jsonb(OLD)-'status')
+      AND legacy_chat_manifest_seal_valid(NEW.source_selection)
+      AND EXISTS (SELECT 1 FROM legacy_chat_task_attempts a JOIN legacy_chat_task_intents i
+        ON i.account_id=a.account_id AND i.id=a.intent_id AND i.actor_user_id=a.actor_user_id
+        WHERE a.account_id=NEW.account_id AND a.id=NEW.lifecycle_attempt_id AND i.id=NEW.lifecycle_intent_id
+          AND a.actor_user_id=NEW.lifecycle_actor_user_id AND a.task_id=NEW.task_id AND i.task_id=a.task_id
+          AND i.manifest_id=NEW.id AND i.current_attempt_id=a.id
+          AND a.fencing_generation=NEW.lifecycle_fencing_generation AND i.fencing_generation=a.fencing_generation
+          AND i.operation_scope='create_chat_task' AND a.state IN ('admitted','running') AND i.state IN ('admitted','running')
+          AND legacy_chat_original_authority_valid(a.original_authority) AND a.original_authority->>'kind'='ordinary') THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+  IF TG_TABLE_NAME='evidence_fragments' AND (
+    to_jsonb(NEW)->'text_content' IS DISTINCT FROM to_jsonb(OLD)->'text_content'
+    OR to_jsonb(NEW)->'attributed_actor' IS DISTINCT FROM to_jsonb(OLD)->'attributed_actor') THEN
+    INSERT INTO agent_session_retracted_tasks(account_id,task_id)
+      SELECT m.account_id,m.task_id::text FROM context_manifests m
+      JOIN context_manifest_evidence me ON me.account_id=m.account_id AND me.manifest_id=m.id
+      WHERE me.account_id=NEW.account_id AND me.evidence_fragment_id=(to_jsonb(NEW)->>'id')::uuid
+        AND m.status<>'pending'
+        AND (NOT EXISTS (SELECT 1 FROM legacy_chat_task_attempts a
+              WHERE a.account_id=m.account_id AND a.task_id::text=m.task_id::text)
+          OR EXISTS (SELECT 1 FROM legacy_chat_task_attempts completed
+            JOIN legacy_chat_task_intents intent ON intent.account_id=completed.account_id AND intent.id=completed.intent_id
+            WHERE completed.account_id=m.account_id AND completed.task_id=m.task_id
+              AND completed.state='completed' AND intent.state='completed'))
+      ON CONFLICT DO NOTHING;
+  END IF;
+  -- Completion is historical metadata, not current source availability. A
+  -- source withdrawal makes the public gate false before this trigger runs;
+  -- genuinely completed answers still require permanent retraction markers.
+  -- Revoke even tasks not yet uploaded by a temporarily offline device.
+  INSERT INTO agent_session_retracted_tasks(account_id,task_id)
+    SELECT m.account_id,m.task_id::text FROM context_manifests m
+    WHERE m.account_id=NEW.account_id AND m.status<>'pending'
+      AND (NOT EXISTS (SELECT 1 FROM legacy_chat_task_attempts a
+            WHERE a.account_id=m.account_id AND a.task_id::text=m.task_id::text)
+        OR EXISTS (SELECT 1 FROM legacy_chat_task_attempts completed
+            JOIN legacy_chat_task_intents intent ON intent.account_id=completed.account_id AND intent.id=completed.intent_id
+            WHERE completed.account_id=m.account_id AND completed.task_id=m.task_id
+              AND completed.state='completed' AND intent.state='completed'))
+      AND NOT agent_session_task_available(m.account_id,m.task_id::text,m.subject_id::text,m.assignment_id::text)
+    ON CONFLICT DO NOTHING;
+  PERFORM retract_agent_session_tasks(account_id,payload) FROM agent_sessions
+    WHERE account_id=NEW.account_id AND deleted_at IS NULL;
+  UPDATE agent_sessions SET payload=redact_agent_session_payload(NEW.account_id,payload),revision=revision+1,updated_at=now()
+  WHERE account_id=NEW.account_id AND deleted_at IS NULL
+    AND payload IS DISTINCT FROM redact_agent_session_payload(NEW.account_id,payload);
+  RETURN NEW;
+END;
+$$;

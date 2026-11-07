@@ -1,0 +1,115 @@
+/**
+ * One-JSON-document stdout envelope with secret redaction.
+ *
+ * The redactor scrubs bearer material and 43+ character unbroken token-shaped
+ * strings from every rendered value before it can reach stdout, stderr, or
+ * error messages. Secrets must also never arrive here in the first place:
+ * request bodies keep tokens out of logs and errors by construction.
+ */
+import { CAPIR_SCHEMA_VERSION } from "@talent-signal/contracts";
+
+// 64-character pure hex strings are public scenario digests, not secrets.
+const TOKEN_LIKE = /\b(?![a-f0-9]{64}\b)[A-Za-z0-9._~-]{43,128}\b/g;
+const BEARER_LIKE = /\bBearer\s+[^\s"']+/gi;
+const AUTH_HEADER_LIKE = /("?authorization"?\s*[:=]\s*"?)[^",\s]+/gi;
+
+export function redactText(value: string): string {
+  return value
+    .replace(BEARER_LIKE, "Bearer [REDACTED]")
+    .replace(AUTH_HEADER_LIKE, "$1[REDACTED]")
+    .replace(TOKEN_LIKE, "[REDACTED]");
+}
+
+export function redactValue(value: unknown): unknown {
+  if (typeof value === "string") return redactText(value);
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      if (/(token|secret|password|code_verifier)s?$/i.test(key)) {
+        out[key] = typeof entry === "string" ? "[REDACTED]" : entry === null ? null : "[REDACTED]";
+        continue;
+      }
+      out[key] = redactValue(entry);
+    }
+    return out;
+  }
+  return value;
+}
+
+export interface SuccessEnvelope {
+  schema_version: typeof CAPIR_SCHEMA_VERSION;
+  ok: true;
+  command: string;
+  [key: string]: unknown;
+}
+
+export interface FailureEnvelope {
+  schema_version: typeof CAPIR_SCHEMA_VERSION;
+  ok: false;
+  command: string;
+  error: {
+    code: string;
+    message: string;
+    recoverable_request_id?: string;
+  };
+  run?: unknown;
+  browser?: unknown;
+  client_state?: unknown;
+}
+
+export function successEnvelope(
+  command: string,
+  payload: Record<string, unknown> = {},
+): SuccessEnvelope {
+  return {
+    schema_version: CAPIR_SCHEMA_VERSION,
+    ok: true,
+    command,
+    ...((redactValue(payload) as Record<string, unknown>) ?? {}),
+  };
+}
+
+export function failureEnvelope(
+  command: string,
+  error: {
+    code: string;
+    message: string;
+    recoverableRequestId?: string;
+    run?: unknown;
+    browser?: unknown;
+    clientState?: unknown;
+  },
+): FailureEnvelope {
+  const envelope: FailureEnvelope = {
+    schema_version: CAPIR_SCHEMA_VERSION,
+    ok: false,
+    command,
+    error: {
+      code: error.code,
+      message: redactText(error.message),
+    },
+  };
+  if (error.recoverableRequestId)
+    envelope.error.recoverable_request_id = error.recoverableRequestId;
+  if (error.run !== undefined) envelope.run = redactValue(error.run);
+  if (error.browser !== undefined) envelope.browser = redactValue(error.browser);
+  if (error.clientState !== undefined)
+    envelope.client_state = redactValue(error.clientState);
+  return envelope;
+}
+
+export function renderHuman(envelope: SuccessEnvelope | FailureEnvelope): string {
+  if (!envelope.ok) {
+    const lines = [`error ${envelope.error.code}: ${envelope.error.message}`];
+    if (envelope.error.recoverable_request_id)
+      lines.push(`recoverable request id: ${envelope.error.recoverable_request_id}`);
+    return lines.join("\n");
+  }
+  const lines: string[] = [`ok ${envelope.command}`];
+  for (const [key, value] of Object.entries(envelope)) {
+    if (key === "schema_version" || key === "ok" || key === "command") continue;
+    lines.push(`${key}: ${JSON.stringify(value)}`);
+  }
+  return lines.join("\n");
+}

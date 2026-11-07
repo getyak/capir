@@ -1,0 +1,57 @@
+import type { AgentBudget, AgentProviderResult } from "./types.js";
+
+const tokenCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+/** Numeric accounting only; never retain source content or provider error bodies. */
+export class ProviderUsageLedger {
+  private input = 0;
+  private output = 0;
+  private cost = 0;
+  private inputKnown = true;
+  private outputKnown = true;
+  private costKnown = true;
+
+  constructor(private readonly estimateCost?: (input: number, output: number) => number) {}
+
+  record(value: unknown) {
+    const usage = value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : {};
+    if (tokenCount(usage.prompt_tokens)) this.input += usage.prompt_tokens;
+    else this.inputKnown = false;
+    if (tokenCount(usage.completion_tokens)) this.output += usage.completion_tokens;
+    else this.outputKnown = false;
+    if (!this.estimateCost) {
+      const raw = usage.cost;
+      const parsed = typeof raw === "number" || (typeof raw === "string" && raw.trim()) ? Number(raw) : NaN;
+      if (Number.isFinite(parsed) && parsed >= 0) this.cost += parsed;
+      else this.costKnown = false;
+    }
+  }
+
+  result(): Pick<AgentProviderResult, "inputTokens" | "outputTokens" | "estimatedUsd" | "reportedUsage"> {
+    const knownTokens = this.inputKnown && this.outputKnown;
+    const estimatedUsd = this.estimateCost ? this.estimateCost(this.input, this.output) : this.cost;
+    return { inputTokens: this.input, outputTokens: this.output, estimatedUsd,
+      reportedUsage: { inputTokens: this.inputKnown ? this.input : null,
+        outputTokens: this.outputKnown ? this.output : null,
+        estimatedUsd: (this.estimateCost ? knownTokens : this.costKnown) ? estimatedUsd : null } };
+  }
+
+  /** Whole-task ceilings are checked AFTER reported usage, not mapped to
+   * model output capacity. Equal allowance permits a final answer, not tools.
+   * A received response can overshoot; this is not a strict billing cap. */
+  boundary(budget: AgentBudget, hasTools: boolean): "budget_exhausted" | "provider_usage_unavailable" | undefined {
+    const usage = this.result().reportedUsage!;
+    if (budget.maxTaskTokens !== undefined) {
+      if (usage.inputTokens === null || usage.outputTokens === null) return "provider_usage_unavailable";
+      const total = usage.inputTokens + usage.outputTokens;
+      if (total > budget.maxTaskTokens || (hasTools && total === budget.maxTaskTokens)) return "budget_exhausted";
+    }
+    if (budget.maxEstimatedUsd !== undefined) {
+      if (usage.estimatedUsd === null) return "provider_usage_unavailable";
+      if (usage.estimatedUsd > budget.maxEstimatedUsd || (hasTools && usage.estimatedUsd === budget.maxEstimatedUsd)) return "budget_exhausted";
+    }
+    return undefined;
+  }
+}

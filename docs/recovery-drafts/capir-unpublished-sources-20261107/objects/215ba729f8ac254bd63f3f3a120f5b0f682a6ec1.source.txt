@@ -1,0 +1,288 @@
+import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { Pool } from "pg";
+import { RuntimeObservationOutbox, RuntimeObservationSession, RuntimeObserver, captureProductStep,
+  type RuntimeObservationContext, type RuntimeObservationPolicy } from "@talent-signal/agent";
+import { buildApp } from "../app.js";
+import { compileRelationshipWiki } from "./wiki.js";
+import type { AuthContext } from "./auth.js";
+import type { RemoteChatAnswerProviding, RemoteChatAnswerResult } from "./chatAnswerProvider.js";
+import { runtimeObservationSourceState, runtimeObservationSourcesAvailable, sweepRuntimeObservationSources } from "./runtimeObservationLifecycle.js";
+import { cleanupProductRunSources } from "./productRunStorage.js";
+import { pendingLifecycleRunForAttempt } from "./legacyChatLifecycle.js";
+
+const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) throw new Error("Use the disposable loopback proof database.");
+const pool = database ? new Pool({ connectionString: database, max: 4, idleTimeoutMillis: 0 }) : null;
+afterAll(async () => { await pool?.end(); });
+
+async function fixture() {
+  const accountId = randomUUID(), userId = randomUUID(), person = randomUUID(), context = randomUUID();
+  const accountSlug = `m3-${randomUUID()}`, userEmail = `${randomUUID()}@synthetic.invalid`;
+  const auth: AuthContext = { accountId, accountSlug, userId, userEmail, userKind: "simulated_human", sessionId: randomUUID() };
+  await pool!.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic observation')", [accountId, accountSlug]);
+  await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic owner','simulated_human')", [userId,accountId,userEmail]);
+  await pool!.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'synthetic',now()+interval '2 hours')", [auth.sessionId,accountId,userId,randomUUID()]);
+  await pool!.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Synthetic Person')", [person,accountId]);
+  await pool!.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label) VALUES($1::uuid,$2,$3,$1::text,'Synthetic Context')", [context,accountId,person]);
+  const capture = randomUUID(), resource = randomUUID(), fragment = randomUUID();
+  await pool!.query(`INSERT INTO captures(id,account_id,created_by_user_id,subject_id,assignment_id,source_kind,source_metadata,identity_status,identity_context,purpose)
+    VALUES($1,$2,$3,$4,$5,'conversation_transcript','{}','bound','{}','Synthetic observation proof')`,[capture,accountId,userId,person,context]);
+  await pool!.query(`INSERT INTO source_resources(id,account_id,capture_id,created_by_user_id,client_resource_id,resource_kind,input_channel,display_name,media_type,observed_at,retention_scope,processing_state)
+    VALUES($1::uuid,$2,$3,$4,$1::text,'conversation_transcript','chat','Synthetic source','text/plain',now(),'reviewed_selected_text','ready')`,[resource,accountId,capture,userId]);
+  await pool!.query(`INSERT INTO source_retention_receipts(receipt_id,account_id,capture_id,policy_version,requested_mode,effective_mode,source_scope,source_access_state,source_access_reason,created_at,updated_at)
+    VALUES($1,$2,$3,'source-retention.v2','ephemeral','ephemeral','reviewed_selected_text','available','awaiting_review_completion',now(),now())`,[randomUUID(),accountId,capture]);
+  await pool!.query(`INSERT INTO evidence_fragments(id,account_id,capture_id,resource_id,fragment_kind,sequence,text_content,content_hash,locator,attributed_actor,attribution_status,parser_name,parser_version,review_status)
+    VALUES($1,$2,$3,$4,'message',0,'Synthetic source: two preparation hours and five discussion hours.',repeat('a',64),'{"kind":"message","source_message_id":"synthetic-work-log","sequence":0,"speaker_side":"right"}','recruiter','confirmed','fixture','1','reviewed')`,[fragment,accountId,capture,resource]);
+  await compileRelationshipWiki(pool!,auth,person,context,{idempotency_key:randomUUID(),objective:"Compile synthetic observation evidence"});
+  return {auth,person,context,capture,fragment};
+}
+const answer: RemoteChatAnswerResult = { kind:"answer",title:"Synthetic",body:"Synthetic model operation completed.",citation_ids:[],
+  provider_id:"zhipu-chat-completions",model:"synthetic",provider_request_id:null,input_tokens:3,output_tokens:5 };
+
+describe.skipIf(!pool)("legacy Chat observation publication", () => {
+  it.each(["private-queue", "monitor-placeholder", "selected-loss", "captured-cutoff", "sibling-withdrawal", "completed-retraction"] as const)("M3 preserves an actual unfinished relationship %s until publication", async mode => {
+    const f = await fixture();
+    const root = await mkdtemp(join(tmpdir(), "legacy-chat-m3-observation-"));
+    const policy: RuntimeObservationPolicy = {version:"private_full_content.v1",mode:"private_full_content",endpoint:"http://localhost:5173/api",
+      workspace:"default",project:"m3-synthetic-proof",source_workspace_ids:[f.auth.accountId],authorization_scopes:["relationship_text"],retention_days:1,max_content_bytes:1024*1024};
+    const retain = vi.fn(async () => {}), remove = vi.fn(async () => {});
+    const outbox = new RuntimeObservationOutbox(root,policy,{retain,remove}), observer = new RuntimeObserver(outbox);
+    let observation: RuntimeObservationContext | undefined, session: RuntimeObservationSession | undefined;
+    let release!: () => void; const settle = new Promise<void>(resolve => {release=resolve;});
+    let modelFinished = false;
+    const provider: RemoteChatAnswerProviding = {providerId:"zhipu-chat-completions",model:"synthetic",supportsImageInput:false,
+      answer:async request => {
+        observation=request.observation!;
+        session=new RuntimeObservationSession(policy,observation,{objective:"Synthetic operation input"},outbox);
+        const result=await captureProductStep("m3.synthetic-model","llm",{observation,text:"Synthetic private model input"},
+          () => session!.step("m3.synthetic-model","llm",{text:"Synthetic private model input"},async()=>answer));
+        await session.complete(result,"ok"); modelFinished=true;
+        // The model operation has genuinely finished; the actual adapter return
+        // remains held, so no product completion has been staged or published.
+        await settle; return result;
+      }};
+    let captured=false,renewed=false;
+    const watched = mode!=="captured-cutoff" ? pool! : {query:(sql:string,values?:unknown[])=>pool!.query(sql,values),connect:async()=>{
+      const client=await pool!.connect();return {release:()=>client.release(),query:async(sql:string,values?:unknown[])=>{
+        if(!captured && sql.includes("WITH manifest AS (SELECT * FROM context_manifests") && sql.includes("selected_receipts AS")) {
+          await client.query("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()+interval '8 seconds' WHERE account_id=$1 AND capture_id=$2",[f.auth.accountId,f.capture]);
+          captured=true;
+        }
+        const value=await client.query(sql,values);
+        if(captured && !renewed && sql==="COMMIT") {
+          // Actual Phase A is committed, so capture locks have been released.
+          // Renew before the real host observation context is constructed.
+          renewed=true;await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()+interval '1 hour' WHERE account_id=$1 AND capture_id=$2",[f.auth.accountId,f.capture]);
+        }
+        return value;
+      }};
+    }};
+    let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+    let running: Promise<Awaited<ReturnType<Awaited<ReturnType<typeof buildApp>>["inject"]>>> | undefined;
+    try {
+    app=await buildApp({pool:watched,config:{databaseUrl:database!,host:"127.0.0.1",port:0,allowedOrigins:[],appleSignInAudiences:[],
+      appleSignInEnabled:false,passwordAuthEnabled:false,passwordRegistrationEnabled:false,simulatedAuthEnabled:true,internalLabEnabled:false,
+      retentionSweepIntervalMs:60000,sessionTtlSeconds:3600},remoteChatProvider:provider,personResearchProvider:null} as never);
+      const login=await app.inject({method:"POST",url:"/v1/auth/simulated-login",payload:{account_slug:f.auth.accountSlug,user_email:f.auth.userEmail,client_label:"m3-proof"}});
+      expect(login.statusCode,login.body).toBe(200);
+      const key=randomUUID();
+      running=app.inject({method:"POST",url:"/v1/chat/tasks",headers:{authorization:`Bearer ${login.json().access_token}`},payload:{
+        idempotency_key:key,person_id:f.person,relationship_context_id:f.context,objective:"Explain synthetic preparation and discussion hours."}}).then(r=>r);
+      await vi.waitFor(()=>expect(modelFinished).toBe(true),{timeout:15000});
+      const state=(await pool!.query<{attempt_id:string;task_id:string;manifest_id:string;run_id:string;canonical_retention_expires_at:Date;selected_source_expires_at:Date|null;source_generation:string;input:unknown;output:unknown}>(`
+        SELECT a.id AS attempt_id,a.task_id,i.manifest_id,i.canonical_retention_expires_at,m.selected_source_expires_at,
+          r.id AS run_id,r.source_generation::text,r.input,r.output FROM legacy_chat_task_attempts a
+        JOIN legacy_chat_task_intents i ON i.account_id=a.account_id AND i.id=a.intent_id
+        JOIN context_manifests m ON m.account_id=i.account_id AND m.id=i.manifest_id
+        JOIN product_runs r ON r.account_id=a.account_id AND r.task_id=a.task_id AND r.attempt_id=a.id
+        WHERE a.account_id=$1 AND i.idempotency_key=$2`,[f.auth.accountId,key])).rows[0]!;
+      expect(state).toBeDefined();expect(state.input).toBeNull();expect(state.output).toBeNull();
+      expect(observation!.run_id).toBe(state.task_id);expect(observation!.source_refs?.kind).toBe("product");
+      expect(pendingLifecycleRunForAttempt(state.attempt_id)).not.toBeNull();
+      const span=(await pool!.query<{id:string;span:Record<string,unknown>}>("SELECT id,span FROM product_run_spans WHERE run_id=$1 AND span->>'name'='m3.synthetic-model'",[state.run_id])).rows[0]!;
+      expect(span).toBeDefined();expect(JSON.stringify(span.span)).not.toContain("Synthetic private model input");
+      expect(await runtimeObservationSourceState(pool!,observation!)).toBe("defer_pending");
+      expect(await runtimeObservationSourcesAvailable(pool!,observation!)).toBe(false);
+      const publicState=(await pool!.query("SELECT legacy_chat_task_publicly_available($1,$2) AS task,product_run_source_available($3) AS run",[f.auth.accountId,state.task_id,state.run_id])).rows[0];
+      expect(publicState).toEqual({task:false,run:false});
+      const generation=(await pool!.query("SELECT r.source_generation=g.generation AS matches FROM product_runs r JOIN harness_source_generations g ON g.account_id=r.account_id WHERE r.id=$1",[state.run_id])).rows[0]!.matches;
+      expect(generation).toBe(mode!=="captured-cutoff");
+      // Narrowing/renewing a selected source advanced the generation after
+      // monitor admission. Do not rebind an ordinary stale monitor to rescue it.
+      expect((await pool!.query("SELECT legacy_chat_observation_product_run_state($1,$2) AS state",[state.run_id,state.source_generation])).rows[0]!.state).toBe(mode==="captured-cutoff"?"withdrawn":"defer_pending");
+      expect((await pool!.query("SELECT legacy_chat_observation_product_run_state($1,$2) AS state",[state.run_id,(BigInt(state.source_generation)+1n).toString()])).rows[0]!.state).toBe("withdrawn");
+      expect((await pool!.query("SELECT legacy_chat_observation_task_state($1,$2,$3) AS state",[f.auth.accountId,state.task_id,randomUUID()])).rows[0]!.state).toBe("withdrawn");
+      if(mode==="captured-cutoff") {
+        expect(captured && renewed).toBe(true);expect(state.selected_source_expires_at).not.toBeNull();
+        expect(state.selected_source_expires_at!.valueOf()).toBeLessThan(state.canonical_retention_expires_at.valueOf());
+        expect(observation!.source_refs?.kind==="product" && observation!.source_refs.expires_at).toBe(state.selected_source_expires_at!.toISOString());
+        await outbox.flush();
+        await vi.waitFor(async()=>expect((await outbox.status()).receipts.length).toBe(1));
+        expect((await outbox.status()).receipts[0]!.retention_expires_at).toBe(state.selected_source_expires_at!.toISOString());
+      }
+      if(mode!=="monitor-placeholder") {
+        await sweepRuntimeObservationSources(pool!,observer);
+        await outbox.flush();
+        // The sweep intentionally schedules a background flush. A concurrent
+        // explicit flush can observe its busy lock and return before merge.
+        await vi.waitFor(async()=>expect((await outbox.status()).pending,"a selected live source is unfinished, not withdrawn").toBe(1));
+        const status=await outbox.status();
+        expect(status.deletion_pending+status.deleted).toBe(0);expect(status.receipts[0]!.attempts).toBe(0);
+        expect(retain).not.toHaveBeenCalled();expect(remove).not.toHaveBeenCalled();
+        expect(await readFile(join(root,`${session!.id}.json`),"utf8")).toContain("Synthetic private model input");
+        const restarted=new RuntimeObservationOutbox(root,policy,{retain,remove});
+        const restartedObserver=new RuntimeObserver(restarted);
+        try {await sweepRuntimeObservationSources(pool!,restartedObserver);await restarted.flush();
+          await vi.waitFor(async()=>expect((await restarted.status()).receipts[0]).toMatchObject({trace_id:session!.id,state:"pending",attempts:0}));
+        } finally {restartedObserver.dispose();}
+      } else {
+        // Simulate an older pending diagnostic body, then require the actual
+        // cleaner to preserve only its original safe metadata identity.
+        await pool!.query(`UPDATE product_run_spans SET span=span || '{"input":{"value":"Synthetic pending raw must scrub"},"output":{"value":"Synthetic pending raw must scrub"},"error":"Synthetic pending raw must scrub","metadata":{"input_tokens":3,"private_debug":"Synthetic pending raw must scrub"}}'::jsonb WHERE id=$1`,[span.id]);
+        await cleanupProductRunSources(pool!);
+        const kept=(await pool!.query<{span:unknown}>("SELECT span FROM product_run_spans WHERE id=$1 AND run_id=$2",[span.id,state.run_id])).rows[0];
+        expect(kept,"source-current pending metadata must survive cleanup").toBeDefined();
+        expect(JSON.stringify(kept!.span)).not.toContain("Synthetic private model input");
+        expect(JSON.stringify(kept!.span)).not.toContain("Synthetic pending raw must scrub");
+        expect(kept!.span).toMatchObject({input:{status:"unavailable"},output:{status:"unavailable"},error:"Operation failed",metadata:{input_tokens:3}});
+      }
+      if(mode==="selected-loss" || mode==="captured-cutoff") {
+        if(mode==="selected-loss") {
+          await pool!.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE account_id=$1 AND capture_id=$2",[f.auth.accountId,f.capture]);
+          await pool!.query("UPDATE source_retention_receipts SET authorization_state='authorized' WHERE account_id=$1 AND capture_id=$2",[f.auth.accountId,f.capture]);
+        } else await pool!.query("SELECT pg_sleep(GREATEST(0,EXTRACT(EPOCH FROM($1::timestamptz-clock_timestamp()))+0.05))",[state.selected_source_expires_at]);
+        expect(await runtimeObservationSourceState(pool!,observation!)).toBe("withdrawn");
+        expect(pendingLifecycleRunForAttempt(state.attempt_id),"withdrawal does not settle the held adapter").not.toBeNull();
+        await sweepRuntimeObservationSources(pool!,observer);await outbox.flush();
+        await vi.waitFor(async()=>expect((await outbox.status()).deleted).toBe(1));
+        expect(retain).not.toHaveBeenCalled();expect(remove).toHaveBeenCalledOnce();
+        expect(await readFile(join(root,`${session!.id}.json`),"utf8")).not.toContain("Synthetic private model input");
+        await cleanupProductRunSources(pool!);
+        expect((await pool!.query("SELECT 1 FROM product_run_spans WHERE id=$1",[span.id])).rowCount).toBe(0);
+        release();const unavailable=await running;expect(unavailable.statusCode,unavailable.body).toBe(409);
+        expect(unavailable.json().error.code).toBe("CHAT_COMPLETION_SOURCE_CHANGED");
+        expect(pendingLifecycleRunForAttempt(state.attempt_id)).toBeNull();return;
+      }
+      if(mode==="sibling-withdrawal") {
+        const media=randomUUID();await pool!.query(`INSERT INTO chat_media_assets(id,account_id,subject_id,assignment_id,created_by_user_id,idempotency_key,file_name,media_type,byte_size,storage_provider,object_key,status)
+          VALUES($1,$2,$3,$4,$5,$6,'synthetic.png','image/png',1,'local',$6,'ready')`,[media,f.auth.accountId,f.person,f.context,f.auth.userId,randomUUID()]);
+        if(observation!.source_refs?.kind!=="product") throw new Error("Expected actual product refs");
+        const sibling:RuntimeObservationContext={...observation!,source_product_run_id:state.run_id,source_product_run_generation:state.source_generation,
+          source_refs:{...observation!.source_refs,media_ids:[media]}};
+        expect(await runtimeObservationSourceState(pool!,sibling)).toBe("defer_pending");
+        const child=new RuntimeObservationSession(policy,sibling,{text:"Synthetic declared media sibling"},outbox);await child.complete({text:"Synthetic output"},"ok");
+        await pool!.query("UPDATE chat_media_assets SET status='deleted',deleted_at=clock_timestamp() WHERE account_id=$1 AND id=$2",[f.auth.accountId,media]);
+        expect(await runtimeObservationSourceState(pool!,sibling)).toBe("withdrawn");
+        expect(await runtimeObservationSourceState(pool!,observation!)).toBe("defer_pending");
+        await sweepRuntimeObservationSources(pool!,observer);await outbox.flush();
+        await vi.waitFor(async()=>expect((await outbox.status()).deleted).toBe(1));expect(retain).not.toHaveBeenCalled();
+        release();const independent=await running;expect(independent.statusCode,independent.body).toBe(201);
+        expect(pendingLifecycleRunForAttempt(state.attempt_id)).toBeNull();return;
+      }
+      release(); const result=await running;expect(result.statusCode,result.body).toBe(201);
+      expect(pendingLifecycleRunForAttempt(state.attempt_id)).toBeNull();
+      await sweepRuntimeObservationSources(pool!,observer);await outbox.flush();
+      await vi.waitFor(async()=>expect((await outbox.status()).retained).toBe(1));
+      expect(retain).toHaveBeenCalledOnce();expect(remove).not.toHaveBeenCalled();
+      if(mode==="completed-retraction") {
+        const body={turns:[{response:{taskID:state.task_id}}]};
+        expect((await pool!.query("SELECT 1 FROM agent_session_retracted_tasks WHERE account_id=$1 AND task_id=$2",[f.auth.accountId,state.task_id])).rowCount).toBe(0);
+        await pool!.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE account_id=$1 AND capture_id=$2",[f.auth.accountId,f.capture]);
+        await pool!.query("UPDATE source_retention_receipts SET authorization_state='authorized' WHERE account_id=$1 AND capture_id=$2",[f.auth.accountId,f.capture]);
+        await pool!.query("SELECT retract_agent_session_tasks($1,$2::jsonb)",[f.auth.accountId,JSON.stringify(body)]);
+        expect((await pool!.query("SELECT 1 FROM agent_session_retracted_tasks WHERE account_id=$1 AND task_id=$2",[f.auth.accountId,state.task_id])).rowCount).toBe(1);
+        expect(await runtimeObservationSourceState(pool!,observation!)).toBe("withdrawn");
+        await sweepRuntimeObservationSources(pool!,observer);await outbox.flush();
+        await vi.waitFor(async()=>expect((await outbox.status()).deleted).toBe(1));expect(remove).toHaveBeenCalledOnce();
+      }
+      const clocks=(await pool!.query("SELECT i.canonical_retention_expires_at,m.selected_source_expires_at FROM legacy_chat_task_intents i JOIN context_manifests m ON m.account_id=i.account_id AND m.id=i.manifest_id WHERE i.account_id=$1 AND i.idempotency_key=$2",[f.auth.accountId,key])).rows[0]!;
+      expect(clocks.canonical_retention_expires_at).toEqual(state.canonical_retention_expires_at);expect(clocks.selected_source_expires_at).toEqual(state.selected_source_expires_at);
+    } finally {
+      release();try {await running;} finally {try {await app?.close();} finally {observer.dispose();await rm(root,{recursive:true,force:true});}}
+    }
+  },30000);
+
+  it("M3 keeps actual Session-bound ordinary Unscoped execution compatible",async()=>{
+    const f=await fixture(),entry=vi.fn(async()=>answer);
+    const app=await buildApp({pool:pool!,config:{databaseUrl:database!,host:"127.0.0.1",port:0,allowedOrigins:[],appleSignInAudiences:[],
+      appleSignInEnabled:false,passwordAuthEnabled:false,passwordRegistrationEnabled:false,simulatedAuthEnabled:true,internalLabEnabled:false,
+      retentionSweepIntervalMs:60000,sessionTtlSeconds:3600},remoteChatProvider:{providerId:"zhipu-chat-completions",model:"synthetic",supportsImageInput:false,answer:entry},personResearchProvider:null} as never);
+    try {
+      const login=await app.inject({method:"POST",url:"/v1/auth/simulated-login",payload:{account_slug:f.auth.accountSlug,user_email:f.auth.userEmail,client_label:"m3-unscoped-proof"}});
+      expect(login.statusCode,login.body).toBe(200);const headers={authorization:`Bearer ${login.json().access_token}`};
+      const sessionID=randomUUID();const saved=await app.inject({method:"PUT",url:`/v1/agent-sessions/${sessionID}`,headers,payload:{
+        idempotency_key:randomUUID(),expected_revision:0,payload:{id:sessionID,scopeKind:"unresolved_intent",personDisplayLabel:"New session",
+          contextDisplayLabel:"Conversation",title:"Synthetic Unscoped compatibility",updatedAt:new Date().toISOString(),isUnread:false,turns:[]}}});
+      expect(saved.statusCode,saved.body).toBe(200);
+      const result=await app.inject({method:"POST",url:"/v1/chat/unscoped-tasks",headers,payload:{idempotency_key:randomUUID(),objective:"Explain the synthetic next step",session_id:sessionID}});
+      expect(result.statusCode,result.body).toBe(201);expect(entry).toHaveBeenCalledOnce();
+      expect((await pool!.query("SELECT legacy_chat_observation_task_state($1,$2) AS state",[f.auth.accountId,result.json().task_id])).rows[0]!.state).toBe("current");
+      const regression=randomUUID();await pool!.query(`INSERT INTO lab_regressions(id,account_id,user_id,request_hash,content_hash,snapshot)
+        VALUES($1,$2,$3,$4,$4,'{"data_class":"registered_synthetic"}')`,[regression,f.auth.accountId,f.auth.userId,`synthetic-${regression}`]);
+      const linked:RuntimeObservationContext={run_id:randomUUID(),workspace_id:f.auth.accountId,authorization_scope:"relationship_text",
+        source_regression_id:regression,source_session_id:sessionID,source_refs:{kind:"synthetic"}};
+      expect(await runtimeObservationSourceState(pool!,linked)).toBe("current");
+      const revision=(await pool!.query("SELECT revision FROM agent_sessions WHERE account_id=$1 AND id=$2",[f.auth.accountId,sessionID])).rows[0]!.revision;
+      const deleted=await app.inject({method:"DELETE",url:`/v1/agent-sessions/${sessionID}`,headers,payload:{idempotency_key:randomUUID(),expected_revision:revision}});
+      expect(deleted.statusCode,deleted.body).toBe(200);
+      expect(await runtimeObservationSourceState(pool!,linked)).toBe("withdrawn");
+    } finally {await app.close();}
+  },30000);
+
+  it("M3 denies actual known-new relationship pointer loss before provider or fallback",async()=>{
+    const f=await fixture(),entry=vi.fn(async()=>answer);let changed=false;
+    const watched={connect:()=>pool!.connect(),query:async(sql:string,values?:unknown[])=>{
+      if(!changed && sql.includes(" AS known,") && sql.includes("canonical_retention_expires_at AS canonical")) {
+        changed=true;await pool!.query("UPDATE legacy_chat_task_intents SET manifest_id=NULL WHERE account_id=$1 AND operation_scope='create_chat_task'",[f.auth.accountId]);
+      }
+      return pool!.query(sql,values);
+    }};
+    const app=await buildApp({pool:watched,config:{databaseUrl:database!,host:"127.0.0.1",port:0,allowedOrigins:[],appleSignInAudiences:[],
+      appleSignInEnabled:false,passwordAuthEnabled:false,passwordRegistrationEnabled:false,simulatedAuthEnabled:true,internalLabEnabled:false,
+      retentionSweepIntervalMs:60000,sessionTtlSeconds:3600},remoteChatProvider:{providerId:"zhipu-chat-completions",model:"synthetic",supportsImageInput:false,answer:entry},personResearchProvider:null} as never);
+    try {
+      const login=await app.inject({method:"POST",url:"/v1/auth/simulated-login",payload:{account_slug:f.auth.accountSlug,user_email:f.auth.userEmail,client_label:"m3-malformed-proof"}});
+      expect(login.statusCode,login.body).toBe(200);const key=randomUUID();
+      const result=await app.inject({method:"POST",url:"/v1/chat/tasks",headers:{authorization:`Bearer ${login.json().access_token}`},payload:{idempotency_key:key,
+        person_id:f.person,relationship_context_id:f.context,objective:"Explain the synthetic evidence"}});
+      expect(changed).toBe(true);expect(result.statusCode,result.body).toBe(409);expect(result.json().error.code).toBe("CHAT_COMPLETION_SOURCE_CHANGED");
+      expect(entry).not.toHaveBeenCalled();expect((await pool!.query("SELECT 1 FROM idempotency_records WHERE account_id=$1 AND operation_scope='create_chat_task' AND idempotency_key=$2 AND response_body IS NOT NULL",[f.auth.accountId,key])).rowCount).toBe(0);
+    } finally {await app.close();}
+  },30000);
+
+  it("M3 binds the actual earlier parent to a pending child without a raw monitor body",async()=>{
+    const f=await fixture();let hold=false,observation:RuntimeObservationContext|undefined;
+    let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+    const provider:RemoteChatAnswerProviding={providerId:"zhipu-chat-completions",model:"synthetic",supportsImageInput:false,answer:async request=>{
+      if(hold){observation=request.observation;await gate;}return answer;
+    }};
+    const app=await buildApp({pool:pool!,config:{databaseUrl:database!,host:"127.0.0.1",port:0,allowedOrigins:[],appleSignInAudiences:[],
+      appleSignInEnabled:false,passwordAuthEnabled:false,passwordRegistrationEnabled:false,simulatedAuthEnabled:true,internalLabEnabled:false,
+      retentionSweepIntervalMs:60000,sessionTtlSeconds:3600},remoteChatProvider:provider,personResearchProvider:null} as never);
+    let running:Promise<Awaited<ReturnType<typeof app.inject>>>|undefined;
+    try {
+      const login=await app.inject({method:"POST",url:"/v1/auth/simulated-login",payload:{account_slug:f.auth.accountSlug,user_email:f.auth.userEmail,client_label:"m3-parent-proof"}});
+      expect(login.statusCode,login.body).toBe(200);const headers={authorization:`Bearer ${login.json().access_token}`};
+      const first=await app.inject({method:"POST",url:"/v1/chat/tasks",headers,payload:{idempotency_key:randomUUID(),person_id:f.person,relationship_context_id:f.context,objective:"Explain synthetic source"}});
+      expect(first.statusCode,first.body).toBe(201);
+      const parent=(await pool!.query("SELECT id FROM product_runs WHERE account_id=$1 AND task_id=$2 AND product_run_source_available(id)",[f.auth.accountId,first.json().task_id])).rows[0]!;
+      expect(parent).toBeDefined();hold=true;const key=randomUUID();
+      running=app.inject({method:"POST",url:"/v1/chat/tasks",headers,payload:{idempotency_key:key,person_id:f.person,relationship_context_id:f.context,
+        previous_task_id:first.json().task_id,objective:"Continue from the actual earlier answer"}}).then(r=>r);
+      await vi.waitFor(()=>expect(observation).toBeDefined(),{timeout:15000});
+      const child=(await pool!.query("SELECT a.id,a.observation_parent_run_id,r.id AS run_id,r.input,r.source_generation::text FROM legacy_chat_task_attempts a JOIN legacy_chat_task_intents i ON i.account_id=a.account_id AND i.id=a.intent_id JOIN product_runs r ON r.account_id=a.account_id AND r.task_id=a.task_id AND r.attempt_id=a.id WHERE a.account_id=$1 AND i.idempotency_key=$2",[f.auth.accountId,key])).rows[0]!;
+      expect(child.observation_parent_run_id).toBe(parent.id);expect(child.input).toBeNull();expect(pendingLifecycleRunForAttempt(child.id)).not.toBeNull();
+      expect(await runtimeObservationSourceState(pool!,observation!)).toBe("defer_pending");
+      await expect(pool!.query("UPDATE legacy_chat_task_attempts SET observation_parent_run_id=NULL WHERE id=$1",[child.id])).rejects.toMatchObject({code:"23514",message:"LEGACY_CHAT_ATTEMPT_IDENTITY_IMMUTABLE"});
+      await pool!.query("UPDATE product_runs SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[parent.id]);
+      expect(await runtimeObservationSourceState(pool!,observation!)).toBe("withdrawn");
+      expect((await pool!.query("SELECT legacy_chat_observation_product_run_state($1,$2) AS state",[child.run_id,child.source_generation])).rows[0]!.state).toBe("withdrawn");
+      expect(pendingLifecycleRunForAttempt(child.id)).not.toBeNull();release();const denied=await running;expect(denied.statusCode,denied.body).toBe(409);
+      expect(denied.json().error.code).toBe("PREVIOUS_ANSWER_UNAVAILABLE");expect(pendingLifecycleRunForAttempt(child.id)).toBeNull();
+    } finally {release();try {await running;} finally {await app.close();}}
+  },30000);
+});

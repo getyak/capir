@@ -1,0 +1,12 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { parseArgs, validateRequestShape } from "../dist/args.js";
+
+test("chosen test password accepts six/seven without composition requirements", () => {
+  for (const password of ["simple", "123456", "      ", "密码测试专用", "seven77"]) {
+    const args = parseArgs(["test", "create", "--env", "staging", "--password", password]);
+    validateRequestShape(args);
+    assert.equal(args.password, password);
+  }
+  assert.throws(() => validateRequestShape(parseArgs(["test", "create", "--env", "staging", "--password", "short"])));
+});

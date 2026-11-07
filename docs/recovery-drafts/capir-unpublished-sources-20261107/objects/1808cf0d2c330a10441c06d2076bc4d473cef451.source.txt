@@ -1,0 +1,171 @@
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
+import { fetchBrowserResource } from "./safeWebFetch.js";
+import { withAbort } from "./abortable.js";
+import { browserContainerLabels, removeBrowserContainer, sweepAbandonedBrowserContainers } from "./browserContainerCleanup.js";
+
+let active = 0, healthy = true;
+export function browserRuntimeIsHealthy(): boolean { return healthy; }
+export interface PublicBrowserObservation {
+  url: string; title: string; text: string; engine: "chromium";
+  engineVersion: string; requests: number; blockedRequests: number;
+  httpRequests: number; responseBytes: number;
+}
+type ResourceFetcher = typeof fetchBrowserResource;
+export interface BrowserLifecycleEvent { phase: string; elapsedMs: number; workerElapsedMs?: number; }
+const navigationKey = (raw: string): string | null => {
+  try { const url = new URL(raw); url.hash = ""; return url.href; } catch { return null; }
+};
+
+/** Each call starts an immutable, uncredentialed, network-none container. Only
+ * this broker may make public GETs; the worker never sees the Docker socket. */
+export async function browseDiscoveredPublicPage(url: string, signal: AbortSignal,
+  environment: NodeJS.ProcessEnv = process.env,
+  fetchResource: ResourceFetcher = fetchBrowserResource,
+  onLifecycle?: (event: BrowserLifecycleEvent) => void | Promise<void>,
+): Promise<PublicBrowserObservation> {
+  const started = performance.now();
+  const trace = (phase: string, workerElapsedMs?: number) => {
+    try { void Promise.resolve(onLifecycle?.({ phase, elapsedMs: Math.round(performance.now() - started),
+      ...(workerElapsedMs === undefined ? {} : { workerElapsedMs }) })).catch(() => {}); } catch { /* Diagnostics cannot change execution. */ }
+  };
+  const image = environment.TALENT_SIGNAL_BROWSER_IMAGE;
+  if (!image || !/^sha256:[a-f0-9]{64}$/u.test(image)) throw new Error("BROWSER_IMAGE_NOT_CONFIGURED");
+  if (!healthy || active >= 2) throw new Error("BROWSER_CAPACITY_UNAVAILABLE");
+  const initial = new URL(url);
+  if (initial.protocol !== "https:" || initial.username || initial.password || initial.port || url.length > 2_000) throw new Error("BROWSER_SOURCE_INVALID");
+  signal.throwIfAborted();
+  const name = `talent-signal-browser-${randomUUID()}`;
+  // These variables configure the trusted Docker client only. None is passed
+  // through `docker run --env`, and the container has no host mounts.
+  const env = Object.fromEntries(["PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG"]
+    .flatMap(key => environment[key] ? [[key, environment[key]!]] : []));
+  trace("startup_started");
+  await sweepAbandonedBrowserContainers(env);
+  trace("startup_completed");
+  signal.throwIfAborted();
+  if (!healthy || active >= 2) throw new Error("BROWSER_CAPACITY_UNAVAILABLE");
+  active++;
+  const controller = new AbortController();
+  const execution = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(30_000)]);
+  const child = spawn("docker", ["run", "--rm", "-i", "--name", name, ...browserContainerLabels, "--pull=never",
+    "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+    "--pids-limit=256", "--memory=768m", "--memory-swap=768m", "--cpus=2",
+    "--shm-size=128m", "--tmpfs=/tmp:rw,nosuid,nodev,size=256m", image],
+  { env, stdio: ["pipe", "pipe", "pipe"] });
+  trace("container_spawned");
+  let totalBytes = 0, resourceBytes = 0, stderrBytes = 0, requests = 0, blockedRequests = 0;
+  let buffer = "", result: PublicBrowserObservation | undefined, failure: Error | undefined;
+  const decoder = new StringDecoder("utf8");
+  const ids = new Set<number>();
+  const phases = new Set<string>();
+  const documents = new Set<string>([navigationKey(initial.href)!]);
+  const jobs = new Set<Promise<void>>();
+  const networkBudget = { requests: 0, bytes: 0 };
+  const fail = (error: Error) => { failure ??= error; controller.abort(error); };
+  child.stdin.on("error", () => fail(new Error("BROWSER_PIPE_CLOSED")));
+  const send = (message: unknown) => { if (!execution.aborted && !child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.write(JSON.stringify(message) + "\n"); };
+  const stop = () => { child.kill("SIGKILL"); };
+  execution.addEventListener("abort", stop, { once: true });
+  try {
+    const closed = new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject); child.once("close", resolve);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 32_000) fail(new Error("BROWSER_DIAGNOSTIC_LIMIT"));
+    });
+    child.stdout.on("data", (chunk: Buffer) => {
+      totalBytes += chunk.length;
+      if (totalBytes > 300_000) { fail(new Error("BROWSER_OUTPUT_LIMIT")); return; }
+      buffer += decoder.write(chunk);
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 1);
+        let message: Record<string, unknown>;
+        try { message = JSON.parse(line); } catch { fail(new Error("BROWSER_PROTOCOL_INVALID")); return; }
+        if (!message || typeof message !== "object" || Array.isArray(message)) { fail(new Error("BROWSER_PROTOCOL_INVALID")); return; }
+        if (message.kind === "phase") {
+          if (typeof message.phase !== "string" || !["launch_started", "launch_completed", "navigation_started", "snapshot_completed", "close_started", "close_completed", "close_failed"].includes(message.phase)
+            || phases.has(message.phase) || !Number.isInteger(message.elapsedMs) || Number(message.elapsedMs) < 0 || Number(message.elapsedMs) > 60_000) {
+            fail(new Error("BROWSER_PROTOCOL_INVALID")); return;
+          }
+          phases.add(message.phase); trace(`worker_${message.phase}`, Number(message.elapsedMs));
+        } else if (message.kind === "request") {
+          if (!Number.isInteger(message.id) || Number(message.id) < 1 || Number(message.id) > 40
+            || typeof message.navigation !== "boolean" || typeof message.mainFrame !== "boolean"
+            || ids.has(message.id as number) || ++requests > 40) { fail(new Error("BROWSER_REQUEST_LIMIT")); return; }
+          ids.add(message.id as number);
+          if (jobs.size >= 6) {
+            blockedRequests++; send({ kind: "resource", id: message.id, ok: false }); continue;
+          }
+          const job = (async () => {
+            try {
+              if (message.method !== "GET" || typeof message.url !== "string") throw new Error("BROWSER_REQUEST_DENIED");
+              const target = new URL(message.url);
+              if (target.origin !== initial.origin || (message.navigation && (!message.mainFrame || !documents.has(navigationKey(target.href)!)))) throw new Error("BROWSER_NAVIGATION_DENIED");
+              const response = await withAbort(execution, () => fetchResource(target.href, initial.origin, execution, { budget: networkBudget }));
+              resourceBytes += response.body.length;
+              if (resourceBytes > 8_000_000) { fail(new Error("BROWSER_RESOURCE_LIMIT")); return; }
+              if (response.headers.location && message.navigation) {
+                const key = navigationKey(response.headers.location);
+                if (!key) throw new Error("BROWSER_REDIRECT_INVALID");
+                documents.add(key);
+              }
+              send({ kind: "resource", id: message.id, ok: true, status: response.status,
+                headers: response.headers, body: response.body.toString("base64") });
+            } catch (error) {
+              if (error instanceof Error && /^BROWSER_(?:HTTP_LIMIT|RESPONSE_BYTE_LIMIT)$/u.test(error.message)) { fail(error); return; }
+              blockedRequests++;
+              send({ kind: "resource", id: message.id, ok: false });
+            }
+          })();
+          jobs.add(job); void job.finally(() => jobs.delete(job));
+        } else if (message.kind === "blocked" && ["websocket", "resource_redirect"].includes(String(message.channel))) {
+          if (++blockedRequests > 40) { fail(new Error("BROWSER_REQUEST_LIMIT")); return; }
+        } else if (message.kind === "result") {
+          if (result || message.engine !== "chromium" || typeof message.engineVersion !== "string" || !message.engineVersion || message.engineVersion.length > 100
+            || typeof message.url !== "string" || message.url.length > 2_000 || !documents.has(navigationKey(message.url) ?? "") || typeof message.title !== "string" || message.title.length > 500
+            || typeof message.text !== "string" || !message.text.trim()
+            || message.requests !== requests || requests < 1) { fail(new Error("BROWSER_RESULT_INVALID")); return; }
+          result = { url: message.url, title: message.title, text: message.text, engine: "chromium",
+            engineVersion: message.engineVersion, requests, blockedRequests,
+            httpRequests: networkBudget.requests, responseBytes: networkBudget.bytes };
+          child.stdin.end();
+        } else if (message.kind === "failure") {
+          const phase = ["launch", "navigation", "render"].includes(String(message.phase)) ? String(message.phase).toUpperCase() : "EXECUTION";
+          failure = new Error(message.code === "BROWSER_REQUEST_LIMIT" ? message.code : `BROWSER_${phase}_FAILED`,
+            { cause: typeof message.diagnostic === "string" ? message.diagnostic.slice(0, 1_000) : undefined });
+          child.stdin.end();
+        } else { fail(new Error("BROWSER_PROTOCOL_INVALID")); return; }
+      }
+    });
+    send({ kind: "navigate", url: initial.href });
+    const code = await closed;
+    trace("cli_closed");
+    if (failure) throw failure;
+    execution.throwIfAborted();
+    if (code !== 0 || !result || buffer.trim()) throw new Error("BROWSER_EXECUTION_FAILED");
+  } finally {
+    controller.abort(); execution.removeEventListener("abort", stop);
+    // Verify normal --rm completion and remove an orphan if the CLI died.
+    // A daemon outage fails future admission closed until the service restarts.
+    try {
+      trace("cleanup_started");
+      await removeBrowserContainer(name, env);
+      trace("cleanup_completed");
+    } catch {
+      healthy = false;
+      active--;
+      throw new Error("BROWSER_CLEANUP_UNVERIFIED", { cause: failure ?? execution.reason });
+    }
+    await Promise.allSettled(jobs);
+    active--;
+  }
+  if (failure) throw failure;
+  signal.throwIfAborted();
+  if (!result || networkBudget.bytes > 8_000_000) throw new Error("BROWSER_RESULT_INVALID");
+  return { ...result, requests, blockedRequests,
+    httpRequests: networkBudget.requests, responseBytes: networkBudget.bytes };
+}

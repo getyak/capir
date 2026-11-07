@@ -1,0 +1,469 @@
+import Foundation
+
+/// Restricted JSON-pointer delta semantics shared with the backend and the
+/// TypeScript planner (`agentSessionDelta.ts`). Only the mutable Session
+/// surface is reachable — new turns, retained metadata elements, drafts,
+/// feedback and pending execution metadata — and every value must stay plain
+/// JSON without prototype keys or fabricated execution authority.
+enum AgentSessionDeltaOperationsError: Error, Equatable {
+    case invalidPath
+    case invalidIndex
+    case absentParent
+    case prototypeKey
+    case unsupportedPath
+    case invalidValue
+    case unexpressibleChange
+    case frameUnpackable
+}
+
+enum AgentSessionDeltaOperations {
+    typealias Operation = [String: Any]
+
+    private static let forbiddenSegments: Set<String> = ["__proto__", "constructor", "prototype"]
+    private static let settableFields: Set<String> = [
+        "personDisplayLabel", "contextDisplayLabel", "title", "contextWasTrimmed",
+        "isUnread", "updatedAt", "composerDraft", "composerDraftUpdatedAt",
+        "contactProposal",
+        "pendingUnscopedChatIdempotencyKey", "pendingPersonResearchIdempotencyKey",
+        "pendingPersonResearchRequestIdentity", "pendingScopedAskIdempotencyKey",
+        "pendingScopedAskRequestIdentity", "pendingObjective",
+        "pendingScreenshotIdempotencyKey", "pendingScreenshotRequestIdentity",
+        "pendingScreenshotCapturedAt",
+    ]
+    private static let removableFields: Set<String> = [
+        "composerDraft", "composerDraftUpdatedAt", "contactProposal", "contextWasTrimmed",
+        "pendingUnscopedChatIdempotencyKey", "pendingPersonResearchIdempotencyKey",
+        "pendingPersonResearchRequestIdentity", "pendingScopedAskIdempotencyKey",
+        "pendingScopedAskRequestIdentity", "pendingObjective",
+        "pendingScreenshotIdempotencyKey", "pendingScreenshotRequestIdentity",
+        "pendingScreenshotCapturedAt",
+    ]
+    private static let appendArrayFields: Set<String> = [
+        "contactReceipts", "screenshotTaskIDs", "inheritedScreenshotTaskIDs",
+    ]
+    /// Pending execution metadata always lands in the final frames.
+    static let pendingFields: [String] = [
+        "pendingUnscopedChatIdempotencyKey", "pendingPersonResearchIdempotencyKey",
+        "pendingPersonResearchRequestIdentity", "pendingScopedAskIdempotencyKey",
+        "pendingScopedAskRequestIdentity", "pendingObjective",
+        "pendingScreenshotIdempotencyKey", "pendingScreenshotRequestIdentity",
+        "pendingScreenshotCapturedAt",
+    ]
+    /// The screenshot admission fields are validated as one identity.
+    static let screenshotAdmissionPaths: Set<String> = [
+        "/pendingScreenshotIdempotencyKey", "/pendingScreenshotRequestIdentity",
+        "/pendingScreenshotCapturedAt", "/pendingObjective",
+    ]
+
+    static func decodePointer(_ path: String) throws -> [String] {
+        guard path.hasPrefix("/"), path.count <= 512 else {
+            throw AgentSessionDeltaOperationsError.invalidPath
+        }
+        return try path.dropFirst().split(separator: "/", omittingEmptySubsequences: false)
+            .map { rawSegment in
+                var segment = String(rawSegment)
+                var decoded = ""
+                var iterator = Substring(segment).makeIterator()
+                while let character = iterator.next() {
+                    if character == "~" {
+                        guard let next = iterator.next(), next == "0" || next == "1" else {
+                            throw AgentSessionDeltaOperationsError.invalidPath
+                        }
+                        decoded.append(next == "0" ? "~" : "/")
+                    } else {
+                        decoded.append(character)
+                    }
+                }
+                segment = decoded
+                return segment
+            }
+    }
+
+    static func apply(base: [String: Any], operations: [Operation]) throws -> [String: Any] {
+        var state = base
+        for operation in operations {
+            try applyOne(operation, into: &state)
+        }
+        return state
+    }
+
+    private static func applyOne(_ operation: Operation, into state: inout [String: Any]) throws {
+        guard let op = operation["op"] as? String, let path = operation["path"] as? String,
+              ["add", "remove", "replace"].contains(op) else {
+            throw AgentSessionDeltaOperationsError.invalidValue
+        }
+        let segments = try decodePointer(path)
+        guard let root = segments.first, !forbiddenSegments.contains(root) else {
+            throw AgentSessionDeltaOperationsError.prototypeKey
+        }
+        if root == "turns" {
+            guard segments.count >= 2, var turns = state["turns"] as? [[String: Any]] else {
+                throw AgentSessionDeltaOperationsError.absentParent
+            }
+            guard let index = Int(segments[1]), index >= 0 else {
+                throw AgentSessionDeltaOperationsError.invalidIndex
+            }
+            if segments.count == 2 {
+                guard op == "add", index == turns.count,
+                      let value = operation["value"] as? [String: Any] else {
+                    throw AgentSessionDeltaOperationsError.unexpressibleChange
+                }
+                try assertTurnValue(value)
+                turns.append(value)
+                state["turns"] = turns
+                return
+            }
+            guard segments.count == 3, index < turns.count,
+                  segments[2] == "feedback" || segments[2] == "feedbackUpdatedAt" else {
+                throw AgentSessionDeltaOperationsError.invalidPath
+            }
+            let field = segments[2]
+            if op == "remove" {
+                guard turns[index].removeValue(forKey: field) != nil else {
+                    throw AgentSessionDeltaOperationsError.absentParent
+                }
+            } else {
+                if op == "replace", turns[index][field] == nil {
+                    throw AgentSessionDeltaOperationsError.absentParent
+                }
+                turns[index][field] = operation["value"] ?? NSNull()
+            }
+            state["turns"] = turns
+            return
+        }
+        if appendArrayFields.contains(root) {
+            if state[root] == nil { state[root] = [Any]() }
+            guard op == "add", segments.count == 2, var list = state[root] as? [Any],
+                  let index = Int(segments[1]), index == list.count else {
+                throw AgentSessionDeltaOperationsError.invalidIndex
+            }
+            let value = operation["value"] ?? NSNull()
+            try assertSafeValue(value)
+            list.append(value)
+            state[root] = list
+            return
+        }
+        if root == "contactProposal" {
+            guard segments.count == 1 else { throw AgentSessionDeltaOperationsError.invalidPath }
+            if op == "remove" {
+                guard state.removeValue(forKey: root) != nil else {
+                    throw AgentSessionDeltaOperationsError.absentParent
+                }
+                return
+            }
+            if op == "replace", state[root] == nil {
+                throw AgentSessionDeltaOperationsError.absentParent
+            }
+            state[root] = operation["value"] ?? NSNull()
+            return
+        }
+        guard settableFields.contains(root), segments.count == 1 else {
+            throw AgentSessionDeltaOperationsError.unsupportedPath
+        }
+        if op == "remove" {
+            guard removableFields.contains(root), state.removeValue(forKey: root) != nil else {
+                throw AgentSessionDeltaOperationsError.unsupportedPath
+            }
+            return
+        }
+        if op == "replace", state[root] == nil {
+            throw AgentSessionDeltaOperationsError.absentParent
+        }
+        try assertSafeValue(operation["value"] ?? NSNull())
+        state[root] = operation["value"] ?? NSNull()
+    }
+
+    private static func assertTurnValue(_ value: [String: Any]) throws {
+        try assertSafeValue(value)
+        guard value["id"] is String, value["objective"] is String,
+              let response = value["response"] as? [String: Any] else {
+            throw AgentSessionDeltaOperationsError.invalidValue
+        }
+        for field in ["steeredMessages", "execution", "mcpInteraction", "hostResult"] {
+            if value[field] != nil { throw AgentSessionDeltaOperationsError.invalidValue }
+        }
+        for field in ["execution", "mcpInteraction", "hostResult"] {
+            if response[field] != nil { throw AgentSessionDeltaOperationsError.invalidValue }
+        }
+    }
+
+    private static func assertSafeValue(_ value: Any, depth: Int = 0) throws {
+        guard depth <= 32 else { throw AgentSessionDeltaOperationsError.invalidValue }
+        switch value {
+        case is NSNull:
+            return
+        case let number as NSNumber:
+            if CFGetTypeID(number) != CFBooleanGetTypeID(), !number.doubleValue.isFinite {
+                throw AgentSessionDeltaOperationsError.invalidValue
+            }
+        case is String:
+            return
+        case let array as [Any]:
+            for item in array { try assertSafeValue(item, depth: depth + 1) }
+        case let object as [String: Any]:
+            for (key, item) in object {
+                if forbiddenSegments.contains(key) { throw AgentSessionDeltaOperationsError.prototypeKey }
+                try assertSafeValue(item, depth: depth + 1)
+            }
+        default:
+            throw AgentSessionDeltaOperationsError.invalidValue
+        }
+    }
+
+    /// Minimal ordered operations between two canonical payloads: only changed
+    /// fields, appended turns and appended metadata elements, with pending
+    /// execution metadata ordered last. Unexpressible changes throw instead of
+    /// rewriting history.
+    static func plan(before: [String: Any], after: [String: Any]) throws -> [Operation] {
+        var operations: [Operation] = []
+        for field in settableFields
+        where !pendingFields.contains(field) && field != "contactProposal" {
+            try appendChange(&operations, field: field, before: before, after: after)
+        }
+        for field in ["contactReceipts"] {
+            try appendGrowth(&operations, field: field, before: before, after: after)
+        }
+        try appendScreenshotMetadata(&operations, before: before, after: after)
+        let beforeTurns = before["turns"] as? [[String: Any]] ?? []
+        let afterTurns = after["turns"] as? [[String: Any]] ?? []
+        guard afterTurns.count >= beforeTurns.count else {
+            throw AgentSessionDeltaOperationsError.unexpressibleChange
+        }
+        for index in beforeTurns.indices {
+            for field in ["feedback", "feedbackUpdatedAt"] {
+                try appendChange(
+                    &operations, path: "/turns/\(index)/\(field)",
+                    before: [field: beforeTurns[index][field] ?? NSNull()],
+                    after: [field: afterTurns[index][field] ?? NSNull()]
+                )
+            }
+        }
+        for index in beforeTurns.count..<afterTurns.count {
+            operations.append(["op": "add", "path": "/turns/\(index)", "value": afterTurns[index]])
+        }
+        try appendChange(&operations, field: "contactProposal", before: before, after: after)
+        for field in pendingFields {
+            try appendChange(&operations, field: field, before: before, after: after)
+        }
+        return operations
+    }
+
+    private static func appendChange(
+        _ operations: inout [Operation], field: String,
+        before: [String: Any], after: [String: Any]
+    ) throws {
+        try appendChange(&operations, path: "/\(field)", before: before, after: after)
+    }
+
+    private static func appendChange(
+        _ operations: inout [Operation], path: String,
+        before: [String: Any], after: [String: Any]
+    ) throws {
+        let key = String(path.split(separator: "/").last ?? "")
+        let hadBefore = before[key] != nil && !(before[key] is NSNull)
+        let hasAfter = after[key] != nil && !(after[key] is NSNull)
+        let unchanged = (before[key] is NSNull && after[key] is NSNull)
+            || (before[key] == nil && after[key] == nil)
+            || valuesEqual(before[key], after[key])
+        if unchanged { return }
+        if hasAfter {
+            operations.append(["op": hadBefore ? "replace" : "add", "path": path, "value": after[key]!])
+        } else if hadBefore {
+            operations.append(["op": "remove", "path": path])
+        }
+    }
+
+    private static func appendGrowth(
+        _ operations: inout [Operation], field: String,
+        before: [String: Any], after: [String: Any]
+    ) throws {
+        let beforeList = before[field] as? [Any] ?? []
+        let afterList = after[field] as? [Any] ?? []
+        guard afterList.count >= beforeList.count else {
+            throw AgentSessionDeltaOperationsError.unexpressibleChange
+        }
+        for index in beforeList.indices where !valuesEqual(beforeList[index], afterList[index]) {
+            throw AgentSessionDeltaOperationsError.unexpressibleChange
+        }
+        for index in beforeList.count..<afterList.count {
+            operations.append(["op": "add", "path": "/\(field)/\(index)", "value": afterList[index]])
+        }
+    }
+
+    /// Source-associated screenshot metadata keeps its authorization invariants
+    /// at every frame: inherited references only grow and each new live
+    /// reference arrives immediately before its inherited twin.
+    private static func appendScreenshotMetadata(
+        _ operations: inout [Operation], before: [String: Any], after: [String: Any]
+    ) throws {
+        let liveBefore = before["screenshotTaskIDs"] as? [String] ?? []
+        let liveAfter = after["screenshotTaskIDs"] as? [String] ?? []
+        let inheritedBefore = before["inheritedScreenshotTaskIDs"] as? [String] ?? []
+        let inheritedAfter = after["inheritedScreenshotTaskIDs"] as? [String] ?? []
+        guard liveAfter.count >= liveBefore.count, inheritedAfter.count >= inheritedBefore.count
+        else { throw AgentSessionDeltaOperationsError.unexpressibleChange }
+        for index in liveBefore.indices
+        where canonicalString(liveBefore[index]) != canonicalString(liveAfter[index]) {
+            throw AgentSessionDeltaOperationsError.unexpressibleChange
+        }
+        for index in inheritedBefore.indices
+        where canonicalString(inheritedBefore[index]) != canonicalString(inheritedAfter[index]) {
+            throw AgentSessionDeltaOperationsError.unexpressibleChange
+        }
+        if inheritedBefore.isEmpty, !inheritedAfter.isEmpty,
+           liveBefore.contains(where: { candidate in
+               !inheritedAfter.contains { canonicalString($0) == canonicalString(candidate) }
+           }) {
+            throw AgentSessionDeltaOperationsError.unexpressibleChange
+        }
+        // Source-associated metadata arrives as contiguous paired units: each
+        // new live reference immediately before its inherited twin, so every
+        // canonical prefix keeps inherited ⊆ live and the frame that first
+        // introduces inherited refs already covers every accepted reference.
+        let liveGrowth = Array(liveAfter.dropFirst(liveBefore.count))
+        let inheritedGrowth = Array(inheritedAfter.dropFirst(inheritedBefore.count))
+        var liveIndex = 0
+        func emitLive(upTo value: String) {
+            while liveIndex < liveGrowth.count,
+                  canonicalString(liveGrowth[liveIndex]) != canonicalString(value) {
+                operations.append([
+                    "op": "add",
+                    "path": "/screenshotTaskIDs/\(liveBefore.count + liveIndex)",
+                    "value": liveGrowth[liveIndex],
+                ])
+                liveIndex += 1
+            }
+            if liveIndex < liveGrowth.count {
+                operations.append([
+                    "op": "add",
+                    "path": "/screenshotTaskIDs/\(liveBefore.count + liveIndex)",
+                    "value": liveGrowth[liveIndex],
+                ])
+                liveIndex += 1
+            }
+        }
+        for (index, value) in inheritedGrowth.enumerated() {
+            if liveGrowth.contains(where: { canonicalString($0) == canonicalString(value) }) {
+                emitLive(upTo: value)
+            }
+            operations.append([
+                "op": "add",
+                "path": "/inheritedScreenshotTaskIDs/\(inheritedBefore.count + index)",
+                "value": value,
+            ])
+        }
+        while liveIndex < liveGrowth.count {
+            operations.append([
+                "op": "add",
+                "path": "/screenshotTaskIDs/\(liveBefore.count + liveIndex)",
+                "value": liveGrowth[liveIndex],
+            ])
+            liveIndex += 1
+        }
+    }
+
+    /// Actual UTF-8 bytes of one complete serialized frame request.
+    static func requestBytes(
+        transferID: UUID, targetDigest: String, operations: [Operation], skeleton: [String: Any]?
+    ) throws -> Int {
+        var request: [String: Any] = [
+            "transfer_id": transferID.uuidString.lowercased(),
+            "expected_revision": 2147483647,
+            "idempotency_key": "00000000-0000-4000-8000-000000000000",
+            "target_payload_digest": targetDigest,
+            "operations": operations,
+            "final": true,
+        ]
+        if let skeleton { request["skeleton"] = skeleton }
+        let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        return data.count
+    }
+
+    static func planFrames(
+        before: [String: Any], after: [String: Any], transferID: UUID,
+        skeleton: [String: Any]?, maxOperationsPerFrame: Int = 256, maxFrameBytes: Int = 250 * 1024
+    ) throws -> (targetDigest: String, frames: [[Operation]]) {
+        let operations = try plan(before: before, after: after)
+        let target = try AgentSessionDeltaCanonical.sessionIntentDigest(after)
+        // Source-associated and admission operations are atomic units: an
+        // inherited reference never separates from its live twin or coverage
+        // run, and the screenshot admission identity stays whole.
+        var units: [[Operation]] = []
+        for operation in operations {
+            let path = operation["path"] as? String ?? ""
+            let inherits = path.hasPrefix("/inheritedScreenshotTaskIDs/")
+            let admission = screenshotAdmissionPaths.contains(path)
+                && (units.last?.last?["path"] as? String).map {
+                    screenshotAdmissionPaths.contains($0)
+                } ?? false
+            if (inherits || admission), !units.isEmpty {
+                units[units.count - 1].append(operation)
+            } else {
+                units.append([operation])
+            }
+        }
+        var frames: [[Operation]] = []
+        var current: [Operation] = []
+        for unit in units {
+            // The contract's 256-operation bound is hard: a unit that cannot
+            // fit it fails explicitly and the local history stays untouched.
+            guard unit.count <= 256 else {
+                throw AgentSessionDeltaOperationsError.frameUnpackable
+            }
+            if current.isEmpty {
+                if try requestBytes(
+                    transferID: transferID, targetDigest: target, operations: unit,
+                    skeleton: frames.isEmpty ? skeleton : nil
+                ) > maxFrameBytes {
+                    throw AgentSessionDeltaOperationsError.frameUnpackable
+                }
+                current = unit
+                continue
+            }
+            let first = frames.isEmpty
+            let overflowCount = current.count + unit.count > max(maxOperationsPerFrame, unit.count)
+            let overflowBytes = try requestBytes(
+                transferID: transferID, targetDigest: target,
+                operations: current + unit, skeleton: first ? skeleton : nil
+            ) > maxFrameBytes
+            if overflowCount || overflowBytes {
+                frames.append(current)
+                if try requestBytes(
+                    transferID: transferID, targetDigest: target, operations: unit, skeleton: nil
+                ) > maxFrameBytes {
+                    throw AgentSessionDeltaOperationsError.frameUnpackable
+                }
+                current = unit
+            } else {
+                current += unit
+            }
+        }
+        if !current.isEmpty { frames.append(current) }
+        return (target, frames)
+    }
+
+    /// Identity-insensitive equality: UUID-shaped identifier strings compare
+    /// canonically so raw lowercase server values and uppercase DTO values are
+    /// the same identity (metadata prefixes, screenshot references and
+    /// contact receipts included).
+    static func valuesEqual(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return true
+        case (let left?, let right?):
+            if left is NSNull, right is NSNull { return true }
+            let canonicalLeft = AgentSessionDeltaCanonical.canonicalizingIdentityStrings(left)
+            let canonicalRight = AgentSessionDeltaCanonical.canonicalizingIdentityStrings(right)
+            guard let leftData = try? JSONSerialization.data(withJSONObject: [canonicalLeft], options: [.sortedKeys]),
+                  let rightData = try? JSONSerialization.data(withJSONObject: [canonicalRight], options: [.sortedKeys])
+            else { return false }
+            return leftData == rightData
+        default:
+            return false
+        }
+    }
+
+    private static func canonicalString(_ value: String) -> String {
+        AgentSessionDeltaCanonical.canonicalID(value)
+    }
+}

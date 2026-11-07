@@ -1,0 +1,130 @@
+import "server-only";
+
+import { CapirHandoffExchangeResponseSchema, type SessionResponse } from "@talent-signal/contracts";
+import { Value } from "@sinclair/typebox/value";
+import { encode } from "next-auth/jwt";
+
+import { authCookieSecure } from "@/lib/auth-cookie-policy";
+import { registerContractFormats } from "@/lib/capirContractFormats";
+import { capirSessionClaims, secondsUntil, type CapirSessionClaims } from "@/lib/capirHandoff";
+import { AUTH_SESSION_COOKIE, authSecret, backendAuthBaseUrl } from "@/lib/server/backendAuth";
+
+registerContractFormats();
+
+/** Header name taken verbatim from Task 1: server-only consumer authentication. */
+export const CAPIR_WEB_HANDOFF_KEY_HEADER = "x-capir-web-handoff-key";
+
+export class CapirHandoffError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "CapirHandoffError";
+  }
+}
+
+/**
+ * Exchange the one-use handoff secret on the backend as the trusted Web
+ * consumer. The CAPIR_WEB_HANDOFF_KEY never leaves server memory.
+ */
+export async function exchangeCapirHandoff(
+  handoffSecret: string,
+  webOrigin: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SessionResponse> {
+  const key = process.env.CAPIR_WEB_HANDOFF_KEY?.trim();
+  if (!key) {
+    throw new CapirHandoffError(
+      503,
+      "CAPIR_WEB_HANDOFF_UNAVAILABLE",
+      "The trusted Web cookie consumer is not configured on this server.",
+    );
+  }
+  let response: Response;
+  try {
+    response = await fetchImpl(new URL("/v1/capir/handoffs/exchange", backendAuthBaseUrl()), {
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        [CAPIR_WEB_HANDOFF_KEY_HEADER]: key,
+      },
+      body: JSON.stringify({ handoff_secret: handoffSecret, web_origin: webOrigin }),
+    });
+  } catch {
+    throw new CapirHandoffError(
+      502,
+      "CAPIR_HANDOFF_EXCHANGE_FAILED",
+      "The capir backend could not be reached for the handoff exchange.",
+    );
+  }
+  let text: string;
+  try { text = await response.text(); }
+  catch { throw new CapirHandoffError(502, "CAPIR_HANDOFF_EXCHANGE_FAILED", "The handoff response was interrupted."); }
+  let parsed: unknown;
+  try {
+    parsed = text ? JSON.parse(text) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  if (!response.ok) {
+    const code = (parsed as { error?: { code?: string } } | undefined)?.error?.code;
+    throw new CapirHandoffError(
+      response.status === 503 ? 503 : 401,
+      code ?? "CAPIR_HANDOFF_DENIED",
+      "The handoff secret is expired, consumed, or unavailable.",
+    );
+  }
+  if (!Value.Check(CapirHandoffExchangeResponseSchema, parsed)) {
+    throw new CapirHandoffError(
+      502,
+      "CAPIR_HANDOFF_EXCHANGE_FAILED",
+      "The handoff exchange response did not match the capir.v1 contract.",
+    );
+  }
+  return (parsed as { session: SessionResponse }).session;
+}
+
+export interface HandoffCookie {
+  name: string;
+  value: string;
+  options: {
+    httpOnly: true;
+    sameSite: "lax";
+    secure: boolean;
+    path: "/";
+    maxAge: number;
+  };
+  claims: CapirSessionClaims;
+}
+
+/** Build the existing encrypted Auth.js HttpOnly session cookie. */
+export async function buildCapirSessionCookie(
+  session: SessionResponse,
+  now = Date.now(),
+): Promise<HandoffCookie> {
+  const claims = capirSessionClaims(session);
+  const maxAge = secondsUntil(session.expires_at, now);
+  const value = await encode({
+    secret: authSecret(),
+    salt: AUTH_SESSION_COOKIE,
+    maxAge,
+    token: claims as unknown as Record<string, unknown>,
+  });
+  return {
+    name: AUTH_SESSION_COOKIE,
+    value,
+    options: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: authCookieSecure(),
+      path: "/",
+      maxAge,
+    },
+    claims,
+  };
+}
