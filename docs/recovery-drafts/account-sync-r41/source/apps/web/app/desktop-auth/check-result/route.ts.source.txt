@@ -1,0 +1,16 @@
+import { redirect } from "next/navigation";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Fixed first-party completion handoff for native StagedPassword completion
+ * (ADR 0020). The URL is immutable and carries no query, body or secret.
+ * A capable native host intercepts this exact main-frame request and runs its
+ * own paired read-only result read -> final ACK; it never accepts a page-claimed
+ * success. An ordinary browser (web fallback) lands on the canonical Settings
+ * page. Nothing is consumed or cleared here: an uncertain completion keeps its
+ * recovery authority instead of being replayed or reported as success.
+ */
+export async function GET(): Promise<never> {
+  redirect("/workspace/settings");
+}

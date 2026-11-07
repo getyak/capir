@@ -1,0 +1,372 @@
+import { Type, type Static } from "@sinclair/typebox";
+
+import { CONTRACT_VERSION } from "./constants.js";
+import { AccountSettingsSchema, ProviderChallengeSchema } from "./accountSchemas.js";
+import { SessionResponseSchema } from "./schemas.js";
+
+/**
+ * macOS system authentication handoff (ADR 0019) and credential proof rounds
+ * (ADR 0020).
+ *
+ * A native host generates the PKCE verifier and state in native memory and
+ * drives one bounded attempt through the Web origin. The Web layer resolves
+ * the WK-sealed flow/round state and binds the attempt to its own verified
+ * request origin and the server-side session; the backend owns the durable
+ * `desktop_auth_attempts` state machine. Only opaque identifiers, the one-time
+ * code and the native state ever appear in URLs. Display capability metadata
+ * is never authority.
+ */
+
+export const DESKTOP_AUTH_PROTOCOL_VERSION = 2 as const;
+
+/** Fixed native callback (scheme/host/path are immutable). */
+export const DESKTOP_AUTH_CALLBACK_URL = "com.talentsignal.macos.auth://complete" as const;
+
+/** Fixed Web routes used by the handoff. Return paths are fixed by purpose. */
+export const DESKTOP_AUTH_REQUEST_PATH = "/desktop-auth/request" as const;
+export const DESKTOP_AUTH_PENDING_PATH = "/desktop-auth/pending" as const;
+export const DESKTOP_AUTH_AUTHORIZE_PATH = "/desktop-auth/authorize" as const;
+export const DESKTOP_AUTH_CONFIRM_PATH = "/desktop-auth/confirm" as const;
+export const DESKTOP_AUTH_COMPLETE_PATH = "/desktop-auth/complete" as const;
+export const DESKTOP_AUTH_PREPARE_PATH = "/api/desktop-auth/prepare" as const;
+export const DESKTOP_AUTH_CONSUME_PATH = "/api/desktop-auth/consume" as const;
+export const DESKTOP_AUTH_CANCEL_PATH = "/api/desktop-auth/cancel" as const;
+export const DESKTOP_AUTH_RESULT_PATH = "/api/desktop-auth/result" as const;
+export const DESKTOP_AUTH_ACK_PATH = "/api/desktop-auth/ack" as const;
+
+/** Attempt lifetime (five minutes) and one-time code lifetime (one minute). */
+export const DESKTOP_AUTH_ATTEMPT_TTL_SECONDS = 300 as const;
+export const DESKTOP_AUTH_CODE_TTL_SECONDS = 60 as const;
+/** Absolute lifetime of one WK credential flow (ADR 0020). */
+export const DESKTOP_AUTH_FLOW_TTL_SECONDS = 600 as const;
+
+const ID = Type.String({ minLength: 8, maxLength: 200 });
+const Revision = Type.Integer({ minimum: 1 });
+const State = Type.String({ minLength: 16, maxLength: 200, pattern: "^[A-Za-z0-9_-]+$" });
+const Verifier = Type.String({ minLength: 32, maxLength: 200, pattern: "^[A-Za-z0-9_-]+$" });
+const Challenge = Type.String({ minLength: 43, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" });
+const Secret = Type.String({ minLength: 32, maxLength: 200, pattern: "^[A-Za-z0-9_-]+$" });
+const OpaqueRef = Type.String({ minLength: 8, maxLength: 200 });
+
+export const DesktopAuthProviderSchema = Type.Union([
+  Type.Literal("apple"),
+  Type.Literal("google"),
+]);
+export const DesktopAuthPurposeSchema = Type.Union([
+  Type.Literal("login"),
+  Type.Literal("credential_round"),
+]);
+export const DesktopAuthRoleSchema = Type.Union([
+  Type.Literal("login"),
+  Type.Literal("current"),
+  Type.Literal("target"),
+]);
+export const DesktopCredentialIntentSchema = Type.Union([
+  Type.Literal("link_provider"),
+  Type.Literal("unlink_provider"),
+  Type.Literal("set_password"),
+  Type.Literal("change_password"),
+]);
+export const DesktopTargetProviderSchema = Type.Union([
+  Type.Literal("apple"),
+  Type.Literal("google"),
+  Type.Literal("password"),
+]);
+
+export const DesktopAuthPrepareRequestSchema = Type.Object({
+  provider: DesktopAuthProviderSchema,
+  purpose: DesktopAuthPurposeSchema,
+  role: DesktopAuthRoleSchema,
+  /** S256 (base64url) challenge of the native one-time-code verifier. */
+  code_challenge: Challenge,
+  /** Native-generated raw state; the backend stores only its hash. */
+  state: State,
+  client_label: Type.String({ minLength: 1, maxLength: 80 }),
+  /**
+   * The exact Web origin the attempt is bound to. The backend requires the
+   * request `Origin` header to equal this value; a client-supplied string is
+   * never authority on its own.
+   */
+  web_origin: Type.String({ minLength: 1, maxLength: 500 }),
+  /**
+   * Immutable rendered/flow scope: comparison constraints against the CURRENT
+   * authenticated server scope and WK-sealed flow state, never proof.
+   */
+  expected_account_id: Type.Optional(ID),
+  expected_user_id: Type.Optional(ID),
+  expected_account_revision: Type.Optional(Revision),
+  expected_user_revision: Type.Optional(Revision),
+  /** Credential rounds only: opaque sealed flow/round references (ADR 0020). */
+  flow_ref: Type.Optional(OpaqueRef),
+  round_ref: Type.Optional(OpaqueRef),
+  intent: Type.Optional(DesktopCredentialIntentSchema),
+  target_provider: Type.Optional(DesktopTargetProviderSchema),
+  /** Absolute original flow deadline resolved from the WK-sealed state. */
+  flow_deadline_at: Type.Optional(Type.String({ format: "date-time" })),
+  original_proof_at: Type.Optional(Type.String({ format: "date-time" })),
+  /** Target rounds name the existing credential attempt they complete. */
+  credential_attempt_id: Type.Optional(ID),
+  /** Current rounds carry the frozen phase-one reauth challenge reference. */
+  provider_challenge_id: Type.Optional(ID),
+}, { additionalProperties: false });
+
+export const DesktopAuthPrepareResponseSchema = Type.Object({
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  attempt_id: ID,
+  /** Returned exactly once, only to the WK prepare response; only its hash is stored. */
+  pairing_secret: Secret,
+  expires_at: Type.String({ format: "date-time" }),
+  /** Fixed pending path for this attempt; native accepts it only for its own generation and state. */
+  pending_path: Type.String({ minLength: 1, maxLength: 500 }),
+}, { additionalProperties: false });
+
+export const DesktopAuthAuthorizeRequestSchema = Type.Object({
+  attempt_id: ID,
+  state: State,
+}, { additionalProperties: false });
+
+export const DesktopAuthAuthorizeResponseSchema = Type.Object({
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  attempt_id: ID,
+  provider: DesktopAuthProviderSchema,
+  purpose: DesktopAuthPurposeSchema,
+  role: DesktopAuthRoleSchema,
+  /** Provider challenge created for, or bound to, this round. */
+  provider_challenge: ProviderChallengeSchema,
+  /**
+   * Exact expected OIDC nonce for the provider request (already normalized by
+   * the backend). Feed this value directly; never hash it a second time.
+   */
+  oidc_nonce: Type.String({ minLength: 16, maxLength: 200 }),
+  /** Frozen credential-round context carried into the sealed browser state. */
+  flow_ref: Type.Union([OpaqueRef, Type.Null()]),
+  round_ref: Type.Union([OpaqueRef, Type.Null()]),
+  intent: Type.Union([DesktopCredentialIntentSchema, Type.Null()]),
+  target_provider: Type.Union([DesktopTargetProviderSchema, Type.Null()]),
+  expires_at: Type.String({ format: "date-time" }),
+}, { additionalProperties: false });
+
+export const DesktopAuthApproveRequestSchema = Type.Object({
+  attempt_id: ID,
+  state: State,
+  challenge_id: ID,
+  identity_token: Type.String({ minLength: 100, maxLength: 20_000 }),
+}, { additionalProperties: false });
+
+export const DesktopAuthApprovedIdentitySchema = Type.Object({
+  provider: DesktopAuthProviderSchema,
+  email_hint: Type.Union([Type.String({ maxLength: 320 }), Type.Null()]),
+  email_verified: Type.Boolean(),
+  display_name: Type.String({ maxLength: 200 }),
+}, { additionalProperties: false });
+
+export const DesktopAuthApproveResponseSchema = Type.Object({
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  attempt_id: ID,
+  status: Type.Literal("approved"),
+  provider: DesktopAuthProviderSchema,
+  purpose: DesktopAuthPurposeSchema,
+  role: DesktopAuthRoleSchema,
+  /** Verified provider identity for the confirmation view. Never a token. */
+  verified: DesktopAuthApprovedIdentitySchema,
+  expires_at: Type.String({ format: "date-time" }),
+}, { additionalProperties: false });
+
+export const DesktopAuthStatusRequestSchema = Type.Object({
+  attempt_id: ID,
+}, { additionalProperties: false });
+
+export const DesktopAuthStatusResponseSchema = Type.Object({
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  attempt_id: ID,
+  status: Type.Union([
+    Type.Literal("prepared"), Type.Literal("authorizing"),
+    Type.Literal("approved"), Type.Literal("consumed"),
+    Type.Literal("cancelled"), Type.Literal("expired"),
+  ]),
+  provider: DesktopAuthProviderSchema,
+  purpose: DesktopAuthPurposeSchema,
+  role: DesktopAuthRoleSchema,
+  verified: Type.Union([DesktopAuthApprovedIdentitySchema, Type.Null()]),
+  expires_at: Type.String({ format: "date-time" }),
+}, { additionalProperties: false });
+
+export const DesktopAuthCompleteRequestSchema = Type.Object({
+  attempt_id: ID,
+  state: State,
+}, { additionalProperties: false });
+
+export const DesktopAuthCompleteResponseSchema = Type.Object({
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  attempt_id: ID,
+  /** One-use code, at most one minute. Travels only in the fixed callback URL. */
+  code: Secret,
+  expires_at: Type.String({ format: "date-time" }),
+}, { additionalProperties: false });
+
+export const DesktopAuthConsumeRequestSchema = Type.Object({
+  attempt_id: ID,
+  code: Secret,
+  verifier: Verifier,
+  /** From the attempt-specific HttpOnly WK pairing cookie of the same WKWebView jar. */
+  pairing_secret: Secret,
+  /**
+   * Target rounds only: the existing credential attempt and its secret from
+   * the server-sealed WK continuation. Only its hash is ever stored.
+   */
+  credential_attempt_id: Type.Optional(ID),
+  attempt_secret: Type.Optional(Secret),
+}, { additionalProperties: false });
+
+/** Sealed WK continuation for a relay-created credential attempt (ADR 0020). */
+export const DesktopAuthContinuationSchema = Type.Object({
+  flow_ref: OpaqueRef,
+  round_ref: OpaqueRef,
+  role: DesktopAuthRoleSchema,
+  intent: DesktopCredentialIntentSchema,
+  target_provider: Type.Union([DesktopTargetProviderSchema, Type.Null()]),
+  credential_attempt_id: ID,
+  /** Returned exactly once into the WK-sealed continuation; only its hash is stored. */
+  attempt_secret: Secret,
+  provider_challenge: Type.Union([
+    Type.Object({
+      challenge_id: ID,
+      oidc_nonce: Type.String({ minLength: 16, maxLength: 200 }),
+      expires_at: Type.String({ format: "date-time" }),
+    }, { additionalProperties: false }),
+    Type.Null(),
+  ]),
+  /** The grant's absolute expiry: the original deadline, never renewed. */
+  expires_at: Type.Optional(Type.String({ format: "date-time" })),
+}, { additionalProperties: false });
+
+/** Safe round metadata, returned only after the round's proof is validated.
+ * This is receipt correlation, never a grant secret or mutation authority. */
+export const DesktopAuthReceiptContextSchema = Type.Object({
+  purpose: DesktopAuthPurposeSchema,
+  role: DesktopAuthRoleSchema,
+  intent: Type.Union([DesktopCredentialIntentSchema, Type.Null()]),
+  flow_ref: Type.Union([ID, Type.Null()]),
+  credential_attempt_id: Type.Union([ID, Type.Null()]),
+  expires_at: Type.String({ format: "date-time" }),
+}, { additionalProperties: false });
+
+export const DesktopAuthConsumeResponseSchema = Type.Union([
+  Type.Object({
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    status: Type.Literal("logged_in"),
+    session: SessionResponseSchema,
+  }, { additionalProperties: false }),
+  Type.Object({
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    status: Type.Literal("awaiting_password"),
+    continuation: DesktopAuthContinuationSchema,
+  }, { additionalProperties: false }),
+  Type.Object({
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    status: Type.Literal("awaiting_target"),
+    continuation: DesktopAuthContinuationSchema,
+  }, { additionalProperties: false }),
+  Type.Object({
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    status: Type.Literal("completed"),
+    context: Type.Optional(DesktopAuthReceiptContextSchema),
+    result: Type.Unknown(),
+    settings: AccountSettingsSchema,
+  }, { additionalProperties: false }),
+]);
+
+export const DesktopAuthResultRequestSchema = Type.Object({
+  attempt_id: ID,
+  pairing_secret: Secret,
+  verifier: Verifier,
+}, { additionalProperties: false });
+
+export const DesktopAuthResultResponseSchema = Type.Object({
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  attempt_id: ID,
+  context: Type.Optional(DesktopAuthReceiptContextSchema),
+  status: Type.Union([
+    Type.Literal("committed"),
+    Type.Literal("pending_continuation"),
+    Type.Literal("pending"),
+    Type.Literal("cancelled"),
+    Type.Literal("expired"),
+    Type.Literal("unknown"),
+  ]),
+  result: Type.Union([Type.Unknown(), Type.Null()]),
+  continuation: Type.Union([DesktopAuthContinuationSchema, Type.Null()]),
+  settings: Type.Union([AccountSettingsSchema, Type.Null()]),
+}, { additionalProperties: false });
+
+export const DesktopAuthAckRequestSchema = Type.Object({
+  attempt_id: ID,
+  pairing_secret: Secret,
+  verifier: Verifier,
+  credential_attempt_id: ID,
+}, { additionalProperties: false });
+
+export const DesktopAuthAckResponseSchema = Type.Object({
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  attempt_id: ID,
+  acknowledged: Type.Boolean(),
+  status: Type.Union([
+    Type.Literal("committed"),
+    Type.Literal("pending_continuation"),
+    Type.Literal("unknown"),
+  ]),
+}, { additionalProperties: false });
+
+/**
+ * Discriminated cancellation authorities (ADR 0020 recovery): the WK window
+ * cancels with its pairing secret; the system browser cancels only with its
+ * own sealed attempt's raw state. Neither authority can cancel the other's
+ * round, and no pairing secret is ever exported to the system browser.
+ */
+export const DesktopAuthCancelRequestSchema = Type.Union([
+  Type.Object({
+    attempt_id: ID,
+    mode: Type.Literal("wk"),
+    pairing_secret: Secret,
+  }, { additionalProperties: false }),
+  Type.Object({
+    attempt_id: ID,
+    mode: Type.Literal("system"),
+    state: State,
+  }, { additionalProperties: false }),
+]);
+
+export const DesktopAuthCancelResponseSchema = Type.Object({
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  attempt_id: ID,
+  purpose: DesktopAuthPurposeSchema,
+  context: Type.Optional(DesktopAuthReceiptContextSchema),
+  status: Type.Union([Type.Literal("cancelled"), Type.Literal("consumed"), Type.Literal("expired")]),
+}, { additionalProperties: false });
+
+export type DesktopAuthProvider = Static<typeof DesktopAuthProviderSchema>;
+export type DesktopAuthReceiptContext = Static<typeof DesktopAuthReceiptContextSchema>;
+export type DesktopAuthPurpose = Static<typeof DesktopAuthPurposeSchema>;
+export type DesktopAuthRole = Static<typeof DesktopAuthRoleSchema>;
+export type DesktopCredentialIntent = Static<typeof DesktopCredentialIntentSchema>;
+export type DesktopTargetProvider = Static<typeof DesktopTargetProviderSchema>;
+export type DesktopAuthPrepareRequest = Static<typeof DesktopAuthPrepareRequestSchema>;
+export type DesktopAuthPrepareResponse = Static<typeof DesktopAuthPrepareResponseSchema>;
+export type DesktopAuthAuthorizeRequest = Static<typeof DesktopAuthAuthorizeRequestSchema>;
+export type DesktopAuthAuthorizeResponse = Static<typeof DesktopAuthAuthorizeResponseSchema>;
+export type DesktopAuthApproveRequest = Static<typeof DesktopAuthApproveRequestSchema>;
+export type DesktopAuthApprovedIdentity = Static<typeof DesktopAuthApprovedIdentitySchema>;
+export type DesktopAuthApproveResponse = Static<typeof DesktopAuthApproveResponseSchema>;
+export type DesktopAuthStatusRequest = Static<typeof DesktopAuthStatusRequestSchema>;
+export type DesktopAuthStatusResponse = Static<typeof DesktopAuthStatusResponseSchema>;
+export type DesktopAuthCompleteRequest = Static<typeof DesktopAuthCompleteRequestSchema>;
+export type DesktopAuthCompleteResponse = Static<typeof DesktopAuthCompleteResponseSchema>;
+export type DesktopAuthConsumeRequest = Static<typeof DesktopAuthConsumeRequestSchema>;
+export type DesktopAuthContinuation = Static<typeof DesktopAuthContinuationSchema>;
+export type DesktopAuthConsumeResponse = Static<typeof DesktopAuthConsumeResponseSchema>;
+export type DesktopAuthResultRequest = Static<typeof DesktopAuthResultRequestSchema>;
+export type DesktopAuthResultResponse = Static<typeof DesktopAuthResultResponseSchema>;
+export type DesktopAuthAckRequest = Static<typeof DesktopAuthAckRequestSchema>;
+export type DesktopAuthAckResponse = Static<typeof DesktopAuthAckResponseSchema>;
+export type DesktopAuthCancelRequest = Static<typeof DesktopAuthCancelRequestSchema>;
+export type DesktopAuthCancelResponse = Static<typeof DesktopAuthCancelResponseSchema>;

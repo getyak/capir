@@ -1,0 +1,127 @@
+import { TalentSignalHttpError, type DesktopAuthAckResponse } from "@talent-signal/contracts";
+import { cookies } from "next/headers";
+
+import {
+  desktopBackendClient,
+  desktopReturnPath,
+  desktopSessionToken,
+  pairingCookieName,
+  readDesktopContinuation,
+  readDesktopCommittedReceipt,
+  requestWebOrigin,
+} from "@/lib/server/desktopAuth";
+import {
+  desktopReceiptResponse,
+  isDesktopTransportRequest,
+  requireDesktopRequestRef,
+} from "@/lib/server/desktopReceipt";
+
+export const dynamic = "force-dynamic";
+
+function rejected(status: number, code: string, message: string): Response {
+  return Response.json({ error: { code, message } }, { status });
+}
+
+/**
+ * Paired continuation acknowledgment (ADR 0020). The WK request must carry
+ * the server-sealed continuation matching the committed flow/attempt/result;
+ * page URLs and display metadata can never assert acknowledgment. Idempotent
+ * per round: native may start a target round only after this acknowledgment
+ * (or its deadline), and its completion returns to the fixed purpose route.
+ */
+export async function POST(request: Request): Promise<Response> {
+  const webOrigin = await requestWebOrigin();
+  if (request.headers.get("origin") !== webOrigin) {
+    return rejected(403, "DESKTOP_AUTH_ORIGIN_REQUIRED", "This request origin is not allowed.");
+  }
+  let body: {
+    attempt_id?: string;
+    verifier?: string;
+    credential_attempt_id?: string;
+    flow_ref?: string;
+  };
+  try {
+    body = await request.json();
+  } catch {
+    return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+  }
+  const attemptId = typeof body.attempt_id === "string" ? body.attempt_id : "";
+  const verifier = typeof body.verifier === "string" ? body.verifier : "";
+  const flowRef = typeof body.flow_ref === "string" ? body.flow_ref : "";
+  if (!/^[A-Za-z0-9-]{8,200}$/.test(attemptId) || !/^[A-Za-z0-9_-]{32,200}$/.test(verifier)) {
+    return rejected(400, "DESKTOP_AUTH_REQUEST_INVALID", "This sign-in request is not valid.");
+  }
+
+  // Strict request-reference validation runs BEFORE any backend call or
+  // cookie mutation.
+  let transportRef: string | null = null;
+  if (isDesktopTransportRequest(request)) {
+    const required = requireDesktopRequestRef(request, body as Record<string, unknown>);
+    if (typeof required !== "string") return required.error;
+    transportRef = required;
+  }
+  const pairingSecret = (await cookies()).get(pairingCookieName(attemptId))?.value ?? "";
+  const continuation = await readDesktopContinuation(attemptId);
+  const committed = await readDesktopCommittedReceipt(attemptId);
+  const receipt = committed ?? continuation;
+  // The acknowledgment is valid only when THIS WKWebView carries the sealed
+  // continuation matching the committed flow/attempt. The submitted reference
+  // is an immutable comparator; the sealed continuation is the authority and
+  // supplies the credential attempt id when the caller omits it.
+  const credentialAttemptId =
+    typeof body.credential_attempt_id === "string" && body.credential_attempt_id !== ""
+      ? body.credential_attempt_id
+      : receipt?.credential_attempt_id ?? "";
+  if (
+    !pairingSecret ||
+    !receipt ||
+    !/^[A-Za-z0-9-]{8,200}$/.test(credentialAttemptId) ||
+    receipt.credential_attempt_id !== credentialAttemptId ||
+    (flowRef && receipt.flow_ref !== flowRef)
+  ) {
+    return rejected(409, "DESKTOP_AUTH_ACK_MISMATCH", "This continuation does not match the committed operation.");
+  }
+
+  let response: DesktopAuthAckResponse;
+  try {
+    response = await desktopBackendClient().desktopAuthAck(
+      {
+        attempt_id: attemptId,
+        pairing_secret: pairingSecret,
+        verifier,
+        credential_attempt_id: credentialAttemptId,
+      },
+      { origin: webOrigin, accessToken: (await desktopSessionToken()) ?? undefined },
+    );
+  } catch (error) {
+    if (!(error instanceof TalentSignalHttpError)) throw error;
+    return rejected(502, "DESKTOP_AUTH_UNAVAILABLE", "The acknowledgment could not be recorded.");
+  }
+  if (!response.acknowledged || (committed && response.status !== "committed")) {
+    return rejected(409, "DESKTOP_AUTH_ACK_MISMATCH", "This continuation does not match the committed operation.");
+  }
+  // Keep the attempt-specific pairing until its original cookie TTL. The
+  // response may install Set-Cookie before its receipt is observed; deleting
+  // it here would make a lost final ACK impossible to read/retry. Backend ACK
+  // remains idempotent and does not grant another credential mutation.
+  if (transportRef) {
+    return desktopReceiptResponse({
+      ref: transportRef,
+      attemptID: attemptId,
+      purpose: "credential_round",
+      role: receipt.role,
+      intent: receipt.intent ?? undefined,
+      outcome: response.status === "committed" ? "committed" : "acknowledged",
+      flowRef: receipt.flow_ref ?? undefined,
+      grantRef: receipt.credential_attempt_id ?? undefined,
+      deadline: receipt.expires_at,
+    });
+  }
+  return new Response(null, {
+    status: 303,
+    headers: {
+      location: `${desktopReturnPath("credential_round")}?desktop-auth=acknowledged&attempt=${encodeURIComponent(attemptId)}`,
+      "cache-control": "private, no-store",
+    },
+  });
+}

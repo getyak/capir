@@ -1,0 +1,704 @@
+{
+  "schema_version": "capir-inactive-source-reference.v1",
+  "status": "unfinished-historical-reference",
+  "issue": "GET-439",
+  "repository": "getyak/capir",
+  "snapshot_date": "2026-11-07",
+  "original_branch": "codex/account-sync-transport-r41",
+  "historical_head": "4f85655560bbadf38f0d91bfdca3e6c2e46425cb",
+  "historical_merge_base_with_archive_base": "3ee66972bc94e4847fb22ae7bbd5c11b02376b23",
+  "archive_base_main": "e4465fb1f9b2be8be81211cb0c6c9f937f2b2559",
+  "original_commits": [
+    {
+      "sha": "f581b3a0a0d7515edc8baf8700ff36fdf6be52da",
+      "subject": "Checkpoint Pi desktop transport draft for bounded parent repair",
+      "source_paths_changed": [
+        "apps/backend/src/app.ts",
+        "apps/backend/src/database/085_desktop_auth_attempts.sql",
+        "apps/backend/src/database/schema.test.ts",
+        "apps/backend/src/modules/accountIdentity.ts",
+        "apps/backend/src/modules/accountLoginMethods.ts",
+        "apps/backend/src/modules/desktopAuth.integration.test.ts",
+        "apps/backend/src/modules/desktopAuth.test.ts",
+        "apps/backend/src/modules/desktopAuth.ts",
+        "apps/macos/Sources/App/AppModel.swift",
+        "apps/macos/Sources/Features/QuietWorkspaceView.swift",
+        "apps/macos/Sources/Services/DesktopAuthenticationSession.swift",
+        "apps/macos/Sources/Services/PrimaryLoginStoreRegistry.swift",
+        "apps/macos/Tests/DesktopAuthenticationSessionTests.swift",
+        "apps/macos/Tests/PrimaryLoginStoreRegistryTests.swift",
+        "apps/web/app/api/desktop-auth/ack/route.ts",
+        "apps/web/app/api/desktop-auth/cancel/route.ts",
+        "apps/web/app/api/desktop-auth/consume/route.ts",
+        "apps/web/app/api/desktop-auth/prepare/route.ts",
+        "apps/web/app/api/desktop-auth/result/route.ts",
+        "apps/web/app/api/desktop-auth/status/route.test.ts",
+        "apps/web/app/api/desktop-auth/status/route.ts",
+        "apps/web/app/desktop-auth-chain.test.ts",
+        "apps/web/app/desktop-auth/authorize/route.ts",
+        "apps/web/app/desktop-auth/complete/route.ts",
+        "apps/web/app/desktop-auth/confirm/page.tsx",
+        "apps/web/app/desktop-auth/pending/page.tsx",
+        "apps/web/app/desktop-auth/request/route.ts",
+        "apps/web/app/login/actions.ts",
+        "apps/web/app/login/page.tsx",
+        "apps/web/app/workspace/settings/login-methods/actions.ts",
+        "apps/web/auth.ts",
+        "apps/web/components/account-access-form.tsx",
+        "apps/web/components/account-sign-in-methods.tsx",
+        "apps/web/components/desktop-auth-handoff-links.tsx",
+        "apps/web/lib/account-recovery-flow.test.ts",
+        "apps/web/lib/desktop-auth-protocol.ts",
+        "apps/web/lib/desktop-auth.test.ts",
+        "apps/web/lib/loginSubmitGate.ts",
+        "apps/web/lib/server/desktopAuth.ts",
+        "apps/web/lib/server/desktopReceipt.ts",
+        "apps/web/lib/server/loginSingleFlight.ts",
+        "packages/contracts/src/client.ts",
+        "packages/contracts/src/desktopAuthSchemas.ts",
+        "packages/contracts/src/index.ts",
+        "scripts/check-architecture-boundaries.mjs"
+      ]
+    },
+    {
+      "sha": "0788afacabb3fc0ba9dce90e33bfd3dd47a2a775",
+      "subject": "Preserve desktop recovery authority and bind receipt semantics",
+      "source_paths_changed": [
+        "apps/backend/src/modules/desktopAuth.ts",
+        "apps/macos/Sources/Features/QuietWorkspaceView.swift",
+        "apps/macos/Sources/Services/DesktopAuthenticationSession.swift",
+        "apps/macos/Tests/DesktopAuthenticationSessionTests.swift",
+        "apps/web/app/api/desktop-auth/ack/route.ts",
+        "apps/web/app/api/desktop-auth/cancel/route.ts",
+        "apps/web/app/api/desktop-auth/consume/route.ts",
+        "apps/web/app/api/desktop-auth/prepare/route.ts",
+        "apps/web/app/api/desktop-auth/result/route.ts",
+        "apps/web/lib/server/desktopAuth.ts",
+        "apps/web/lib/server/desktopReceipt.ts",
+        "packages/contracts/src/desktopAuthSchemas.ts"
+      ]
+    },
+    {
+      "sha": "e9cf8b6972083dcbc5e966ee725a4a59071f3f6a",
+      "subject": "Test proven receipt metadata and actual target response contract",
+      "source_paths_changed": [
+        "apps/backend/src/modules/desktopAuth.integration.test.ts",
+        "apps/web/app/desktop-auth-chain.test.ts"
+      ]
+    },
+    {
+      "sha": "1541ba11de5c07e1866c607e6f64fd470282671e",
+      "subject": "Keep login observation separate from credential acknowledgement",
+      "source_paths_changed": [
+        "apps/web/app/api/desktop-auth/result/route.ts"
+      ]
+    },
+    {
+      "sha": "0562a53a6af536cbad95be7ebfa7b6e63c062430",
+      "subject": "Regress committed login result without cookie installation",
+      "source_paths_changed": [
+        "apps/web/app/desktop-auth-chain.test.ts"
+      ]
+    },
+    {
+      "sha": "7040320a7cae48cfcfacb956bc837e14231f8d80",
+      "subject": "Preserve the reviewed login layout in desktop integration",
+      "source_paths_changed": [
+        "apps/web/app/login/page.tsx",
+        "apps/web/components/account-access-form.tsx"
+      ]
+    },
+    {
+      "sha": "4ebafd682cc031627695c69e07f519e50615e6cc",
+      "subject": "Bind independent transport proof and actual navigation boundary",
+      "source_paths_changed": []
+    },
+    {
+      "sha": "4f85655560bbadf38f0d91bfdca3e6c2e46425cb",
+      "subject": "Verify default native deadlines and stale timer isolation",
+      "source_paths_changed": []
+    }
+  ],
+  "scope": {
+    "committed_source_paths": 45,
+    "working_file_snapshots": 7,
+    "working_paths_overlapping_committed_changes": 2,
+    "preserved_source_files": 50,
+    "source_bytes": 1118939,
+    "snapshot_selection": "Latest r41 working bytes for the seven reviewed working files; historical-head bytes for all other source paths changed by the eight commits. Intermediate commit versions are not included.",
+    "execution_authority": false,
+    "build_or_runtime_wiring_added": false,
+    "full_history_backup": false
+  },
+  "hash_contract": {
+    "sha256": "SHA-256 of exact raw bytes; no newline or formatting normalization.",
+    "git_blob_sha1": "SHA-1 of Git blob framing: blob <byte-length> NUL <raw bytes>."
+  },
+  "remote_inspection_scope": {
+    "fresh_origin_main": "e4465fb1f9b2be8be81211cb0c6c9f937f2b2559",
+    "r41_head_github_object_available": false,
+    "local_remote_ref_history_objects": 25599,
+    "additional_known_github_tip_history_objects": 5544,
+    "complete_commit_and_tree_traversal": true,
+    "note": "No exact selected blob occurred in the inspected remote-ref history or in locally present histories of 192 tips independently available through the GitHub object API. This is bounded reachability evidence, not an exhaustive search of all hidden or unreachable GitHub objects."
+  },
+  "excluded": [
+    "Old Git history and intermediate source versions",
+    "Evaluation payloads, receipts, screenshots and transcripts",
+    "Runtime data, logs, browser state, real accounts and serialized credentials",
+    "Machine configuration, environment files and generated next-env.d.ts",
+    "Build outputs and dependencies"
+  ],
+  "files": [
+    {
+      "original_path": "apps/backend/src/app.ts",
+      "preserved_path": "source/apps/backend/src/app.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 91419,
+      "sha256": "b3358747b56c081c7b82078de3f5175b44454011bfaad60fbcc9d345c50e7447",
+      "git_blob_sha1": "b3da816abad6903fc36791d99d2e37ce27c37d85",
+      "r41_committed_head_blob_sha1": "b3da816abad6903fc36791d99d2e37ce27c37d85",
+      "archive_base_main_blob_sha1": "1d9e1c82e2981a942ceac1d7b2d3f8ed63b89bd2",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/backend/src/database/085_desktop_auth_attempts.sql",
+      "preserved_path": "source/apps/backend/src/database/085_desktop_auth_attempts.sql.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 7720,
+      "sha256": "08ece35735de887f3608e02a352bb6b025a3d19dceb481834adf36a322683413",
+      "git_blob_sha1": "b8c4384ca0438318d289c5afcbbe0599a3b22ccd",
+      "r41_committed_head_blob_sha1": "b8c4384ca0438318d289c5afcbbe0599a3b22ccd",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/backend/src/database/schema.test.ts",
+      "preserved_path": "source/apps/backend/src/database/schema.test.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 34484,
+      "sha256": "27a54aff87ccbe4ee43c7dc4c7f5ad9e27ebd40e0fab610c544063d6873f3cca",
+      "git_blob_sha1": "bda38c804cb6b701df8d7f34d6c51354e67d09b6",
+      "r41_committed_head_blob_sha1": "bda38c804cb6b701df8d7f34d6c51354e67d09b6",
+      "archive_base_main_blob_sha1": "ba9ba9441b5877d8fd55f3aacc55d2a13449fbd9",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/backend/src/modules/accountIdentity.ts",
+      "preserved_path": "source/apps/backend/src/modules/accountIdentity.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 26882,
+      "sha256": "cccd8c7d84cd7b5b226bf981a2f62b523fce13c4cb9705f263df964ac4ad0645",
+      "git_blob_sha1": "6373aa6e2b89a8293dca1ea812c0e3befe3238e5",
+      "r41_committed_head_blob_sha1": "6373aa6e2b89a8293dca1ea812c0e3befe3238e5",
+      "archive_base_main_blob_sha1": "98b278bb08729d102b422613f92a4189b21ebe1f",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/backend/src/modules/accountLoginMethods.ts",
+      "preserved_path": "source/apps/backend/src/modules/accountLoginMethods.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 32680,
+      "sha256": "8aa9f7b1d2b8b88264bbacbe415acc7c0f24f71c63d064ee826863173d495f06",
+      "git_blob_sha1": "49b6efadd0ee0814647075aa5ecab7e6f59a4037",
+      "r41_committed_head_blob_sha1": "49b6efadd0ee0814647075aa5ecab7e6f59a4037",
+      "archive_base_main_blob_sha1": "823c443214ee22776adeab7d946aa3724718cb5f",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/backend/src/modules/desktopAuth.integration.test.ts",
+      "preserved_path": "source/apps/backend/src/modules/desktopAuth.integration.test.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 123151,
+      "sha256": "0d7003bf7dd99f62c79e4509e25010c7b4e19a63d7eb48872ca9db8b91220bcf",
+      "git_blob_sha1": "59f91b4c8640717d0a47e23ef328651af371464d",
+      "r41_committed_head_blob_sha1": "59f91b4c8640717d0a47e23ef328651af371464d",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/backend/src/modules/desktopAuth.test.ts",
+      "preserved_path": "source/apps/backend/src/modules/desktopAuth.test.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 2202,
+      "sha256": "deb5e31620f4cf6f6d7efd327f271faa4a84ede27c7f80c440c73b916fc37173",
+      "git_blob_sha1": "a5ce0dbc22fbc02ff7f90e40db84fbb515a8647b",
+      "r41_committed_head_blob_sha1": "a5ce0dbc22fbc02ff7f90e40db84fbb515a8647b",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/backend/src/modules/desktopAuth.ts",
+      "preserved_path": "source/apps/backend/src/modules/desktopAuth.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 87586,
+      "sha256": "18f80a19f3b82fe7485f61a2b8ebe4abd33cc6f9bece57ce95645313054c23b5",
+      "git_blob_sha1": "666bc9ab359a486573137a74d5cf205188f0c808",
+      "r41_committed_head_blob_sha1": "666bc9ab359a486573137a74d5cf205188f0c808",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/macos/Sources/App/AppModel.swift",
+      "preserved_path": "source/apps/macos/Sources/App/AppModel.swift.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 98605,
+      "sha256": "2bfdefe49cf1666be13f656419cf8c7aae89e95e5fef841e33c240e208f4b030",
+      "git_blob_sha1": "e563836d4fbef18583eff271235d72697e233560",
+      "r41_committed_head_blob_sha1": "e563836d4fbef18583eff271235d72697e233560",
+      "archive_base_main_blob_sha1": "701827db45e8e63b02a82b5a46a35e854d870b5a",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/macos/Sources/Features/QuietWorkspaceView.swift",
+      "preserved_path": "source/apps/macos/Sources/Features/QuietWorkspaceView.swift.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 37738,
+      "sha256": "765fea9f0eb8f3f466be2497bc1eab3ac25629e68ed71425a1f62926f6b3334a",
+      "git_blob_sha1": "1b22316543efff531eb6c000a81e7d8e91121e72",
+      "r41_committed_head_blob_sha1": "1b22316543efff531eb6c000a81e7d8e91121e72",
+      "archive_base_main_blob_sha1": "7e5ef507cf362d2bf5dc55d71af2c6ae93a1f201",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/macos/Sources/Services/DesktopAuthenticationSession.swift",
+      "preserved_path": "source/apps/macos/Sources/Services/DesktopAuthenticationSession.swift.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 73913,
+      "sha256": "2f909e2faa6bb6b72c1f9690c95778d5b712587bda8af361c5f65c8740e86e5c",
+      "git_blob_sha1": "33d6b130ac73c0191879b179874663a9884a2615",
+      "r41_committed_head_blob_sha1": "33d6b130ac73c0191879b179874663a9884a2615",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/macos/Sources/Services/PrimaryLoginStoreRegistry.swift",
+      "preserved_path": "source/apps/macos/Sources/Services/PrimaryLoginStoreRegistry.swift.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 29362,
+      "sha256": "53f6759d358fe9a93be1bdd4d08a0fe9fe23c198c84b856bf642c83211233029",
+      "git_blob_sha1": "e3eab7724615c0824cd8433861edc360c8e4372b",
+      "r41_committed_head_blob_sha1": "e3eab7724615c0824cd8433861edc360c8e4372b",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/macos/Tests/DesktopAuthenticationSessionTests.swift",
+      "preserved_path": "source/apps/macos/Tests/DesktopAuthenticationSessionTests.swift.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 49647,
+      "sha256": "ef1ca168fb67c3d0585ed04b33fc74709649dfd0cc483b26bb7c81ad3c6659fc",
+      "git_blob_sha1": "ca45a16812393d14575264f9b06da55b0ddef4c5",
+      "r41_committed_head_blob_sha1": "ca45a16812393d14575264f9b06da55b0ddef4c5",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/macos/Tests/PrimaryLoginStoreRegistryTests.swift",
+      "preserved_path": "source/apps/macos/Tests/PrimaryLoginStoreRegistryTests.swift.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 12254,
+      "sha256": "e403be0a1ed51d0642bec69998889b41881cde02e43ba1a744bb26cdf4728529",
+      "git_blob_sha1": "a52f8f58c8772ec0e1e75d8100254f7002e7344b",
+      "r41_committed_head_blob_sha1": "a52f8f58c8772ec0e1e75d8100254f7002e7344b",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/api/desktop-auth/ack/route.ts",
+      "preserved_path": "source/apps/web/app/api/desktop-auth/ack/route.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 5241,
+      "sha256": "a7b6d2f421fea090318b071722bbe230b7ec693f65c7742a08afd5aaf44f47a4",
+      "git_blob_sha1": "71c69886a20031a2bea671eed269cfa68df521a3",
+      "r41_committed_head_blob_sha1": "71c69886a20031a2bea671eed269cfa68df521a3",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/api/desktop-auth/cancel/route.ts",
+      "preserved_path": "source/apps/web/app/api/desktop-auth/cancel/route.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 9472,
+      "sha256": "b7278f5792e2ec0c5c78446a120cfbd0be02dd65ad87629ee61fc5088476fb4e",
+      "git_blob_sha1": "17562ca64e596bda51db2e6e9fa9af7e5030a522",
+      "r41_committed_head_blob_sha1": "17562ca64e596bda51db2e6e9fa9af7e5030a522",
+      "archive_base_main_blob_sha1": "3fa77e9ad958133f41a1260b152fab9e62085b60",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/api/desktop-auth/consume/route.ts",
+      "preserved_path": "source/apps/web/app/api/desktop-auth/consume/route.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 10961,
+      "sha256": "98ff1153efa133d0fedc7790a00d4de57c04bcaade91294299509be44768923d",
+      "git_blob_sha1": "ee26610d8870351b20d514a42a62c8e0cf867c2f",
+      "r41_committed_head_blob_sha1": "ee26610d8870351b20d514a42a62c8e0cf867c2f",
+      "archive_base_main_blob_sha1": "09bbe9f83712db4856f9e38f0094d01fe2de18f8",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/api/desktop-auth/prepare/route.ts",
+      "preserved_path": "source/apps/web/app/api/desktop-auth/prepare/route.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 9278,
+      "sha256": "30404cff624676bbadd18782eb6f8fdd79c68ee650d5318f17219ed225cf4d28",
+      "git_blob_sha1": "3a627207c6b0e6447859f7055f34258f3afd968f",
+      "r41_committed_head_blob_sha1": "3a627207c6b0e6447859f7055f34258f3afd968f",
+      "archive_base_main_blob_sha1": "85a0a0b8c72515d6c680036ba5dd290979c3c7ce",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/api/desktop-auth/result/route.ts",
+      "preserved_path": "source/apps/web/app/api/desktop-auth/result/route.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 5315,
+      "sha256": "694a749715cbe5810dc1853236d11ebbfa1f10c2e0857c5cb4d6a0e9e7d26d1a",
+      "git_blob_sha1": "064eddacd524cf37071990253db4da06b494cd99",
+      "r41_committed_head_blob_sha1": "064eddacd524cf37071990253db4da06b494cd99",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/api/desktop-auth/status/route.test.ts",
+      "preserved_path": "source/apps/web/app/api/desktop-auth/status/route.test.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 5311,
+      "sha256": "291d0341529e590aeb611da58e6bf26d8f8f1094beaaa182ffd0ad9f034646d2",
+      "git_blob_sha1": "5b9a8d90206c40dd7ca38f7ef0f350f92f19a181",
+      "r41_committed_head_blob_sha1": "5b9a8d90206c40dd7ca38f7ef0f350f92f19a181",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/api/desktop-auth/status/route.ts",
+      "preserved_path": "source/apps/web/app/api/desktop-auth/status/route.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 1687,
+      "sha256": "2d03eed730b4041d62f8eadfc0dcb3f0591c1c15697fc02b1aedc8fccb6008aa",
+      "git_blob_sha1": "3f52b909e75a5f44079dfd546dd6f7625a84e481",
+      "r41_committed_head_blob_sha1": "3f52b909e75a5f44079dfd546dd6f7625a84e481",
+      "archive_base_main_blob_sha1": "f0f6605b3294e5ad8a9e8280b53385ea299539dd",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/desktop-auth-chain.test.ts",
+      "preserved_path": "source/apps/web/app/desktop-auth-chain.test.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 65771,
+      "sha256": "58d9aba8aca37b2ac2caa89a27223dfc9c251364c0b8abcee67979eabdbe2a7f",
+      "git_blob_sha1": "5856503a70cdf2070376f4b7c8569c64a7dcacdb",
+      "r41_committed_head_blob_sha1": "5856503a70cdf2070376f4b7c8569c64a7dcacdb",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/desktop-auth/authorize/route.ts",
+      "preserved_path": "source/apps/web/app/desktop-auth/authorize/route.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 4108,
+      "sha256": "a6e890295fcc81e34d2fd0ad96201af4ed640bf08cae66d100ba8a6f42bab553",
+      "git_blob_sha1": "3164ff1a39657dd2eb7c8bfcc89e7d1c00f280af",
+      "r41_committed_head_blob_sha1": "3164ff1a39657dd2eb7c8bfcc89e7d1c00f280af",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/desktop-auth/check-result/route.ts",
+      "preserved_path": "source/apps/web/app/desktop-auth/check-result/route.ts.source.txt",
+      "snapshot_kind": "working-tree",
+      "bytes": 720,
+      "sha256": "e99f18feda14137239138a29d0e5f6341bb706b7bd7176e936bb4ed0d106ecbc",
+      "git_blob_sha1": "48694bbd5b90ead9f8538a8b0d61dd3911e3c998",
+      "r41_committed_head_blob_sha1": null,
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/desktop-auth/complete/route.ts",
+      "preserved_path": "source/apps/web/app/desktop-auth/complete/route.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 3806,
+      "sha256": "01bf53a658e12225594059238dab824aedad470f3b2732826f72239948f503e0",
+      "git_blob_sha1": "80e45b790d849864ede2e8a48ef84047df144928",
+      "r41_committed_head_blob_sha1": "80e45b790d849864ede2e8a48ef84047df144928",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/desktop-auth/confirm/page.tsx",
+      "preserved_path": "source/apps/web/app/desktop-auth/confirm/page.tsx.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 4777,
+      "sha256": "6b4c4e4e182acf2920c12ceb281906c7e098296de1e6ba42f1cd5339f65a6eab",
+      "git_blob_sha1": "af3394804b327851b5effb198af98aa14124ddba",
+      "r41_committed_head_blob_sha1": "af3394804b327851b5effb198af98aa14124ddba",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/desktop-auth/pending/page.tsx",
+      "preserved_path": "source/apps/web/app/desktop-auth/pending/page.tsx.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 1673,
+      "sha256": "8d4015eb7d45718f6ec558fc9823b1ec92223882b1f03fb6eb889035ce58030a",
+      "git_blob_sha1": "f1a5594df49579578393886820f8317a7892ff8b",
+      "r41_committed_head_blob_sha1": "f1a5594df49579578393886820f8317a7892ff8b",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/desktop-auth/request/route.ts",
+      "preserved_path": "source/apps/web/app/desktop-auth/request/route.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 989,
+      "sha256": "1ea5484010ecf21be60795b70ca8fde186d229ad59fc6e97422761dda68ab0d7",
+      "git_blob_sha1": "dd9f52a23e617e3b0352700b11bbc71a087fee3d",
+      "r41_committed_head_blob_sha1": "dd9f52a23e617e3b0352700b11bbc71a087fee3d",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/login/actions.ts",
+      "preserved_path": "source/apps/web/app/login/actions.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 10849,
+      "sha256": "057f54f2713b5549ce68e3f15048e47029b2db22e277c1355148134cc65d87aa",
+      "git_blob_sha1": "945da80acd938bfc1ce4618e7f2537a77e6a7fcc",
+      "r41_committed_head_blob_sha1": "945da80acd938bfc1ce4618e7f2537a77e6a7fcc",
+      "archive_base_main_blob_sha1": "62d365bce15489b634ba00f348e91fa96244adb0",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/login/page.tsx",
+      "preserved_path": "source/apps/web/app/login/page.tsx.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 8977,
+      "sha256": "379bb6bc3f50dfee725f7ad32413c8a3817da9d35bd900612f7ff0d46b61b18d",
+      "git_blob_sha1": "986e305889f910fb8f771fc20d5cfd90dc31bcda",
+      "r41_committed_head_blob_sha1": "986e305889f910fb8f771fc20d5cfd90dc31bcda",
+      "archive_base_main_blob_sha1": "5d1f17adf4d4a7def07d80db530649d510c4cac9",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/workspace/settings/link-complete/link/page.tsx",
+      "preserved_path": "source/apps/web/app/workspace/settings/link-complete/link/page.tsx.source.txt",
+      "snapshot_kind": "working-tree",
+      "bytes": 1448,
+      "sha256": "734d2509212be3813035e51df4440fbb494b47d4cbefa1efb94f703ae334f981",
+      "git_blob_sha1": "7791467824490b34da0e685f9e56f712744fb335",
+      "r41_committed_head_blob_sha1": "577b9d9373f6a4aba508d6538f58b67e6643b91d",
+      "archive_base_main_blob_sha1": "269da9eafedaa7834405a4b4a96461bc56fc7080",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/workspace/settings/link-complete/password/page.tsx",
+      "preserved_path": "source/apps/web/app/workspace/settings/link-complete/password/page.tsx.source.txt",
+      "snapshot_kind": "working-tree",
+      "bytes": 1337,
+      "sha256": "aa5773484f2c877d3a84b11921064b3dcef8f804657d8e8fb499b3a443229d23",
+      "git_blob_sha1": "3d303eb7101883f422d882e5ccd8b53aa1eeb9a9",
+      "r41_committed_head_blob_sha1": "32d544d2e3049b3e879785bd8559337045516315",
+      "archive_base_main_blob_sha1": "9ff52338880c66a7df4232e28b4bd2c2dc168ccb",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/workspace/settings/link-complete/staged-forms.tsx",
+      "preserved_path": "source/apps/web/app/workspace/settings/link-complete/staged-forms.tsx.source.txt",
+      "snapshot_kind": "working-tree",
+      "bytes": 7484,
+      "sha256": "3c4133be187896206fd06f3ade227cceeb0ae8bf3154bdaf778098442b5a2d6a",
+      "git_blob_sha1": "869c56223f87ba186c4dbcf63e89c446ce1660aa",
+      "r41_committed_head_blob_sha1": "ff102f7ae1455a43b5347547f322c634275dccb4",
+      "archive_base_main_blob_sha1": "f91fa9b2c0236bd3e85f35b64aff8003e0bf4046",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/app/workspace/settings/login-methods/actions.ts",
+      "preserved_path": "source/apps/web/app/workspace/settings/login-methods/actions.ts.source.txt",
+      "snapshot_kind": "working-tree",
+      "bytes": 29251,
+      "sha256": "10883a0b038ec9048ea659ffdac2b9cdc596e57a6d71767f8d9b3022e1d2495f",
+      "git_blob_sha1": "e88b1ecfb51c53b1a777f85a1051b913f7728eb0",
+      "r41_committed_head_blob_sha1": "48a9d892866261a52e6619d7e37524935b11bf2d",
+      "archive_base_main_blob_sha1": "9327a809ba08ab94d6ab1b5a011fd711e585e17d",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/auth.ts",
+      "preserved_path": "source/apps/web/auth.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 22477,
+      "sha256": "eeb0b214d7e3d1ad6ca8a24ad33ae50007969999ccc5c50032fb8f2b07cf1109",
+      "git_blob_sha1": "5ec799550e6d86eba08ba8d9040ed1284ea4cd98",
+      "r41_committed_head_blob_sha1": "5ec799550e6d86eba08ba8d9040ed1284ea4cd98",
+      "archive_base_main_blob_sha1": "c8fe183cecbf4c50b0aa89e3827e70b5ce609588",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/components/account-access-form.tsx",
+      "preserved_path": "source/apps/web/components/account-access-form.tsx.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 7218,
+      "sha256": "c88a731d7a54eaa0a5335eeed6a8043d7be9e7aae94bdb5592aaeae82eebbf00",
+      "git_blob_sha1": "ad193c123f82dc7f0c6dcbeb9bf085e280ad5a43",
+      "r41_committed_head_blob_sha1": "ad193c123f82dc7f0c6dcbeb9bf085e280ad5a43",
+      "archive_base_main_blob_sha1": "951364d0293053815e466f5b0f9ba3257e88bbde",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/components/account-sign-in-methods.tsx",
+      "preserved_path": "source/apps/web/components/account-sign-in-methods.tsx.source.txt",
+      "snapshot_kind": "working-tree",
+      "bytes": 17357,
+      "sha256": "0532bf4fab9324f104b4f6d0b20b88ee0db1b8c2a0e804d6f3e2be12fad61623",
+      "git_blob_sha1": "9eff2d22e9fb468f688ca082b0118d2340836793",
+      "r41_committed_head_blob_sha1": "3c37c4b2177bcdf58f4166e8375c21db57c668a4",
+      "archive_base_main_blob_sha1": "c12c3be4ec20b648e3a66df1f94d8681ae32e876",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/components/desktop-auth-handoff-links.tsx",
+      "preserved_path": "source/apps/web/components/desktop-auth-handoff-links.tsx.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 2239,
+      "sha256": "7ef61b0392d93d7145d315f23bad771d4674f465fb5488c5ba71a5ee7aa87782",
+      "git_blob_sha1": "9af5e2ba0ad670da0d62e2e25ce1083388b2f6bc",
+      "r41_committed_head_blob_sha1": "9af5e2ba0ad670da0d62e2e25ce1083388b2f6bc",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/lib/account-recovery-flow.test.ts",
+      "preserved_path": "source/apps/web/lib/account-recovery-flow.test.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 27496,
+      "sha256": "047a66c518e730cf355c4f524bc27206109adbbc922cb17d027ee3ad94352c24",
+      "git_blob_sha1": "16a5e8d82eb1ba994e71266284e5a3fb43a867eb",
+      "r41_committed_head_blob_sha1": "16a5e8d82eb1ba994e71266284e5a3fb43a867eb",
+      "archive_base_main_blob_sha1": "0d90173189c5f169015c9a33b7c0a6a4a83b22ba",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/lib/desktop-auth-protocol.ts",
+      "preserved_path": "source/apps/web/lib/desktop-auth-protocol.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 7844,
+      "sha256": "5222859ca73339856bc44723cd2dfd2498471cd7cfdace4bc90fb632885eff23",
+      "git_blob_sha1": "7c4cdee42ea92af1960355aac7e6d808ac4fa817",
+      "r41_committed_head_blob_sha1": "7c4cdee42ea92af1960355aac7e6d808ac4fa817",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/lib/desktop-auth.test.ts",
+      "preserved_path": "source/apps/web/lib/desktop-auth.test.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 8425,
+      "sha256": "dca111e5a9b0be965ef1e9989f28e6b7b64b3e8587264c32ff69160ac51d35c0",
+      "git_blob_sha1": "3a74e31e20d6278d48a212d5c67deb228cb91065",
+      "r41_committed_head_blob_sha1": "3a74e31e20d6278d48a212d5c67deb228cb91065",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/lib/loginSubmitGate.ts",
+      "preserved_path": "source/apps/web/lib/loginSubmitGate.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 1135,
+      "sha256": "07c6e4206929c6ff922d13d48984ca95ace5071c9b9aaa878b39a2f529e3b783",
+      "git_blob_sha1": "5755a9ef534339fea518f6488233f9462ac83afb",
+      "r41_committed_head_blob_sha1": "5755a9ef534339fea518f6488233f9462ac83afb",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/lib/server/desktopAuth.ts",
+      "preserved_path": "source/apps/web/lib/server/desktopAuth.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 18050,
+      "sha256": "77d106bd0d7ad3a56e35e57ba7c6c3f7ff6af7b94005e5fb44f6ca47611b24af",
+      "git_blob_sha1": "c058b8e9d1cf0fb8424f47cc2fed65329c142930",
+      "r41_committed_head_blob_sha1": "c058b8e9d1cf0fb8424f47cc2fed65329c142930",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/lib/server/desktopCredentialPresentation.ts",
+      "preserved_path": "source/apps/web/lib/server/desktopCredentialPresentation.ts.source.txt",
+      "snapshot_kind": "working-tree",
+      "bytes": 5197,
+      "sha256": "e8eb90a5fdff56710bf50074a71127c8dca48382659b2dee979ed96f25cfef13",
+      "git_blob_sha1": "ad2d1c811eb8457fe175cf0f3ff747cb66a5abe8",
+      "r41_committed_head_blob_sha1": null,
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/lib/server/desktopReceipt.ts",
+      "preserved_path": "source/apps/web/lib/server/desktopReceipt.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 5177,
+      "sha256": "2354e7d71230ae12dfa7ef2788d271ba79c7575a8b363556cf73b44c41e281c9",
+      "git_blob_sha1": "cb83ed56a425b3690865aacb47e72d1793518a31",
+      "r41_committed_head_blob_sha1": "cb83ed56a425b3690865aacb47e72d1793518a31",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "apps/web/lib/server/loginSingleFlight.ts",
+      "preserved_path": "source/apps/web/lib/server/loginSingleFlight.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 2021,
+      "sha256": "7226e39e07d7e5ff7a0f261b3acfff5759d6a3f87f14b1d4324de93d5553b4d9",
+      "git_blob_sha1": "1b9eaad08f8dd9613f79b75d8bc96f6a0be3ddb7",
+      "r41_committed_head_blob_sha1": "1b9eaad08f8dd9613f79b75d8bc96f6a0be3ddb7",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "packages/contracts/src/client.ts",
+      "preserved_path": "source/packages/contracts/src/client.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 54332,
+      "sha256": "897f6ac38408e35b79b1f8d7e569f0fbf7a08dd98a79ab37446c98435eb53922",
+      "git_blob_sha1": "16591f31c6f0f51176573a37a4acdb95c078ee9b",
+      "r41_committed_head_blob_sha1": "16591f31c6f0f51176573a37a4acdb95c078ee9b",
+      "archive_base_main_blob_sha1": "0b2b70b95437733575679b846e0f100e80e6fb6e",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "packages/contracts/src/desktopAuthSchemas.ts",
+      "preserved_path": "source/packages/contracts/src/desktopAuthSchemas.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 16549,
+      "sha256": "512d98daa155a3304d009ee140c2f8bd5b75f2892dae83b41e0de8d6761f0033",
+      "git_blob_sha1": "8089bbc185f38b845b7a2e159efeb3161f570779",
+      "r41_committed_head_blob_sha1": "8089bbc185f38b845b7a2e159efeb3161f570779",
+      "archive_base_main_blob_sha1": null,
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "packages/contracts/src/index.ts",
+      "preserved_path": "source/packages/contracts/src/index.ts.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 1160,
+      "sha256": "1ca4c8e640e87c133fa6d66dc88bfc14b589e6a8ace1de0622c9de9c9408b8f5",
+      "git_blob_sha1": "162119048d70d49861b6b35e9d74548b2ae74a5a",
+      "r41_committed_head_blob_sha1": "162119048d70d49861b6b35e9d74548b2ae74a5a",
+      "archive_base_main_blob_sha1": "d608e9ecd6903351359a452948aeff628ae5167a",
+      "exact_blob_in_inspected_github_history": false
+    },
+    {
+      "original_path": "scripts/check-architecture-boundaries.mjs",
+      "preserved_path": "source/scripts/check-architecture-boundaries.mjs.source.txt",
+      "snapshot_kind": "historical-commit",
+      "bytes": 26164,
+      "sha256": "162c86a4d9c93b5de0b7f3ddb950baa7c894a8c2c736d2a70953d520e77c1cdb",
+      "git_blob_sha1": "c476bacaeb7b1fc3a2c0365b83a8ac697a6cc869",
+      "r41_committed_head_blob_sha1": "c476bacaeb7b1fc3a2c0365b83a8ac697a6cc869",
+      "archive_base_main_blob_sha1": "78aff153fbd62280373ee0632c930ce80d532b48",
+      "exact_blob_in_inspected_github_history": false
+    }
+  ]
+}

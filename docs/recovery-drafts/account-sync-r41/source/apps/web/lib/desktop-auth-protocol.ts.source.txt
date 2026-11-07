@@ -1,0 +1,213 @@
+import {
+  DESKTOP_AUTH_CALLBACK_URL,
+  DESKTOP_AUTH_CONFIRM_PATH,
+  DESKTOP_AUTH_ATTEMPT_TTL_SECONDS,
+  type DesktopAuthProvider,
+  type DesktopAuthPurpose,
+  type DesktopAuthRole,
+  type DesktopCredentialIntent,
+  type DesktopTargetProvider,
+} from "@talent-signal/contracts";
+
+/**
+ * Pure protocol policy for the macOS system authentication handoff
+ * (ADR 0019) and credential proof rounds (ADR 0020). No server-only imports
+ * live here so the policy is directly testable; transport state (pairing
+ * cookies, sealed browser-attempt cookies, sealed WK continuations) stays in
+ * `lib/server/desktopAuth.ts`.
+ */
+
+export const DESKTOP_BROWSER_ATTEMPT_COOKIE_PREFIX = "talent-signal.desktop-browser-attempt";
+/** Legacy singleton name kept only for evidence compatibility. */
+export const DESKTOP_BROWSER_ATTEMPT_COOKIE = DESKTOP_BROWSER_ATTEMPT_COOKIE_PREFIX;
+export const DESKTOP_CONTINUATION_COOKIE_PREFIX = "talent-signal.desktop-continuation";
+export const DESKTOP_FLOW_POINTER_PREFIX = "talent-signal.desktop-flow";
+export const DESKTOP_BROWSER_ATTEMPT_TTL_SECONDS = DESKTOP_AUTH_ATTEMPT_TTL_SECONDS;
+
+export const DESKTOP_AUTH_RETURN_PATHS = {
+  login: "/login",
+  credential_round: "/workspace/settings",
+} as const satisfies Record<DesktopAuthPurpose, string>;
+
+export type DesktopBrowserAttempt = {
+  attempt_id: string;
+  provider: DesktopAuthProvider;
+  purpose: DesktopAuthPurpose;
+  role: DesktopAuthRole;
+  /** Raw native state, retained only in the sealed cookie for the callback. */
+  state: string;
+  challenge_id: string;
+  /** The exact Web origin this attempt is bound to. */
+  web_origin: string;
+  flow_ref?: string;
+  round_ref?: string;
+  intent?: DesktopCredentialIntent;
+  target_provider?: DesktopTargetProvider;
+  createdAt: string;
+};
+
+function assertAttemptId(attemptId: string): void {
+  if (!/^[A-Za-z0-9-]{8,200}$/.test(attemptId)) {
+    throw new Error("Invalid desktop auth attempt identifier.");
+  }
+}
+
+/** Attempt-specific pairing cookie name (WK jar); one attempt never owns another's state. */
+export function pairingCookieName(attemptId: string): string {
+  assertAttemptId(attemptId);
+  return `talent-signal.desktop-pair-${attemptId}`;
+}
+
+/**
+ * Attempt-specific sealed browser-attempt cookie name (system jar). A delayed
+ * response for attempt A can only ever write or delete A's own cookie; a newer
+ * B is never cleared or overwritten by an old response.
+ */
+export function browserAttemptCookieName(attemptId: string): string {
+  assertAttemptId(attemptId);
+  return `${DESKTOP_BROWSER_ATTEMPT_COOKIE_PREFIX}-${attemptId}`;
+}
+
+/** Attempt-specific sealed WK continuation cookie name (WK jar). */
+export function continuationCookieName(attemptId: string): string {
+  assertAttemptId(attemptId);
+  return `${DESKTOP_CONTINUATION_COOKIE_PREFIX}-${attemptId}`;
+}
+
+export type DesktopProviderReturnDecision =
+  | { kind: "desktop"; attemptId: string }
+  | { kind: "ordinary" }
+  | { kind: "fail-closed" };
+
+/**
+ * Pure routing policy for a provider return. A desktop return is recognized
+ * only by its own round: the fixed confirm path naming the attempt. Anything
+ * addressed to the desktop confirm path without its own sealed attempt fails
+ * closed instead of falling through to ordinary login.
+ */
+export function resolveDesktopProviderReturn(input: {
+  attemptIdFromCallback: string | null;
+  callbackPath: string | null;
+}): DesktopProviderReturnDecision {
+  const addressedToConfirm = input.callbackPath === DESKTOP_AUTH_CONFIRM_PATH;
+  if (!input.attemptIdFromCallback) {
+    return addressedToConfirm ? { kind: "fail-closed" } : { kind: "ordinary" };
+  }
+  if (!addressedToConfirm) return { kind: "ordinary" };
+  return { kind: "desktop", attemptId: input.attemptIdFromCallback };
+}
+
+/** The fixed success callback carries only attempt, one-time code and state. */
+export function desktopCallbackURL(attemptId: string, code: string, state: string): string {
+  const url = new URL(DESKTOP_AUTH_CALLBACK_URL);
+  url.searchParams.set("attempt", attemptId);
+  url.searchParams.set("code", code);
+  url.searchParams.set("state", state);
+  return url.toString();
+}
+
+/**
+ * The fixed terminal cancel callback (ADR 0020): attempt, state and
+ * `outcome=cancelled`, mutually exclusive with code. No bearer, provider token
+ * or error prose ever enters this URL.
+ */
+export function desktopCancelCallbackURL(attemptId: string, state: string): string {
+  const url = new URL(DESKTOP_AUTH_CALLBACK_URL);
+  url.searchParams.set("attempt", attemptId);
+  url.searchParams.set("state", state);
+  url.searchParams.set("outcome", "cancelled");
+  return url.toString();
+}
+
+export type DesktopParsedCallback =
+  | { kind: "success"; attemptId: string; code: string; state: string }
+  | { kind: "cancelled"; attemptId: string; state: string };
+
+/**
+ * Strict parser for the fixed native callback (both variants). Rejects
+ * fragments, non-canonical trailing slashes, duplicate/empty/unknown query
+ * keys, userinfo and ports, and any spelling that is not exactly the fixed
+ * scheme/host/path.
+ */
+export function parseDesktopCallback(raw: string): DesktopParsedCallback | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== `${DESKTOP_AUTH_CALLBACK_URL.split("://")[0]}:` ||
+    url.host !== "complete" ||
+    url.pathname !== "" ||
+    url.hash !== "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.port !== "" ||
+    url.href !== `${DESKTOP_AUTH_CALLBACK_URL}?${url.searchParams.toString()}`
+  ) {
+    return null;
+  }
+  const entries = [...url.searchParams.entries()];
+  const keys = entries.map(([key]) => key).sort();
+  const read = (name: string) => {
+    const values = entries.filter(([key]) => key === name).map(([, value]) => value);
+    return values.length === 1 && values[0] !== "" ? values[0] : null;
+  };
+  const attemptId = read("attempt");
+  const state = read("state");
+  if (!attemptId || !state || !/^[A-Za-z0-9-]{8,200}$/.test(attemptId)) return null;
+  const code = read("code");
+  const outcome = read("outcome");
+  if (code && outcome) return null;
+  if (code) {
+    return keys.join(",") === "attempt,code,state"
+      ? { kind: "success", attemptId, code, state }
+      : null;
+  }
+  if (outcome === "cancelled") {
+    return keys.join(",") === "attempt,outcome,state"
+      ? { kind: "cancelled", attemptId, state }
+      : null;
+  }
+  return null;
+}
+
+/** Fixed return path per purpose; arbitrary redirects are never accepted. */
+export function desktopReturnPath(purpose: DesktopAuthPurpose): string {
+  return DESKTOP_AUTH_RETURN_PATHS[purpose];
+}
+
+export type SubmittedAttemptRef =
+  | { kind: "absent" }
+  | { kind: "invalid" }
+  | { kind: "single"; attemptId: string };
+
+/**
+ * Immutable submitted form reference rules (ADR 0020): a submitted attempt
+ * must appear exactly once and be non-empty; duplicates and empty values are
+ * rejected outright. Absent references fall back to the current sealed round
+ * for compatibility with plain form posts.
+ */
+export function readSubmittedAttemptRef(values: string[]): SubmittedAttemptRef {
+  if (values.length === 0) return { kind: "absent" };
+  if (values.length > 1) return { kind: "invalid" };
+  const value = values[0];
+  if (!value || !/^[A-Za-z0-9-]{8,200}$/.test(value)) return { kind: "invalid" };
+  return { kind: "single", attemptId: value };
+}
+
+/**
+ * A rendered form may act only on the CURRENT sealed round. A stale A form
+ * with a newer B sealed round is refused without touching B's cookies or its
+ * usable form.
+ */
+export function formMatchesCurrentRound(
+  submitted: SubmittedAttemptRef,
+  currentAttemptId: string | null,
+): boolean {
+  if (!currentAttemptId) return false;
+  if (submitted.kind === "invalid") return false;
+  if (submitted.kind === "absent") return true;
+  return submitted.attemptId === currentAttemptId;
+}

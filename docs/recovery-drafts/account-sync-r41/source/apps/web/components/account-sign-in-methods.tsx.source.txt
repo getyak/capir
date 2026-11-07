@@ -1,0 +1,358 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import type { AccountSettings, SignInMethodProvider } from '@talent-signal/contracts';
+import {
+  saveAccountPassword,
+  startPasswordStepUpLink,
+  startProviderReauth,
+  unlinkLoginMethod,
+  type LoginMethodActionState,
+} from '@/app/workspace/settings/login-methods/actions';
+import { runHandoffAction } from '@/app/workspace/settings/link-complete/staged-forms';
+import { useDesktopHandoffCapability } from './desktop-auth-handoff-links';
+import styles from './account-sign-in-methods.module.css';
+
+/**
+ * Settings A sign-in methods: one quiet reading column, one row per provider,
+ * status always visible (including narrow layouts). Current-account
+ * verification is separate from new-provider confirmation, and provider-only
+ * accounts reauthenticate with a linked provider instead of a mandatory
+ * password field. Every failure and provider cancellation leaves the account
+ * unchanged and recoverable in place.
+ */
+
+const providerNames: Record<SignInMethodProvider, string> = { apple: 'Apple', google: 'Google', password: '密码' };
+const stateLabels = { connected: '已绑定', unconnected: '未绑定', legacy_unverified: '需要验证邮箱' } as const;
+
+type Flow =
+  | { kind: 'password' }
+  | { kind: 'unlink'; provider: SignInMethodProvider }
+  | { kind: 'link'; provider: 'apple' | 'google' }
+  | null;
+
+/**
+ * The operation's step-up panel. Exported for rendered-form regression tests:
+ * every entry form (current-provider AND password-first) must carry the same
+ * rendered scope and the same display-only nativeHost capability flag.
+ */
+export function OperationAuthPanel({ flow, hasPassword, connectedProviders, scope, onUpdated, onCancel }: {
+  flow: NonNullable<Flow>;
+  hasPassword: boolean;
+  connectedProviders: Array<'apple' | 'google'>;
+  scope: { accountId: string; userId: string; accountRevision: number; userRevision: number };
+  onUpdated: (settings: AccountSettings) => void;
+  onCancel: () => void;
+}) {
+  const nativeHandoff = useDesktopHandoffCapability();
+  const ScopeFields = () => (
+    <>
+      <input type="hidden" name="accountId" value={scope.accountId} />
+      <input type="hidden" name="userId" value={scope.userId} />
+      <input type="hidden" name="accountRevision" value={String(scope.accountRevision)} />
+      <input type="hidden" name="userRevision" value={scope.userRevision} />
+    </>
+  );
+  // Three distinct chains: password change, unlink, and password step-up
+  // followed by the NEW provider's own proof. A password-only owner can reach
+  // every one of them without a mandatory provider reauthentication.
+  const passwordAction =
+    flow.kind === 'unlink'
+      ? unlinkLoginMethod
+      : flow.kind === 'link'
+        ? startPasswordStepUpLink
+        : saveAccountPassword;
+  const [state, setState] = useState<LoginMethodActionState>({});
+  const [pending, setPending] = useState(false);
+  // Every successful operation carries the authoritative settings readback;
+  // the visible rows and revisions update immediately, so the next action
+  // starts against the state it is rendered from. Native handoffs are applied
+  // by the dispatch as full-document GETs (see runHandoffAction).
+  useEffect(() => {
+    if (state.data) {
+      onUpdated(state.data);
+      onCancel();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.data]);
+  const intent =
+    flow.kind === 'link' ? 'link_provider' : flow.kind === 'unlink' ? 'unlink_provider' : 'set_password';
+  const operationLabel =
+    flow.kind === 'link'
+      ? `将 ${providerNames[flow.provider]} 绑定到这个账户`
+      : flow.kind === 'unlink'
+        ? `解除 ${providerNames[flow.provider]} 绑定`
+        : hasPassword ? '更换密码' : '设置密码';
+  return (
+    <div className={styles.stepUp}>
+      <p className={styles.stepUpTitle}>{operationLabel}</p>
+      <p className={styles.secondary}>
+        {flow.kind === 'link'
+          ? '添加登录方式不会创建工作空间、移动记录或更改主邮箱。先验证当前身份。'
+          : '这一步只授权上面这项更改。先验证当前身份。'}
+      </p>
+      {hasPassword ? (
+        <form
+          action={async (formData: FormData) => {
+            setPending(true);
+            try {
+              await runHandoffAction(() => passwordAction({}, formData), setState);
+            } finally {
+              setPending(false);
+            }
+          }}
+        >
+          <ScopeFields />
+          <input type="hidden" name="nativeHost" value={nativeHandoff ? '1' : '0'} />
+          <p className={styles.stepUpTitle}>验证当前身份</p>
+          <label className={styles.field}>
+            <span>当前密码</span>
+            <input name="currentPassword" type="password" autoComplete="current-password" required minLength={1} maxLength={128} />
+          </label>
+          {flow.kind === 'password' && (
+            <label className={styles.field}>
+              <span>新密码</span>
+              <input name="newPassword" type="password" autoComplete="new-password" required minLength={8} maxLength={128} />
+            </label>
+          )}
+          {flow.kind === 'unlink' && <input type="hidden" name="provider" value={flow.provider} />}
+          {flow.kind === 'link' && <input type="hidden" name="targetProvider" value={flow.provider} />}
+          {flow.kind === 'password' && <input type="hidden" name="hasPassword" value="true" />}
+          <div className={styles.actions}>
+            <button type="submit" className={styles.primary} disabled={pending} aria-busy={pending}>
+              {pending ? '正在核验…' : '继续'}
+            </button>
+            <button type="button" className={styles.quiet} onClick={onCancel} disabled={pending}>取消</button>
+          </div>
+          <p aria-live="polite" className={state.error ? styles.error : styles.notice}>
+            {state.error ?? (state.saved ? '已保存并核验。' : '')}
+          </p>
+        </form>
+      ) : (
+        <p className={styles.secondary}>这个账户还没有密码。用已绑定的登录方式验证当前身份。</p>
+      )}
+      {connectedProviders.map(provider => (
+        <form
+          key={provider}
+          action={async (formData: FormData) => {
+            await runHandoffAction(() => startProviderReauth(formData), () => {});
+          }}
+        >
+          <ScopeFields />
+          <input type="hidden" name="nativeHost" value={nativeHandoff ? '1' : '0'} />
+          <input type="hidden" name="intent" value={intent} />
+          <input type="hidden" name="reauthProvider" value={provider} />
+          {flow.kind === 'link' && <input type="hidden" name="targetProvider" value={flow.provider} />}
+          {flow.kind === 'unlink' && <input type="hidden" name="unlinkProvider" value={flow.provider} />}
+          <div className={styles.actions}>
+            <button type="submit" className={hasPassword ? styles.quiet : styles.primary}>
+              {`使用 ${providerNames[provider]} 验证当前身份`}
+            </button>
+            {!hasPassword && (
+              <button type="button" className={styles.quiet} onClick={onCancel}>取消</button>
+            )}
+          </div>
+        </form>
+      ))}
+    </div>
+  );
+}
+
+export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
+  initial: AccountSettings;
+  linkStatus?: 'done' | 'error' | null;
+}) {
+  const [data, setData] = useState(initial);
+  const desktopHandoff = useDesktopHandoffCapability();
+  const [flow, setFlow] = useState<Flow>(null);
+  const [offline, setOffline] = useState(false);
+  // Failure/cancel recovery is visible in place: the staged round trip returns
+  // to Settings with `?link=done|error` and the row keeps its method state.
+  const [linkResult, setLinkResult] = useState<{ status: 'done' | 'error'; method?: string; state?: string } | null>(
+    linkStatusProp ? { status: linkStatusProp } : null,
+  );
+  useEffect(() => {
+    if (linkStatusProp) return;
+    const parameters = new URLSearchParams(window.location.search);
+    const value = parameters.get('link');
+    if (value === 'done' || value === 'error') {
+      setLinkResult({
+        status: value,
+        method: parameters.get('method') ?? undefined,
+        state: parameters.get('state') ?? undefined,
+      });
+    }
+  }, [linkStatusProp]);
+  const [desktop, setDesktop] = useState<{
+    status: string; attempt?: string; flow?: string; provider?: string; method?: string;
+  } | null>(null);
+  useEffect(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    const value = parameters.get('desktop-auth');
+    if (value) {
+      setDesktop({
+        status: value,
+        attempt: parameters.get('attempt') ?? undefined,
+        flow: parameters.get('flow') ?? undefined,
+        provider: parameters.get('provider') ?? undefined,
+        method: parameters.get('method') ?? undefined,
+      });
+    }
+  }, []);
+  useEffect(() => {
+    const update = () => setOffline(!navigator.onLine);
+    update();
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
+  }, []);
+  useEffect(() => { setData(initial); }, [initial]);
+
+  const hasPassword = data.sign_in_methods.some(method => method.provider === 'password' && method.state !== 'unconnected');
+  const connectedProviders = data.sign_in_methods
+    .filter(method => method.state === 'connected' && method.provider !== 'password')
+    .map(method => method.provider as 'apple' | 'google');
+  // Success is only claimed after the authoritative settings readback agrees;
+  // a bare `?link=done` flag proves nothing, and a failure message never
+  // claims the account is unchanged (a prior step may have committed).
+  const verifiedMethod = linkResult?.status === 'done' && linkResult.method
+    ? data.sign_in_methods.find(method => method.provider === linkResult.method)
+    : undefined;
+  const notice = linkResult?.status === 'done'
+    ? (verifiedMethod?.state === 'connected' && (linkResult.state ? verifiedMethod.state === linkResult.state : true))
+      ? '这个登录方式当前已绑定，可以用它登录同一个账户。'
+      : '请核对下方登录方式的实际状态。'
+    : linkResult?.status === 'error'
+      ? '暂时无法确认这次操作的结果。请核对下方登录方式的实际状态，再决定是否重新验证。'
+      : '';
+
+  const desktopNotice = desktop
+    ? ({
+        stale: { error: true, text: '页面已过期。请刷新后再试。' },
+        reauth: { error: true, text: '请先验证当前身份，再继续这项更改。' },
+        expired: { error: true, text: '此操作已过期。请重新开始。' },
+        changed: { error: true, text: '登录状态已更改，这项更改未生效。请重新登录后重试。' },
+        unknown: { error: true, text: '无法确认这项更改是否完成。请核对下方登录方式的实际状态，不要重复提交。' },
+        cancelled: { error: false, text: '已取消这项更改。' },
+        'cancel-failed': { error: true, text: '取消未完成，请核对下方登录方式的实际状态。' },
+        acknowledged: { error: false, text: '已确认，可以回到应用继续。' },
+        lab: { error: true, text: '测试工作区不能使用此流程。' },
+        done: { error: false, text: '操作已完成，请核对下方登录方式的实际状态。' },
+        password: { error: false, text: '当前身份已验证，请继续设置新密码。' },
+        target: { error: false, text: '当前身份已验证，请继续绑定新的登录方式。' },
+        error: { error: true, text: '这项更改没有完成。请核对下方登录方式的实际状态，再决定是否重试。' },
+      } as const)[desktop.status] ?? null
+    : null;
+
+  return (
+    <section className={styles.section} aria-labelledby="sign-in-methods-title">
+      <h2 id="sign-in-methods-title">登录方式</h2>
+      <p className={styles.secondary}>一个账户，多种登录方式。添加登录方式不会创建工作空间、移动记录或更改主邮箱。</p>
+      {notice && <p role="status" className={styles.notice}>{notice}</p>}
+      {desktopNotice && <p role="status" className={desktopNotice.error ? styles.error : styles.notice}>{desktopNotice.text}</p>}
+      {desktop?.status === 'password' || desktop?.status === 'target' ? (
+        // The staged pages are the single continuation (ADR 0020): each one
+        // resolves the active flow-owned sealed relay grant (or the ordinary
+        // Web sealed attempt) server-side, then renders the actual new-password
+        // or target form. The former query-only controls here could never
+        // continue the operation, and no secret or challenge travels in this
+        // link or its URL.
+        <p>
+          <a
+            href={
+              desktop.status === 'password'
+                ? '/workspace/settings/link-complete/password'
+                : '/workspace/settings/link-complete/link'
+            }
+          >
+            {desktop.status === 'password' ? '设置新密码' : '继续绑定登录方式'}
+          </a>
+        </p>
+      ) : null}
+      {offline && <p role="status" className={styles.error}>离线，恢复连接后重试</p>}
+      <ul className={styles.rows}>
+        {data.sign_in_methods.map(method => {
+          const provider = method.provider;
+          return (
+            <li key={provider} className={styles.row}>
+              <div className={styles.rowHead}>
+                <strong>{providerNames[provider]}</strong>
+                <span className={styles.badge} data-state={method.state}>
+                  {stateLabels[method.state]}
+                </span>
+              </div>
+              {method.hint && method.state === 'connected' && (
+                <p className={styles.secondary}>关联邮箱：{method.hint}</p>
+              )}
+              {method.state === 'legacy_unverified' && (
+                <p className={styles.secondary}>这个密码登录还没有验证邮箱所有权。绑定一个提供方并验证后即可解决。</p>
+              )}
+              {!flow && (
+                <div className={styles.actions}>
+                  {method.state === 'unconnected' && provider !== 'password' && (
+                    // Both host kinds freeze the exact rendered scope first.
+                    // A capable native host then relays this operation's proof
+                    // rounds through the system authentication browser
+                    // (ADR 0020); older hosts keep the ordinary Web flow.
+                    <button type="button" className={styles.quiet} disabled={offline || connectedProviders.length === 0 && !hasPassword}
+                      onClick={() => setFlow({ kind: 'link', provider: provider as 'apple' | 'google' })}>绑定</button>
+                  )}
+                  {method.state === 'unconnected' && provider === 'password' && (
+                    <button type="button" className={styles.quiet} disabled={offline}
+                      onClick={() => setFlow({ kind: 'password' })}>设置密码</button>
+                  )}
+                  {method.state === 'connected' && provider === 'password' && (
+                    <button type="button" className={styles.quiet} disabled={offline}
+                      onClick={() => setFlow({ kind: 'password' })}>更换密码</button>
+                  )}
+                  {method.state !== 'unconnected' && method.can_unlink && (
+                    <button type="button" className={styles.quiet} disabled={offline}
+                      onClick={() => setFlow({ kind: 'unlink', provider })}>解除绑定</button>
+                  )}
+                  {method.state !== 'unconnected' && !method.can_unlink && (
+                    <span className={styles.secondary}>至少保留一种登录方式</span>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {flow && (
+        <OperationAuthPanel
+          flow={flow}
+          hasPassword={hasPassword}
+          connectedProviders={connectedProviders}
+          scope={{
+            accountId: data.workspace.id,
+            userId: data.user.id,
+            accountRevision: data.workspace.revision,
+            userRevision: data.user.revision,
+          }}
+          onUpdated={(settings) => {
+            setData(settings);
+            setFlow(null);
+          }}
+          onCancel={() => setFlow(null)}
+        />
+      )}
+    </section>
+  );
+}
+
+export function AccountDataSync({ lastObservedAt }: { lastObservedAt?: string | null }) {
+  return (
+    <section className={styles.section} aria-labelledby="data-sync-title">
+      <h2 id="data-sync-title">数据同步</h2>
+      <p className={styles.secondary}>联系人与对话会自动同步到你的设备</p>
+      <p className={styles.secondary}>
+        {lastObservedAt
+          ? `最近一次同步：${new Date(lastObservedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'medium', timeStyle: 'short' })}`
+          : '打开或回到应用时会自动检查更新。'}
+      </p>
+    </section>
+  );
+}

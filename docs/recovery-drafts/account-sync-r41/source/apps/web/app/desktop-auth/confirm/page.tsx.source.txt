@@ -1,0 +1,125 @@
+import Link from "next/link";
+
+import type { DesktopAuthStatusResponse } from "@talent-signal/contracts";
+
+import {
+  clearDesktopBrowserAttempt,
+  desktopAttemptFromCallback,
+  desktopBackendClient,
+  desktopReturnPath,
+  readDesktopBrowserAttempt,
+  requestWebOrigin,
+} from "@/lib/server/desktopAuth";
+
+export const dynamic = "force-dynamic";
+
+export const metadata = {
+  title: "确认登录",
+  robots: { follow: false, index: false },
+};
+
+const providerLabel = (provider: string) => (provider === "apple" ? "Apple" : "Google");
+
+const intentLabel: Record<string, string> = {
+  set_password: "为当前账号设置密码",
+  change_password: "修改当前账号的密码",
+  link_provider: "连接一个新的登录方式",
+  unlink_provider: "移除一个登录方式",
+};
+
+/**
+ * Explicit system-browser confirmation (ADR 0019 / ADR 0020). The view names
+ * the verified provider identity, the canonical destination and the exact
+ * intent; only the confirmation mints the one-use code for the fixed native
+ * callback. Both forms carry the immutable attempt reference: a stale A form
+ * with a newer B sealed round is refused and B is preserved. An unrelated
+ * existing browser login is never shown as proof and nothing is committed
+ * here.
+ */
+export default async function DesktopAuthConfirmPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ attempt?: string }>;
+}) {
+  const parameters = await searchParams;
+  const webOrigin = await requestWebOrigin();
+  const currentAttemptId = await desktopAttemptFromCallback();
+  const requested = parameters.attempt ?? "";
+  const ownAttempt =
+    currentAttemptId &&
+    (!requested || requested === currentAttemptId) &&
+    (await readDesktopBrowserAttempt(currentAttemptId));
+  const attempt = ownAttempt && ownAttempt.web_origin === webOrigin ? ownAttempt : null;
+
+  if (!attempt) {
+    return (
+      <main id="main-content" className="confirm-shell" tabIndex={-1}>
+        <h1>这次登录没有完成</h1>
+        <p role="status">请回到应用，重新开始登录。没有输入会被保存。</p>
+        <Link href={desktopReturnPath("login")}>返回登录</Link>
+      </main>
+    );
+  }
+
+  let status: DesktopAuthStatusResponse | null = null;
+  try {
+    status = await desktopBackendClient().desktopAuthStatus(attempt.attempt_id, {
+      origin: webOrigin,
+    });
+  } catch {
+    status = null;
+  }
+
+  if (!status || status.status !== "approved" || !status.verified) {
+    return (
+      <main id="main-content" className="confirm-shell" tabIndex={-1}>
+        <h1>这次登录没有完成</h1>
+        <p role="status">
+          {status?.status === "consumed"
+            ? "这次登录已经完成，可以回到应用继续。"
+            : "验证没有完成或已过期。请回到应用，重新开始。"}
+        </p>
+        <Link href={desktopReturnPath(attempt.purpose)}>返回</Link>
+      </main>
+    );
+  }
+
+  const identity = status.verified.email_hint ?? `${providerLabel(attempt.provider)} 账号`;
+  const effect =
+    attempt.purpose === "login"
+      ? "登录到 Talent Signal 工作区"
+      : intentLabel[attempt.intent ?? ""] ?? "更新登录方式";
+
+  return (
+    <main id="main-content" className="confirm-shell" tabIndex={-1}>
+      <h1>确认{providerLabel(attempt.provider)}验证</h1>
+      <p>
+        已验证的登录身份：<strong>{identity}</strong>
+        {!status.verified.email_verified && "（邮箱未验证）"}
+      </p>
+      <p role="status">
+        {effect}
+        {attempt.purpose === "credential_round"
+          ? "。只影响你确认的这一项更改，不会新建工作区、移动记录或更改主邮箱。"
+          : "。这会在当前窗口创建新的登录会话。"}
+      </p>
+      <form method="post" action="/desktop-auth/complete">
+        <input type="hidden" name="attempt_id" value={attempt.attempt_id} />
+        <button type="submit" className="confirm-primary">继续</button>
+      </form>
+      <form method="post" action="/api/desktop-auth/cancel">
+        <input type="hidden" name="attempt_id" value={attempt.attempt_id} />
+        <button type="submit" className="confirm-secondary">取消</button>
+      </form>
+      <style>{`
+        .confirm-shell { min-height: 100vh; display: flex; flex-direction: column;
+          align-items: center; justify-content: center; gap: 16px; padding: 32px;
+          text-align: center; }
+        .confirm-primary { min-height: 44px; padding: 0 28px; font-size: 16px;
+          border-radius: 8px; border: 1px solid #b04a2f; background: #b04a2f; color: #fff; }
+        .confirm-secondary { min-height: 44px; padding: 0 28px; font-size: 16px;
+          border-radius: 8px; border: 1px solid #bbb; background: transparent; color: #444; }
+      `}</style>
+    </main>
+  );
+}
