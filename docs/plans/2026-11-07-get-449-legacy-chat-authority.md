@@ -180,7 +180,25 @@ rolls back the old transaction. Waiting for committed deleting/401 before
 release deadlocks against the original idempotency workspace SHARE lock.
 After release require stop completion, child401, exact cleanup and parent200.
 Original2s/15s budgets and all prior12 cases remain; the final14 PG cases have
-not yet executed and do not establish operator-principal race acceptance.
+not yet executed at that frozen prepublication review and do not establish
+operator-principal race acceptance.
+
+At published b1577351 the explicit Hosted14 cases executed: original12 passed;
+the grant fixture failed before Chat because password login legitimately omits
+optional session_id. It now reads the real identity via GET /v1/auth/session
+with the same issued credential, requiring equal account/user and a present
+session ID. The stop case reached its intended held-provider/pending-stop race,
+but observation persistence hit the canonical closed-Lab write guard after the
+handler rejected: onSend replaced409 with500. Preserve the original rejection
+only for an already-failed response, actual lab_human, exact PostgreSQL P0001
+and LAB_TEST_WORKSPACE_CLOSED. Other errors and successful responses still
+fail normally; the existing flush/source checks and pending-span cleanup remain.
+No write guard, timeout or public denial assertion changes. A real Fastify hook
+regression with injected PG/Auth boundaries first failed1/5, then passed5/5;
+the exact pinned-SDK three changed-root check has zero diagnostics after an
+explicit optional-ID presence assertion. Independent review found no remaining
+P0/P1 in the frozen three-path repair. The new14 real PG and later feedback
+contracts still require execution on the newly published head.
 
 ## Milestones
 

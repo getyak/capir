@@ -608,6 +608,16 @@ async function withLabHttpFixture(kind: LabWithdrawal, operation: (fixture: LabH
         payload: { identifier: run.username, password: childPassword, client_label: "Synthetic grant child" } });
       expect(admitted.statusCode).toBe(200);
       child = admitted.json<SessionResponse>();
+      // Password login intentionally need not return session_id. Read the
+      // actual server-issued identity through the same credential's owner.
+      const current = await controlApp.inject({ method: "GET", url: "/v1/auth/session",
+        headers: { authorization: `Bearer ${child.access_token}` } });
+      expect(current.statusCode).toBe(200);
+      const observed = current.json<SessionResponse>();
+      expect(observed.account.id).toBe(child.account.id);
+      expect(observed.user.id).toBe(child.user.id);
+      if (!observed.session_id) throw new Error("The canonical Lab session readback omitted its identity.");
+      child = { ...child, session_id: observed.session_id };
     } else {
       workspaceId = randomUUID();
       const created = await controlApp.inject({ method: "POST", url: "/v1/lab/workspaces", headers: parentHeaders,
