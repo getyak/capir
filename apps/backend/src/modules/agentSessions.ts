@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { SESSION_HISTORY_MAX_TURNS, assertSessionHistoryTextBudget, readSessionHistoryBodies, readSessionHistorySources,
+  readSessionHistoryScreenshots, sessionHistorySnapshotUnavailable } from "./sessionHistorySnapshot.js";
 
 import { FormatRegistry } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
@@ -322,6 +324,8 @@ interface Row {
   deleted_at: Date | null;
   composer_draft_hash: string | null;
   composer_draft_started_at: Date | null;
+  history_stamp?: string;
+  history_generation?: string;
 }
 const missing = () =>
   new ApiError(
@@ -344,10 +348,11 @@ async function rowFor(
   client: DatabaseClient,
   auth: AuthContext,
   id: string,
+  historyMetadata = false,
 ): Promise<Row | null> {
   const row = (
     await client.query<Row>(
-      "SELECT * FROM agent_sessions WHERE account_id=$1 AND id=$2",
+      `SELECT *${historyMetadata ? ",md5(jsonb_build_array(payload->'turns',payload->'personID',payload->'relationshipContextID')::text) AS history_stamp,COALESCE((SELECT generation FROM harness_source_generations WHERE account_id=$1),0)::text AS history_generation" : ""} FROM agent_sessions WHERE account_id=$1 AND id=$2`,
       [auth.accountId, id],
     )
   ).rows[0];
@@ -1213,6 +1218,7 @@ export async function readAgentSessionConversation(
   auth: AuthContext,
   sessionId: string,
   scope: { personId: string | null; relationshipContextId: string | null },
+  options: { complete?: boolean } = {},
 ): Promise<{
   /** Persistence truth, independent of whether old content is still admissible. */
   hasRecordedTurns: boolean;
@@ -1223,8 +1229,11 @@ export async function readAgentSessionConversation(
   }>;
   sources?: AgentSessionChatSource[];
   unavailableScreenshotContext?: boolean;
+  historyTaskIDs?: string[];
+  historyStamp?: string;
+  historyGeneration?: string;
 }> {
-  const row = await rowFor(client, auth, sessionId);
+  const row = await rowFor(client, auth, sessionId, options.complete);
   if (!row) return { hasRecordedTurns: false, messages: [] };
   if (row.deleted_at || row.expires_at <= new Date())
     throw new ApiError(
@@ -1233,6 +1242,8 @@ export async function readAgentSessionConversation(
       "This Session was deleted or expired.",
     );
   const payload = row.payload!;
+  if (options.complete && (!Array.isArray(payload.turns) || payload.turns.length > SESSION_HISTORY_MAX_TURNS))
+    throw sessionHistorySnapshotUnavailable();
   if (
     !sameID(payload.personID, scope.personId) ||
     !sameID(payload.relationshipContextID, scope.relationshipContextId)
@@ -1242,8 +1253,12 @@ export async function readAgentSessionConversation(
       "AGENT_SESSION_SCOPE_CHANGED",
       "Conversation history belongs to a different relationship scope.",
     );
-  const turns = payload.turns.slice(-6);
-  const bodies = (
+  // Full text remains host-owned and is only exposed through an independently
+  // fenced, bounded history tool. Existing callers retain their inline budget.
+  const turns = options.complete ? payload.turns : payload.turns.slice(-6);
+  const dialogueText = (text: string) => options.complete ? text : text.slice(0, 2000);
+  const taskIDs = [...new Set(turns.map(turn => canonicalID(turn.response.taskID)))];
+  const bodies = options.complete ? await readSessionHistoryBodies(client, auth, taskIDs) : (
     await client.query<{
       operation_scope: string;
       response_body: {
@@ -1276,12 +1291,11 @@ export async function readAgentSessionConversation(
       [auth.accountId, turns.map((turn) => canonicalID(turn.response.taskID))],
     )
   ).rows;
-  const screenshotContexts = await loadSessionScreenshotContexts(
-    client,
-    auth,
-    turns.map((turn) => canonicalID(turn.response.taskID)),
-  );
+  const screenshotContexts = options.complete ? await readSessionHistoryScreenshots(client, auth, taskIDs)
+    : await loadSessionScreenshotContexts(client, auth, turns.map(turn => canonicalID(turn.response.taskID)));
+  const completeSources = options.complete ? await readSessionHistorySources(client, auth, taskIDs) : undefined;
   const sourcesByMessage = new Map<string, AgentSessionChatSource[]>();
+  const admittedTasks = new Set<string>();
   let unavailableScreenshotContext = false;
   const messages: Array<{
     message_id: string;
@@ -1311,6 +1325,7 @@ export async function readAgentSessionConversation(
         continue;
       }
       const hostResult = (turn.response as { hostResult?: { request_id: string; call_id: string; outcome: string } }).hostResult;
+      admittedTasks.add(canonicalID(turn.response.taskID));
       messages.push(hostResult
         ? {
             message_id: turn.id,
@@ -1320,7 +1335,7 @@ export async function readAgentSessionConversation(
         : {
             message_id: turn.id,
             role: "user",
-            text: turn.objective.slice(0, 2000),
+            text: dialogueText(turn.objective),
           });
       if (source.summary || source.question || source.findings?.length) {
         messages.push({
@@ -1334,12 +1349,12 @@ export async function readAgentSessionConversation(
       } else unavailableScreenshotContext = true;
       continue;
     }
-    const inheritedSources = await inheritedSessionChatSources(
+    const inheritedSources = completeSources ? completeSources.get(canonicalID(turn.response.taskID)) : await inheritedSessionChatSources(
       client,
       auth,
       canonicalID(turn.response.taskID),
     );
-    if (inheritedSources === null) {
+    if (inheritedSources == null) {
       unavailableScreenshotContext = true;
       continue;
     }
@@ -1371,6 +1386,7 @@ export async function readAgentSessionConversation(
       ).rows[0]?.available;
       if (!available) continue;
     }
+    admittedTasks.add(canonicalID(turn.response.taskID));
     for (const message of [turn, ...(turn.steeredMessages ?? [])]) {
       // A typed host tool result is host/assistant result provenance and never
       // a human-authored user message.
@@ -1386,7 +1402,7 @@ export async function readAgentSessionConversation(
         : {
             message_id: message.id,
             role: "user",
-            text: message.objective.slice(0, 2000),
+            text: dialogueText(message.objective),
           });
     }
     const canonical = canonicalResult?.response_body;
@@ -1395,13 +1411,12 @@ export async function readAgentSessionConversation(
     // idempotency result. No extra prose store or retention scope is created.
     const retained = turn.response.execution !== undefined
       ? turn.response.unboundConversationBlocks ?? turn.response.savedBlocks ?? [] : [];
-    const text = (canonical?.blocks ?? retained)
+    const text = dialogueText((canonical?.blocks ?? retained)
       .filter((block) =>
         ["answer", "clarification", "question_set"].includes(block.kind),
       )
       .map((block) => block.body)
-      .join("\n")
-      .slice(0, 2000);
+      .join("\n"));
     if (text)
       messages.push({
         message_id: turn.response.taskID,
@@ -1412,7 +1427,8 @@ export async function readAgentSessionConversation(
       sourcesByMessage.set(turn.response.taskID, inheritedSources);
   }
   let remaining = 12000;
-  const boundedMessages = messages
+  if (options.complete) assertSessionHistoryTextBudget(messages);
+  const boundedMessages = options.complete ? messages : messages
     .reverse()
     .map((message) => {
       const text = message.text.slice(0, remaining);
@@ -1431,6 +1447,8 @@ export async function readAgentSessionConversation(
   return {
     hasRecordedTurns: payload.turns.length > 0,
     messages: boundedMessages,
+    ...(options.complete ? { historyTaskIDs: [...admittedTasks],
+      historyStamp: row.history_stamp!, historyGeneration: row.history_generation! } : {}),
     ...(sources.length ? { sources } : {}),
     ...(unavailableScreenshotContext
       ? { unavailableScreenshotContext: true }

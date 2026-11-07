@@ -23,6 +23,7 @@ export interface AgentSessionChatSource {
   taskID: string;
   fingerprint: string;
 }
+export const SESSION_CHAT_SOURCE_LIMIT = 20;
 export interface AgentSessionScreenshotContext {
   id: string;
   subject_id: string | null;
@@ -201,7 +202,7 @@ export async function recordSessionChatSources(
   previousTaskIDs: string[] = [],
 ): Promise<void> {
   if (!sessionID && !sources.length) return;
-  if (!sessionID || sources.length > 20)
+  if (!sessionID || sources.length > SESSION_CHAT_SOURCE_LIMIT)
     throw new ApiError(
       409,
       "AGENT_SESSION_CONTEXT_UNAVAILABLE",

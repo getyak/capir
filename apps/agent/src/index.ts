@@ -39,6 +39,7 @@ export * from "./relationshipTaskConfiguration.js";
 
 export * from "./claudeHarnessContinuation.js";
 export * from "./claudeHarnessWorkspace.js";
+export * from "./conversationHistoryTools.js";
 
 export * from "./calendarDraft.js";
 export * from "./currentImageInspection.js";

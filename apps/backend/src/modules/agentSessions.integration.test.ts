@@ -18,6 +18,7 @@ import {
 import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
 import type { AuthContext } from "./auth.js";
 import { ApiError } from "../lib/apiError.js";
+import { createSessionHistorySnapshot } from "./sessionHistorySnapshot.js";
 import { createUnscopedChatTask } from "./unscopedChat.js";
 import { createChatTask, getChatTaskReadback } from "./chat.js";
 import { compileRelationshipWiki } from "./wiki.js";
@@ -292,6 +293,87 @@ afterAll(async () => {
 });
 
 describe.skipIf(!pool)("Agent Session PostgreSQL authority", () => {
+  it("GET-445 reads earlier complete canonical dialogue while retaining the legacy inline projection", async () => {
+    const value = payload();
+    value.turns = Array.from({ length: 9 }, (_, index) => ({ ...payload().turns[0]!,
+      objective: `Synthetic earlier choice ${index}: ` + "中😀".repeat(900) }));
+    for (const [index, turn] of value.turns.entries())
+      await canonicalAnswer(turn.response.taskID, `Canonical answer ${index}: ` + "文😀".repeat(900));
+    await create(value);
+    const scope = { personId: null, relationshipContextId: null };
+    const inline = await readAgentSessionConversation(pool!, auth, value.id, scope);
+    expect(inline.messages.some(message => message.message_id === value.turns[0]!.id)).toBe(false);
+    const complete = await readAgentSessionConversation(pool!, auth, value.id, scope, { complete: true });
+    expect(complete.messages).toHaveLength(18);
+    expect(complete.messages[0]!.text).toBe(value.turns[0]!.objective);
+    expect(complete.messages[1]!.text).toBe("Canonical answer 0: " + "文😀".repeat(900));
+  });
+
+  it("GET-445 rejects a legacy oversized canonical result at the SQL budget boundary", async () => {
+    const value = payload();
+    await canonicalAnswer(value.turns[0]!.response.taskID, "x".repeat(1_048_577));
+    await create(value);
+    let code: string | undefined;
+    try { await readAgentSessionConversation(pool!, auth, value.id,
+      { personId: null, relationshipContextId: null }, { complete: true }); }
+    catch (error) { if (error instanceof ApiError) code = error.code; else throw error; }
+    expect(code).toBe("SESSION_HISTORY_SNAPSHOT_UNAVAILABLE");
+  });
+
+  it("GET-445 uses only the bounded canonical screenshot summary, never its OCR body", async () => {
+    const source = await screenshotContextFixture();
+    await create(source.value);
+    const complete = await readAgentSessionConversation(pool!, auth, source.value.id,
+      { personId: null, relationshipContextId: null }, { complete: true });
+    expect(complete.messages.some(message => message.text.includes("Friday"))).toBe(true);
+    expect(complete.messages.some(message => message.text.includes("PRIVATE FULL OCR BODY"))).toBe(false);
+    expect(complete.messages.some(message => message.text.includes("PRIVATE OCR EXCERPT"))).toBe(false);
+  });
+
+  it("GET-445 live history SQL rejects a foreign actor and a revoked authenticated session", async () => {
+    const session = await create();
+    const canonical = await readAgentSessionConversation(pool!, auth, session.session_id,
+      { personId: null, relationshipContextId: null }, { complete: true });
+    const owner = { ...auth, sessionId: randomUUID() };
+    await pool!.query(`INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at)
+      VALUES($1,$2,$3,$4,'GET-445 synthetic history gate',now()+interval '1 hour')`,
+    [owner.sessionId, owner.accountId, owner.userId, createHash("sha256").update(randomUUID()).digest("hex")]);
+    const snapshot = (actor: AuthContext) => createSessionHistorySnapshot({ database: pool!, auth: actor,
+      sessionID: session.session_id, messages: [], sources: [], taskIDs: canonical.historyTaskIDs ?? [],
+      sessionStamp: canonical.historyStamp ?? "", sourceGeneration: canonical.historyGeneration ?? "", assertCurrent: async () => {} });
+    await snapshot(owner).assertCurrent();
+    await expect(snapshot({ ...owner, userId: otherUser.userId }).assertCurrent())
+      .rejects.toMatchObject({ code: "SESSION_HISTORY_UNAVAILABLE" });
+    await pool!.query("UPDATE sessions SET revoked_at=now() WHERE id=$1", [owner.sessionId]);
+    await expect(snapshot(owner).assertCurrent()).rejects.toMatchObject({ code: "SESSION_HISTORY_UNAVAILABLE" });
+  });
+
+  it("GET-445 rechecks original reply expiry while the auth, product Session and generation stay live", async () => {
+    const value = payload(), taskID = value.turns[0]!.response.taskID;
+    await canonicalAnswer(taskID, "Synthetic retained original reply"); await create(value);
+    const owner = { ...auth, sessionId: randomUUID() };
+    await pool!.query(`INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at)
+      VALUES($1,$2,$3,$4,'GET-445 original expiry gate',now()+interval '1 hour')`,
+    [owner.sessionId, owner.accountId, owner.userId, createHash("sha256").update(randomUUID()).digest("hex")]);
+    await pool!.query(`INSERT INTO agent_session_chat_tasks(account_id,task_id,actor_user_id,origin_session_id,expires_at)
+      VALUES($1,$2,$3,$4,now()+interval '1 hour')`, [auth.accountId, taskID, auth.userId, value.id]);
+    const canonical = await readAgentSessionConversation(pool!, owner, value.id,
+      { personId: null, relationshipContextId: null }, { complete: true });
+    let observedExpiry: Date | undefined;
+    const snapshot = createSessionHistorySnapshot({ database: pool!, auth: owner, sessionID: value.id,
+      messages: canonical.messages, sources: [], taskIDs: canonical.historyTaskIDs ?? [],
+      sessionStamp: canonical.historyStamp ?? "", sourceGeneration: canonical.historyGeneration ?? "",
+      onExpiry: expiry => { observedExpiry = expiry; }, assertCurrent: async () => {} });
+    await snapshot.assertCurrent(); expect(observedExpiry).toBeInstanceOf(Date);
+    await pool!.query("UPDATE agent_session_chat_tasks SET expires_at=clock_timestamp()-interval '1 second' WHERE account_id=$1 AND task_id=$2",
+      [auth.accountId, taskID]);
+    const unchanged = await readAgentSessionConversation(pool!, owner, value.id,
+      { personId: null, relationshipContextId: null }, { complete: true });
+    expect(unchanged.historyStamp).toBe(canonical.historyStamp);
+    expect(unchanged.historyGeneration).toBe(canonical.historyGeneration);
+    await expect(snapshot.assertCurrent()).rejects.toMatchObject({ code: "SESSION_HISTORY_UNAVAILABLE" });
+  });
+
   it("commits sensitive scrubbing and mutations while isolated snapshot cleanup is blocked", async () => {
     const expired = await create();
     await pool!.query(
