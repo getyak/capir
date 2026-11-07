@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import { ArrowLeft, CaretRight } from "@phosphor-icons/react/dist/ssr";
 
 import { auth } from "@/auth";
-import { MemoryReviewCard } from "@/components/memory-review/memory-review-card";
+import { MemoryProposalPages } from "@/components/memory-review/memory-proposal-pages";
 import { safeResearchLink } from "@/components/research-notebook";
 import { PersonMemoryContent } from "@/components/person-memory-content";
 import { AvatarEditor } from "@/components/avatar-editor";
@@ -161,7 +161,7 @@ export default async function PersonMemoryPage({
     );
   }
 
-  const { person, proposals, items, basicFields = [], contactPoints = [], hasMore = false, nextCursor = null } = data;
+  const { person, proposals, proposalPage, items, basicFields = [], contactPoints = [], hasMore = false, nextCursor = null } = data;
   // The successful return targets the actual loaded Person entry so the
   // directory resumes at that Person. No canonical Person return (or none
   // loaded) keeps the link ordinary.
@@ -234,7 +234,7 @@ export default async function PersonMemoryPage({
               </ul>
             </nav>
           ) : null}
-          {proposals.length > 0 ? (
+          {proposals.length > 0 || proposalPage?.has_more ? (
             <section
               className={styles.section}
               aria-labelledby="person-memory-pending"
@@ -242,23 +242,9 @@ export default async function PersonMemoryPage({
               <h2 className={styles.sectionTitle} id="person-memory-pending">
                 {t("待确认变化")}
               </h2>
-              <ul className={styles.pendingList}>
-                {proposals.map((proposal) => (
-                  <li key={proposal.proposal_id}>
-                    <MemoryReviewCard
-                      binding={binding}
-                      contextId={proposal.relationship_context_id ?? null}
-                      entryCapability={entryCapability}
-                      personId={person?.id ?? id}
-                      proposal={{
-                        proposal_id: proposal.proposal_id,
-                        revision: proposal.revision,
-                      }}
-                      purpose="people"
-                    />
-                  </li>
-                ))}
-              </ul>
+              <MemoryProposalPages binding={binding} entryCapability={entryCapability}
+                personId={person?.id ?? id} purpose="people" className={styles.pendingList}
+                initialPage={proposalPage ?? { proposals }} />
             </section>
           ) : null}
           {person || items.length || proposals.length || hasMore ? <PersonMemoryContent key={`${binding}:${person?.id ?? id}`} personId={person?.id ?? id} binding={binding} entryCapability={entryCapability}

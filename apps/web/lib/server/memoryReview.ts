@@ -141,6 +141,14 @@ function derivedSearch(
     if (entry.personId) params.set("person_id", entry.personId);
     if (entry.contextId) params.set("relationship_context_id", entry.contextId);
     if (entry.purpose === "chat" && entry.sessionId) params.set("session_id", entry.sessionId);
+    const cursors = original.getAll("cursor"), pagination = original.getAll("paginate");
+    if (cursors.length > 1 || pagination.length > 1
+      || (pagination[0] !== undefined && !["true", "false"].includes(pagination[0]))) throw new MemoryEntryMismatch();
+    const cursor = cursors[0] ?? null;
+    if (cursor !== null && (cursor.length === 0 || cursor.length > 1024
+      || !/^[A-Za-z0-9_.-]+$/u.test(cursor))) throw new MemoryEntryMismatch();
+    if (original.get("paginate") === "true" || cursor !== null) params.set("paginate", "true");
+    if (cursor !== null) params.set("cursor", cursor);
     return `?${params.toString()}`;
   }
   if (first === "operation-views" && segments.length === 2) {
