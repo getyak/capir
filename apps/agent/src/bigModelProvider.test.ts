@@ -39,6 +39,7 @@ function provider(fetcher: typeof fetch) {
   return new BigModelAgentProvider({
     apiKey: "test-key",
     model: "glm-5.3",
+    reasoningEffort: "low",
     inputCnyPerMillion: 8,
     outputCnyPerMillion: 28,
     cnyPerUsd: 7,
@@ -47,6 +48,30 @@ function provider(fetcher: typeof fetch) {
 }
 
 describe("BigModelAgentProvider", () => {
+
+  it("rejects unsupported explicit reasoning before any provider request", () => {
+    const fetcher = vi.fn<typeof fetch>();
+    expect(() => new BigModelAgentProvider({ apiKey: "synthetic", model: "glm-4.6v-flash", inputCnyPerMillion: 8, outputCnyPerMillion: 28, cnyPerUsd: 7,
+      reasoningEffort: "high", fetcher })).toThrow();
+    expect(() => new BigModelAgentProvider({ apiKey: "synthetic", model: "glm-5.3", inputCnyPerMillion: 8, outputCnyPerMillion: 28, cnyPerUsd: 7,
+      reasoningEffort: "invalid" as "low", fetcher })).toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "low", "high", "max"] as const)("preserves host reasoning intent %s in the actual request body", async effort => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({
+      model: "glm-5.3", choices: [{ finish_reason: "stop", message: { role: "assistant", content: "{}" } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.000001 },
+    }));
+    const configured = new BigModelAgentProvider({ apiKey: "synthetic-test-key", model: "glm-5.3", inputCnyPerMillion: 8, outputCnyPerMillion: 28, cnyPerUsd: 7,
+      ...(effort === undefined ? {} : { reasoningEffort: effort }), fetcher });
+    await configured.run(request(), vi.fn(), new AbortController().signal);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    if (effort === undefined) expect(Object.hasOwn(body, "reasoning_effort")).toBe(false);
+    else expect(body.reasoning_effort).toBe(effort);
+  });
+
   it("uses the official multimodal content shape for a pinned vision model", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       response({

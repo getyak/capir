@@ -1,3 +1,4 @@
+import { snapshotProviderRunConfiguration } from "@talent-signal/agent";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -80,6 +81,7 @@ export function pursuitAgentSemanticIdentity(provider: AgentProvider, promptText
       provider: provider.id,
       model: provider.model,
       sdkVersion: provider.sdkVersion,
+      providerConfiguration: snapshotProviderRunConfiguration(provider.runConfiguration),
     }),
   };
 }
@@ -290,6 +292,7 @@ export class SafeDeterministicAgentProvider implements AgentProvider {
   readonly id = "deterministic-safe";
   readonly model = "talent-signal-no-action-v1";
   readonly sdkVersion = "deterministic-provider.v1";
+  readonly runConfiguration = snapshotProviderRunConfiguration({ version: "agent-run-reasoning.v1", reasoning: { mode: "not_applicable" } });
   readonly inputCapabilities = {
     text: true,
     image: true,
@@ -497,8 +500,8 @@ export function configuredAgentProvider(): AgentProvider {
         return value;
       };
       const reasoningEffort =
-        process.env.TALENT_SIGNAL_AGENT_REASONING_EFFORT?.trim() || "low";
-      if (!new Set(["low", "high", "max"]).has(reasoningEffort)) {
+        process.env.TALENT_SIGNAL_AGENT_REASONING_EFFORT?.trim();
+      if (reasoningEffort && !new Set(["low", "high", "max"]).has(reasoningEffort)) {
         throw new Error(
           "TALENT_SIGNAL_AGENT_REASONING_EFFORT must be low, high, or max.",
         );
@@ -509,7 +512,7 @@ export function configuredAgentProvider(): AgentProvider {
         ...(process.env.ZHIPU_BASE_URL
           ? { baseUrl: process.env.ZHIPU_BASE_URL }
           : {}),
-        reasoningEffort: reasoningEffort as "low" | "high" | "max",
+        ...(reasoningEffort ? { reasoningEffort: reasoningEffort as "low" | "high" | "max" } : {}),
         inputCnyPerMillion: numericSetting(
           "TALENT_SIGNAL_ZHIPU_INPUT_CNY_PER_MILLION",
         ),

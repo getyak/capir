@@ -469,6 +469,7 @@ export interface AgentProvider {
   readonly id: string;
   readonly model: string;
   readonly sdkVersion: string;
+  readonly runConfiguration?: import("./providerRunConfiguration.js").ProviderRunConfiguration;
   readonly inputCapabilities: AgentProviderInputCapabilities;
   run(
     request: AgentProviderRequest,
@@ -579,6 +580,7 @@ export interface AgentPublicResearchJournal {
     modelProviderID: string;
     model: string;
     sdkVersion: string;
+    providerConfiguration: import("./providerRunConfiguration.js").ProviderRunConfiguration;
     startedAt: string;
   }): Promise<void>;
   loadCheckpoint(runID: string): Promise<AgentPublicResearchCheckpoint | null>;
@@ -665,6 +667,7 @@ export interface AgentPersonResearchJournal {
     modelProviderID: string;
     model: string;
     sdkVersion: string;
+    providerConfiguration: import("./providerRunConfiguration.js").ProviderRunConfiguration;
     startedAt: string;
   }): Promise<void>;
   loadCheckpoint(runID: string): Promise<AgentPersonResearchCheckpoint | null>;

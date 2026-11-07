@@ -291,6 +291,8 @@ boundaries inspectable without asking the model to infer them from prose.
 
 The governed Pursuit Task adds durable attempts, snapshots, checkpoints, artifacts, and events with authoritative readback. Interactive surfaces consume an account-scoped cursor projection and recover from canonical snapshots, never from provider tokens, private reasoning, or a live session. Progressive semantic blocks remain projections of the authoritative Artifact, Proposal, decision, and terminal Receipt. PostgreSQL notification, Redis, or another broker may accelerate fan-out but must remain disposable: its loss degrades to bounded readback without losing, duplicating, or widening the task. Decisions retain domain owners; resume and effects remain targets.
 
+[Provider reasoning and local recovery](engineering/provider-reasoning.md) owns frozen effort intent, immutable configuration identity and lawful completed replay.
+
 ## Evaluation
 
 Evaluate evidence, identity and temporal correctness separately from proposal
