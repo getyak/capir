@@ -11,6 +11,8 @@ import type {
   AgentToolName,
   AgentToolResult,
 } from "./types.js";
+import { providerCompletionFailure } from "./providerCompletion.js";
+import { ProviderUsageLedger } from "./providerUsage.js";
 
 const SDK_VERSION = "bigmodel-chat-completions.v1";
 const DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
@@ -45,13 +47,17 @@ type BigModelResponse = {
   id?: string;
   model?: string;
   choices?: Array<{
+    finish_reason?: string | null;
+    error?: unknown;
     message?: {
       content?: string | null;
       reasoning_content?: string;
       tool_calls?: BigModelToolCall[];
+      refusal?: unknown;
     };
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  error?: unknown;
 };
 
 type BigModelAgentProviderOptions = {
@@ -95,11 +101,6 @@ function parseStructuredOutput(content: string | null | undefined): unknown {
   } catch {
     return null;
   }
-}
-
-function nonnegativeNumber(value: unknown): number {
-  const parsed = typeof value === "number" ? value : Number(value ?? 0);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function positiveNumber(value: number, name: string) {
@@ -230,16 +231,19 @@ export class BigModelAgentProvider implements AgentProvider {
     ];
     const availableTools = tools(request.toolManifest);
     const permissionDenials: string[] = [];
-    let inputTokens = 0;
-    let outputTokens = 0;
+    const usage = new ProviderUsageLedger((input, output) => this.estimatedUsd(input, output));
     let candidateToolSucceeded = false;
     let lastResponseID: string | undefined;
+    const result = (turns: number, terminalReason: string, structuredOutput: unknown = null): AgentProviderResult => ({
+      structuredOutput, ...usage.result(), turns, permissionDenials,
+      ...(lastResponseID ? { sessionID: lastResponseID } : {}), terminalReason,
+    });
 
     for (let turn = 1; turn <= request.budget.maxTurns; turn += 1) {
       if (signal.aborted) throw signal.reason;
       const remainingTokens = Math.max(
         1,
-        request.budget.maxTaskTokens - inputTokens - outputTokens,
+        request.budget.maxTaskTokens - (usage.result().totalTokens ?? 0),
       );
       const response = await this.fetcher(
         `${this.baseUrl}/chat/completions`,
@@ -274,26 +278,21 @@ export class BigModelAgentProvider implements AgentProvider {
           "BigModel returned a model different from the immutable configured model.",
         );
       }
-      const message = payload.choices?.[0]?.message;
+      const choice = payload.choices?.[0];
+      const message = choice?.message;
       if (!message) throw new Error("BigModel returned no assistant message.");
       lastResponseID = payload.id ?? lastResponseID;
-      inputTokens += nonnegativeNumber(payload.usage?.prompt_tokens);
-      outputTokens += nonnegativeNumber(payload.usage?.completion_tokens);
+      usage.record(payload.usage);
       const toolCalls = message.tool_calls ?? [];
+      const failure = payload.error != null || choice?.error != null || message.refusal != null
+        ? "provider_response_rejected" : providerCompletionFailure(choice?.finish_reason, toolCalls.length > 0);
+      if (failure) return result(turn, failure);
+      const boundary = usage.boundary(request.budget, toolCalls.length > 0);
+      if (boundary) return result(turn, boundary);
+      signal.throwIfAborted();
 
       if (toolCalls.length === 0) {
-        return {
-          structuredOutput: parseStructuredOutput(message.content),
-          inputTokens,
-          outputTokens,
-          estimatedUsd: this.estimatedUsd(inputTokens, outputTokens),
-          turns: turn,
-          permissionDenials,
-          ...(lastResponseID ? { sessionID: lastResponseID } : {}),
-          terminalReason: candidateToolSucceeded
-            ? "completed"
-            : "provider_stopped",
-        };
+        return result(turn, candidateToolSucceeded ? "completed" : "provider_stopped", parseStructuredOutput(message.content));
       }
 
       messages.push({
@@ -305,6 +304,7 @@ export class BigModelAgentProvider implements AgentProvider {
         tool_calls: toolCalls,
       });
       for (const toolCall of toolCalls) {
+        signal.throwIfAborted();
         const result = await invokeTool(
           toolCall.function.name,
           parseArguments(toolCall.function.arguments),
@@ -329,15 +329,6 @@ export class BigModelAgentProvider implements AgentProvider {
       }
     }
 
-    return {
-      structuredOutput: null,
-      inputTokens,
-      outputTokens,
-      estimatedUsd: this.estimatedUsd(inputTokens, outputTokens),
-      turns: request.budget.maxTurns,
-      permissionDenials,
-      ...(lastResponseID ? { sessionID: lastResponseID } : {}),
-      terminalReason: "max_turns",
-    };
+    return result(request.budget.maxTurns, "max_turns");
   }
 }

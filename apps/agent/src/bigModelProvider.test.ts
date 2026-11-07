@@ -104,6 +104,7 @@ describe("BigModelAgentProvider", () => {
           model: "glm-5.3",
           choices: [
             {
+              finish_reason: "tool_calls",
               message: {
                 content: null,
                 reasoning_content: "Synthetic reasoning",
@@ -129,6 +130,7 @@ describe("BigModelAgentProvider", () => {
           model: "glm-5.3",
           choices: [
             {
+              finish_reason: "stop",
               message: {
                 content: JSON.stringify({
                   outcome: "no_action",

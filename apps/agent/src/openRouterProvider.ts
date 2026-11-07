@@ -11,6 +11,8 @@ import type {
   AgentToolName,
   AgentToolResult,
 } from "./types.js";
+import { providerCompletionFailure } from "./providerCompletion.js";
+import { ProviderUsageLedger } from "./providerUsage.js";
 
 const SDK_VERSION = "openrouter-chat-completions.v1";
 const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
@@ -48,10 +50,12 @@ type OpenRouterResponse = {
   model?: string;
   choices?: Array<{
     finish_reason?: string | null;
+    error?: unknown;
     message?: {
       role?: string;
       content?: string | null;
       tool_calls?: OpenRouterToolCall[];
+      refusal?: unknown;
     };
   }>;
   usage?: {
@@ -107,11 +111,6 @@ function parseStructuredOutput(content: string | null | undefined): unknown {
   } catch {
     return null;
   }
-}
-
-function number(value: unknown): number {
-  const parsed = typeof value === "number" ? value : Number(value ?? 0);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function validatedBaseUrl(value: string): string {
@@ -224,17 +223,19 @@ export class OpenRouterAgentProvider implements AgentProvider {
     ];
     const availableTools = tools(request.toolManifest);
     const permissionDenials: string[] = [];
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let estimatedUsd = 0;
+    const usage = new ProviderUsageLedger();
     let candidateToolSucceeded = false;
     let lastResponseID: string | undefined;
+    const result = (turns: number, terminalReason: string, structuredOutput: unknown = null): AgentProviderResult => ({
+      structuredOutput, ...usage.result(), turns, permissionDenials,
+      ...(lastResponseID ? { sessionID: lastResponseID } : {}), terminalReason,
+    });
 
     for (let turn = 1; turn <= request.budget.maxTurns; turn += 1) {
       if (signal.aborted) throw signal.reason;
       const remainingTokens = Math.max(
         1,
-        request.budget.maxTaskTokens - inputTokens - outputTokens,
+        request.budget.maxTaskTokens - (usage.result().totalTokens ?? 0),
       );
       const response = await this.fetcher(`${this.baseUrl}/chat/completions`, {
         method: "POST",
@@ -286,22 +287,17 @@ export class OpenRouterAgentProvider implements AgentProvider {
       const message = choice?.message;
       if (!message) throw new Error("OpenRouter returned no assistant message.");
       lastResponseID = payload.id ?? lastResponseID;
-      inputTokens += number(payload.usage?.prompt_tokens);
-      outputTokens += number(payload.usage?.completion_tokens);
-      estimatedUsd += number(payload.usage?.cost);
+      usage.record(payload.usage);
       const toolCalls = message.tool_calls ?? [];
+      const failure = payload.error != null || choice?.error != null || message.refusal != null
+        ? "provider_response_rejected" : providerCompletionFailure(choice?.finish_reason, toolCalls.length > 0);
+      if (failure) return result(turn, failure);
+      const boundary = usage.boundary(request.budget, toolCalls.length > 0);
+      if (boundary) return result(turn, boundary);
+      signal.throwIfAborted();
 
       if (toolCalls.length === 0) {
-        return {
-          structuredOutput: parseStructuredOutput(message.content),
-          inputTokens,
-          outputTokens,
-          estimatedUsd,
-          turns: turn,
-          permissionDenials,
-          ...(lastResponseID ? { sessionID: lastResponseID } : {}),
-          terminalReason: candidateToolSucceeded ? "completed" : "provider_stopped",
-        };
+        return result(turn, candidateToolSucceeded ? "completed" : "provider_stopped", parseStructuredOutput(message.content));
       }
 
       messages.push({
@@ -310,6 +306,7 @@ export class OpenRouterAgentProvider implements AgentProvider {
         tool_calls: toolCalls,
       });
       for (const toolCall of toolCalls) {
+        signal.throwIfAborted();
         const result = await invokeTool(
           toolCall.function.name,
           parseArguments(toolCall.function.arguments),
@@ -334,15 +331,6 @@ export class OpenRouterAgentProvider implements AgentProvider {
       }
     }
 
-    return {
-      structuredOutput: null,
-      inputTokens,
-      outputTokens,
-      estimatedUsd,
-      turns: request.budget.maxTurns,
-      permissionDenials,
-      ...(lastResponseID ? { sessionID: lastResponseID } : {}),
-      terminalReason: "max_turns",
-    };
+    return result(request.budget.maxTurns, "max_turns");
   }
 }

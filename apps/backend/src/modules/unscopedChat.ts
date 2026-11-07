@@ -79,8 +79,8 @@ export interface UnscopedChatExecution {
     providerID: string;
     model: string;
     providerRequestID: string | null;
-    inputTokens: number;
-    outputTokens: number;
+    inputTokens: number | null;
+    outputTokens: number | null;
     prompt?: import("@talent-signal/agent").PromptReference;
     /** Genuine tool completions (name/time only) for execution readback. */
     toolCompletions?: import("@talent-signal/agent").HarnessToolCompletion[];

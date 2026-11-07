@@ -150,6 +150,20 @@ class MemoryResearchHost
 }
 
 describe("local public-research Agent", () => {
+  it.each([
+    ["provider_output_incomplete", "PROVIDER_OUTPUT_INCOMPLETE"],
+    ["provider_response_rejected", "PROVIDER_RESPONSE_REJECTED"],
+    ["provider_usage_unavailable", "PROVIDER_USAGE_UNAVAILABLE"],
+  ])("keeps %s quarantined with honest nullable accounting", async (terminalReason, reasonCode) => {
+    const host = new MemoryResearchHost(), provider = new ScriptedAgentProvider([], {});
+    provider.run = async () => ({ structuredOutput: {}, inputTokens: null, outputTokens: 0,
+      totalTokens: 13, estimatedUsd: null, turns: 1, permissionDenials: [], terminalReason });
+    const receipt = await runPublicResearchAgent({ scope, budget: { ...DEFAULT_AGENT_BUDGET }, provider, gateway: host, journal: host });
+    expect(receipt).toMatchObject({ status: "quarantined", reasonCode, externalEffects: [],
+      usage: { inputTokens: null, outputTokens: 0, totalTokens: 13, estimatedUsd: null } });
+    expect(host.artifacts).toEqual([]); expect(host.terminal).toBe(receipt);
+  });
+
   it("keeps unreported provider usage unknown after a transport failure", async () => {
     const host = new MemoryResearchHost();
     const provider = new ScriptedAgentProvider([], {});

@@ -198,6 +198,20 @@ function deterministicRuntime(): AgentRuntimeDependencies {
 }
 
 describe("bounded Agent control plane", () => {
+  it.each([
+    ["provider_output_incomplete", "PROVIDER_OUTPUT_INCOMPLETE"],
+    ["provider_response_rejected", "PROVIDER_RESPONSE_REJECTED"],
+    ["provider_usage_unavailable", "PROVIDER_USAGE_UNAVAILABLE"],
+  ])("quarantines %s without turning it into a proposal or no-action receipt", async (terminalReason, reasonCode) => {
+    const provider = proposalProvider(), gateway = new Gateway();
+    provider.run = async () => ({ structuredOutput: {}, inputTokens: null, outputTokens: 0,
+      totalTokens: 13, estimatedUsd: null, turns: 1, permissionDenials: [], terminalReason });
+    const receipt = await runBoundedAgent(request(provider, gateway));
+    expect(receipt).toMatchObject({ status: "quarantined", reasonCode, externalEffects: [],
+      usage: { inputTokens: null, outputTokens: 0, totalTokens: 13, estimatedUsd: null } });
+    expect(gateway.proposalCommitCount).toBe(0); expect(gateway.noActionCommitCount).toBe(0);
+  });
+
   it("keeps unreported provider usage unknown after a transport failure", async () => {
     const provider = proposalProvider();
     provider.run = async () => { throw new Error("Synthetic transport interruption"); };

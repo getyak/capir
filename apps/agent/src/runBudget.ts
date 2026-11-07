@@ -1,6 +1,10 @@
 import { AGENT_BUDGET_CEILING } from "./runtimePolicy.js";
 import type { AgentBudget, AgentProviderResult, AgentUsage } from "./types.js";
 
+export const DEFAULT_AGENT_BUDGET: Readonly<AgentBudget> = Object.freeze({
+  ...AGENT_BUDGET_CEILING,
+});
+
 export type AgentBudgetViolation = "positive" | "ceiling";
 
 export interface AgentBudgetViolationDetail {
@@ -36,7 +40,7 @@ export function agentUsage(
   return {
     inputTokens,
     outputTokens,
-    totalTokens:
+    totalTokens: provider?.totalTokens !== undefined ? provider.totalTokens :
       inputTokens === null || outputTokens === null
         ? null
         : inputTokens + outputTokens,
