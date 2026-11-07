@@ -42,16 +42,7 @@ const GENERIC_SESSION_TITLES = new Set([
 /** Control characters must never reach a persisted one-line label. */
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/gu;
 
-function boundedGraphemeTitle(value: string): string {
-  let segments: string[];
-  try {
-    segments = Array.from(
-      new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value),
-      (part) => part.segment,
-    );
-  } catch {
-    segments = Array.from(value);
-  }
+function boundedTitleSegments(segments: Iterable<string>): string {
   let codePoints = 0;
   const accepted: string[] = [];
   for (const segment of segments) {
@@ -66,6 +57,18 @@ function boundedGraphemeTitle(value: string): string {
   return accepted.join("").trim();
 }
 
+function boundedGraphemeTitle(value: string): string {
+  try {
+    const segments = new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value);
+    return boundedTitleSegments((function* () {
+      for (const part of segments) yield part.segment;
+    })());
+  } catch {
+    // Restart from the original value even when iteration itself failed.
+    return boundedTitleSegments(value);
+  }
+}
+
 /** One line, collapsed internal whitespace, no surrounding whitespace. */
 export function canonicalizeToOneLine(value: string): string {
   return value
@@ -75,10 +78,13 @@ export function canonicalizeToOneLine(value: string): string {
 }
 
 function isGenericLabel(value: string): boolean {
-  const normalized = value
-    .toLowerCase()
-    .replace(/^[\s\p{P}\p{S}]+|[\s\p{P}\p{S}]+$/gu, "")
-    .trim();
+  const scalars = Array.from(value.toLowerCase());
+  const boundary = /^[\s\p{P}\p{S}]$/u;
+  let start = 0;
+  let end = scalars.length;
+  while (start < end && boundary.test(scalars[start]!)) start += 1;
+  while (end > start && boundary.test(scalars[end - 1]!)) end -= 1;
+  const normalized = scalars.slice(start, end).join("").trim();
   return normalized.length === 0 || GENERIC_SESSION_TITLES.has(normalized);
 }
 

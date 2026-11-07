@@ -1,5 +1,30 @@
 import {describe,it,expect} from "vitest";
 import {publicSubjectRegistry,isBoundedPublicName,isBoundedPublicNameTarget,admitAuthoredPublicHomepage,parseAuthoredResearchClause,publicContextAnchorsFromText,admitPublicContextAnchor,publicSearchDeclined} from "./publicSubjectRegistry.js";
+describe("complete private contact-token exclusion",()=>{
+ it("does not admit a public-looking fragment left after one address in a chained token",()=>{
+  const source="someone@host.invalid@nanoGPT";
+  expect(admitPublicContextAnchor("work","nanoGPT",[source])).toBeNull();
+  expect(admitPublicContextAnchor("handle","@nanoGPT",[source])).toBeNull();
+ });
+ it("keeps an independent authored work and a standalone public handle",()=>{
+  expect(admitPublicContextAnchor("work","nanoGPT",["someone@host.invalid nanoGPT"]))
+   .toEqual({kind:"work",text:"nanoGPT"});
+  expect(admitPublicContextAnchor("handle","@nanoGPT",["@nanoGPT"]))
+   .toEqual({kind:"handle",text:"@nanoGPT"});
+ });
+ it.each(["nanoGPT@private.invalid","private@nanoGPT.invalid","nanoGPT@","@@nanoGPT","someone＠host.invalid＠nanoGPT"])("excludes the complete private or malformed contact token: %s",source=>{
+  expect(admitPublicContextAnchor("work","nanoGPT",[source])).toBeNull();
+  expect(admitPublicContextAnchor("handle","@nanoGPT",[source])).toBeNull();
+ });
+ it("keeps separate anchors around delimited contacts and long non-contact tokens",()=>{
+  for(const delimiter of [" ","，","。",";","(","\""]){
+   expect(admitPublicContextAnchor("work","nanoGPT",[`someone@private.invalid${delimiter}nanoGPT`]))
+    .toEqual({kind:"work",text:"nanoGPT"});
+  }
+  expect(admitPublicContextAnchor("work","nanoGPT",[`${"!".repeat(100_000)} nanoGPT`]))
+   .toEqual({kind:"work",text:"nanoGPT"});
+ });
+});
 describe("public topic admission",()=>{
  it("registers requested full public names without forwarding the user's note",()=>{
   const registry=publicSubjectRegistry("查一下 Lilian Weng 和 Shunyu Yao 的背景，我准备离职还没告诉老板。");

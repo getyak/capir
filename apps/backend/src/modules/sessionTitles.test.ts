@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   canonicalizeSessionTitle,
@@ -6,6 +6,30 @@ import {
 } from "./sessionTitles.js";
 
 describe("Session title canonicalization", () => {
+  it("stops consuming segmented input at its unchanged visible-title budget", () => {
+    const family = "👨‍👩‍👧‍👦";
+    let consumed = 0;
+    const segmented = { *[Symbol.iterator]() {
+      for (let index=0; index<40; index++) { consumed += 1; yield { segment: family, index: index * family.length, input: family.repeat(40) }; }
+    } } as unknown as Intl.Segments;
+    const spy = vi.spyOn(Intl.Segmenter.prototype,"segment").mockReturnValue(segmented);
+    try {
+      expect(canonicalizeSessionTitle(family.repeat(40))).toBe(family.repeat(32));
+      expect(consumed).toBe(33);
+    } finally { spy.mockRestore(); }
+  });
+
+  it.each(["🙌【Reply】🔥", "•• answer !!!", "“你好。”", "\t[Chat]\t"])("keeps Unicode boundary-label rejection: %s", proposed => {
+    expect(canonicalizeSessionTitle(proposed)).toBeNull();
+  });
+
+  it("keeps its code-point fallback after a segmentation iterator fails", () => {
+    const segmented = { *[Symbol.iterator]() { yield { segment: "partial" }; throw new Error("synthetic segmenter failure"); } } as unknown as Intl.Segments;
+    const spy = vi.spyOn(Intl.Segmenter.prototype,"segment").mockReturnValue(segmented);
+    try { expect(canonicalizeSessionTitle("Specific source topic")).toBe("Specific source topic"); }
+    finally { spy.mockRestore(); }
+  });
+
   it("keeps a specific proposal on one bounded line", () => {
     const title = canonicalizeSessionTitle(
       "  准备 Maya 的 CPO 初聊提纲\n并整理问题  ",

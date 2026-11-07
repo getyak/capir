@@ -213,6 +213,31 @@ and cleanup owner; no runtime/schema/guard changes. Independent delta review
 has no confirmed P0/P1, and the one-root exact-SDK check has zero diagnostics.
 All14 cases and later feedback still require a fresh exact-head Hosted run.
 
+At d2a959bf the real Hosted14 PG cases and later42 feedback cases all passed,
+with zero skips in those explicit groups. Full Backend and Web also passed.
+This establishes the guard/fixture milestone, not the short-transaction or
+resident/native lifecycle. The aggregate CodeQL gate still failed on two
+nonlinear regex scans and a source-admission branch; no gate is bypassed.
+
+The security repair scans whole contact tokens once, retaining only the
+existing standalone public-handle grammar as an exception; chained/dangling
+contact fragments cannot become public grounding. Generic-title trimming uses
+Unicode scalar boundary scans. Grapheme iteration stops at the unchanged
+32-grapheme/256-code-point budget and restarts from the original string if
+iteration fails. Source staging branches on the same live host-owned map's
+membership; an admitted non-string value is rejected rather than falling back
+to persisted authority. Current empty text remains valid. Credential, Session,
+source, identity and final human-commit checks remain independent and intact.
+
+The new privacy/segmentation regressions first failed2/54; the affected public,
+title and workspace suites now pass145 tests. Local TypeScript6.0.3 with exact
+SDK0.3.312 declarations has zero diagnostics in the two Agent roots; the three
+Backend roots retain seven diagnostics identical to an immutable d2 baseline
+under the same peer-dependency resolver. This is not a full pinned typecheck
+pass. Independent review and fresh exact-head Hosted gates remain required;
+the two older store CodeQL findings were already dismissed upstream in
+September, and no dismissal or scanner configuration is changed here.
+
 ## Milestones
 
 1. Active: implement and verify only the original-credential guard on both
