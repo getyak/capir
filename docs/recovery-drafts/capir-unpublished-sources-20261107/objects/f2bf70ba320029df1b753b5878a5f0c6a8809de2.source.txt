@@ -1,0 +1,46 @@
+import { createHash } from "node:crypto";
+import { Value } from "@sinclair/typebox/value";
+import Fastify from "fastify";
+import { describe, expect, it } from "vitest";
+import { AgentTaskProjectionSchema, LabExperimentSchema, LabExperimentRequestSchema, LabJobDefinitionSchema,
+  LabJobRequestSchema } from "@talent-signal/contracts";
+
+const text = "  " + "完整提示😀e\u0301\n".repeat(5000) + "完整结尾  ";
+const snapshot = { name: "assistant/relationship", text, revision: createHash("sha256").update(text).digest("hex"),
+  source: "bundled", versionId: null, commit: null, environment: null };
+const consumers = [
+  ["Lab experiment", LabExperimentSchema.properties.prompt_snapshot],
+  ["Lab job frozen configuration", LabJobDefinitionSchema.properties.configurations.items.properties.prompt_snapshot],
+  ["Agent task semantic snapshot", AgentTaskProjectionSchema.properties.semantic_snapshot.properties.prompt_snapshot],
+] as const;
+
+describe("full server-owned frozen prompt contract", () => {
+  it.each(consumers)("%s accepts full Unicode prompt and preserves nonempty/provenance shape", (_name, schema) => {
+    expect(text.length).toBeGreaterThan(32000);
+    expect(Value.Check(schema, snapshot)).toBe(true);
+    expect(Value.Check(schema, { ...snapshot, text: "" })).toBe(false);
+    expect(Value.Check(schema, { ...snapshot, revision: "invalid" })).toBe(false);
+    expect(Value.Check(schema, { ...snapshot, source: "public_override" })).toBe(false);
+    expect(Value.Check(schema, { ...snapshot, unknown_property: true })).toBe(false);
+  });
+
+  it("keeps public Lab requests unable to submit prompt snapshots", async () => {
+    const experiment = { id: "11111111-1111-4111-8111-111111111111", case_id: "conflicting-evidence", models: ["a", "b"] };
+    const job = { id: experiment.id, catalog_revision: "a".repeat(64), task: "relationship_text", case_ids: [experiment.case_id],
+      configurations: [{ model: "a", prompt_preset: "baseline" }, { model: "b", prompt_preset: "baseline" }], repetitions: 1, call_limit: 2 };
+    const app = Fastify();
+    let admitted = 0;
+    app.post("/experiment", { schema: { body: LabExperimentRequestSchema } }, async (request) => { admitted++; return request.body; });
+    app.post("/job", { schema: { body: LabJobRequestSchema } }, async (request) => { admitted++; return request.body; });
+    try {
+      const response = await app.inject({ method: "POST", url: "/experiment", payload: { ...experiment, prompt_snapshot: snapshot } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual(experiment);
+      const jobResponse = await app.inject({ method: "POST", url: "/job", payload: { ...job,
+        configurations: job.configurations.map(value => ({ ...value, prompt_snapshot: snapshot })) } });
+      expect(jobResponse.statusCode).toBe(200);
+      expect(jobResponse.json()).toEqual(job);
+      expect(admitted).toBe(2);
+    } finally { await app.close(); }
+  });
+});

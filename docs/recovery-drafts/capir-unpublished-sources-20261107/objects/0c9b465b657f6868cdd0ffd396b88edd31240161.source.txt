@@ -1,0 +1,93 @@
+import { randomUUID } from "node:crypto";
+
+import type { ChatResponseBlock } from "@talent-signal/contracts";
+import type { PersonResearchServiceResponse } from "@talent-signal/agent";
+
+function completeBody(lines: readonly string[]): string {
+  return lines
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function personResearchChatBlock(
+  response: PersonResearchServiceResponse,
+): ChatResponseBlock {
+  if (response.result.kind === "artifact") {
+    const matchBasis = new Map(
+      response.result.candidates.map((candidate) => [
+        candidate.result_id,
+        candidate.match_basis,
+      ]),
+    );
+    return {
+      id: randomUUID(),
+      kind: "person_research",
+      title:
+        response.result.identity_status === "ambiguous"
+          ? "Public profile research · multiple possible matches"
+          : "Public profile research · possible match",
+      body: completeBody([
+        response.result.summary,
+        ...response.result.sources.map((source) =>
+          [
+            `${source.display_name}${source.handle ? ` · @${source.handle.replace(/^@/u, "")}` : ""}`,
+            source.biography ?? "",
+            matchBasis.get(source.result_id) ?? "",
+          ]
+            .filter(Boolean)
+            .join(" — "),
+        ),
+        response.result.limitations,
+        "Unconfirmed public-source draft · no identity binding or external action.",
+      ]),
+      status: "needs_review",
+      citation_dependency_ids: [],
+      requires_user_decision: true,
+      public_source_refs: response.result.sources.map((source) => ({
+        result_id: source.result_id,
+        provider_id: source.provider_id,
+        platform: source.platform,
+        profile_url: source.profile_url,
+        display_name: source.display_name,
+        handle: source.handle,
+        biography: source.biography,
+        avatar_url: source.avatar_url,
+        avatar_display_policy: "source_link_only" as const,
+        verified: source.verified,
+        match_basis: matchBasis.get(source.result_id) ??
+          "Returned by the bounded public-profile provider for a visible screenshot clue.",
+        content_hash: source.content_hash,
+        retrieved_at: source.retrieved_at,
+      })),
+    };
+  }
+  if (response.result.kind === "no_action") {
+    return {
+      id: randomUUID(),
+      kind: "person_research",
+      title: "Public profile research · no safe match",
+      body: completeBody([
+        response.result.reason,
+        `Reason: ${response.result.reason_code}`,
+        "No identity was confirmed and no external action occurred.",
+      ]),
+      status: "informational",
+      citation_dependency_ids: [],
+      requires_user_decision: false,
+    };
+  }
+  return {
+    id: randomUUID(),
+    kind: "failure_recovery",
+    title: "Public profile research unavailable",
+    body: completeBody([
+      response.result.reason,
+      `Reason: ${response.result.reason_code}`,
+      "The relationship summary remains available. No identity was confirmed and no external action occurred.",
+    ]),
+    status: "failed",
+    citation_dependency_ids: [],
+    requires_user_decision: false,
+  };
+}

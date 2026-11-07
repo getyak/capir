@@ -1,0 +1,12 @@
+import { expect, it } from "vitest";
+import { integrationOnboardingTarget, integrationReturnTarget } from "./integration-onboarding-navigation";
+it("preserves a safe original workspace destination after optional connections", () => {
+  expect(integrationOnboardingTarget("/workspace/sessions?new=true#draft")).toBe("/workspace/connect?returnTo=%2Fworkspace%2Fsessions%3Fnew%3Dtrue%23draft");
+});
+it("preserves native browser authorization completion without routing its proofs into mail onboarding", () => {
+  const callback = "/desktop-auth/authorize?attempt=synthetic-attempt&state=synthetic-state";
+  expect(integrationOnboardingTarget(callback)).toBe(callback);
+});
+it("rejects external, login, nested connection and normalized redirect loops", () => {
+  for (const target of ["//hostile.invalid", "https://hostile.invalid", "/login", "/onboarding", "/workspace/connect?returnTo=/workspace/connect", "/workspace/../login", "/workspace\\hostile", "/workspace\n"]) expect(integrationReturnTarget(target)).toBe("/workspace");
+});

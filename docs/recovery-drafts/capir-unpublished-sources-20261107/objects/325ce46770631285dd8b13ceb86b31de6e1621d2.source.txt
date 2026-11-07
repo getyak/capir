@@ -1,0 +1,366 @@
+import CryptoKit
+import Foundation
+import Security
+
+/// The minimum durable correlation needed to reconcile an outcome-unknown
+/// canonical decision after this process exits. Candidate message text and
+/// bearer credentials are deliberately excluded.
+struct DurableUnknownResolution: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let operationID: String
+    let bundleID: String
+    let taskID: String
+    let taskRevision: Int
+    let bundleRevision: Int
+    let proposalID: String
+    let baseRevision: Int
+    let reason: String
+    let decisions: [Decision]
+    let workspaceID: String
+    let accountID: String
+    let pursuitID: String
+    let personID: String
+    let relationshipContextID: String
+    let captureID: String
+    let resourceID: String
+    let evidenceIDs: [String]
+    let savedAt: Date
+    let transportError: String
+
+    struct Decision: Codable, Equatable, Sendable {
+        let itemID: String
+        let choice: String
+    }
+}
+
+/// Minimal exact-operation retirement marker inside the SAME encrypted
+/// unknown-operation home. It carries the original ownership needed to compare
+/// exactly — never inferred from the static scope key — and is never a second
+/// raw source shadow, a credential store, or a scope-wide purge.
+struct DurableUnknownRetirement: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let operationID: String
+    let accountID: String
+    let workspaceID: String
+    let retiredAt: Date
+}
+
+enum UnknownRetirementEstablishment: Equatable, Sendable {
+    /// The exact durable retirement barrier is established. The correlation is
+    /// removed only on an atomic identity compare, so a newer operation's
+    /// record always survives.
+    case established(correlationRemoved: Bool, newerOperationPreserved: Bool)
+    /// The marker write failed. Retirement stays visibly pending and fails
+    /// closed for restore until the barrier exists; it is never claimed
+    /// cleared, and only local cleanup is retried — never a remote effect.
+    case unavailable(String)
+}
+
+protocol UnknownResolutionPersisting: Sendable {
+    func load(scopeKey: String) throws -> DurableUnknownResolution?
+    func save(_ resolution: DurableUnknownResolution, scopeKey: String) throws
+    func clear(scopeKey: String) throws
+    /// Establishes exact-operation durable retirement in the same encrypted
+    /// home, then compare-clears the correlation atomically. Load and marker
+    /// failures propagate: a failure is never reported as "no record".
+    func retireOperation(
+        scopeKey: String,
+        retirement: DurableUnknownRetirement,
+        now: Date
+    ) throws -> UnknownRetirementEstablishment
+    /// The durable retirement marker for one exact operation, if established.
+    func retirementState(scopeKey: String, operationID: String) throws -> DurableUnknownRetirement?
+}
+
+struct NullUnknownResolutionStore: UnknownResolutionPersisting {
+    func load(scopeKey: String) throws -> DurableUnknownResolution? { nil }
+    func save(_ resolution: DurableUnknownResolution, scopeKey: String) throws { }
+    func clear(scopeKey: String) throws { }
+    func retireOperation(
+        scopeKey: String,
+        retirement: DurableUnknownRetirement,
+        now: Date
+    ) throws -> UnknownRetirementEstablishment {
+        .established(correlationRemoved: false, newerOperationPreserved: false)
+    }
+    func retirementState(scopeKey: String, operationID: String) throws -> DurableUnknownRetirement? { nil }
+}
+
+final class SecureUnknownResolutionStore: UnknownResolutionPersisting, @unchecked Sendable {
+    static let shared = SecureUnknownResolutionStore()
+
+    /// One synchronization domain spanning ALL store instances for the same
+    /// namespace. Atomic file replace alone is not compare-delete: read,
+    /// identity compare, and delete share this lock so a newer operation's
+    /// record can never be lost to a racing stale cleanup.
+    private static let namespaceLock = NSLock()
+
+    private let directory: URL
+    private let keyProvider: any UnknownResolutionKeyProviding
+    private let fileManager: FileManager
+
+    init(
+        directory: URL? = nil,
+        keyProvider: any UnknownResolutionKeyProviding = KeychainUnknownResolutionKeyProvider(),
+        fileManager: FileManager = .default
+    ) {
+        self.fileManager = fileManager
+        self.keyProvider = keyProvider
+        self.directory = directory ?? fileManager
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "TalentSignal/UnknownOperations", directoryHint: .isDirectory)
+    }
+
+    func load(scopeKey: String) throws -> DurableUnknownResolution? {
+        Self.namespaceLock.lock()
+        defer { Self.namespaceLock.unlock() }
+        let file = fileURL(scopeKey: scopeKey)
+        guard fileManager.fileExists(atPath: file.path) else { return nil }
+        let encrypted = try Data(contentsOf: file)
+        let box = try AES.GCM.SealedBox(combined: encrypted)
+        let storedBytes = try AES.GCM.open(
+            box,
+            using: SymmetricKey(data: try keyProvider.key(scopeKey: scopeKey))
+        )
+        let resolution = try JSONDecoder().decode(DurableUnknownResolution.self, from: storedBytes)
+        guard resolution.schemaVersion == DurableUnknownResolution.currentSchemaVersion else {
+            throw UnknownResolutionStoreError.unsupportedSchema(resolution.schemaVersion)
+        }
+        // A retired exact operation never restores, across restarts included.
+        // Its remaining local cleanup is retried here and nowhere else; a
+        // newer operation's record and key are untouched.
+        if try retirementMarkerLocked(scopeKey: scopeKey, operationID: resolution.operationID) != nil {
+            try clearLocked(scopeKey: scopeKey)
+            return nil
+        }
+        return resolution
+    }
+
+    func retireOperation(
+        scopeKey: String,
+        retirement: DurableUnknownRetirement,
+        now: Date
+    ) throws -> UnknownRetirementEstablishment {
+        Self.namespaceLock.lock()
+        defer { Self.namespaceLock.unlock() }
+        // The marker is the durable retirement barrier and is written first:
+        // once it exists, the exact operation can never restore. Its write
+        // failure propagates so callers stay visibly pending instead of
+        // claiming a clear.
+        try writeRetirementMarkerLocked(scopeKey: scopeKey, retirement: retirement)
+        // Atomic compare before clearing: only this exact operation's        // correlation is removed; a newer operation's record survives.
+        let file = fileURL(scopeKey: scopeKey)
+        guard fileManager.fileExists(atPath: file.path) else {
+            return .established(correlationRemoved: false, newerOperationPreserved: false)
+        }
+        let encrypted = try Data(contentsOf: file)
+        let box = try AES.GCM.SealedBox(combined: encrypted)
+        let storedBytes = try AES.GCM.open(
+            box,
+            using: SymmetricKey(data: try keyProvider.key(scopeKey: scopeKey))
+        )
+        let stored = try JSONDecoder().decode(DurableUnknownResolution.self, from: storedBytes)
+        guard stored.operationID == retirement.operationID else {
+            return .established(correlationRemoved: false, newerOperationPreserved: true)
+        }
+        try clearLocked(scopeKey: scopeKey)
+        return .established(correlationRemoved: true, newerOperationPreserved: false)
+    }
+
+    func retirementState(scopeKey: String, operationID: String) throws -> DurableUnknownRetirement? {
+        Self.namespaceLock.lock()
+        defer { Self.namespaceLock.unlock() }
+        return try retirementMarkerLocked(scopeKey: scopeKey, operationID: operationID)
+    }
+
+    func save(_ resolution: DurableUnknownResolution, scopeKey: String) throws {
+        Self.namespaceLock.lock()
+        defer { Self.namespaceLock.unlock() }
+        guard resolution.schemaVersion == DurableUnknownResolution.currentSchemaVersion else {
+            throw UnknownResolutionStoreError.unsupportedSchema(resolution.schemaVersion)
+        }
+        guard try retirementMarkerLocked(scopeKey: scopeKey, operationID: resolution.operationID) == nil else {
+            throw UnknownResolutionStoreError.retiredOperation
+        }
+        try prepareDirectory()
+        let clear = try JSONEncoder().encode(resolution)
+        let sealed = try AES.GCM.seal(
+            clear,
+            using: SymmetricKey(data: try keyProvider.key(scopeKey: scopeKey))
+        )
+        guard let combined = sealed.combined else {
+            throw UnknownResolutionStoreError.encryptionFailed
+        }
+        let file = fileURL(scopeKey: scopeKey)
+        try combined.write(to: file, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableFile = file
+        try mutableFile.setResourceValues(values)
+    }
+
+    func clear(scopeKey: String) throws {
+        Self.namespaceLock.lock()
+        defer { Self.namespaceLock.unlock() }
+        try clearLocked(scopeKey: scopeKey)
+    }
+
+    /// Unlocked clear, callable ONLY while `namespaceLock` is already held.
+    /// The lock is nonrecursive: nested public entry would deadlock normal
+    /// retirement and marker-backed restart cleanup.
+    private func clearLocked(scopeKey: String) throws {
+        let file = fileURL(scopeKey: scopeKey)
+        if fileManager.fileExists(atPath: file.path) {
+            try fileManager.removeItem(at: file)
+        }
+    }
+
+    private func prepareDirectory() throws {
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableDirectory = directory
+        try mutableDirectory.setResourceValues(values)
+    }
+
+    private func fileURL(scopeKey: String) -> URL {
+        let digest = SHA256.hash(data: Data(scopeKey.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return directory.appending(path: "\(digest).operation")
+    }
+
+    private func retirementFileURL(scopeKey: String) -> URL {
+        let digest = SHA256.hash(data: Data(scopeKey.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return directory.appending(path: "\(digest).operation-retirement")
+    }
+
+    /// Locked-context marker read: callable only while `namespaceLock` is held.
+    private func retirementMarkerLocked(
+        scopeKey: String,
+        operationID: String
+    ) throws -> DurableUnknownRetirement? {
+        let file = retirementFileURL(scopeKey: scopeKey)
+        guard fileManager.fileExists(atPath: file.path) else { return nil }
+        let encrypted = try Data(contentsOf: file)
+        let box = try AES.GCM.SealedBox(combined: encrypted)
+        let clear = try AES.GCM.open(
+            box,
+            using: SymmetricKey(data: try keyProvider.key(scopeKey: scopeKey))
+        )
+        let markers = try JSONDecoder().decode([DurableUnknownRetirement].self, from: clear)
+        return markers.first { $0.operationID == operationID }
+    }
+
+    /// Locked-context marker write: callable only while `namespaceLock` is held.
+    private func writeRetirementMarkerLocked(
+        scopeKey: String,
+        retirement: DurableUnknownRetirement
+    ) throws {
+        guard retirement.schemaVersion == DurableUnknownRetirement.currentSchemaVersion else {
+            throw UnknownResolutionStoreError.unsupportedSchema(retirement.schemaVersion)
+        }
+        var markers: [DurableUnknownRetirement] = []
+        let file = retirementFileURL(scopeKey: scopeKey)
+        if fileManager.fileExists(atPath: file.path) {
+            let encrypted = try Data(contentsOf: file)
+            let box = try AES.GCM.SealedBox(combined: encrypted)
+            let clear = try AES.GCM.open(
+                box,
+                using: SymmetricKey(data: try keyProvider.key(scopeKey: scopeKey))
+            )
+            markers = try JSONDecoder().decode([DurableUnknownRetirement].self, from: clear)
+        }
+        guard !markers.contains(where: { $0.operationID == retirement.operationID }) else { return }
+        markers.append(retirement)
+        // Retirement markers are anti-restoration authority, not a display
+        // list. Never evict a live marker by count and revive an old operation.
+        try prepareDirectory()
+        let markerBytes = try JSONEncoder().encode(markers)
+        let sealed = try AES.GCM.seal(
+            markerBytes,
+            using: SymmetricKey(data: try keyProvider.key(scopeKey: scopeKey))
+        )
+        guard let combined = sealed.combined else {
+            throw UnknownResolutionStoreError.encryptionFailed
+        }
+        try combined.write(to: file, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableFile = file
+        try mutableFile.setResourceValues(values)
+    }
+}
+
+protocol UnknownResolutionKeyProviding: Sendable {
+    func key(scopeKey: String) throws -> Data
+}
+
+struct KeychainUnknownResolutionKeyProvider: UnknownResolutionKeyProviding {
+    private let service = "com.talentsignal.macos.unknown-operation"
+
+    func key(scopeKey: String) throws -> Data {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: scopeKey,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess, let data = result as? Data { return data }
+        guard status == errSecItemNotFound else {
+            throw UnknownResolutionStoreError.keychain(status)
+        }
+
+        var bytes = Data(count: 32)
+        let randomStatus = bytes.withUnsafeMutableBytes { buffer in
+            SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
+        }
+        guard randomStatus == errSecSuccess else {
+            throw UnknownResolutionStoreError.keychain(randomStatus)
+        }
+        let add: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: scopeKey,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecValueData as String: bytes
+        ]
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw UnknownResolutionStoreError.keychain(addStatus)
+        }
+        return bytes
+    }
+}
+
+enum UnknownResolutionStoreError: LocalizedError {
+    case encryptionFailed
+    case retiredOperation
+    case unsupportedSchema(Int)
+    case keychain(OSStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .retiredOperation:
+            "The exact operation was retired and cannot be persisted or restored again."
+        case .encryptionFailed:
+            "The outcome-unknown operation could not be encrypted."
+        case .unsupportedSchema(let version):
+            "The outcome-unknown operation uses unsupported schema version \(version)."
+        case .keychain(let status):
+            "The outcome-unknown operation keychain request failed (\(status))."
+        }
+    }
+}

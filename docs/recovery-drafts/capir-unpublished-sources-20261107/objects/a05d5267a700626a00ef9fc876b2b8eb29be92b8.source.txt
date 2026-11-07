@@ -1,0 +1,103 @@
+import { createHash, randomUUID } from "node:crypto";
+import { afterAll, afterEach, beforeAll, describe, it, expect, vi } from "vitest";
+import { Pool } from "pg";
+import { ARK_SCREENSHOT_PREPROCESS_MODEL, type AgentProvider, type AgentProviderRequest, type ScreenshotContactTaskResponse } from "@talent-signal/agent";
+import type { AuthContext } from "./auth.js";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { admitConversationQueueEntry, readConversationQueueSnapshot } from "./conversationQueue.js";
+import { ConversationQueueRunner } from "./conversationQueueRunner.js";
+import { createScreenshotContactTask, deleteContactCaptureTask, loadScreenshotContactTask } from "./screenshotContactTasks.js";
+import { LocalChatMediaStorage } from "./chatMediaStorage.js";
+
+const database=process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+const pool=database?new Pool({connectionString:database,max:4}):null;
+const auth:AuthContext={accountId:randomUUID(),accountSlug:`author-${randomUUID().slice(0,8)}`,userId:randomUUID(),userEmail:"recruiter@alpha.local",userKind:"simulated_human",sessionId:randomUUID()};
+beforeAll(async()=>{
+ if(!pool)return;
+ await pool.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic Author Fixture')",[auth.accountId,auth.accountSlug]);
+ await pool.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic Owner','simulated_human')",[auth.userId,auth.accountId,auth.userEmail]);
+});
+afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();});
+afterAll(async()=>{vi.unstubAllEnvs();await pool?.end();});
+
+async function waitFor(predicate:()=>Promise<boolean>){const until=Date.now()+12000;while(Date.now()<until){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,30));}throw Error("Timed out waiting for authored queue result");}
+
+describe.skipIf(!pool)("workspace authored-image production queue",()=>{
+ it.each(["explicit_delete","escaped_text","image_delete","artifact_revocation","image_changed","image_expired","session_deleted"])("files and replays the author receipt, then fences %s",async withdrawal=>{
+  const directory=process.env.AUTHOR_PROOF_ARTIFACT_DIRECTORY!;
+  if(!directory)throw Error("AUTHOR_PROOF_ARTIFACT_DIRECTORY_REQUIRED");
+  vi.stubEnv("DATABASE_URL",database!);vi.stubEnv("CHAT_MEDIA_LOCAL_DIRECTORY",directory);
+  vi.stubEnv("TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING","true");vi.stubEnv("TALENT_SIGNAL_WORKSPACE_PUBLIC_RESEARCH_ENABLED","false");
+  const sessionID=randomUUID(),messageID=randomUUID(),name=`Author ${randomUUID().slice(0,8)}`;
+  vi.stubEnv("ARK_API_KEY","synthetic-inspection-credential");
+  vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({model:ARK_SCREENSHOT_PREPROCESS_MODEL,id:"synthetic-classification",choices:[{message:{content:JSON.stringify({conversation_kind:"authored_content",content_author:{name,source_excerpt:name},visible_text:[name],description:"Single authored post",uncertainties:[]})}}]}),{status:200})));
+  const now=new Date().toISOString();await pool!.query(`INSERT INTO agent_sessions(account_id,id,created_by_user_id,revision,payload,created_at,expires_at)
+    VALUES($1,$2,$3,1,$4::jsonb,now(),now()+interval '7 days')`,[auth.accountId,sessionID,auth.userId,JSON.stringify({id:sessionID,scopeKind:"unresolved_intent",personDisplayLabel:"",contextDisplayLabel:"",title:"",turns:[],updatedAt:now,createdAt:now})]);
+  const data=Buffer.from([137,80,78,71,13,10,26,10,0]),attachmentID=randomUUID();
+  const upload={attachment_id:attachmentID,file_name:"synthetic-post.png",media_type:"image/png" as const,byte_size:data.length,content_hash:createHash("sha256").update(data).digest("hex"),data_base64:data.toString("base64")};
+  let saved: {task_id:string;capture_id:string;source_resource_id:string}|undefined;
+  const run=vi.fn<AgentProvider["run"]>(async(request:AgentProviderRequest)=>{
+    expect(request.inputParts?.[0]).toMatchObject({kind:"image",contentHash:upload.content_hash,dataBase64:upload.data_base64});
+    const tool=request.supplementalTools?.find(tool=>tool.name==="file_current_image_author");expect(tool).toBeDefined();
+    const extraction={artifact_id:request.inputParts![0]!.artifactID,author_label:name,platform:"Synthetic feed",blocks:[{text:withdrawal==="escaped_text"?'The author quotes a conversation. JSON example: "line\\nnext\\r"':'The author quotes a conversation about another named person.',time_text:"27 minutes ago"}],identity_clues:[]};
+    const output=await tool!.execute(extraction,new AbortController().signal);saved=JSON.parse((output.content[0] as {text:string}).text);
+    expect(output.isError).toBe(false);expect(saved).toHaveProperty("capture_id",expect.any(String));
+    const replay=await tool!.execute(extraction,new AbortController().signal);expect(JSON.parse((replay.content[0] as {text:string}).text).capture_id).toBe(saved!.capture_id);
+    return {structuredOutput:{outcome:"reply",title:"已保存发布内容",body:`已保存 ${name} 的发布内容，时间原文为 27 minutes ago。公开调研未启用。`},inputTokens:1,outputTokens:1,estimatedUsd:0,turns:1,permissionDenials:[]};
+  });
+  const provider={id:"claude-agent-sdk",providerId:"claude-agent-sdk",model:"fixture",sdkVersion:"fixture",inputCapabilities:{text:true,image:true,imageUnderstanding:true},run,
+    generate:async()=>{throw Error("LEGACY_GENERATE_FORBIDDEN");}} as unknown as RemoteChatAnswerProviding;
+  const runner=new ConversationQueueRunner({pool:pool!,provider,logger:{info:()=>{},warn:()=>{},error:()=>{}},pollIntervalMs:30});
+  try{
+    await admitConversationQueueEntry(pool!,auth,{session_id:sessionID,message_id:messageID,idempotency_key:randomUUID(),objective:"",images:[upload]});
+    await runner.start();
+    await waitFor(async()=>{const state=await readConversationQueueSnapshot(pool!,auth,sessionID);if(state.queued.some(entry=>entry.status==="failed"))throw Error(JSON.stringify(state));return !state.active&&!state.queued.length&&run.mock.calls.length>0;});
+    expect(run).toHaveBeenCalledOnce();expect(saved?.capture_id).toBeTruthy();
+    if(withdrawal==="escaped_text"){
+      const original=(await pool!.query("SELECT text_content FROM evidence_fragments WHERE capture_id=$1",[saved!.capture_id])).rows[0].text_content;
+      expect(original).toContain('line\\nnext\\r');
+      expect((await loadScreenshotContactTask(pool!,auth,saved!.task_id)).summary).toContain('line\\nnext\\r');
+    }
+    const row=(await pool!.query("SELECT payload FROM agent_sessions WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID])).rows[0];
+    expect((await loadScreenshotContactTask(pool!,auth,saved!.task_id)).summary).toContain("The author quotes a conversation");
+    expect(row.payload.screenshotTaskIDs).toContain(saved!.task_id);expect(row.payload.turns.at(-1).response.unboundConversationBlocks[0].body).toContain(name);
+    const lineage=(await pool!.query("SELECT source_fingerprint FROM agent_session_chat_sources WHERE account_id=$1 AND screenshot_task_id=$2",[auth.accountId,saved!.task_id])).rows;
+    expect(lineage).toHaveLength(1);expect(lineage[0].source_fingerprint).toBeTruthy();
+    expect((await pool!.query("SELECT id FROM captures WHERE account_id=$1 AND id=$2",[auth.accountId,saved!.capture_id])).rowCount).toBe(1);
+    if(withdrawal!=="explicit_delete"&&withdrawal!=="escaped_text"){
+      if(withdrawal==="image_delete")await pool!.query("DELETE FROM conversation_message_images WHERE account_id=$1 AND session_id=$2",[auth.accountId,sessionID]);
+      if(withdrawal==="artifact_revocation")await pool!.query("INSERT INTO memory_source_revocations(id,account_id,source_kind,source_id,reason) VALUES($1,$2,'artifact',$3,'source_revoked')",[randomUUID(),auth.accountId,`conversation-image-${messageID}-0-${attachmentID}`]);
+      if(withdrawal==="image_changed")await pool!.query("UPDATE conversation_message_images SET content=$3,content_hash=$4 WHERE account_id=$1 AND session_id=$2",[auth.accountId,sessionID,Buffer.alloc(data.length),"0".repeat(64)]);
+      if(withdrawal==="image_expired")await pool!.query("UPDATE conversation_message_images SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND session_id=$2",[auth.accountId,sessionID]);
+      if(withdrawal==="session_deleted")await pool!.query("UPDATE agent_sessions SET deleted_at=now(),payload=NULL WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID]);
+      const fenced=(await pool!.query("SELECT status,state,input_manifest FROM screenshot_contact_tasks WHERE account_id=$1 AND id=$2",[auth.accountId,saved!.task_id])).rows[0];
+      expect(fenced).toMatchObject({status:"deleted",state:{},input_manifest:{}});
+      expect((await pool!.query("SELECT agent_session_screenshot_context_available($1,$2) AS available",[auth.accountId,saved!.task_id])).rows[0].available).toBe(false);
+    }
+    const task=await loadScreenshotContactTask(pool!,auth,saved!.task_id);
+    await deleteContactCaptureTask(pool!,auth,saved!.task_id,task.revision,new LocalChatMediaStorage(directory));
+    expect((await pool!.query("SELECT id FROM evidence_fragments WHERE capture_id=$1 AND text_content IS NOT NULL",[saved!.capture_id])).rowCount).toBe(0);
+  }finally{await runner.close();vi.unstubAllEnvs();}
+ },20000);
+ it("serializes author admission with Session deletion before any raw copy",async()=>{
+   const sessionID=randomUUID(),messageID=randomUUID(),key=`author-race:${randomUUID()}`;
+   const now=new Date().toISOString();await pool!.query(`INSERT INTO agent_sessions(account_id,id,created_by_user_id,revision,payload,created_at,expires_at)
+     VALUES($1,$2,$3,1,$4::jsonb,now(),now()+interval '7 days')`,[auth.accountId,sessionID,auth.userId,JSON.stringify({id:sessionID,scopeKind:"unresolved_intent",turns:[],updatedAt:now,createdAt:now})]);
+   const data=Buffer.from([137,80,78,71,13,10,26,10,0]),attachmentID=randomUUID();
+   const image={media_type:"image/png" as const,data_base64:data.toString("base64"),byte_size:data.length,content_hash:createHash("sha256").update(data).digest("hex")};
+   await admitConversationQueueEntry(pool!,auth,{session_id:sessionID,message_id:messageID,idempotency_key:randomUUID(),objective:"",images:[{...image,attachment_id:attachmentID,file_name:"synthetic-post.png"}]});
+   const blocker=await pool!.connect();const storage={provider:"local" as const,put:vi.fn(),get:vi.fn(),delete:vi.fn()};
+   try{
+     await blocker.query("BEGIN");await blocker.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`${auth.accountId}:${auth.userId}:agent-sessions`]);
+     const pid=(await blocker.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+     const pending=createScreenshotContactTask(pool!,auth,{idempotency_key:key,objective:"File the authored source",captured_at:now,allow_public_research:false,image},storage,
+       {workspaceAuthorSource:{session_id:sessionID,message_id:messageID,artifact_id:`conversation-image-${messageID}-0-${attachmentID}`,content_hash:image.content_hash}}).catch(error=>error);
+     await waitFor(async()=>(await pool!.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked",[pid])).rows[0].blocked);
+     await blocker.query("UPDATE agent_sessions SET deleted_at=now(),payload=NULL WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID]);await blocker.query("COMMIT");
+     expect(await pending).toHaveProperty("code","AGENT_SESSION_DELETED");
+     expect(storage.put).not.toHaveBeenCalled();
+     expect((await pool!.query("SELECT id FROM screenshot_contact_tasks WHERE account_id=$1 AND idempotency_key=$2",[auth.accountId,key])).rowCount).toBe(0);
+   }finally{await blocker.query("ROLLBACK");blocker.release();}
+ },20000);
+
+});

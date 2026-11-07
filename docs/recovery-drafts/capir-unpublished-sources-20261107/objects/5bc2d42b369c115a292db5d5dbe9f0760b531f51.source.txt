@@ -1,0 +1,96 @@
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it } from "vitest";
+import { NativeCapabilityWorkbench } from "./NativeCapabilityWorkbench.js";
+import type { OcrResult, PlatformAdapter } from "../platform/ports.js";
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+let root: Root | null = null;
+let container: HTMLDivElement;
+afterEach(async () => {
+  if (root) await act(async () => { root?.unmount(); });
+  root = null;
+  container?.remove();
+});
+
+async function fixture() {
+  const attempts: Array<{ signal: AbortSignal | undefined; resolve: (value: OcrResult) => void }> = [];
+  const drafts: string[] = [];
+  let capture = 0;
+  const adapter: PlatformAdapter = {
+    host: "desktop",
+    capabilities: async () => ({ window_capture: "available", local_ocr: "available", quick_panel: "unavailable", notification: "unavailable" }),
+    captureSelectedWindow: async () => ({ status: "captured", localHandle: `capture-${++capture}`, expiresAt: "2099-01-01T00:00:00Z" }),
+    cancelCapture: async () => ({ status: "cancelled" }),
+    recognizeLocalText: async (_request, signal) => new Promise((resolve) => { attempts.push({ signal, resolve }); }),
+    openQuickPanel: async () => ({ status: "denied", reason: "unused" }),
+    notifyState: async () => ({ status: "denied", reason: "unused" }),
+  };
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => { root?.render(createElement(NativeCapabilityWorkbench, {
+    adapter, intentId: "intent", scope: { accountId: "a", sessionId: "s" },
+    onDraftChange: (text) => drafts.push(text),
+  })); });
+  async function click(label: string) {
+    const button = Array.from(container.querySelectorAll("button")).find((node) => node.textContent === label);
+    expect(button, label).toBeDefined();
+    expect(button?.disabled, label).toBe(false);
+    await act(async () => { button?.click(); });
+  }
+  await click("选择窗口并采集");
+  return { attempts, drafts, click };
+}
+
+const recognized = (text: string): OcrResult => ({ status: "recognized", localText: text, isProvisional: true });
+
+describe("mounted OCR caller intent", () => {
+  it("displays the complete long Unicode draft through the real reducer and textarea", async () => {
+    const { attempts, drafts, click } = await fixture();
+    await click("本地识别文字");
+    const text = ` ${"识别 e\u{301} 🧭\n".repeat(2400)}FINALTAIL\n`;
+    await act(async () => { attempts[0]!.resolve(recognized(text)); });
+    expect(container.querySelector<HTMLTextAreaElement>("#ts-draft")?.value).toBe(text);
+    expect(drafts.at(-1)).toBe(text);
+    expect(container.querySelector("#ts-draft")?.getAttribute("data-provisional")).toBe("true");
+  });
+
+  it("rejects late recognized text from an adapter that ignores cancellation", async () => {
+    const { attempts, drafts, click } = await fixture();
+    await click("本地识别文字");
+    await click("取消识别");
+    expect(attempts[0]!.signal?.aborted).toBe(true);
+    await act(async () => { attempts[0]!.resolve(recognized("late sensitive text")); });
+    expect(container.querySelector("#ts-draft")).toBeNull();
+    expect(drafts).not.toContain("late sensitive text");
+    expect(container.textContent).toContain("无法确认 helper 是否已停止");
+  });
+
+  it("old completion/finally cannot overwrite a replacement attempt or its cancel state", async () => {
+    const { attempts, drafts, click } = await fixture();
+    await click("本地识别文字");
+    await click("选择窗口并采集");
+    expect(attempts[0]!.signal?.aborted).toBe(true);
+    await click("本地识别文字");
+    await click("取消识别");
+    await act(async () => { attempts[0]!.resolve(recognized("old source text")); });
+    const cancel = Array.from(container.querySelectorAll("button")).find((node) => node.textContent === "正在取消…");
+    expect(cancel?.disabled).toBe(true);
+    expect(container.querySelector("#ts-draft")).toBeNull();
+    expect(drafts).not.toContain("old source text");
+    await act(async () => { attempts[1]!.resolve({ status: "cancelled" }); });
+    expect(container.textContent).toContain("已取消");
+  });
+
+  it("unmounted old completion cannot emit a draft callback", async () => {
+    const { attempts, drafts, click } = await fixture();
+    await click("本地识别文字");
+    await act(async () => { root?.unmount(); });
+    root = null;
+    expect(attempts[0]!.signal?.aborted).toBe(true);
+    await act(async () => { attempts[0]!.resolve(recognized("after unmount")); });
+    expect(drafts).not.toContain("after unmount");
+  });
+});

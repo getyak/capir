@@ -1,0 +1,49 @@
+import "server-only";
+
+import { headers } from "next/headers";
+import { getToken } from "next-auth/jwt";
+
+import { AUTH_SESSION_COOKIE, authSecret } from "@/lib/server/backendAuth";
+
+export type CapirSessionClaims = {
+  sandboxId: string;
+  entryPath: string;
+  sessionExpiresAt: string;
+};
+
+/**
+ * Read the capir sandbox binding out of the encrypted Auth.js session cookie.
+ * A normal (non-CLI) session has no capir claim and gets null: the workspace
+ * chrome must stay truthful about a direct CLI-created Lab primary session.
+ */
+export async function readCapirSessionClaims(): Promise<CapirSessionClaims | null> {
+  let requestHeaders: Headers;
+  try {
+    requestHeaders = await headers();
+  } catch {
+    return null;
+  }
+  const token = await getToken({
+    req: { headers: requestHeaders },
+    cookieName: AUTH_SESSION_COOKIE,
+    salt: AUTH_SESSION_COOKIE,
+    secret: authSecret(),
+  });
+  const capir = token?.capir as
+    | { sandbox_id?: unknown; entry_path?: unknown }
+    | undefined;
+  const expiresAt = token?.backendExpiresAt;
+  if (
+    !capir ||
+    typeof capir.sandbox_id !== "string" ||
+    typeof capir.entry_path !== "string" ||
+    typeof expiresAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    sandboxId: capir.sandbox_id,
+    entryPath: capir.entry_path,
+    sessionExpiresAt: expiresAt,
+  };
+}

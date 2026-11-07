@@ -1,0 +1,2479 @@
+import Foundation
+
+/// Loopback-only implementation of the real governed chain. It ships in the
+/// Release binary so an explicitly configured local backend does not silently
+/// downgrade to fixtures.
+/// It does not manufacture a canonical readback: the response is emitted only
+/// after every account, scope, resource, evidence, task, and effect invariant
+/// has been re-read from the backend.
+actor URLMacRelationshipService: MacRelationshipServing {
+    struct Configuration: Sendable {
+        let baseURL: URL
+        let accountSlug: String
+        let userEmail: String
+    }
+
+    private static let contractVersion = "2026-08-24.10"
+    private let configuration: Configuration
+    private let session: URLSession
+    private let unknownResolutionStore: any UnknownResolutionPersisting
+    private let unknownResolutionScopeKey: String
+    private var login: LoginResponse?
+    private var connectedScope: LiveScope?
+    private var availableScopes: [LiveScope]?
+    private var availableTodayAttention: TodayAttentionProjection = .empty
+    private var pendingResolution: PendingResolutionContext?
+    private var unknownResolution: UnknownResolutionContext?
+    private var confirmedScope: RelationshipScopeSelection?
+    private var currentReadback: CanonicalRelationshipReadback?
+
+    init(
+        configuration: Configuration,
+        session: URLSession = .shared,
+        unknownResolutionStore: any UnknownResolutionPersisting = NullUnknownResolutionStore()
+    ) throws {
+        guard Self.isLoopback(configuration.baseURL) else {
+            throw RelationshipServiceError.liveServiceNotConfigured
+        }
+        self.configuration = configuration
+        self.session = session
+        self.unknownResolutionStore = unknownResolutionStore
+        self.unknownResolutionScopeKey = [
+            configuration.baseURL.absoluteString,
+            configuration.accountSlug,
+            configuration.userEmail.lowercased()
+        ].joined(separator: "|")
+    }
+
+    func loadWorkspace() async throws -> MacRelationshipServiceResponse {
+        let scopes = try await loadAvailableScopes()
+        if let recovered = try restoreDurableUnknownResolution(scopes: scopes) {
+            return recovered
+        }
+        guard let first = scopes.first else {
+            throw RelationshipServiceError.invalidResponse("No reviewable candidate relationship scope is available in this workspace.")
+        }
+        return .connected(.init(
+            workspaceID: first.workspaceID,
+            accountID: first.accountID,
+            options: scopes.map(\.option),
+            presentation: WorkspacePresentation(
+                candidateName: "Choose a Person or keep identity unresolved",
+                pursuitTitle: "Relationship scope required",
+                relationshipContext: "No Pursuit, Person, or relationship context is selected.",
+                changedSummary: "Review the available source owner before adding task authority.",
+                evidenceQuote: "No source has been submitted from this Mac.",
+                evidenceSource: "Connected canonical workspace",
+                dependency: "A recruiter must explicitly select one exact scope or preserve an unresolved outcome.",
+                proposal: "No proposal exists until a reviewed Capsule is submitted.",
+                actionProjections: []
+            ),
+            todayAttention: availableTodayAttention
+        ))
+    }
+
+    func confirmScope(_ selection: RelationshipScopeSelection) async throws {
+        let scopes = try await loadAvailableScopes()
+        guard let scope = scopes.first(where: { $0.option.selection == selection }) else {
+            throw RelationshipServiceError.invalidResponse("The relationship scope changed before confirmation.")
+        }
+        connectedScope = scope
+        confirmedScope = selection
+    }
+
+    func openTodayProposalReview(
+        pursuitID: String,
+        proposalID: String
+    ) async throws -> MacRelationshipServiceResponse {
+        let scopes = try await loadAvailableScopes()
+        let activeLogin = try await authenticate()
+        async let proposalRequest: ProposalResponseDTO = send(
+            "v1/pursuit-proposals/\(proposalID)",
+            token: activeLogin.accessToken
+        )
+        async let taskListRequest: AgentTaskListResponseDTO = send(
+            "v1/pursuits/\(pursuitID)/agent-tasks",
+            token: activeLogin.accessToken
+        )
+        let (proposalEnvelope, taskList) = try await (proposalRequest, taskListRequest)
+        let proposal = proposalEnvelope.proposal
+        guard proposalEnvelope.contractVersion == Self.contractVersion,
+              proposal.id == proposalID,
+              proposal.pursuitID == pursuitID,
+              proposal.status == "needs_review",
+              taskList.contractVersion == Self.contractVersion,
+              taskList.workspaceID == activeLogin.account.id else {
+            throw RelationshipServiceError.invalidResponse(
+                "The Today Proposal changed before its canonical review could open."
+            )
+        }
+
+        let matchingTasks = taskList.tasks.filter {
+            $0.workspaceID == activeLogin.account.id &&
+                $0.pursuitID == pursuitID &&
+                $0.status == "waiting_for_domain_decision" &&
+                $0.decisionBundle?.proposalID == proposalID &&
+                $0.decisionBundle?.status == "open" &&
+                $0.externalEffects.isEmpty
+        }
+        guard matchingTasks.count == 1, let task = matchingTasks.first else {
+            throw RelationshipServiceError.invalidResponse(
+                "The current Proposal does not map to one exact active decision gate. Return to Today and refresh before deciding."
+            )
+        }
+
+        let candidateScopes = scopes.filter {
+            $0.workspaceID == activeLogin.account.id &&
+                $0.pursuitID == pursuitID &&
+                $0.personID == proposal.reviewContext.subject.personID
+        }
+        var matchingResources: [(scope: LiveScope, resourceID: String)] = []
+        for candidateScope in candidateScopes {
+            let resources: RelationshipResourceListResponseDTO = try await send(
+                "v1/people/\(candidateScope.personID)/contexts/\(candidateScope.relationshipContextID)/resources",
+                token: activeLogin.accessToken
+            )
+            guard resources.contractVersion == Self.contractVersion,
+                  resources.personID == candidateScope.personID,
+                  resources.relationshipContextID == candidateScope.relationshipContextID else {
+                throw RelationshipServiceError.invalidResponse(
+                    "A relationship resource list did not match its authorized scope."
+                )
+            }
+            matchingResources.append(contentsOf: resources.resources.compactMap { resource in
+                guard resource.captureID == proposal.captureID else { return nil }
+                return (scope: candidateScope, resourceID: resource.id)
+            })
+        }
+        guard matchingResources.count == 1, let match = matchingResources.first else {
+            throw RelationshipServiceError.invalidResponse(
+                "The Proposal does not map to one exact authorized Person relationship and source. Nothing was selected or changed."
+            )
+        }
+        let scope = match.scope
+
+        let resource: ResourceDetailResponse = try await send(
+            "v1/resources/\(match.resourceID)",
+            token: activeLogin.accessToken
+        )
+        let evidenceIDs = proposal.reviewContext.evidence.map(\.fragmentID)
+        let evidenceSet = Set(evidenceIDs)
+        let currentFragments = resource.fragments.filter { evidenceSet.contains($0.id) }
+        guard resource.contractVersion == Self.contractVersion,
+              resource.resource.id == match.resourceID,
+              resource.resource.captureID == proposal.captureID,
+              resource.resource.processingState == "ready",
+              resource.resource.sourceAccessState == "available",
+              resource.resource.sourceAuthorizationState == "authorized",
+              Self.authorizationIsCurrent(resource.resource.sourceAuthorizationExpiresAt),
+              !evidenceIDs.isEmpty,
+              Set(currentFragments.map(\.id)) == evidenceSet,
+              currentFragments.allSatisfy({
+                  $0.captureID == proposal.captureID &&
+                      $0.resourceID == match.resourceID &&
+                      $0.reviewStatus == "reviewed" &&
+                      $0.attribution.status == "confirmed" &&
+                      $0.attribution.actorKind == "candidate" &&
+                      $0.text?.isEmpty == false
+              }),
+              task.semanticSnapshot.pursuitRevision == proposal.baseRevision else {
+            throw RelationshipServiceError.staleAuthority(
+                "The supporting source or Pursuit revision changed. No decision was sent; refresh Today before reviewing this Proposal."
+            )
+        }
+
+        let runAudit = try await loadRunAudit(
+            task: task,
+            resource: resource,
+            token: activeLogin.accessToken
+        )
+        guard let review = try await loadDecision(
+            task: task,
+            scope: scope,
+            captureID: proposal.captureID,
+            resourceID: match.resourceID,
+            evidenceIDs: evidenceIDs,
+            runAudit: runAudit,
+            token: activeLogin.accessToken
+        ) else {
+            throw RelationshipServiceError.invalidResponse(
+                "The canonical decision gate is no longer reviewable."
+            )
+        }
+
+        let presentation = WorkspacePresentation(
+            candidateName: scope.personDisplayLabel,
+            pursuitTitle: scope.pursuitTitle,
+            relationshipContext: scope.relationshipContextLabel,
+            changedSummary: proposal.summary,
+            evidenceQuote: review.evidence.first?.text ?? "Reviewed evidence is unavailable.",
+            evidenceSource: review.evidence.first.map {
+                "\($0.source) · fragment \($0.id)"
+            } ?? "Canonical Proposal evidence",
+            dependency: review.dependency,
+            proposal: "Review every proposed change before anything is saved to the relationship.",
+            actionProjections: [
+                ActionProjection(
+                    id: task.id,
+                    objectName: scope.pursuitTitle,
+                    consequence: "Review proposed Pursuit changes; no external effect",
+                    authority: "Open Agent Decision Bundle · recruiter decision required",
+                    status: .awaitingDecision,
+                    nextOperation: "Review exact evidence and decide every proposed change",
+                    route: .reviewDecision
+                )
+            ]
+        )
+        let readback = CanonicalRelationshipReadback(
+            workspaceID: scope.workspaceID,
+            accountID: scope.accountID,
+            pursuitID: scope.pursuitID,
+            personID: scope.personID,
+            relationshipContextID: scope.relationshipContextID,
+            captureID: proposal.captureID,
+            evidenceFragmentIDs: evidenceIDs,
+            taskID: task.id,
+            taskStatus: task.status,
+            externalEffects: [],
+            displayMode: .needsDecision,
+            presentation: presentation,
+            runAudit: runAudit,
+            clarification: nil,
+            pendingDecision: review,
+            receipt: nil
+        )
+        guard readback.provesCanonicalSafeReadback else {
+            throw RelationshipServiceError.canonicalReadbackIncomplete
+        }
+        connectedScope = scope
+        currentReadback = readback
+        return .canonical(readback)
+    }
+
+    func submit(manifest: SubmittedContextManifest) async throws -> MacRelationshipServiceResponse {
+        guard let scope = connectedScope else {
+            throw RelationshipServiceError.invalidResponse("Review and explicitly confirm the current Pursuit, Person, and relationship context before submission.")
+        }
+        let expectedScope = RelationshipScopeSelection(
+            pursuitID: scope.pursuitID,
+            personID: scope.personID,
+            relationshipContextID: scope.relationshipContextID
+        )
+        guard confirmedScope == expectedScope,
+              manifest.pursuitID == expectedScope.pursuitID,
+              manifest.personID == expectedScope.personID else {
+            throw RelationshipServiceError.invalidResponse("Review and explicitly confirm the current Pursuit, Person, and relationship context before submission.")
+        }
+        let liveItems = manifest.selectedItems.filter { $0.kind == .selectedText }
+        guard liveItems.count == 1,
+              let liveItem = liveItems.first,
+              manifest.selectedItems.count == 1,
+              liveItem.actorKind == .candidate else {
+            throw RelationshipServiceError.invalidResponse(
+                "The live vertical slice accepts one reviewed excerpt with separately confirmed candidate attribution."
+            )
+        }
+        let selectedText = liveItem.reviewedContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selectedText.isEmpty else {
+            throw RelationshipServiceError.invalidResponse("The reviewed excerpt was empty.")
+        }
+
+        let timestamp = Self.timestamp(manifest.submittedAt)
+        let derivativeExpiresAt = Self.timestamp(
+            manifest.submittedAt.addingTimeInterval(
+                liveItem.retention == .twentyFourHours ? 86_400 : 3_600
+            )
+        )
+        let clientResourceID = "mac-selected-text-\(manifest.capsuleID.prefix(72))-v\(manifest.version)"
+        let captureBody = CaptureRequest(
+            contractVersion: Self.contractVersion,
+            idempotencyKey: manifest.idempotencyKey,
+            channel: "chat",
+            purpose: String(manifest.purpose.prefix(240)),
+            capturedAt: timestamp,
+            sourceTimezone: TimeZone.current.identifier,
+            personScope: .init(
+                status: "confirmed",
+                personID: scope.personID,
+                relationshipContext: .init(status: "existing", relationshipContextID: scope.relationshipContextID),
+                bindingBasis: "The signed-in recruiter explicitly selected this confirmed Pursuit role and reviewed the visible Context Capsule."
+            ),
+            resource: .init(
+                clientResourceID: clientResourceID,
+                kind: "conversation_transcript",
+                displayName: "Mac Context Capsule selected text",
+                mediaType: "text/plain",
+                observedAt: timestamp,
+                sourceTimezone: TimeZone.current.identifier,
+                authorizationExpiresAt: derivativeExpiresAt,
+                // The selected text is already the user-reviewed derivative,
+                // not a raw screenshot. Keep that derivative available only
+                // for the bounded canonical review window so a later human
+                // decision can still revalidate it. The raw local Capsule TTL
+                // remains independently controlled on this Mac.
+                retention: .init(
+                    requestedMode: "evidence_crop",
+                    sourceScope: "reviewed_selected_text",
+                    requestedRetentionUntil: derivativeExpiresAt
+                )
+            ),
+            fragments: [
+                .init(
+                    clientResourceID: clientResourceID,
+                    kind: "message",
+                    sequence: 0,
+                    text: selectedText,
+                    locator: .init(
+                        kind: "message",
+                        sourceMessageID: "\(manifest.capsuleID)-v\(manifest.version)-message-0",
+                        sequence: 0,
+                        speakerSide: "unknown"
+                    ),
+                    attribution: .init(actorKind: liveItem.actorKind.rawValue, status: "confirmed"),
+                    reviewStatus: "reviewed",
+                    parser: .init(name: "talent-signal-macos-context-capsule", version: "1.0.0")
+                )
+            ]
+        )
+        let capture: CaptureResponse = try await send(
+            "v1/resource-captures",
+            method: "POST",
+            token: scope.accessToken,
+            body: captureBody
+        )
+        guard capture.contractVersion == Self.contractVersion,
+              capture.identity.status == "bound",
+              capture.identity.personID == scope.personID,
+              capture.identity.relationshipContextID == scope.relationshipContextID,
+              capture.resource.fragmentCount > 0 else {
+            throw RelationshipServiceError.invalidResponse("Capture identity or relationship readback did not match the reviewed scope.")
+        }
+
+        let resource: ResourceDetailResponse = try await send(
+            "v1/resources/\(capture.resource.id)",
+            token: scope.accessToken
+        )
+        let reviewedFragments = resource.fragments.filter {
+            $0.captureID == capture.captureID &&
+                $0.resourceID == capture.resource.id &&
+                $0.reviewStatus == "reviewed" &&
+                $0.attribution.status == "confirmed" &&
+                $0.attribution.actorKind == "candidate" &&
+                $0.text?.isEmpty == false
+        }
+        guard resource.contractVersion == Self.contractVersion,
+              resource.resource.id == capture.resource.id,
+              resource.resource.captureID == capture.captureID,
+              resource.resource.processingState == "ready",
+              resource.resource.sourceAccessState == "available",
+              resource.resource.sourceAuthorizationState == "authorized",
+              Self.authorizationIsCurrent(resource.resource.sourceAuthorizationExpiresAt),
+              !reviewedFragments.isEmpty else {
+            throw RelationshipServiceError.invalidResponse("Resource authorization or reviewed evidence readback was incomplete.")
+        }
+
+        let evidenceIDs = reviewedFragments.map(\.id)
+        let taskBody = CreateAgentTaskRequest(
+            idempotencyKey: String("\(manifest.idempotencyKey)-task".prefix(128)),
+            expectedRevision: scope.pursuitRevision,
+            taskKind: "pre_call_briefing",
+            captureID: capture.captureID,
+            objective: String(manifest.purpose.prefix(1_000)),
+            evidenceRefs: evidenceIDs
+        )
+        let created: AgentTaskResponse = try await send(
+            "v1/pursuits/\(scope.pursuitID)/agent-tasks",
+            method: "POST",
+            token: scope.accessToken,
+            body: taskBody
+        )
+        guard created.contractVersion == Self.contractVersion else {
+            throw RelationshipServiceError.invalidResponse("Agent Task creation contract version did not match.")
+        }
+        let settled = try await pollTask(
+            id: created.task.id,
+            token: scope.accessToken,
+            expected: scope
+        )
+        guard settled.id == created.task.id,
+              settled.workspaceID == scope.workspaceID,
+              settled.pursuitID == scope.pursuitID,
+              settled.semanticSnapshot.pursuitRevision == scope.pursuitRevision,
+              settled.externalEffects.isEmpty else {
+            throw RelationshipServiceError.canonicalReadbackIncomplete
+        }
+        let runAudit = try await loadRunAudit(
+            task: settled,
+            resource: resource,
+            token: scope.accessToken
+        )
+
+        let decision = try await loadDecision(
+            task: settled,
+            scope: scope,
+            captureID: capture.captureID,
+            resourceID: capture.resource.id,
+            evidenceIDs: evidenceIDs,
+            runAudit: runAudit,
+            token: scope.accessToken
+        )
+        let displayMode = Self.displayMode(for: settled)
+        if displayMode == .needsDecision, decision == nil {
+            throw RelationshipServiceError.invalidResponse("A waiting Agent Task did not include a complete canonical Decision Bundle.")
+        }
+        let evidenceQuote = decision?.evidence.first?.text ?? reviewedFragments.first?.text ?? "Reviewed evidence is unavailable."
+        let clarification = settled.clarification.map {
+            CanonicalClarification(
+                id: $0.id,
+                taskID: $0.taskID,
+                taskRevision: $0.taskRevision,
+                requestRevision: $0.requestRevision,
+                question: $0.question,
+                reason: $0.reason,
+                status: $0.status,
+                expiresAt: $0.expiresAt
+            )
+        }
+        if displayMode == .clarification {
+            guard let clarification,
+                  clarification.taskID == settled.id,
+                  clarification.taskRevision == settled.taskRevision,
+                  clarification.status == "open" else {
+                throw RelationshipServiceError.invalidResponse("A waiting Agent Task did not include its exact open clarification request.")
+            }
+        }
+        let proposalText: String
+        if let decision {
+            proposalText = decision.summary
+        } else if let clarification {
+            proposalText = clarification.question
+        } else if let artifact = settled.artifact {
+            proposalText = artifact.nextMove.label
+        } else if settled.latestRun?.noActionID != nil || settled.status == "no_action" {
+            proposalText = "The canonical task recorded no_action. Revisit only if the evidence state changes."
+        } else {
+            proposalText = "The canonical task is \(settled.status). Inspect the exact Task before any retry."
+        }
+        let presentation = WorkspacePresentation(
+            candidateName: scope.personDisplayLabel,
+            pursuitTitle: scope.pursuitTitle,
+            relationshipContext: scope.relationshipContextLabel,
+            changedSummary: decision?.summary ?? settled.artifact?.summary ?? "Canonical Agent Task readback: \(settled.status.replacingOccurrences(of: "_", with: " ")).",
+            evidenceQuote: evidenceQuote,
+            evidenceSource: "Reviewed resource \(capture.resource.id) · fragment \(evidenceIDs[0])",
+            dependency: decision?.dependency ?? settled.artifact?.whatMattersNow.dependency ?? "This result is bound to Pursuit revision \(scope.pursuitRevision) and the immutable Capsule manifest.",
+            proposal: proposalText,
+            actionProjections: [
+                ActionProjection(
+                    id: settled.id,
+                    objectName: settled.artifact?.nextMove.label ?? scope.pursuitTitle,
+                    consequence: settled.artifact?.nextMove.reason ?? (settled.latestRun?.proposalID == nil ? "No approved effect" : "Canonical proposal review"),
+                    authority: settled.artifact?.nextMove.kind == "continue_owned_action"
+                        ? "Existing owned action · no duplicate created · external_effects is empty"
+                        : "Task readback · external_effects is empty",
+                    status: Self.actionStatus(for: settled),
+                    nextOperation: displayMode == .outcomeUnknown ? "Reconcile before retry" : "Open the canonical Task and evidence",
+                    route: Self.actionRoute(for: displayMode)
+                )
+            ]
+        )
+        let readback = CanonicalRelationshipReadback(
+                workspaceID: scope.workspaceID,
+                accountID: scope.accountID,
+                pursuitID: scope.pursuitID,
+                personID: scope.personID,
+                relationshipContextID: scope.relationshipContextID,
+                captureID: capture.captureID,
+                evidenceFragmentIDs: evidenceIDs,
+                taskID: settled.id,
+                taskStatus: settled.status,
+                externalEffects: [],
+                displayMode: displayMode,
+                presentation: presentation,
+                runAudit: runAudit,
+                clarification: clarification,
+                pendingDecision: decision,
+                receipt: nil
+            )
+        currentReadback = readback
+        return .canonical(readback)
+    }
+
+    func resolveDecision(_ request: CanonicalDecisionRequest) async throws -> MacRelationshipServiceResponse {
+        guard let pending = pendingResolution,
+              pending.review.bundleID == request.bundleID,
+              pending.review.taskID == request.taskID,
+              pending.review.taskRevision == request.taskRevision,
+              pending.review.bundleRevision == request.bundleRevision,
+              pending.review.proposalID == request.proposalID,
+              pending.review.baseRevision == request.baseRevision else {
+            throw RelationshipServiceError.invalidResponse("The canonical Decision Bundle changed before review.")
+        }
+        let expectedItemIDs = Set(pending.review.items.map(\.id))
+        guard request.decisions.count == expectedItemIDs.count,
+              Set(request.decisions.map(\.itemID)) == expectedItemIDs else {
+            throw RelationshipServiceError.invalidResponse("Resolve every canonical proposal item exactly once.")
+        }
+
+        // Preview is not durable authority. Re-read source access,
+        // authorization, attribution, and exact fragments immediately before
+        // the consequential canonical write.
+        try await revalidateEvidenceAuthority(pending)
+
+        let operationID = UUID().uuidString.lowercased()
+        let body = ResolveDecisionRequestDTO(
+            operationID: operationID,
+            idempotencyKey: "macos:agent-decision:\(operationID)",
+            expectedTaskRevision: request.taskRevision,
+            expectedBundleRevision: request.bundleRevision,
+            baseRevision: request.baseRevision,
+            reason: String(request.reason.prefix(1_000)),
+            decisions: request.decisions.map {
+                .init(itemID: $0.itemID, decision: $0.choice.rawValue)
+            }
+        )
+        let initialUnknown = UnknownResolutionContext(
+            operationID: operationID,
+            request: request,
+            pending: pending,
+            transportError: "The decision request is being dispatched; its canonical receipt is not yet known."
+        )
+        // Persist the correlation before the consequential request leaves this
+        // process. A crash after the backend commit can therefore only resume
+        // with this exact operation ID; it cannot manufacture a second POST.
+        try unknownResolutionStore.save(
+            durableUnknownResolution(from: initialUnknown),
+            scopeKey: unknownResolutionScopeKey
+        )
+        unknownResolution = initialUnknown
+
+        let response: DecisionResolutionResponseDTO
+        do {
+            response = try await send(
+                "v1/decision-bundles/\(request.bundleID)/resolve",
+                method: "POST",
+                token: pending.scope.accessToken,
+                body: body
+            )
+        } catch {
+            let unknown = UnknownResolutionContext(
+                operationID: operationID,
+                request: request,
+                pending: pending,
+                transportError: error.localizedDescription
+            )
+            unknownResolution = unknown
+            try? unknownResolutionStore.save(
+                durableUnknownResolution(from: unknown),
+                scopeKey: unknownResolutionScopeKey
+            )
+            for _ in 0..<4 {
+                try? await Task.sleep(for: .milliseconds(200))
+                if let recovered = try? await recoverUnknownResolution() { return recovered }
+            }
+            return unknownReadback(
+                operationID: operationID,
+                pending: pending,
+                detail: error.localizedDescription
+            )
+        }
+        return try finalizeResolution(
+            response: response,
+            operationID: operationID,
+            request: request,
+            pending: pending
+        )
+    }
+
+    func reconcileDecisionOutcome() async throws -> MacRelationshipServiceResponse {
+        guard let unknown = unknownResolution else {
+            throw RelationshipServiceError.invalidResponse("There is no unknown canonical operation to reconcile.")
+        }
+        if let recovered = try await recoverUnknownResolution() { return recovered }
+        return unknownReadback(
+            operationID: unknown.operationID,
+            pending: unknown.pending,
+            detail: unknown.transportError
+        )
+    }
+
+    func openProjection(_ projection: CanonicalProjectionRequest) async throws -> MacRelationshipServiceResponse {
+        guard let current = currentReadback,
+              current.presentation.actionProjections.contains(where: {
+                  $0.id == projection.objectID && $0.route == projection.route
+              }) else {
+            throw RelationshipServiceError.invalidResponse(
+                "The Action Center projection is stale or does not belong to the current canonical readback."
+            )
+        }
+
+        switch projection.route {
+        case .reconcileOperation:
+            return try await reconcileDecisionOutcome()
+        case .reviewDecision:
+            guard let pending = pendingResolution,
+                  pending.review.taskID == projection.objectID else {
+                throw RelationshipServiceError.invalidResponse("The current Decision Bundle is no longer reviewable.")
+            }
+            try await revalidateEvidenceAuthority(pending)
+            let envelope: AgentTaskResponse = try await send(
+                "v1/agent-tasks/\(pending.review.taskID)",
+                token: pending.scope.accessToken
+            )
+            guard envelope.contractVersion == Self.contractVersion,
+                  envelope.task.status == "waiting_for_domain_decision",
+                  envelope.task.taskRevision == pending.review.taskRevision,
+                  envelope.task.externalEffects.isEmpty else {
+                throw RelationshipServiceError.invalidResponse("The canonical Task changed; refresh before deciding.")
+            }
+            let refreshed = try await loadDecision(
+                task: envelope.task,
+                scope: pending.scope,
+                captureID: pending.captureID,
+                resourceID: pending.resourceID,
+                evidenceIDs: pending.evidenceIDs,
+                runAudit: pending.runAudit,
+                token: pending.scope.accessToken
+            )
+            let readback = CanonicalRelationshipReadback(
+                workspaceID: current.workspaceID,
+                accountID: current.accountID,
+                pursuitID: current.pursuitID,
+                personID: current.personID,
+                relationshipContextID: current.relationshipContextID,
+                captureID: current.captureID,
+                evidenceFragmentIDs: current.evidenceFragmentIDs,
+                taskID: current.taskID,
+                taskStatus: envelope.task.status,
+                externalEffects: [],
+                displayMode: .needsDecision,
+                presentation: current.presentation,
+                runAudit: current.runAudit,
+                clarification: nil,
+                pendingDecision: refreshed,
+                receipt: nil
+            )
+            currentReadback = readback
+            return .canonical(readback)
+        case .openReceipt:
+            guard let receipt = current.receipt,
+                  receipt.id == projection.objectID,
+                  let scope = connectedScope else {
+                throw RelationshipServiceError.invalidResponse("The receipt projection is no longer current.")
+            }
+            async let taskEnvelope: AgentTaskResponse = send(
+                "v1/agent-tasks/\(current.taskID)", token: scope.accessToken
+            )
+            async let operationEnvelope: OperationResponseDTO = send(
+                "v1/operations/\(receipt.operationID)", token: scope.accessToken
+            )
+            let (task, operation) = try await (taskEnvelope, operationEnvelope)
+            guard task.contractVersion == Self.contractVersion,
+                  task.task.status == "completed",
+                  task.task.externalEffects.isEmpty,
+                  operation.contractVersion == Self.contractVersion,
+                  operation.operation.id == receipt.operationID,
+                  operation.receipt?.id == receipt.id,
+                  operation.receipt?.externalEffects.isEmpty == true else {
+                throw RelationshipServiceError.invalidResponse("The receipt could not be re-verified from canonical objects.")
+            }
+            return .canonical(current)
+        case .reviewStaleSource, .openCurrent:
+            guard let scope = connectedScope else {
+                throw RelationshipServiceError.invalidResponse("No connected canonical scope is available.")
+            }
+            let envelope: AgentTaskResponse = try await send(
+                "v1/agent-tasks/\(current.taskID)", token: scope.accessToken
+            )
+            guard envelope.contractVersion == Self.contractVersion,
+                  envelope.task.id == current.taskID,
+                  envelope.task.workspaceID == current.workspaceID,
+                  envelope.task.pursuitID == current.pursuitID,
+                  envelope.task.externalEffects.isEmpty,
+                  (projection.route != .reviewStaleSource || envelope.task.status == "needs_rebase") else {
+                throw RelationshipServiceError.invalidResponse("The canonical Task changed; its projection cannot be reused.")
+            }
+            return .canonical(current)
+        }
+    }
+
+    func signOut() async throws -> SessionSignOutReceipt {
+        let active = try await authenticate()
+        // Signing out in the shell always revokes this process' local authority,
+        // even when the backend response is lost or cannot be verified. The UI
+        // reports remote revocation as outcome-unknown in that case instead of
+        // retaining a reusable bearer token.
+        defer {
+            login = nil
+            connectedScope = nil
+            availableScopes = nil
+            confirmedScope = nil
+            pendingResolution = nil
+            unknownResolution = nil
+            currentReadback = nil
+            try? unknownResolutionStore.clear(scopeKey: unknownResolutionScopeKey)
+        }
+        let response: LogoutResponse = try await send(
+            "v1/auth/logout",
+            method: "POST",
+            token: active.accessToken,
+            encodedBody: nil
+        )
+        guard response.contractVersion == Self.contractVersion,
+              !response.revokedSessionID.isEmpty,
+              !response.revokedAt.isEmpty else {
+            throw RelationshipServiceError.canonicalReadbackIncomplete
+        }
+        return .init(sessionID: response.revokedSessionID, revokedAt: response.revokedAt)
+    }
+
+    private func restoreDurableUnknownResolution(
+        scopes: [LiveScope]
+    ) throws -> MacRelationshipServiceResponse? {
+        if unknownResolution != nil, let currentReadback,
+           currentReadback.displayMode == .outcomeUnknown {
+            return .canonical(currentReadback)
+        }
+        guard let durable = try unknownResolutionStore.load(
+            scopeKey: unknownResolutionScopeKey
+        ) else {
+            return nil
+        }
+        guard durable.schemaVersion == DurableUnknownResolution.currentSchemaVersion,
+              let scope = scopes.first(where: {
+                  $0.workspaceID == durable.workspaceID &&
+                      $0.accountID == durable.accountID &&
+                      $0.pursuitID == durable.pursuitID &&
+                      $0.personID == durable.personID &&
+                      $0.relationshipContextID == durable.relationshipContextID
+              }) else {
+            throw RelationshipServiceError.invalidResponse(
+                "The durable outcome-unknown operation no longer matches this authenticated relationship scope. No retry is authorized."
+            )
+        }
+        let decisions = try durable.decisions.map { decision in
+            guard let choice = CanonicalDecisionChoice(rawValue: decision.choice) else {
+                throw RelationshipServiceError.invalidResponse(
+                    "The durable outcome-unknown operation contains an unsupported decision. No retry is authorized."
+                )
+            }
+            return CanonicalDecisionRequest.Decision(
+                itemID: decision.itemID,
+                choice: choice
+            )
+        }
+        let request = CanonicalDecisionRequest(
+            bundleID: durable.bundleID,
+            taskID: durable.taskID,
+            taskRevision: durable.taskRevision,
+            bundleRevision: durable.bundleRevision,
+            proposalID: durable.proposalID,
+            baseRevision: durable.baseRevision,
+            reason: durable.reason,
+            decisions: decisions
+        )
+        let review = CanonicalProposalReview(
+            bundleID: durable.bundleID,
+            taskID: durable.taskID,
+            taskRevision: durable.taskRevision,
+            bundleRevision: durable.bundleRevision,
+            proposalID: durable.proposalID,
+            baseRevision: durable.baseRevision,
+            summary: "A previously confirmed decision has an outcome that still needs canonical reconciliation.",
+            dependency: "Reconcile the original operation ID before any retry.",
+            expiresAt: Self.timestamp(durable.savedAt),
+            evidence: [],
+            items: []
+        )
+        let pending = PendingResolutionContext(
+            review: review,
+            scope: scope,
+            captureID: durable.captureID,
+            resourceID: durable.resourceID,
+            evidenceIDs: durable.evidenceIDs,
+            runAudit: nil
+        )
+        let unknown = UnknownResolutionContext(
+            operationID: durable.operationID,
+            request: request,
+            pending: pending,
+            transportError: durable.transportError
+        )
+        connectedScope = scope
+        confirmedScope = scope.option.selection
+        pendingResolution = pending
+        unknownResolution = unknown
+        return unknownReadback(
+            operationID: durable.operationID,
+            pending: pending,
+            detail: "Recovered the original operation after relaunch. No new decision request was sent."
+        )
+    }
+
+    private func durableUnknownResolution(
+        from unknown: UnknownResolutionContext
+    ) -> DurableUnknownResolution {
+        DurableUnknownResolution(
+            schemaVersion: DurableUnknownResolution.currentSchemaVersion,
+            operationID: unknown.operationID,
+            bundleID: unknown.request.bundleID,
+            taskID: unknown.request.taskID,
+            taskRevision: unknown.request.taskRevision,
+            bundleRevision: unknown.request.bundleRevision,
+            proposalID: unknown.request.proposalID,
+            baseRevision: unknown.request.baseRevision,
+            reason: unknown.request.reason,
+            decisions: unknown.request.decisions.map {
+                .init(itemID: $0.itemID, choice: $0.choice.rawValue)
+            },
+            workspaceID: unknown.pending.scope.workspaceID,
+            accountID: unknown.pending.scope.accountID,
+            pursuitID: unknown.pending.scope.pursuitID,
+            personID: unknown.pending.scope.personID,
+            relationshipContextID: unknown.pending.scope.relationshipContextID,
+            captureID: unknown.pending.captureID,
+            resourceID: unknown.pending.resourceID,
+            evidenceIDs: unknown.pending.evidenceIDs,
+            savedAt: Date(),
+            transportError: unknown.transportError
+        )
+    }
+
+    private func recoverUnknownResolution() async throws -> MacRelationshipServiceResponse? {
+        guard let unknown = unknownResolution else { return nil }
+        let operation: OperationResponseDTO = try await send(
+            "v1/operations/\(unknown.operationID)",
+            token: unknown.pending.scope.accessToken
+        )
+        guard operation.contractVersion == Self.contractVersion,
+              operation.operation.id == unknown.operationID else {
+            throw RelationshipServiceError.canonicalReadbackIncomplete
+        }
+        if let receipt = operation.receipt {
+            let taskResponse: AgentTaskResponse = try await send(
+                "v1/agent-tasks/\(unknown.request.taskID)",
+                token: unknown.pending.scope.accessToken
+            )
+            return try finalizeResolution(
+                response: .init(
+                    contractVersion: taskResponse.contractVersion,
+                    task: taskResponse.task,
+                    domainReceipt: receipt
+                ),
+                operationID: unknown.operationID,
+                request: unknown.request,
+                pending: unknown.pending
+            )
+        }
+        if ["conflict", "failed"].contains(operation.operation.status) {
+            unknownResolution = nil
+            try? unknownResolutionStore.clear(scopeKey: unknownResolutionScopeKey)
+            throw RelationshipServiceError.invalidResponse(
+                "The original canonical operation ended as \(operation.operation.status); no retry was issued."
+            )
+        }
+        return nil
+    }
+
+    private func unknownReadback(
+        operationID: String,
+        pending: PendingResolutionContext,
+        detail: String
+    ) -> MacRelationshipServiceResponse {
+        let presentation = WorkspacePresentation(
+            candidateName: pending.scope.personDisplayLabel,
+            pursuitTitle: pending.scope.pursuitTitle,
+            relationshipContext: pending.scope.relationshipContextLabel,
+            changedSummary: "The decision request may have reached the backend, but its receipt was not read back.",
+            evidenceQuote: pending.review.evidence.first?.text ?? "Reviewed evidence remains referenced by the original Task.",
+            evidenceSource: "Canonical operation \(operationID)",
+            dependency: "Reconcile this operation ID before any retry. Transport detail: \(detail)",
+            proposal: "No new operation will be created while the original outcome is unknown.",
+            actionProjections: [
+                ActionProjection(
+                    id: operationID,
+                    objectName: pending.scope.pursuitTitle,
+                    consequence: "Decision outcome requires canonical readback",
+                    authority: "Original operation ID retained · no retry authority",
+                    status: .outcomeUnknown,
+                    nextOperation: "Reconcile the original operation",
+                    route: .reconcileOperation
+                )
+            ]
+        )
+        let readback = CanonicalRelationshipReadback(
+            workspaceID: pending.scope.workspaceID,
+            accountID: pending.scope.accountID,
+            pursuitID: pending.scope.pursuitID,
+            personID: pending.scope.personID,
+            relationshipContextID: pending.scope.relationshipContextID,
+            captureID: pending.captureID,
+            evidenceFragmentIDs: pending.evidenceIDs,
+            taskID: pending.review.taskID,
+            taskStatus: "waiting_for_external",
+            externalEffects: [],
+            displayMode: .outcomeUnknown,
+            presentation: presentation,
+            runAudit: pending.runAudit,
+            clarification: nil,
+            pendingDecision: nil,
+            receipt: nil
+        )
+        currentReadback = readback
+        return .canonical(readback)
+    }
+
+    private func finalizeResolution(
+        response: DecisionResolutionResponseDTO,
+        operationID: String,
+        request: CanonicalDecisionRequest,
+        pending: PendingResolutionContext
+    ) throws -> MacRelationshipServiceResponse {
+        let task = response.task
+        let receiptDTO = response.domainReceipt
+        guard response.contractVersion == Self.contractVersion,
+              task.id == request.taskID,
+              task.workspaceID == pending.scope.workspaceID,
+              task.pursuitID == pending.scope.pursuitID,
+              task.status == "completed",
+              task.decisionBundle?.id == request.bundleID,
+              task.decisionBundle?.status == "resolved",
+              task.externalEffects.isEmpty,
+              receiptDTO.operationID == operationID,
+              receiptDTO.workspaceID == pending.scope.workspaceID,
+              receiptDTO.operationKind == "review_pursuit_proposal",
+              receiptDTO.status == "applied",
+              receiptDTO.proposalID == request.proposalID,
+              receiptDTO.entityRef.type == "pursuit",
+              receiptDTO.entityRef.id == pending.scope.pursuitID,
+              receiptDTO.entityRef.beforeRevision == request.baseRevision,
+              receiptDTO.entityRef.afterRevision >= receiptDTO.entityRef.beforeRevision,
+              receiptDTO.externalEffects.isEmpty else {
+            throw RelationshipServiceError.canonicalReadbackIncomplete
+        }
+
+        let receipt = CanonicalPursuitReceipt(
+            id: receiptDTO.id,
+            operationID: receiptDTO.operationID,
+            workspaceID: receiptDTO.workspaceID,
+            pursuitID: receiptDTO.entityRef.id,
+            proposalID: request.proposalID,
+            outcome: receiptDTO.outcome,
+            summary: receiptDTO.summary,
+            beforeRevision: receiptDTO.entityRef.beforeRevision,
+            afterRevision: receiptDTO.entityRef.afterRevision,
+            changedFields: receiptDTO.changedFields,
+            externalEffects: [],
+            occurredAt: receiptDTO.occurredAt
+        )
+        let updatedScope = pending.scope.updatingRevision(receipt.afterRevision)
+        connectedScope = updatedScope
+        pendingResolution = nil
+        unknownResolution = nil
+        try? unknownResolutionStore.clear(scopeKey: unknownResolutionScopeKey)
+        let presentation = WorkspacePresentation(
+            candidateName: updatedScope.personDisplayLabel,
+            pursuitTitle: updatedScope.pursuitTitle,
+            relationshipContext: updatedScope.relationshipContextLabel,
+            changedSummary: receipt.summary,
+            evidenceQuote: pending.review.evidence.first?.text ?? "Reviewed evidence retained by canonical reference.",
+            evidenceSource: "Canonical Decision Bundle \(request.bundleID)",
+            dependency: "The receipt is the authority for the applied Pursuit revision. External effects remain empty.",
+            proposal: "Decision resolved with outcome \(receipt.outcome.replacingOccurrences(of: "_", with: " ")).",
+            actionProjections: [
+                ActionProjection(
+                    id: receipt.id,
+                    objectName: updatedScope.pursuitTitle,
+                    consequence: receipt.changedFields.isEmpty ? "No canonical field changed" : "Changed \(receipt.changedFields.joined(separator: ", "))",
+                    authority: "Canonical PursuitReceipt · external_effects is empty",
+                    status: .verified,
+                    nextOperation: "Inspect receipt and current Pursuit revision \(receipt.afterRevision)",
+                    route: .openReceipt
+                )
+            ]
+        )
+        let readback = CanonicalRelationshipReadback(
+            workspaceID: updatedScope.workspaceID,
+            accountID: updatedScope.accountID,
+            pursuitID: updatedScope.pursuitID,
+            personID: updatedScope.personID,
+            relationshipContextID: updatedScope.relationshipContextID,
+            captureID: pending.captureID,
+            evidenceFragmentIDs: pending.evidenceIDs,
+            taskID: task.id,
+            taskStatus: task.status,
+            externalEffects: [],
+            displayMode: .receipt,
+            presentation: presentation,
+            runAudit: pending.runAudit,
+            clarification: nil,
+            pendingDecision: nil,
+            receipt: receipt
+        )
+        currentReadback = readback
+        return .canonical(readback)
+    }
+
+    private func loadDecision(
+        task: AgentTaskDTO,
+        scope: LiveScope,
+        captureID: String,
+        resourceID: String,
+        evidenceIDs: [String],
+        runAudit: RunAuditSummary?,
+        token: String
+    ) async throws -> CanonicalProposalReview? {
+        guard task.status == "waiting_for_domain_decision" else {
+            pendingResolution = nil
+            return nil
+        }
+        guard let bundle = task.decisionBundle,
+              bundle.taskID == task.id,
+              bundle.taskRevision == task.taskRevision,
+              bundle.status == "open",
+              let proposalID = bundle.proposalID,
+              !bundle.items.isEmpty else {
+            throw RelationshipServiceError.invalidResponse("The Agent Decision Bundle correlation was incomplete.")
+        }
+        let envelope: ProposalResponseDTO = try await send(
+            "v1/pursuit-proposals/\(proposalID)",
+            token: token
+        )
+        let proposal = envelope.proposal
+        guard envelope.contractVersion == Self.contractVersion,
+              proposal.id == proposalID,
+              proposal.pursuitID == scope.pursuitID,
+              proposal.captureID == captureID,
+              proposal.baseRevision == scope.pursuitRevision,
+              proposal.status == "needs_review",
+              proposal.reviewContext.pursuit.id == scope.pursuitID,
+              proposal.reviewContext.capture.id == captureID,
+              proposal.reviewContext.subject.personID == scope.personID,
+              !proposal.items.isEmpty else {
+            throw RelationshipServiceError.invalidResponse("The canonical Proposal did not match the reviewed Task scope.")
+        }
+        let evidenceSet = Set(evidenceIDs)
+        guard proposal.reviewContext.evidence.allSatisfy({ evidence in
+            evidenceSet.contains(evidence.fragmentID) &&
+                evidence.text?.isEmpty == false &&
+                evidence.attributedActor == "candidate" &&
+                evidence.attributionStatus == "confirmed" &&
+                evidence.reviewStatus == "reviewed"
+        }), proposal.items.allSatisfy({ item in
+            !item.evidenceRefs.isEmpty && Set(item.evidenceRefs).isSubset(of: evidenceSet)
+        }) else {
+            throw RelationshipServiceError.invalidResponse("The Proposal evidence was not fully attributable to the reviewed Capsule.")
+        }
+        let bundleItemsByDomainID = Dictionary(uniqueKeysWithValues: bundle.items.map { ($0.domainSubjectID, $0) })
+        guard bundleItemsByDomainID.count == proposal.items.count,
+              proposal.items.allSatisfy({ bundleItemsByDomainID[$0.id] != nil }) else {
+            throw RelationshipServiceError.invalidResponse("Proposal items did not map one-to-one to Agent Decision items.")
+        }
+        let review = CanonicalProposalReview(
+            bundleID: bundle.id,
+            taskID: task.id,
+            taskRevision: task.taskRevision,
+            bundleRevision: bundle.bundleRevision,
+            proposalID: proposal.id,
+            baseRevision: proposal.baseRevision,
+            summary: proposal.summary,
+            dependency: bundle.dependency,
+            expiresAt: bundle.expiresAt,
+            evidence: proposal.reviewContext.evidence.map {
+                .init(
+                    id: $0.fragmentID,
+                    text: $0.text ?? "",
+                    source: $0.sourceDisplayName,
+                    observedAt: $0.observedAt,
+                    attributedActor: $0.attributedActor,
+                    attributionStatus: $0.attributionStatus,
+                    reviewStatus: $0.reviewStatus
+                )
+            },
+            items: proposal.items.compactMap { item in
+                guard let agentItem = bundleItemsByDomainID[item.id] else { return nil }
+                return .init(
+                    id: agentItem.id,
+                    domainItemID: item.id,
+                    key: item.itemKey,
+                    changeKind: item.changeKind,
+                    beforeValue: item.beforeValue.displayText,
+                    proposedValue: item.proposedValue.displayText,
+                    reason: item.reason,
+                    effectSummary: item.effectSummary,
+                    epistemicStatus: item.epistemicStatus,
+                    evidenceAvailability: item.evidenceState.availability,
+                    evidenceRefs: item.evidenceRefs
+                )
+            }
+        )
+        guard review.items.count == proposal.items.count else {
+            throw RelationshipServiceError.invalidResponse("The reviewable Proposal lost an Agent Decision correlation.")
+        }
+        pendingResolution = PendingResolutionContext(
+            review: review,
+            scope: scope,
+            captureID: captureID,
+            resourceID: resourceID,
+            evidenceIDs: evidenceIDs,
+            runAudit: runAudit
+        )
+        return review
+    }
+
+    private func loadRunAudit(
+        task: AgentTaskDTO,
+        resource: ResourceDetailResponse,
+        token: String
+    ) async throws -> RunAuditSummary? {
+        var auditedTask = task
+        var runID = task.latestRun?.id
+        for _ in 0..<8 where runID == nil {
+            try await Task.sleep(for: .milliseconds(100))
+            let refreshed: AgentTaskResponse = try await send(
+                "v1/agent-tasks/\(task.id)", token: token
+            )
+            guard refreshed.contractVersion == Self.contractVersion,
+                  refreshed.task.id == task.id,
+                  refreshed.task.workspaceID == task.workspaceID,
+                  refreshed.task.pursuitID == task.pursuitID,
+                  refreshed.task.externalEffects.isEmpty else {
+                throw RelationshipServiceError.canonicalReadbackIncomplete
+            }
+            auditedTask = refreshed.task
+            runID = refreshed.task.latestRun?.id
+        }
+        guard let runID else { return nil }
+        let envelope: AgentRunResponseDTO = try await send(
+            "v1/agent-runs/\(runID)",
+            token: token
+        )
+        let run = envelope.run
+        guard envelope.contractVersion == Self.contractVersion,
+              run.id == runID,
+              run.workspaceID == task.workspaceID,
+              run.pursuitID == task.pursuitID,
+              run.captureID == resource.resource.captureID,
+              run.externalEffects.isEmpty,
+              Set(run.contextManifest.evidence.map(\.fragmentID)).isSubset(
+                  of: Set(resource.fragments.map(\.id))
+              ) else {
+            throw RelationshipServiceError.canonicalReadbackIncomplete
+        }
+        return RunAuditSummary(
+            runID: run.id,
+            objective: run.objective,
+            evidenceFragmentIDs: run.contextManifest.evidence.map(\.fragmentID),
+            evidenceManifestDigest: auditedTask.semanticSnapshot.evidenceManifestDigest,
+            eligibleCapabilities: run.definition.toolManifest,
+            maxTurns: run.budget.maxTurns,
+            maxToolCalls: run.budget.maxToolCalls,
+            maxDurationMilliseconds: run.budget.maxDurationMilliseconds,
+            maxTaskTokens: run.budget.maxTaskTokens,
+            maximumEstimatedUSD: run.budget.maximumEstimatedUSD,
+            sourceAccessState: resource.resource.sourceAccessState,
+            sourceAuthorizationState: resource.resource.sourceAuthorizationState,
+            sourceAuthorizationExpiresAt: resource.resource.sourceAuthorizationExpiresAt,
+            externalEffects: []
+        )
+    }
+
+    private func revalidateEvidenceAuthority(_ pending: PendingResolutionContext) async throws {
+        let resource: ResourceDetailResponse = try await send(
+            "v1/resources/\(pending.resourceID)",
+            token: pending.scope.accessToken
+        )
+        let fragments = resource.fragments.filter { pending.evidenceIDs.contains($0.id) }
+        guard resource.contractVersion == Self.contractVersion,
+              resource.resource.id == pending.resourceID,
+              resource.resource.captureID == pending.captureID,
+              resource.resource.processingState == "ready",
+              resource.resource.sourceAccessState == "available",
+              resource.resource.sourceAuthorizationState == "authorized",
+              Self.authorizationIsCurrent(resource.resource.sourceAuthorizationExpiresAt),
+              Set(fragments.map(\.id)) == Set(pending.evidenceIDs),
+              fragments.allSatisfy({
+                  $0.captureID == pending.captureID &&
+                      $0.resourceID == pending.resourceID &&
+                      $0.reviewStatus == "reviewed" &&
+                      $0.attribution.status == "confirmed" &&
+                      $0.attribution.actorKind == "candidate" &&
+                      $0.text?.isEmpty == false
+              }) else {
+            pendingResolution = nil
+            throw RelationshipServiceError.staleAuthority(
+                "Evidence was revoked, expired, deleted, purged, changed, or is no longer attributable. No decision was sent; review changed context and create a new immutable Task version."
+            )
+        }
+    }
+
+    private func loadAvailableScopes() async throws -> [LiveScope] {
+        if let availableScopes { return availableScopes }
+        let login = try await authenticate()
+        async let pursuits: PursuitListResponse = send("v1/pursuits", token: login.accessToken)
+        async let people: PeopleResponse = send("v1/people", token: login.accessToken)
+        async let proposals: PursuitProposalListResponse = send("v1/pursuit-proposals", token: login.accessToken)
+        let (pursuitList, peopleList, proposalList) = try await (pursuits, people, proposals)
+        guard pursuitList.contractVersion == Self.contractVersion,
+              pursuitList.workspaceID == login.account.id,
+              peopleList.contractVersion == Self.contractVersion,
+              proposalList.contractVersion == Self.contractVersion,
+              proposalList.workspaceID == pursuitList.workspaceID else {
+            throw RelationshipServiceError.invalidResponse("Pursuit workspace did not match the authenticated account.")
+        }
+        let peopleByID = Dictionary(uniqueKeysWithValues: peopleList.people.map { ($0.id, $0) })
+        availableTodayAttention = Self.todayAttentionProjection(
+            pursuits: pursuitList.pursuits,
+            proposals: proposalList.proposals,
+            peopleByID: peopleByID
+        )
+        var selections: [(PursuitDTO, PersonDTO, PersonDTO.ContextDTO)] = []
+        for pursuit in pursuitList.pursuits where pursuit.workspaceID == login.account.id {
+            for role in pursuit.roles where
+                role.subjectRef.type == "person" &&
+                role.roleType == "candidate" &&
+                role.status == "active" &&
+                role.confidence == "confirmed" {
+                guard let person = peopleByID[role.subjectRef.id] else { continue }
+                for context in person.contexts {
+                    selections.append((pursuit, person, context))
+                }
+            }
+        }
+        guard !selections.isEmpty else {
+            throw RelationshipServiceError.invalidResponse(
+                "No active, confirmed candidate role has a current Person and relationship-context readback in this workspace."
+            )
+        }
+        var scopes: [LiveScope] = []
+        for (pursuit, person, context) in selections {
+            let relationship: RelationshipScopeResponse = try await send(
+                "v1/people/\(person.id)/contexts/\(context.id)",
+                token: login.accessToken
+            )
+            guard relationship.contractVersion == Self.contractVersion,
+                  relationship.person.id == person.id,
+                  relationship.relationshipContext.id == context.id else {
+                throw RelationshipServiceError.invalidResponse("Person relationship context readback did not match the directory.")
+            }
+            scopes.append(LiveScope(
+                accessToken: login.accessToken,
+                workspaceID: pursuitList.workspaceID,
+                accountID: login.account.id,
+                pursuitID: pursuit.id,
+                pursuitRevision: pursuit.revision,
+                pursuitTitle: pursuit.title,
+                personID: person.id,
+                personDisplayLabel: relationship.person.displayLabel,
+                relationshipContextID: relationship.relationshipContext.id,
+                relationshipContextLabel: relationship.relationshipContext.displayLabel,
+                consequencePreflight: Self.consequencePreflight(for: pursuit)
+            ))
+        }
+        let unique = Dictionary(grouping: scopes, by: { $0.option.id }).compactMap(\.value.first)
+            .sorted { $0.option.id < $1.option.id }
+        availableScopes = unique
+        return unique
+    }
+
+    private func authenticate() async throws -> LoginResponse {
+        if let login { return login }
+        let response: LoginResponse = try await send(
+            "v1/auth/simulated-login",
+            method: "POST",
+            body: LoginRequest(
+                accountSlug: configuration.accountSlug,
+                userEmail: configuration.userEmail,
+                clientLabel: "macos-relationship-workbench"
+            )
+        )
+        guard response.contractVersion == Self.contractVersion else {
+            throw RelationshipServiceError.invalidResponse("Authentication contract version did not match.")
+        }
+        login = response
+        return response
+    }
+
+    private func pollTask(id: String, token: String, expected: LiveScope) async throws -> AgentTaskDTO {
+        // These are client-settled states: some remain open in the backend but
+        // already require a human decision, clarification, rebase, or explicit
+        // reconciliation. Continuing to poll them would turn a valid governed
+        // state into a false timeout.
+        let settledStatuses: Set<String> = [
+            "waiting_for_clarification", "waiting_for_domain_decision",
+            "waiting_for_external", "needs_rebase", "completed", "no_action",
+            "abstained", "failed", "cancelled", "expired"
+        ]
+        for _ in 0..<40 {
+            let response: AgentTaskResponse = try await send("v1/agent-tasks/\(id)", token: token)
+            guard response.contractVersion == Self.contractVersion,
+                  response.task.id == id,
+                  response.task.workspaceID == expected.workspaceID,
+                  response.task.pursuitID == expected.pursuitID,
+                  response.task.externalEffects.isEmpty else {
+                throw RelationshipServiceError.canonicalReadbackIncomplete
+            }
+            if settledStatuses.contains(response.task.status) { return response.task }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        throw RelationshipServiceError.invalidResponse("Agent Task outcome is still unknown; retry is intentionally disabled.")
+    }
+
+    private func send<Response: Decodable>(
+        _ path: String,
+        method: String = "GET",
+        token: String? = nil
+    ) async throws -> Response {
+        try await send(path, method: method, token: token, encodedBody: nil)
+    }
+
+    private func send<Response: Decodable, Body: Encodable>(
+        _ path: String,
+        method: String,
+        token: String? = nil,
+        body: Body
+    ) async throws -> Response {
+        try await send(path, method: method, token: token, encodedBody: try JSONEncoder().encode(body))
+    }
+
+    private func send<Response: Decodable>(
+        _ path: String,
+        method: String,
+        token: String?,
+        encodedBody: Data?
+    ) async throws -> Response {
+        var request = URLRequest(url: configuration.baseURL.appending(path: path))
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization") }
+        if let encodedBody {
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = encodedBody
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw RelationshipServiceError.invalidResponse("HTTP request failed for \(path).")
+        }
+        do { return try JSONDecoder().decode(Response.self, from: data) }
+        catch { throw RelationshipServiceError.invalidResponse("Could not decode \(path): \(error.localizedDescription)") }
+    }
+
+    private static func isLoopback(_ url: URL) -> Bool {
+        guard url.scheme == "http" || url.scheme == "https" else { return false }
+        return ["localhost", "127.0.0.1", "::1"].contains(url.host?.lowercased() ?? "")
+    }
+
+    private static func timestamp(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    static func todayAttentionProjection(
+        pursuits: [PursuitDTO],
+        proposals: [PursuitProposalSummaryDTO],
+        peopleByID: [String: PersonDTO],
+        now: Date = Date()
+    ) -> TodayAttentionProjection {
+        let activePursuits = pursuits.filter { ["draft", "active", "paused"].contains($0.status) }
+        let proposalsByPursuit = Dictionary(grouping: proposals, by: \.pursuitID)
+        let openActionStatuses = Set(["drafted", "awaiting_confirmation", "scheduled", "in_progress"])
+        let reviewStatuses = Set(["needs_review", "conflict", "failed"])
+
+        let ranked: [(item: TodayAttentionItem, rank: Int, due: Date)] = activePursuits.compactMap { pursuit in
+            let review = proposalsByPursuit[pursuit.id]?
+                .filter { reviewStatuses.contains($0.status) }
+                .sorted {
+                    (parsedTimestamp($0.updatedAt) ?? .distantPast) >
+                        (parsedTimestamp($1.updatedAt) ?? .distantPast)
+                }
+                .first
+            let action = pursuit.actions
+                .filter { openActionStatuses.contains($0.status) }
+                .sorted {
+                    (parsedTimestamp($0.dueAt) ?? .distantFuture) <
+                        (parsedTimestamp($1.dueAt) ?? .distantFuture)
+                }
+                .first
+            let gap = pursuit.gaps.first(where: { $0.status == "open" })
+            guard review != nil || action != nil || gap != nil else { return nil }
+
+            let candidateRoles = pursuit.roles.filter {
+                $0.subjectRef.type == "person" && $0.roleType == "candidate" &&
+                    $0.status == "active" && $0.confidence == "confirmed"
+            }
+            let uniqueCandidate = candidateRoles.count == 1
+                ? peopleByID[candidateRoles[0].subjectRef.id]
+                : nil
+            let personLabel = review?.reviewContext.subject.displayLabel ?? uniqueCandidate?.displayLabel
+            let scopeOptionID: String?
+            if let uniqueCandidate, uniqueCandidate.contexts.count == 1 {
+                scopeOptionID = "\(pursuit.id):\(uniqueCandidate.id):\(uniqueCandidate.contexts[0].id)"
+            } else {
+                scopeOptionID = nil
+            }
+            let targetDue = targetDate(pursuit.targetDate) ?? .distantFuture
+
+            if let review {
+                let evidence = review.evidenceState.availability
+                let citedEvidenceIDs = Set(review.items.flatMap(\.evidenceRefs))
+                let exactEvidence = review.reviewContext.evidence.compactMap { source -> TodayAttentionEvidence? in
+                    guard citedEvidenceIDs.contains(source.fragmentID),
+                          source.attributionStatus == "confirmed",
+                          source.reviewStatus == "reviewed",
+                          let text = source.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !text.isEmpty else {
+                        return nil
+                    }
+                    return TodayAttentionEvidence(
+                        id: source.fragmentID,
+                        text: text,
+                        source: source.sourceDisplayName,
+                        observedAt: source.observedAt,
+                        attributedActor: source.attributedActor
+                    )
+                }
+                let unresolved = review.status == "conflict"
+                    ? "The proposal conflicts with the current Pursuit revision. Rebase or reject it before any state change."
+                    : "\(review.items.count) proposed change\(review.items.count == 1 ? "" : "s") remain unconfirmed; evidence is \(evidence.replacingOccurrences(of: "_", with: " "))."
+                return (
+                    TodayAttentionItem(
+                        id: "proposal:\(review.id)",
+                        pursuitID: pursuit.id,
+                        pursuitTitle: pursuit.title,
+                        personLabel: personLabel,
+                        kind: .proposalReview,
+                        whyNow: review.summary,
+                        unresolved: unresolved,
+                        owner: "You",
+                        dueAt: nil,
+                        dueFallback: "Pursuit target \(pursuit.targetDate)",
+                        nextMove: "Review each proposed change against its exact evidence.",
+                        evidenceAvailability: evidence,
+                        scopeOptionID: scopeOptionID,
+                        proposalID: review.id,
+                        evidence: exactEvidence
+                    ),
+                    0,
+                    targetDue
+                )
+            }
+
+            if let action {
+                let linkedGap = action.gapID.flatMap { gapID in pursuit.gaps.first(where: { $0.id == gapID }) }
+                let evidence = linkedGap?.basis.evidenceState.availability ?? pursuit.milestoneAuthority.evidenceState.availability
+                let due = parsedTimestamp(action.dueAt) ?? targetDue
+                return (
+                    TodayAttentionItem(
+                        id: "action:\(action.id)",
+                        pursuitID: pursuit.id,
+                        pursuitTitle: pursuit.title,
+                        personLabel: personLabel,
+                        kind: .ownedAction,
+                        whyNow: action.title,
+                        unresolved: linkedGap?.closeCondition ?? "The action outcome has not been recorded yet.",
+                        owner: action.ownerDisplayName,
+                        dueAt: action.dueAt == nil || due == .distantFuture ? nil : due,
+                        dueFallback: action.dueAt == nil ? "No action due date · Pursuit target \(pursuit.targetDate)" : "Due date unavailable",
+                        nextMove: action.title,
+                        evidenceAvailability: evidence,
+                        scopeOptionID: scopeOptionID
+                    ),
+                    due <= now ? 1 : 2,
+                    due
+                )
+            }
+
+            guard let gap else { return nil }
+            let evidence = gap.basis.evidenceState.availability
+            return (
+                TodayAttentionItem(
+                    id: "gap:\(gap.id)",
+                    pursuitID: pursuit.id,
+                    pursuitTitle: pursuit.title,
+                    personLabel: personLabel,
+                    kind: .openGap,
+                    whyNow: gap.title,
+                    unresolved: gap.closeCondition,
+                    owner: "Recruiter to assign",
+                    dueAt: nil,
+                    dueFallback: "Pursuit target \(pursuit.targetDate)",
+                    nextMove: gap.closeCondition,
+                    evidenceAvailability: evidence,
+                    scopeOptionID: scopeOptionID
+                ),
+                3,
+                targetDue
+            )
+        }
+
+        let items = ranked.sorted {
+            $0.rank != $1.rank ? $0.rank < $1.rank :
+                ($0.due != $1.due ? $0.due < $1.due : $0.item.pursuitTitle < $1.item.pursuitTitle)
+        }.prefix(6).map(\.item)
+        return TodayAttentionProjection(
+            items: items,
+            noActionCount: max(0, activePursuits.count - ranked.count),
+            totalPursuitCount: activePursuits.count
+        )
+    }
+
+    static func consequencePreflight(for pursuit: PursuitDTO) -> RelationshipConsequencePreflight {
+        let openActionStatuses = Set(["drafted", "awaiting_confirmation", "scheduled", "in_progress"])
+        return RelationshipConsequencePreflight(
+            milestone: pursuit.milestone,
+            targetDate: pursuit.targetDate,
+            evidenceAvailability: pursuit.milestoneAuthority.evidenceState.availability,
+            openActions: pursuit.actions.filter { openActionStatuses.contains($0.status) }.map {
+                .init(
+                    id: $0.id,
+                    title: $0.title,
+                    owner: $0.ownerDisplayName,
+                    dueAt: parsedTimestamp($0.dueAt),
+                    status: $0.status
+                )
+            },
+            openGaps: pursuit.gaps.filter { $0.status == "open" }.map {
+                .init(
+                    id: $0.id,
+                    title: $0.title,
+                    closeCondition: $0.closeCondition,
+                    evidenceAvailability: $0.basis.evidenceState.availability
+                )
+            }
+        )
+    }
+
+    private static func parsedTimestamp(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    private static func targetDate(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        guard let start = formatter.date(from: value) else { return nil }
+        return Calendar.current.date(bySettingHour: 23, minute: 59, second: 0, of: start)
+    }
+
+    private static func authorizationIsCurrent(_ expiresAt: String?) -> Bool {
+        guard let expiresAt else { return true }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: expiresAt) ?? ISO8601DateFormatter().date(from: expiresAt)
+        return date.map { $0 > Date() } == true
+    }
+
+    private static func displayMode(for task: AgentTaskDTO) -> WorkspaceMode {
+        switch task.status {
+        case "completed", "waiting_for_domain_decision": .needsDecision
+        case "no_action": .noAction
+        case "waiting_for_clarification": .clarification
+        case "abstained": .ambiguousIdentity
+        case "needs_rebase": .stale
+        case "waiting_for_external": .outcomeUnknown
+        case "failed", "cancelled", "expired": .failed
+        default: .working
+        }
+    }
+
+    private static func actionStatus(for task: AgentTaskDTO) -> ActionProjectionStatus {
+        switch task.status {
+        case "failed", "cancelled", "expired": .failed
+        case "completed", "no_action": .verified
+        case "waiting_for_domain_decision": .awaitingDecision
+        case "needs_rebase": .stale
+        case "waiting_for_external": .outcomeUnknown
+        default: .active
+        }
+    }
+
+    private static func actionRoute(for mode: WorkspaceMode) -> ActionProjectionRoute {
+        switch mode {
+        case .needsDecision: .reviewDecision
+        case .outcomeUnknown: .reconcileOperation
+        case .receipt: .openReceipt
+        case .stale: .reviewStaleSource
+        default: .openCurrent
+        }
+    }
+}
+
+private struct LiveScope: Sendable {
+    let accessToken: String
+    let workspaceID: String
+    let accountID: String
+    let pursuitID: String
+    let pursuitRevision: Int
+    let pursuitTitle: String
+    let personID: String
+    let personDisplayLabel: String
+    let relationshipContextID: String
+    let relationshipContextLabel: String
+    let consequencePreflight: RelationshipConsequencePreflight
+
+    func updatingRevision(_ revision: Int) -> LiveScope {
+        LiveScope(
+            accessToken: accessToken,
+            workspaceID: workspaceID,
+            accountID: accountID,
+            pursuitID: pursuitID,
+            pursuitRevision: revision,
+            pursuitTitle: pursuitTitle,
+            personID: personID,
+            personDisplayLabel: personDisplayLabel,
+            relationshipContextID: relationshipContextID,
+            relationshipContextLabel: relationshipContextLabel,
+            consequencePreflight: consequencePreflight
+        )
+    }
+
+    var option: RelationshipScopeOption {
+        RelationshipScopeOption(
+            id: "\(pursuitID):\(personID):\(relationshipContextID)",
+            pursuitID: pursuitID,
+            pursuitRevision: pursuitRevision,
+            pursuitTitle: pursuitTitle,
+            personID: personID,
+            personDisplayLabel: personDisplayLabel,
+            relationshipContextID: relationshipContextID,
+            relationshipContextLabel: relationshipContextLabel,
+            consequencePreflight: consequencePreflight
+        )
+    }
+}
+
+private struct PendingResolutionContext: Sendable {
+    let review: CanonicalProposalReview
+    let scope: LiveScope
+    let captureID: String
+    let resourceID: String
+    let evidenceIDs: [String]
+    let runAudit: RunAuditSummary?
+}
+
+private struct UnknownResolutionContext: Sendable {
+    let operationID: String
+    let request: CanonicalDecisionRequest
+    let pending: PendingResolutionContext
+    let transportError: String
+}
+
+private struct LoginRequest: Encodable {
+    let accountSlug: String
+    let userEmail: String
+    let clientLabel: String
+    enum CodingKeys: String, CodingKey {
+        case accountSlug = "account_slug"
+        case userEmail = "user_email"
+        case clientLabel = "client_label"
+    }
+}
+
+private struct LoginResponse: Decodable {
+    let contractVersion: String
+    let accessToken: String
+    let account: Account
+    struct Account: Decodable { let id: String }
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case accessToken = "access_token"
+        case account
+    }
+}
+
+private struct LogoutResponse: Decodable {
+    let contractVersion: String
+    let revokedSessionID: String
+    let revokedAt: String
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case revokedSessionID = "revoked_session_id"
+        case revokedAt = "revoked_at"
+    }
+}
+
+private struct PursuitListResponse: Decodable {
+    let contractVersion: String
+    let workspaceID: String
+    let pursuits: [PursuitDTO]
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case workspaceID = "workspace_id"
+        case pursuits
+    }
+}
+
+struct PursuitDTO: Decodable {
+    let id: String
+    let workspaceID: String
+    let title: String
+    let targetOutcome: String
+    let targetDate: String
+    let status: String
+    let milestone: String
+    let milestoneAuthority: MilestoneAuthorityDTO
+    let revision: Int
+    let roles: [PursuitRoleDTO]
+    let gaps: [PursuitGapDTO]
+    let actions: [PursuitActionDTO]
+    enum CodingKeys: String, CodingKey {
+        case id, title, status, milestone, revision, roles, gaps, actions
+        case workspaceID = "workspace_id"
+        case targetOutcome = "target_outcome"
+        case targetDate = "target_date"
+        case milestoneAuthority = "milestone_authority"
+    }
+}
+
+struct MilestoneAuthorityDTO: Decodable {
+    let evidenceState: EvidenceAuthorityDTO
+    enum CodingKeys: String, CodingKey { case evidenceState = "evidence_state" }
+}
+
+struct EvidenceAuthorityDTO: Decodable {
+    let availability: String
+}
+
+struct PursuitGapDTO: Decodable {
+    let id: String
+    let title: String
+    let status: String
+    let basis: Basis
+    let closeCondition: String
+
+    struct Basis: Decodable {
+        let evidenceState: EvidenceAuthorityDTO
+        enum CodingKeys: String, CodingKey { case evidenceState = "evidence_state" }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, status, basis
+        case closeCondition = "close_condition"
+    }
+}
+
+struct PursuitActionDTO: Decodable {
+    let id: String
+    let gapID: String?
+    let title: String
+    let ownerDisplayName: String
+    let status: String
+    let dueAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, status
+        case gapID = "gap_id"
+        case ownerDisplayName = "owner_display_name"
+        case dueAt = "due_at"
+    }
+}
+
+struct PursuitRoleDTO: Decodable {
+    let subjectRef: SubjectRef
+    let roleType: String
+    let status: String
+    let confidence: String
+    struct SubjectRef: Decodable { let type: String; let id: String }
+    enum CodingKeys: String, CodingKey {
+        case subjectRef = "subject_ref"
+        case roleType = "role_type"
+        case status, confidence
+    }
+}
+
+struct PursuitProposalListResponse: Decodable {
+    let contractVersion: String
+    let workspaceID: String
+    let proposals: [PursuitProposalSummaryDTO]
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case workspaceID = "workspace_id"
+        case proposals
+    }
+}
+
+struct PursuitProposalSummaryDTO: Decodable {
+    let id: String
+    let pursuitID: String
+    let summary: String
+    let status: String
+    let evidenceState: EvidenceAuthorityDTO
+    let reviewContext: ReviewContext
+    let items: [Item]
+    let updatedAt: String
+
+    struct ReviewContext: Decodable {
+        let subject: Subject
+        let evidence: [Evidence]
+
+        init(subject: Subject, evidence: [Evidence] = []) {
+            self.subject = subject
+            self.evidence = evidence
+        }
+
+        struct Subject: Decodable {
+            let personID: String
+            let displayLabel: String
+            enum CodingKeys: String, CodingKey {
+                case personID = "person_id"
+                case displayLabel = "display_label"
+            }
+        }
+
+        struct Evidence: Decodable {
+            let fragmentID: String
+            let text: String?
+            let observedAt: String
+            let sourceDisplayName: String
+            let attributedActor: String
+            let attributionStatus: String
+            let reviewStatus: String
+
+            enum CodingKeys: String, CodingKey {
+                case text
+                case fragmentID = "fragment_id"
+                case observedAt = "observed_at"
+                case sourceDisplayName = "source_display_name"
+                case attributedActor = "attributed_actor"
+                case attributionStatus = "attribution_status"
+                case reviewStatus = "review_status"
+            }
+        }
+    }
+
+    struct Item: Decodable {
+        let evidenceRefs: [String]
+        enum CodingKeys: String, CodingKey { case evidenceRefs = "evidence_refs" }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, summary, status, items
+        case pursuitID = "pursuit_id"
+        case evidenceState = "evidence_state"
+        case reviewContext = "review_context"
+        case updatedAt = "updated_at"
+    }
+}
+
+private struct PeopleResponse: Decodable {
+    let contractVersion: String
+    let people: [PersonDTO]
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case people
+    }
+}
+
+struct PersonDTO: Decodable {
+    let id: String
+    let displayLabel: String
+    let contexts: [ContextDTO]
+    struct ContextDTO: Decodable { let id: String; let displayLabel: String; enum CodingKeys: String, CodingKey { case id; case displayLabel = "display_label" } }
+    enum CodingKeys: String, CodingKey { case id, contexts; case displayLabel = "display_label" }
+}
+
+private struct RelationshipScopeResponse: Decodable {
+    let contractVersion: String
+    let person: Person
+    let relationshipContext: Context
+    struct Person: Decodable { let id: String; let displayLabel: String; enum CodingKeys: String, CodingKey { case id; case displayLabel = "display_label" } }
+    struct Context: Decodable { let id: String; let displayLabel: String; enum CodingKeys: String, CodingKey { case id; case displayLabel = "display_label" } }
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case person
+        case relationshipContext = "relationship_context"
+    }
+}
+
+private struct CaptureRequest: Encodable {
+    let contractVersion: String
+    let idempotencyKey: String
+    let channel: String
+    let purpose: String
+    let capturedAt: String
+    let sourceTimezone: String?
+    let personScope: PersonScope
+    let resource: Resource
+    let fragments: [Fragment]
+
+    struct PersonScope: Encodable {
+        let status: String
+        let personID: String
+        let relationshipContext: RelationshipContext
+        let bindingBasis: String
+        struct RelationshipContext: Encodable {
+            let status: String
+            let relationshipContextID: String
+            enum CodingKeys: String, CodingKey { case status; case relationshipContextID = "relationship_context_id" }
+        }
+        enum CodingKeys: String, CodingKey {
+            case status
+            case personID = "person_id"
+            case relationshipContext = "relationship_context"
+            case bindingBasis = "binding_basis"
+        }
+    }
+
+    struct Resource: Encodable {
+        let clientResourceID: String
+        let kind: String
+        let displayName: String
+        let mediaType: String
+        let observedAt: String
+        let sourceTimezone: String?
+        let authorizationExpiresAt: String
+        let retention: Retention
+        struct Retention: Encodable {
+            let requestedMode: String
+            let sourceScope: String
+            let requestedRetentionUntil: String?
+            enum CodingKeys: String, CodingKey {
+                case requestedMode = "requested_mode"
+                case sourceScope = "source_scope"
+                case requestedRetentionUntil = "requested_retention_until"
+            }
+        }
+        enum CodingKeys: String, CodingKey {
+            case clientResourceID = "client_resource_id"
+            case kind
+            case displayName = "display_name"
+            case mediaType = "media_type"
+            case observedAt = "observed_at"
+            case sourceTimezone = "source_timezone"
+            case authorizationExpiresAt = "authorization_expires_at"
+            case retention
+        }
+    }
+
+    struct Fragment: Encodable {
+        let clientResourceID: String
+        let kind: String
+        let sequence: Int
+        let text: String
+        let locator: Locator
+        let attribution: Attribution
+        let reviewStatus: String
+        let parser: Parser
+        struct Locator: Encodable {
+            let kind: String
+            let sourceMessageID: String
+            let sequence: Int
+            let speakerSide: String
+            enum CodingKeys: String, CodingKey { case kind, sequence; case sourceMessageID = "source_message_id"; case speakerSide = "speaker_side" }
+        }
+        struct Attribution: Encodable {
+            let actorKind: String
+            let status: String
+            enum CodingKeys: String, CodingKey { case actorKind = "actor_kind"; case status }
+        }
+        struct Parser: Encodable { let name: String; let version: String }
+        enum CodingKeys: String, CodingKey {
+            case clientResourceID = "client_resource_id"
+            case kind, sequence, text, locator, attribution, parser
+            case reviewStatus = "review_status"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case idempotencyKey = "idempotency_key"
+        case channel, purpose
+        case capturedAt = "captured_at"
+        case sourceTimezone = "source_timezone"
+        case personScope = "person_scope"
+        case resource, fragments
+    }
+}
+
+private struct CaptureResponse: Decodable {
+    let contractVersion: String
+    let captureID: String
+    let identity: Identity
+    let resource: Resource
+    struct Identity: Decodable {
+        let status: String
+        let personID: String?
+        let relationshipContextID: String?
+        enum CodingKeys: String, CodingKey { case status; case personID = "person_id"; case relationshipContextID = "relationship_context_id" }
+    }
+    struct Resource: Decodable {
+        let id: String
+        let fragmentCount: Int
+        enum CodingKeys: String, CodingKey { case id; case fragmentCount = "fragment_count" }
+    }
+    enum CodingKeys: String, CodingKey { case contractVersion = "contract_version"; case captureID = "capture_id"; case identity, resource }
+}
+
+private struct ResourceDetailResponse: Decodable {
+    let contractVersion: String
+    let resource: Resource
+    let fragments: [Fragment]
+    struct Resource: Decodable {
+        let id: String
+        let captureID: String
+        let processingState: String
+        let sourceAccessState: String
+        let sourceAuthorizationState: String
+        let sourceAuthorizationExpiresAt: String?
+        enum CodingKeys: String, CodingKey {
+            case id
+            case captureID = "capture_id"
+            case processingState = "processing_state"
+            case sourceAccessState = "source_access_state"
+            case sourceAuthorizationState = "source_authorization_state"
+            case sourceAuthorizationExpiresAt = "source_authorization_expires_at"
+        }
+    }
+    struct Fragment: Decodable {
+        let id: String
+        let captureID: String
+        let resourceID: String
+        let text: String?
+        let reviewStatus: String
+        let attribution: Attribution
+        struct Attribution: Decodable {
+            let actorKind: String
+            let status: String
+            enum CodingKeys: String, CodingKey {
+                case actorKind = "actor_kind"
+                case status
+            }
+        }
+        enum CodingKeys: String, CodingKey {
+            case id, text, attribution
+            case captureID = "capture_id"
+            case resourceID = "resource_id"
+            case reviewStatus = "review_status"
+        }
+    }
+    enum CodingKeys: String, CodingKey { case contractVersion = "contract_version"; case resource, fragments }
+}
+
+private struct RelationshipResourceListResponseDTO: Decodable {
+    let contractVersion: String
+    let personID: String
+    let relationshipContextID: String
+    let resources: [Resource]
+
+    struct Resource: Decodable {
+        let id: String
+        let captureID: String
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case captureID = "capture_id"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case personID = "person_id"
+        case relationshipContextID = "relationship_context_id"
+        case resources
+    }
+}
+
+private struct CreateAgentTaskRequest: Encodable {
+    let idempotencyKey: String
+    let expectedRevision: Int
+    let taskKind: String
+    let captureID: String
+    let objective: String
+    let evidenceRefs: [String]
+    enum CodingKeys: String, CodingKey {
+        case idempotencyKey = "idempotency_key"
+        case expectedRevision = "expected_revision"
+        case taskKind = "task_kind"
+        case captureID = "capture_id"
+        case objective
+        case evidenceRefs = "evidence_refs"
+    }
+}
+
+private struct AgentTaskResponse: Decodable {
+    let contractVersion: String
+    let task: AgentTaskDTO
+    enum CodingKeys: String, CodingKey { case contractVersion = "contract_version"; case task }
+}
+
+private struct AgentTaskListResponseDTO: Decodable {
+    let contractVersion: String
+    let workspaceID: String
+    let tasks: [AgentTaskDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case workspaceID = "workspace_id"
+        case tasks
+    }
+}
+
+private struct AgentTaskDTO: Decodable {
+    let id: String
+    let workspaceID: String
+    let pursuitID: String
+    let status: String
+    let taskRevision: Int
+    let semanticSnapshot: SemanticSnapshot
+    let latestRun: LatestRun?
+    let artifact: Artifact?
+    let clarification: Clarification?
+    let decisionBundle: DecisionBundle?
+    let externalEffects: [EmptyExternalEffect]
+    struct SemanticSnapshot: Decodable {
+        let pursuitRevision: Int
+        let evidenceManifestDigest: String
+        enum CodingKeys: String, CodingKey {
+            case pursuitRevision = "pursuit_revision"
+            case evidenceManifestDigest = "evidence_manifest_digest"
+        }
+    }
+    struct LatestRun: Decodable {
+        let id: String?
+        let proposalID: String?
+        let noActionID: String?
+        enum CodingKeys: String, CodingKey {
+            case id
+            case proposalID = "proposal_id"
+            case noActionID = "no_action_id"
+        }
+    }
+    struct Artifact: Decodable {
+        let id: String
+        let taskID: String
+        let status: String
+        let title: String
+        let summary: String
+        let whatMattersNow: WhatMattersNow
+        let nextMove: NextMove
+
+        struct WhatMattersNow: Decodable {
+            let dependency: String
+        }
+
+        struct NextMove: Decodable {
+            let kind: String
+            let label: String
+            let reason: String
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, status, title, summary
+            case taskID = "task_id"
+            case whatMattersNow = "what_matters_now"
+            case nextMove = "next_move"
+        }
+    }
+    struct Clarification: Decodable {
+        let id: String
+        let taskID: String
+        let taskRevision: Int
+        let requestRevision: Int
+        let question: String
+        let reason: String
+        let status: String
+        let expiresAt: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, question, reason, status
+            case taskID = "task_id"
+            case taskRevision = "task_revision"
+            case requestRevision = "request_revision"
+            case expiresAt = "expires_at"
+        }
+    }
+    struct DecisionBundle: Decodable {
+        let id: String
+        let taskID: String
+        let taskRevision: Int
+        let bundleRevision: Int
+        let dependency: String
+        let status: String
+        let proposalID: String?
+        let items: [Item]
+        let expiresAt: String
+
+        struct Item: Decodable {
+            let id: String
+            let domainSubjectID: String
+            let status: String
+            enum CodingKeys: String, CodingKey {
+                case id, status
+                case domainSubjectID = "domain_subject_id"
+            }
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, dependency, status, items
+            case taskID = "task_id"
+            case taskRevision = "task_revision"
+            case bundleRevision = "bundle_revision"
+            case proposalID = "proposal_id"
+            case expiresAt = "expires_at"
+        }
+    }
+    enum CodingKeys: String, CodingKey {
+        case id, status
+        case workspaceID = "workspace_id"
+        case pursuitID = "pursuit_id"
+        case taskRevision = "task_revision"
+        case semanticSnapshot = "semantic_snapshot"
+        case latestRun = "latest_run"
+        case artifact, clarification
+        case decisionBundle = "decision_bundle"
+        case externalEffects = "external_effects"
+    }
+}
+
+private struct EmptyExternalEffect: Decodable {}
+
+private struct AgentRunResponseDTO: Decodable {
+    let contractVersion: String
+    let run: Run
+
+    struct Run: Decodable {
+        let id: String
+        let workspaceID: String
+        let pursuitID: String
+        let captureID: String
+        let objective: String
+        let definition: Definition
+        let budget: Budget
+        let contextManifest: ContextManifest
+        let externalEffects: [EmptyExternalEffect]
+
+        struct Definition: Decodable {
+            let toolManifest: [String]
+            enum CodingKeys: String, CodingKey { case toolManifest = "tool_manifest" }
+        }
+        typealias Budget = AgentRunBudget
+        struct ContextManifest: Decodable {
+            let evidence: [Evidence]
+            struct Evidence: Decodable {
+                let fragmentID: String
+                enum CodingKeys: String, CodingKey { case fragmentID = "fragment_id" }
+            }
+        }
+        enum CodingKeys: String, CodingKey {
+            case id, objective, definition, budget
+            case workspaceID = "workspace_id"
+            case pursuitID = "pursuit_id"
+            case captureID = "capture_id"
+            case contextManifest = "context_manifest"
+            case externalEffects = "external_effects"
+        }
+    }
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case run
+    }
+}
+
+private struct ProposalResponseDTO: Decodable {
+    let contractVersion: String
+    let proposal: ProposalDTO
+    enum CodingKeys: String, CodingKey { case contractVersion = "contract_version"; case proposal }
+}
+
+private struct ProposalDTO: Decodable {
+    let id: String
+    let pursuitID: String
+    let captureID: String
+    let baseRevision: Int
+    let summary: String
+    let status: String
+    let reviewContext: ReviewContext
+    let items: [Item]
+
+    struct ReviewContext: Decodable {
+        let pursuit: Pursuit
+        let capture: Capture
+        let subject: Subject
+        let evidence: [Evidence]
+        struct Pursuit: Decodable { let id: String }
+        struct Capture: Decodable { let id: String }
+        struct Subject: Decodable {
+            let personID: String
+            enum CodingKeys: String, CodingKey { case personID = "person_id" }
+        }
+        struct Evidence: Decodable {
+            let fragmentID: String
+            let text: String?
+            let observedAt: String
+            let sourceDisplayName: String
+            let attributedActor: String
+            let attributionStatus: String
+            let reviewStatus: String
+            enum CodingKeys: String, CodingKey {
+                case text
+                case fragmentID = "fragment_id"
+                case observedAt = "observed_at"
+                case sourceDisplayName = "source_display_name"
+                case attributedActor = "attributed_actor"
+                case attributionStatus = "attribution_status"
+                case reviewStatus = "review_status"
+            }
+        }
+    }
+
+    struct Item: Decodable {
+        let id: String
+        let itemKey: String
+        let changeKind: String
+        let beforeValue: MacJSONValue
+        let proposedValue: MacJSONValue
+        let epistemicStatus: String
+        let evidenceRefs: [String]
+        let evidenceState: EvidenceState
+        let reason: String
+        let effectSummary: String
+        struct EvidenceState: Decodable { let availability: String }
+        enum CodingKeys: String, CodingKey {
+            case id, reason
+            case itemKey = "item_key"
+            case changeKind = "change_kind"
+            case beforeValue = "before_value"
+            case proposedValue = "proposed_value"
+            case epistemicStatus = "epistemic_status"
+            case evidenceRefs = "evidence_refs"
+            case evidenceState = "evidence_state"
+            case effectSummary = "effect_summary"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, summary, status, items
+        case pursuitID = "pursuit_id"
+        case captureID = "capture_id"
+        case baseRevision = "base_revision"
+        case reviewContext = "review_context"
+    }
+}
+
+private enum MacJSONValue: Decodable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: MacJSONValue])
+    case array([MacJSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { self = .null }
+        else if let value = try? container.decode(String.self) { self = .string(value) }
+        else if let value = try? container.decode(Bool.self) { self = .bool(value) }
+        else if let value = try? container.decode(Double.self) { self = .number(value) }
+        else if let value = try? container.decode([String: MacJSONValue].self) { self = .object(value) }
+        else if let value = try? container.decode([MacJSONValue].self) { self = .array(value) }
+        else { throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported proposal JSON value") }
+    }
+
+    var displayText: String {
+        switch self {
+        case .string(let value): value.replacingOccurrences(of: "_", with: " ")
+        case .number(let value): value.rounded() == value ? String(Int(value)) : String(value)
+        case .bool(let value): value ? "Yes" : "No"
+        case .object(let value): value.sorted { $0.key < $1.key }
+            .map { "\($0.key.replacingOccurrences(of: "_", with: " ")): \($0.value.displayText)" }
+            .joined(separator: " · ")
+        case .array(let value): value.map(\.displayText).joined(separator: ", ")
+        case .null: "None"
+        }
+    }
+}
+
+private struct ResolveDecisionRequestDTO: Encodable {
+    let operationID: String
+    let idempotencyKey: String
+    let expectedTaskRevision: Int
+    let expectedBundleRevision: Int
+    let baseRevision: Int
+    let reason: String
+    let decisions: [Decision]
+
+    struct Decision: Encodable {
+        let itemID: String
+        let decision: String
+        enum CodingKeys: String, CodingKey { case itemID = "item_id"; case decision }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case operationID = "operation_id"
+        case idempotencyKey = "idempotency_key"
+        case expectedTaskRevision = "expected_task_revision"
+        case expectedBundleRevision = "expected_bundle_revision"
+        case baseRevision = "base_revision"
+        case reason, decisions
+    }
+}
+
+private struct DecisionResolutionResponseDTO: Decodable {
+    let contractVersion: String
+    let task: AgentTaskDTO
+    let domainReceipt: ReceiptDTO
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case task
+        case domainReceipt = "domain_receipt"
+    }
+}
+
+private struct OperationResponseDTO: Decodable {
+    let contractVersion: String
+    let operation: Operation
+    let receipt: ReceiptDTO?
+
+    struct Operation: Decodable {
+        let id: String
+        let status: String
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case operation, receipt
+    }
+}
+
+private struct ReceiptDTO: Decodable {
+    let id: String
+    let operationID: String
+    let workspaceID: String
+    let operationKind: String
+    let status: String
+    let proposalID: String?
+    let outcome: String
+    let entityRef: EntityRef
+    let changedFields: [String]
+    let externalEffects: [EmptyExternalEffect]
+    let summary: String
+    let occurredAt: String
+
+    struct EntityRef: Decodable {
+        let type: String
+        let id: String
+        let beforeRevision: Int
+        let afterRevision: Int
+        enum CodingKeys: String, CodingKey {
+            case type, id
+            case beforeRevision = "before_revision"
+            case afterRevision = "after_revision"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, status, outcome, summary
+        case operationID = "operation_id"
+        case workspaceID = "workspace_id"
+        case operationKind = "operation_kind"
+        case proposalID = "proposal_id"
+        case entityRef = "entity_ref"
+        case changedFields = "changed_fields"
+        case externalEffects = "external_effects"
+        case occurredAt = "occurred_at"
+    }
+}

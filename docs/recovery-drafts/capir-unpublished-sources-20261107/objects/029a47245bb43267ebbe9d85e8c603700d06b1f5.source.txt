@@ -1,0 +1,116 @@
+import { join } from "node:path";
+import { captureObservationContent, observationHash, observationID, RuntimeObservationSchema,
+  RuntimeObservationPolicySchema, RuntimeObservationOutbox, PrivateOpikRuntimeTransport,
+  type RuntimeObservation, type RuntimeObservationPolicy, type ProductRunSpan } from "@talent-signal/agent";
+import type { Pool } from "pg";
+import { runtimeObservationSourceState } from "./runtimeObservationLifecycle.js";
+
+export interface ProjectionRun {
+  id: string; account_id: string; source_generation: string; platform: string; task_kind: string; status: string;
+  created_at: Date; updated_at: Date; finished_at: Date | null; expires_at: Date;
+  input: RuntimeObservation["spans"][number]["input"];
+  output: unknown; spans: ProductRunSpan[];
+}
+const unknownUsage = { input_tokens: null, output_tokens: null, source: "unavailable" as const,
+  cost_usd: null, cost_source: "unavailable" as const, accounting: "none" as const };
+
+/** Project only already captured evidence; never rerun a model or invent historical spans. */
+export function projectProductRun(row: ProjectionRun, policy: RuntimeObservationPolicy): RuntimeObservation {
+  const runID = `product-run:${row.id}:generation:${row.source_generation}`, traceID = observationID(`${row.account_id}:${runID}`);
+  const digest = observationHash([row.source_generation, row.updated_at, row.input, row.output, row.spans]);
+  const rootID = observationID(`${traceID}:${digest}:root`);
+  const bounded = (content: RuntimeObservation["spans"][number]["input"]) => content?.retained_bytes > policy.max_content_bytes
+    ? captureObservationContent(content.value, policy.max_content_bytes) : content;
+  const input = bounded(row.input) ?? captureObservationContent(undefined, policy.max_content_bytes);
+  const output = captureObservationContent({ product_output: row.output, capture_summary: {
+    recorded_spans: row.spans.length, projected_spans: Math.min(499, row.spans.length),
+    historical_replay: false, detail_source: "persisted_product_run", usage_accounting: "see_native_provider_trace",
+  } }, policy.max_content_bytes);
+  const spans: RuntimeObservation["spans"] = [{ id: rootID, parent_span_id: null,
+    name: `${row.platform}/${row.task_kind}`, kind: "general", operation_id: row.id, attempt: 1, retry_of: null,
+    started_at: row.created_at.toISOString(), ended_at: (row.finished_at ?? row.updated_at).toISOString(),
+    status: ["completed", "ok"].includes(row.status) ? "ok" : "error",
+    error_code: ["completed", "ok"].includes(row.status) ? null : `PRODUCT_RUN_${row.status.toUpperCase()}`,
+    model: null, provider: null, prompt_revision: null, input, output, usage: unknownUsage }];
+  const ids = new Map(row.spans.slice(0, 499).map(span => [span.id, observationID(`${traceID}:${digest}:${span.id}`)]));
+  for (const span of row.spans.slice(0, 499)) {
+    spans.push({ id: ids.get(span.id)!, parent_span_id: span.parent_id ? ids.get(span.parent_id) ?? rootID : rootID,
+      name: span.name.slice(0, 200), kind: span.kind === "context" ? "general" : span.kind,
+      operation_id: span.id, attempt: 1, retry_of: null, started_at: span.started_at, ended_at: span.finished_at,
+      status: span.status === "completed" ? "ok" : "error", error_code: span.status === "completed" ? null : "PRODUCT_STEP_FAILED",
+      input: bounded(span.input), output: bounded(span.output),
+      model: typeof span.metadata.model === "string" ? span.metadata.model : null,
+      provider: typeof span.metadata.provider === "string" ? span.metadata.provider : null,
+      prompt_revision: typeof span.metadata.prompt_revision === "string" ? span.metadata.prompt_revision : null,
+      // The original diagnostic payload retains provider usage when present. This projection
+      // does not reinterpret aggregate SDK usage as independently billed model leaves.
+      usage: unknownUsage });
+  }
+  return RuntimeObservationSchema.parse({ schema_version: "runtime-observation.v1", id: traceID, run_id: runID,
+    attempt_id: observationID(`${traceID}:${digest}`), source_workspace_id: row.account_id,
+    authorization_scope: "product_run", source_product_run_id: row.id, source_product_run_generation: row.source_generation,
+    source_refs: { kind: "product", capture_ids: [], fragment_ids: [], media_ids: [], person_ids: [],
+      relationship_context_ids: [], expires_at: row.expires_at.toISOString() }, policy,
+    created_at: row.created_at.toISOString(), retention_expires_at: new Date(Math.min(row.expires_at.valueOf(),
+      row.created_at.valueOf() + policy.retention_days * 86_400_000)).toISOString(), native_trace_id: null, spans });
+}
+
+/** The durable local product database is the queue; an outage never blocks product responses. */
+export function startProductRunProjection(pool: Pool, onError: () => void): () => Promise<void> {
+  const raw = process.env.TALENT_SIGNAL_OPIK_RUNTIME_POLICY?.trim();
+  if (!raw) return async () => {};
+  const base = RuntimeObservationPolicySchema.parse(JSON.parse(raw));
+  if (!base.authorization_scopes.includes("product_run")) return async () => {};
+  const root = process.env.TALENT_SIGNAL_OPIK_RUNTIME_OUTBOX?.trim();
+  if (!root) throw new Error("RUNTIME_OBSERVATION_OUTBOX_REQUIRED");
+  const fingerprints = new Map<string, string>();
+  const outboxes = new Map<string, RuntimeObservationOutbox>();
+  let stopped = false, active: Promise<void> | undefined;
+  const sweep = async () => {
+    let cursor = "00000000-0000-0000-0000-000000000000";
+    const seen = new Set<string>();
+    do {
+      const rows = (await pool.query<ProjectionRun>(`SELECT r.*,CASE WHEN r.status='running' THEN 'interrupted' ELSE r.status END AS status,
+        COALESCE((SELECT jsonb_agg(s.span ORDER BY s.created_at,s.id) FROM product_run_spans s WHERE s.run_id=r.id),'[]') AS spans
+        FROM product_runs r WHERE r.id>$1 AND (r.status<>'running' OR r.updated_at<now()-interval '15 minutes') AND product_run_source_available(r.id)
+          AND r.created_at>now()-($3::int*interval '1 day')
+          AND (r.account_id::text=ANY($2::text[]) OR EXISTS(SELECT 1 FROM lab_test_workspaces w
+            WHERE w.target_account_id=r.account_id AND w.owner_account_id::text=ANY($2::text[])
+              AND w.state='active' AND w.expires_at>now())) ORDER BY r.id LIMIT 50`,
+      [cursor, base.source_workspace_ids, base.retention_days])).rows;
+      for (const row of rows) {
+        cursor = row.id; seen.add(row.id);
+        try {
+        // Active isolated workspaces inherit only their already admitted owner's scope.
+        const policy = { ...base, project: `${base.project}-product-runs`, source_workspace_ids: [...new Set([...base.source_workspace_ids, row.account_id])] };
+        let outbox = outboxes.get(row.account_id);
+        if (!outbox) {
+          outbox = new RuntimeObservationOutbox(join(root, "product-runs", row.account_id), policy,
+            new PrivateOpikRuntimeTransport(policy, process.env.OPIK_API_KEY));
+          outbox.setSourceValidator(context => runtimeObservationSourceState(pool, context));
+          outboxes.set(row.account_id, outbox);
+        }
+        const observation = projectProductRun(row, policy);
+        if (fingerprints.get(row.id) !== observation.attempt_id) {
+          await outbox.enqueue(observation); fingerprints.set(row.id, observation.attempt_id);
+        }
+        } catch { onError(); }
+      }
+      if (rows.length < 50) break;
+    } while (!stopped);
+    if (!stopped) for (const id of fingerprints.keys()) if (!seen.has(id)) fingerprints.delete(id);
+    // Discover prior process queues too: source removal must still delete remote traces
+    // when there are no remaining available runs for that account after restart.
+    const { readdir } = await import("node:fs/promises");
+    for (const id of await readdir(join(root, "product-runs")).catch(() => [] as string[])) {
+      if (!/^[a-f0-9-]{36}$/u.test(id) || outboxes.has(id)) continue;
+      const policy = { ...base, project: `${base.project}-product-runs`, source_workspace_ids: [...new Set([...base.source_workspace_ids, id])] };
+      const outbox = new RuntimeObservationOutbox(join(root, "product-runs", id), policy, new PrivateOpikRuntimeTransport(policy, process.env.OPIK_API_KEY));
+      outbox.setSourceValidator(context => runtimeObservationSourceState(pool, context)); outboxes.set(id, outbox);
+    }
+    for (const outbox of outboxes.values()) await outbox.flush().catch(onError);
+  };
+  const tick = () => { if (!stopped && !active) active = sweep().catch(onError).finally(() => { active = undefined; }); };
+  const timer = setInterval(tick, 30_000); timer.unref(); tick();
+  return async () => { stopped = true; clearInterval(timer); await active; };
+}

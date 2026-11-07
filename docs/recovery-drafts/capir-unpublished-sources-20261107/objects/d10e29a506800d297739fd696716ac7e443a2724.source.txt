@@ -1,0 +1,185 @@
+import {
+  DESKTOP_AUTH_ATTEMPT_TTL_SECONDS,
+  DESKTOP_AUTH_PENDING_PATH,
+  TalentSignalHttpError,
+  type DesktopAuthProvider,
+  type DesktopAuthPurpose,
+  type DesktopAuthRole,
+} from "@talent-signal/contracts";
+import { cookies } from "next/headers";
+
+import { authCookieSecure } from "@/lib/auth-cookie-policy";
+import {
+  desktopBackendClient,
+  desktopReturnPath,
+  desktopSessionToken,
+  pairingCookieName,
+  readDesktopContinuation,
+  requestWebOrigin,
+  resolveCredentialFlow,
+} from "@/lib/server/desktopAuth";
+import { isDesktopTransportRequest, requireDesktopRequestRef } from "@/lib/server/desktopReceipt";
+
+export const dynamic = "force-dynamic";
+
+const CLIENT_LABEL = "talent-signal-macos";
+
+function seeOther(location: string): Response {
+  return new Response(null, {
+    status: 303,
+    headers: { location, "cache-control": "private, no-store" },
+  });
+}
+
+function failureLocation(purpose: DesktopAuthPurpose | null, code: string): string {
+  if (process.env.DESKTOP_DEBUG) return `/debug?code=${code}`;
+  if (purpose === "credential_round") {
+    // Stale rendered scope and missing current-identity proof are distinct,
+    // actionable recovery states, not a generic failure.
+    const status =
+      code === "DESKTOP_AUTH_STALE_SCOPE"
+        ? "stale"
+        : code === "DESKTOP_AUTH_REAUTH_REQUIRED"
+          ? "reauth"
+          : code === "DESKTOP_AUTH_FLOW_EXPIRED"
+            ? "expired"
+            : code === "DESKTOP_AUTH_LAB_SCOPE"
+              ? "lab"
+              : "error";
+    return `${desktopReturnPath("credential_round")}?desktop-auth=${encodeURIComponent(status)}`;
+  }
+  return purpose
+    ? `${desktopReturnPath(purpose)}?desktop-auth=error`
+    : "/login?desktop-auth=error";
+}
+
+/**
+ * Same-origin prepare for the native handoff (ADR 0019 / ADR 0020). The
+ * native window posts here through the original WKWebView cookie jar. For
+ * credential rounds the WK-sealed flow/round state is resolved here and its
+ * frozen scope travels as immutable expected comparators; the backend admits
+ * the round only against the CURRENT authenticated server scope under the
+ * shared credential locks. The attempt-specific HttpOnly pairing cookie is set
+ * here and cleared later only by its own consume/cancel response.
+ */
+export async function POST(request: Request): Promise<Response> {
+  const webOrigin = await requestWebOrigin();
+  let purpose: DesktopAuthPurpose | null = null;
+  const fail = (code: string) => seeOther(failureLocation(purpose, code));
+  if (request.headers.get("origin") !== webOrigin) return fail("DESKTOP_AUTH_ORIGIN_REQUIRED");
+  const destination = request.headers.get("sec-fetch-dest");
+  if (destination && destination !== "document") return fail("DESKTOP_AUTH_FRAME_REJECTED");
+
+  let body: {
+    provider?: string;
+    purpose?: string;
+    role?: string;
+    code_challenge?: string;
+    state?: string;
+    intent?: string;
+    continuation_attempt_id?: string;
+  };
+  try {
+    body = await request.json();
+  } catch {
+    return fail("DESKTOP_AUTH_REQUEST_INVALID");
+  }
+  // Capable-host request references are validated BEFORE any backend
+  // transition or cookie mutation.
+  if (isDesktopTransportRequest(request)) {
+    const required = requireDesktopRequestRef(request, body as Record<string, unknown>);
+    if (typeof required !== "string") return required.error;
+  }
+  const provider = body.provider === "apple" || body.provider === "google" ? body.provider : null;
+  purpose = body.purpose === "login" || body.purpose === "credential_round" ? body.purpose : null;
+  const role: DesktopAuthRole | null =
+    body.role === "login" || body.role === "current" || body.role === "target" ? body.role : null;
+  const challenge = typeof body.code_challenge === "string" ? body.code_challenge : "";
+  const state = typeof body.state === "string" ? body.state : "";
+  if (
+    !provider ||
+    !purpose ||
+    !role ||
+    !/^[A-Za-z0-9_-]{43,128}$/.test(challenge) ||
+    !/^[A-Za-z0-9_-]{16,200}$/.test(state)
+  ) {
+    return fail("DESKTOP_AUTH_REQUEST_INVALID");
+  }
+
+  const token = await desktopSessionToken();
+  const client = desktopBackendClient();
+  try {
+    let flowFields: Record<string, unknown> = {};
+    if (purpose === "credential_round") {
+      // Opaque flow/round refs resolve ONLY from the WK-sealed state; DOM
+      // identifiers and client claims are never authority.
+      const flow = await resolveCredentialFlow(role === "target" ? "target" : "current");
+      if (!flow) return fail("DESKTOP_AUTH_STALE_SCOPE");
+      const expected = flow.expected;
+      if (role === "current" && body.intent && body.intent !== expected.intent) {
+        return fail("DESKTOP_AUTH_STALE_SCOPE");
+      }
+      flowFields = {
+        expected_account_id: expected.expected_account_id,
+        expected_user_id: expected.expected_user_id,
+        expected_account_revision: expected.expected_account_revision,
+        expected_user_revision: expected.expected_user_revision,
+        flow_ref: expected.flow_ref,
+        round_ref: expected.round_ref,
+        intent: expected.intent,
+        target_provider: expected.target_provider,
+        flow_deadline_at: expected.flow_deadline_at,
+        original_proof_at: expected.original_proof_at,
+        provider_challenge_id: expected.provider_challenge_id,
+      };
+      if (role === "target") {
+        // The target round completes the existing credential attempt whose
+        // secret and challenge live in this WKWebView's server-sealed
+        // continuation. Its immutable reference travels through the native
+        // request link and is only a lookup key, never proof.
+        const continuationId =
+          typeof body.continuation_attempt_id === "string" ? body.continuation_attempt_id : "";
+        const continuation = /^[A-Za-z0-9-]{8,200}$/.test(continuationId)
+          ? await readDesktopContinuation(continuationId)
+          : null;
+        if (!continuation) return fail("DESKTOP_AUTH_STALE_SCOPE");
+        flowFields = {
+          ...flowFields,
+          intent: continuation.intent,
+          target_provider: continuation.target_provider,
+          credential_attempt_id: continuation.credential_attempt_id,
+          provider_challenge_id: continuation.provider_challenge?.challenge_id ?? expected.provider_challenge_id,
+        };
+      }
+    }
+    const prepared = await client.prepareDesktopAuth(
+      {
+        provider: provider as DesktopAuthProvider,
+        purpose,
+        role,
+        code_challenge: challenge,
+        state,
+        client_label: CLIENT_LABEL,
+        web_origin: webOrigin,
+        ...flowFields,
+      } as Parameters<TalentSignalClient["prepareDesktopAuth"]>[0],
+      { origin: webOrigin, accessToken: token ?? undefined },
+    );
+    (await cookies()).set(pairingCookieName(prepared.attempt_id), prepared.pairing_secret, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      secure: authCookieSecure(),
+      maxAge: DESKTOP_AUTH_ATTEMPT_TTL_SECONDS,
+    });
+    if (!prepared.pending_path.startsWith(DESKTOP_AUTH_PENDING_PATH)) {
+      return fail("DESKTOP_AUTH_REQUEST_INVALID");
+    }
+    return seeOther(prepared.pending_path);
+  } catch (error) {
+    if (!(error instanceof TalentSignalHttpError)) throw error;
+    return fail(error.code);
+  }
+}
+
+type TalentSignalClient = ReturnType<typeof desktopBackendClient>;

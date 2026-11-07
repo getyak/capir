@@ -1,0 +1,137 @@
+import { randomUUID } from "node:crypto";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildApp } from "../app.js";
+import { sha256 } from "../lib/hash.js";
+import { listPeople, searchPeople } from "./people.js";
+import type { AuthContext } from "./auth.js";
+
+// Synthetic fixtures in an explicitly selected disposable local database.
+const database = process.env.PEOPLE_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) {
+  throw new Error("Use an owned disposable loopback PostgreSQL database.");
+}
+const pool = database ? new Pool({ connectionString: database, max: 3 }) : null;
+const auth: AuthContext = {
+  accountId: randomUUID(), accountSlug: `directory-proof-${randomUUID()}`,
+  userId: randomUUID(), userEmail: "directory-proof@example.test",
+  userKind: "simulated_human", sessionId: randomUUID(),
+};
+const people = Array.from({ length: 51 }, () => randomUUID());
+const contexts = Array.from({ length: 26 }, () => randomUUID());
+const handles = Array.from({ length: 26 }, (_, i) => `directory-${i}@example.test`);
+const capture = randomUUID(), resource = randomUUID(), foreignAccount = randomUUID();
+const latePerson = people[50]!;
+let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+let headers: { authorization: string };
+
+beforeAll(async () => {
+  if (!pool || !database) return;
+  await pool.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Directory proof'),($3,$4,'Foreign directory proof')",
+    [auth.accountId, auth.accountSlug, foreignAccount, `foreign-${foreignAccount}`]);
+  await pool.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Directory proof','simulated_human')",
+    [auth.userId, auth.accountId, auth.userEmail]);
+  for (const [i, id] of people.entries()) {
+    await pool.query(`INSERT INTO subjects(id,account_id,external_ref,display_label,created_at)
+      VALUES($1::uuid,$2,$1::text,'Capacity Person',now()-$3::integer*interval '1 second')`,
+      [id, auth.accountId, i]);
+  }
+  await pool.query(`INSERT INTO subjects(id,account_id,external_ref,display_label)
+    VALUES($1::uuid,$2,$1::text,'Capacity Person')`, [randomUUID(), foreignAccount]);
+  for (const [i, id] of contexts.entries()) {
+    await pool.query(`INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label)
+      VALUES($1::uuid,$2,$3,$1::text,$4)`, [id, auth.accountId, latePerson, `Context ${i}`]);
+  }
+  await pool.query(`INSERT INTO captures(id,account_id,created_by_user_id,subject_id,assignment_id,
+    source_kind,source_metadata,identity_status,identity_context,purpose,created_at)
+    VALUES($1,$2,$3,$4,$5,'conversation_transcript','{}','bound','{}','Synthetic directory proof',now()-interval '2 minutes')`,
+    [capture, auth.accountId, auth.userId, latePerson, contexts[0]]);
+  await pool.query(`INSERT INTO source_resources(id,account_id,capture_id,created_by_user_id,client_resource_id,
+    resource_kind,input_channel,display_name,media_type,observed_at,retention_scope,processing_state)
+    VALUES($1::uuid,$2,$3,$4,$1::text,'conversation_transcript','chat','Synthetic directory source',
+      'text/plain',now(),'reviewed_selected_text','ready')`, [resource, auth.accountId, capture, auth.userId]);
+  await pool.query(`INSERT INTO source_retention_receipts(receipt_id,account_id,capture_id,policy_version,
+    requested_mode,effective_mode,source_scope,source_access_state,source_access_reason,created_at,updated_at)
+    VALUES($1,$2,$3,'source-retention.v2','ephemeral','ephemeral','reviewed_selected_text',
+      'available','awaiting_review_completion',now(),now())`, [randomUUID(), auth.accountId, capture]);
+  for (const value of handles) {
+    await pool.query(`INSERT INTO identity_handles(id,account_id,subject_id,handle_type,normalized_value_hash,
+      display_hint,source_resource_id,status,valid_until,confirmed_by_user_id,freshness_policy_version,validity_basis)
+      VALUES($1,$2,$3,'email',$4,'d•••@example.test',$5,'confirmed',now()+interval '1 year',$6,
+        'identity-freshness-2026-08-07.v1','policy_default')`,
+      [randomUUID(), auth.accountId, latePerson, sha256(value), resource, auth.userId]);
+  }
+  app = await buildApp({ pool, config: {
+    databaseUrl: database, host: "127.0.0.1", port: 0, allowedOrigins: [],
+    appleSignInAudiences: [], appleSignInEnabled: false, passwordAuthEnabled: false,
+    passwordRegistrationEnabled: false, simulatedAuthEnabled: true,
+    retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3600,
+  }, remoteChatProvider: null, personResearchProvider: null, labJobWorkerEnabled: false });
+  const login = await app.inject({ method: "POST", url: "/v1/auth/simulated-login", payload: {
+    account_slug: auth.accountSlug, user_email: auth.userEmail, client_label: "directory-isolated-proof",
+  } });
+  expect(login.statusCode, login.body).toBe(200);
+  headers = { authorization: `Bearer ${login.json().access_token}` };
+}, 30_000);
+
+afterAll(async () => { await app?.close(); await pool?.end(); });
+
+describe.skipIf(!pool)("complete current people directory", () => {
+  it("reads the late matching person and all contexts in the same canonical query and HTTP serialization", async () => {
+    for (const read of [listPeople, searchPeople]) {
+      const value = await read(pool!, auth, "Capacity Person");
+      expect(value.people).toHaveLength(51);
+      expect(value.people[50]?.id).toBe(latePerson);
+      expect(value.people[50]?.contexts).toHaveLength(26);
+      expect(new Set(value.people[50]!.contexts.map(({ id }) => id))).toEqual(new Set(contexts));
+    }
+    for (const request of [
+      { method: "GET" as const, url: "/v1/people?query=Capacity%20Person" },
+      { method: "POST" as const, url: "/v1/people/search", payload: { query: "Capacity Person" } },
+    ]) {
+      const response = await app!.inject({ ...request, headers });
+      expect(response.statusCode, response.body).toBe(200);
+      const value = response.json();
+      expect(value.people).toHaveLength(51);
+      expect(value.people[50].id).toBe(latePerson);
+      expect(value.people[50].contexts).toHaveLength(26);
+    }
+    const scope = await app!.inject({ method: "GET",
+      url: `/v1/people/${latePerson}/contexts/${contexts[0]}`, headers });
+    expect(scope.statusCode, scope.body).toBe(200);
+    expect(scope.json().person.contact_points).toHaveLength(26);
+  });
+
+  it("accepts full long queries and keeps absent results empty without widening account access", async () => {
+    const query = "DirectoryQueryTail".repeat(80);
+    for (const request of [
+      { method: "GET" as const, url: `/v1/people?query=${query}` },
+      { method: "POST" as const, url: "/v1/people/search", payload: { query } },
+    ]) {
+      const response = await app!.inject({ ...request, headers });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().people).toEqual([]);
+    }
+    const match = await searchPeople(pool!, auth, handles[25]!);
+    expect(match.people.map(({ id }) => id)).toEqual([latePerson]);
+    expect(match.people[0]?.identity_matches[0]?.kind).toBe("confirmed_handle");
+  });
+
+  it("withdraws all source-bound contact points and matching hints after authorization revocation", async () => {
+    try {
+      await pool!.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE account_id=$1 AND capture_id=$2",
+        [auth.accountId, capture]);
+      expect((await searchPeople(pool!, auth, handles[25]!)).people).toEqual([]);
+      const directory = await listPeople(pool!, auth, "Capacity Person");
+      expect(directory.people).toHaveLength(51);
+      expect(directory.people[50]?.confirmed_identity_count).toBe(0);
+      const scope = await app!.inject({ method: "GET",
+        url: `/v1/people/${latePerson}/contexts/${contexts[0]}`, headers });
+      expect(scope.statusCode, scope.body).toBe(200);
+      expect(scope.json().person.contact_points).toEqual([]);
+    } finally {
+      await pool!.query("UPDATE source_retention_receipts SET authorization_state='authorized' WHERE account_id=$1 AND capture_id=$2",
+        [auth.accountId, capture]);
+    }
+  });
+});

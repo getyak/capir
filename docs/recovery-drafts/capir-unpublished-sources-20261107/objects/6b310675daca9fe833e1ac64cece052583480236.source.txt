@@ -1,0 +1,99 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { fixture, provider, setup, cli, binary, openai, anthropic } from './model-helpers.mjs';
+const respond=(res,value)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(value));};
+const metadata=(id='pinned-model',extra={})=>({type:'model',id,max_input_tokens:1000000,max_tokens:128000,...extra});
+function answer(res,body,model=body.model) {
+  let text=anthropic('answer','end_turn',body.stream).replaceAll('"model":"fixture"',JSON.stringify({model}).slice(1,-1));
+  res.writeHead(200,{'content-type':body.stream?'text/event-stream':'application/json'});res.end(text);
+}
+async function configured(t,handle) {
+  const f=await fixture(t),p=await provider(t,(req,res,b)=>{
+    if(req.url === '/prefix/v1/messages/count_tokens'){respond(res,{input_tokens:100});return;}
+    return handle(req,res,b);
+  });
+  const added=await cli(['models','add','work','--provider','anthropic','--base-url',p.url,'--model','alias','--api-key-env','CAPIR_SYNTHETIC_KEY','--default'],f.env);
+  assert.equal(added.code,0);
+  return {...f,...p,env:{...f.env,CAPIR_SYNTHETIC_KEY:'synthetic-only-secret-12345'}};
+}
+// These output-policy regressions inspect ordinary metadata/answer operations.
+// Native-context tests independently assert every actual token-count request.
+const operations=f=>f.requests.filter(x=>!x.path.endsWith('/count_tokens'));
+const generations=f=>operations(f).filter(x=>x.method==='POST');
+for(const field of ['max_completion_tokens','max_tokens']) test(`compatible ${field} has no invented output allowance and honors large explicit values`,async t=>{
+  const f=await setup(t,(_,res,b)=>{res.writeHead(200,{'content-type':b.stream?'text/event-stream':'application/json'});res.end(openai('ok','stop',b.stream));},'openai-compatible',['--token-limit-field',field]);
+  for(const [args,input] of [[['ask','hello','--json'],''],[[],'pipe'],[['ask','hello','--max-tokens','131072','--json'],''],[['ask','hello','--max-tokens',String(Number.MAX_SAFE_INTEGER),'--json'],'']]) assert.equal((await cli(args,f.env,input)).code,0);
+  assert.equal(operations(f).length,4);assert.equal(operations(f).every(x=>x.method==='POST'),true);
+  for(const request of operations(f).slice(0,2)){assert.equal(Object.hasOwn(request.body,'max_tokens'),false);assert.equal(Object.hasOwn(request.body,'max_completion_tokens'),false);}
+  assert.equal(operations(f)[2].body[field],131072);assert.equal(operations(f)[3].body[field],Number.MAX_SAFE_INTEGER);
+  const invalid=await cli(['ask','x','--max-tokens','9007199254740993','--json'],f.env);assert.equal(invalid.code,2);assert.equal(operations(f).length,4);
+});
+for(const stream of [true,false]) test(`Anthropic ${stream?'SSE':'buffered'} effective alias uses same-prefix metadata and exact response pin`,async t=>{
+  const f=await configured(t,(req,res,b)=>req.method==='GET'?respond(res,metadata()):answer(res,b));
+  const r=await cli(['ask','hello','--model','override /🙂','--system','brief','--json',...(stream?[]:['--no-stream'])],f.env);
+  assert.equal(r.code,0);assert.equal(r.stderr,'');const doc=JSON.parse(r.stdout);
+  assert.equal(doc.model,'pinned-model');assert.equal(doc.capacity.requested_model,'override /🙂');assert.equal(doc.capacity.resolved_model,'pinned-model');assert.equal(doc.capacity.binding,'metadata');assert.equal(doc.capacity.output_policy,'advertised_maximum');
+  assert.equal(operations(f).length,2);assert.equal(operations(f)[0].method,'GET');assert.equal(operations(f)[0].path,'/prefix/v1/models/'+encodeURIComponent('override /🙂'));
+  assert.equal(operations(f)[0].headers['x-api-key'],f.env.CAPIR_SYNTHETIC_KEY);assert.equal(operations(f)[1].headers['x-api-key'],f.env.CAPIR_SYNTHETIC_KEY);
+  assert.equal(operations(f)[1].body.model,'pinned-model');assert.equal(operations(f)[1].body.max_tokens,128000);assert.equal(operations(f)[1].body.system,'brief');
+});
+test('known model output capacity bounds only an explicit request and rejects before paid generation',async t=>{
+  const f=await configured(t,(req,res,b)=>req.method==='GET'?respond(res,metadata()):answer(res,b));
+  assert.equal((await cli(['ask','x','--max-tokens','32000','--json'],f.env)).code,0);assert.equal(generations(f)[0].body.max_tokens,32000);
+  const bad=await cli(['ask','x','--max-tokens','128001','--json'],f.env);assert.equal(bad.code,5);assert.equal(JSON.parse(bad.stdout).error.code,'CAPIR_MODEL_TOKEN_LIMIT');assert.equal(generations(f).length,1);
+});
+for(const status of [404,405,501]) test(`unsupported metadata HTTP${status} requires explicit tokens, remains unresolved, and never retries`,async t=>{
+  const f=await configured(t,(req,res,b)=>{if(req.method==='GET'){res.writeHead(status);res.end(f.env.CAPIR_SYNTHETIC_KEY);}else answer(res,b,'gateway-resolved-alias');});
+  const absent=await cli(['ask','x','--json'],f.env);assert.equal(absent.code,3);assert.equal(JSON.parse(absent.stdout).error.code,'CAPIR_MODEL_CAPACITY_UNAVAILABLE');assert.equal(generations(f).length,0);
+  const explicit=await cli(['ask','x','--max-tokens','131072','--json'],f.env);assert.equal(explicit.code,0);const doc=JSON.parse(explicit.stdout);assert.equal(doc.capacity.binding,'unresolved');assert.equal(doc.capacity.resolved_model,null);assert.equal(doc.capacity.max_output_tokens,null);assert.equal(doc.capacity.output_policy,'caller');assert.equal(generations(f)[0].body.model,'alias');assert.equal(generations(f)[0].body.max_tokens,131072);assert.equal(operations(f).length,3);assert.equal(explicit.stdout.includes(f.env.CAPIR_SYNTHETIC_KEY),false);
+});
+for(const unknown of [undefined,null]) test(`valid identity with ${unknown===null?'null':'missing'} output still binds pin for explicit allowance`,async t=>{
+  const info=metadata('resolved',{max_tokens:unknown});
+  const f=await configured(t,(req,res,b)=>req.method==='GET'?respond(res,info):answer(res,b));
+  const noCap=await cli(['ask','x','--json'],f.env);assert.equal(noCap.code,3);assert.equal(generations(f).length,0);
+  const yes=await cli(['ask','x','--max-tokens','20000','--json'],f.env);assert.equal(yes.code,0);const doc=JSON.parse(yes.stdout);assert.equal(doc.capacity.binding,'metadata');assert.equal(doc.capacity.resolved_model,'resolved');assert.equal(doc.capacity.max_output_tokens,null);assert.equal(generations(f)[0].body.model,'resolved');
+});
+for(const status of [401,403,429,500,302]) test(`metadata HTTP${status} stops even with explicit cap, without fallback or secret output`,async t=>{
+  const f=await configured(t,(req,res)=>{res.writeHead(status,{location:'http://127.0.0.1:1/steal'});res.end(f.env.CAPIR_SYNTHETIC_KEY);});
+  const r=await cli(['ask','x','--max-tokens','20000','--json'],f.env);assert.equal(r.code,status===401||status===403?4:status===429?5:3);assert.equal(generations(f).length,0);assert.equal(operations(f).length,1);assert.equal((r.stdout+r.stderr).includes(f.env.CAPIR_SYNTHETIC_KEY),false);
+});
+for(const info of [metadata(''),metadata('  '),{...metadata(),type:'wrong'},metadata('x',{max_tokens:0}),metadata('x',{max_tokens:-1}),metadata('x',{max_tokens:2.5}),metadata('x',{max_tokens:'128000'}),metadata('x',{max_tokens:Number.MAX_SAFE_INTEGER+1}),metadata('x',{max_input_tokens:0}),metadata('x',{max_input_tokens:'1000000'})]) test(`invalid metadata ${JSON.stringify(info)} cannot fall back to an explicit allowance`,async t=>{
+  const f=await configured(t,(_,res)=>respond(res,info));const r=await cli(['ask','x','--max-tokens','20000','--json'],f.env);assert.equal(r.code,3);assert.equal(JSON.parse(r.stdout).error.code,'CAPIR_MODEL_PROTOCOL');assert.equal(operations(f).length,1);assert.equal(generations(f).length,0);
+});
+for(const stream of [true,false]) test(`response pin mismatch ${stream?'SSE':'buffered'} emits no answer and retains known usage`,async t=>{
+  const f=await configured(t,(req,res,b)=>req.method==='GET'?respond(res,metadata()):answer(res,b,'other-model'));
+  const r=await cli(['ask','x','--json',...(stream?[]:['--no-stream'])],f.env);assert.equal(r.code,3);const doc=JSON.parse(r.stdout);assert.equal(doc.error.code,'CAPIR_MODEL_IDENTITY');assert.equal(doc.response.text,'');assert.equal(doc.response.complete,false);assert.equal(doc.usage.input_tokens,0);assert.equal(doc.usage.output_tokens,stream?0:2);assert.equal(operations(f).length,2);
+});
+test('pinned SSE refuses text before identity and duplicate message starts',async t=>{
+  const f=await configured(t,(req,res,b)=>{
+    if(req.method==='GET'){respond(res,metadata());return;}
+    res.writeHead(200,{'content-type':'text/event-stream'});
+    const data=anthropic('forbidden','end_turn',true).replaceAll('fixture','pinned-model');
+    res.end(b.messages[0].content==='early'?data.slice(data.indexOf('event: content_block_start')):data.slice(0,data.indexOf('event: content_block_start'))+data);
+  });
+  for(const text of ['early','duplicate']){const r=await cli(['ask',text,'--json'],f.env);assert.equal(r.code,3);assert.equal(JSON.parse(r.stdout).response.text,'');}
+  assert.equal(generations(f).length,2);
+});
+test('requested timeout includes hanging selected-model metadata and admits no generation',async t=>{
+  const f=await configured(t,(_,res)=>{res.writeHead(200,{'content-type':'application/json'});res.flushHeaders();});
+  const r=await cli(['ask','x','--timeout','1','--json'],f.env);assert.equal(r.code,3);assert.equal(JSON.parse(r.stdout).error.code,'CAPIR_MODEL_TIMEOUT');assert.equal(operations(f).length,1);assert.equal(generations(f).length,0);
+});
+test('SIGINT during metadata cancels process and never advances to generation',{timeout:15000},async t=>{
+  let entered;const ready=new Promise(r=>entered=r);const f=await configured(t,(_,res)=>{res.writeHead(200,{'content-type':'application/json'});res.flushHeaders();entered();});
+  const child=spawn(process.execPath,[binary,'ask','x','--json'],{env:f.env,stdio:['pipe','pipe','pipe']});t.after(()=>child.kill());child.stdin.end();let out='';child.stdout.on('data',x=>out+=x);child.stderr.resume();const closed=new Promise(r=>child.once('close',r));await ready;child.kill('SIGINT');assert.equal(await closed,130);assert.equal(JSON.parse(out).error.code,'CAPIR_MODEL_CANCELLED');assert.equal(generations(f).length,0);
+});
+function pty(env,actions,args=[]){return new Promise((resolve,reject)=>{const child=spawn('python3',[fileURLToPath(new URL('./model-pty.py',import.meta.url))],{env,stdio:['pipe','pipe','pipe']});let out='',err='';child.stdout.on('data',x=>out+=x);child.stderr.on('data',x=>err+=x);child.once('error',reject);child.once('close',code=>code!==0?reject(new Error(err)):resolve(JSON.parse(out)));child.stdin.end(JSON.stringify({node:process.execPath,binary,actions,args}));});}
+test('actual PTY resolves selected model once and keeps its pin across completed turns',async t=>{
+  const f=await configured(t,(req,res,b)=>req.method==='GET'?respond(res,metadata()):answer(res,b));
+  const r=await pty(f.env,[{wait:'capir> '},{write:'first\nsecond\n'},{wait:'capir> '},{wait:'capir> '},{write:'/model\n'},{wait:'capir> '},{write:'/exit\n'}]);assert.equal(r.code,0);assert.equal(operations(f).length,3);assert.equal(operations(f).filter(x=>x.method==='GET').length,1);assert.equal(generations(f).length,2);assert.equal(generations(f).every(x=>x.body.model==='pinned-model'&&x.body.max_tokens===128000),true);assert.deepEqual(generations(f)[1].body.messages.map(x=>x.content),['first','answer','second']);assert.match(r.stderr,/resolved model pinned-model/);
+});
+for(const invalid of ['malformed-json','invalid-utf8']) test(`malformed metadata transport ${invalid} never accepts an explicit fallback`,async t=>{
+  const f=await configured(t,(_,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(invalid==='malformed-json'?'{broken':Buffer.from([0xff]));});
+  const r=await cli(['ask','x','--max-tokens','20000','--json'],f.env);assert.equal(r.code,3);assert.equal(JSON.parse(r.stdout).response.text,'');assert.equal(generations(f).length,0);assert.equal(operations(f).length,1);
+});
+test('plain pinned mismatch emits no untrusted answer text',async t=>{
+  const f=await configured(t,(req,res,b)=>req.method==='GET'?respond(res,metadata()):answer(res,b,'other-model'));
+  const r=await cli(['ask','x'],f.env);assert.equal(r.code,3);assert.equal(r.stdout,'');assert.match(r.stderr,/CAPIR_MODEL_IDENTITY/);assert.equal(operations(f).length,2);
+});

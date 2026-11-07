@@ -1,0 +1,35 @@
+import "server-only";
+
+import { LabWorkspaceResponseSchema } from "@talent-signal/contracts";
+import { Value } from "@sinclair/typebox/value";
+
+import { registerContractFormats } from "@/lib/capirContractFormats";
+import { backendAuthBaseUrl, type BackendSessionClaims } from "@/lib/server/backendAuth";
+import type { CapirSessionClaims } from "@/lib/server/capirSession";
+
+registerContractFormats();
+
+/** The Lab child's own credential reads the authoritative sandbox expiry. */
+export async function readCapirSandboxExpiry(
+  capir: CapirSessionClaims,
+  claims: BackendSessionClaims,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  if (claims.backendAccountSlug !== `lab-${capir.sandboxId}` ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(capir.sandboxId)) return null;
+  try {
+    const response = await fetchImpl(
+      new URL(`/v1/lab/workspaces/${capir.sandboxId}`, backendAuthBaseUrl()),
+      { method: "GET", redirect: "error", signal: AbortSignal.timeout(5_000),
+        headers: { accept: "application/json", authorization: `Bearer ${claims.backendAccessToken}` } },
+    );
+    if (!response.ok) return null;
+    const data: unknown = await response.json();
+    if (!Value.Check(LabWorkspaceResponseSchema, data)) return null;
+    const workspace = data.workspace;
+    if (workspace.id !== capir.sandboxId || workspace.account_id !== claims.backendAccountId ||
+        workspace.user_id !== claims.backendUserId || workspace.state !== "active" ||
+        Date.parse(workspace.expires_at) <= Date.now()) return null;
+    return workspace.expires_at;
+  } catch { return null; }
+}

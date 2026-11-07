@@ -1,0 +1,13 @@
+import { notFound } from "next/navigation";
+import { IntegrationOnboarding } from "@/components/integration-onboarding";
+import "@/components/workspace-theme.css";
+
+// An account-free layout rehearsal. Browser tests may intercept the local API
+// with labeled fixtures; this entry itself has no authentication or fake grant.
+export default function IntegrationDesignPreview() {
+  if (process.env.NODE_ENV !== "development") notFound();
+  return <div className="ts-workspace-theme quiet-workspace" data-workspace-scope="synthetic-onboarding-design" style={{ minHeight: "100vh" }}>
+    <p style={{ margin: 0, padding: "12px 20px", fontSize: 13, borderBottom: "1px solid var(--line)", color: "var(--muted)" }}>设计演示 · 仅用于合成数据验证，不代表真实邮箱连接</p>
+    <IntegrationOnboarding sessionVersion="synthetic-design-session" configured={{ gmail: false, outlook: false }} returnTo="/workspace" />
+  </div>;
+}

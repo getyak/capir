@@ -1,0 +1,167 @@
+import type { Pool } from "pg";
+import { ApiError } from "../lib/apiError.js";
+import { parseOriginalAuthority } from "./legacyChatAuthority.js";
+import {
+  notifyLifecycleMaintenanceOwner, pendingLifecycleMaintenanceOwners,
+  type LifecycleMaintenanceOwner,
+} from "./legacyChatLifecycle.js";
+
+type ExpiryReason = "execution_authority_expired" | "canonical_retention_expired";
+interface StoredOwner {
+  account_id: string; actor_user_id: string; operation_scope: string;
+  intent_id: string; task_id: string; attempt_id: string; run_id: string;
+  fencing_generation: string;
+  intent_state: string; attempt_state: string;
+  intent_reason: string | null; attempt_reason: string | null;
+  intent_execution: Date | null; execution: Date | null; canonical: Date | null;
+  auth_session_id: string | null; intent_auth_session_id: string | null;
+  auth_actor_kind: string | null; original_authority: unknown; checked_at: Date;
+}
+const active = new Set(["admitted", "running", "cancelling"]);
+const joinedOwner = `SELECT i.account_id,i.actor_user_id,i.operation_scope,i.id AS intent_id,
+  i.task_id,a.id AS attempt_id,a.run_id,a.fencing_generation,
+  i.state AS intent_state,a.state AS attempt_state,i.terminal_reason AS intent_reason,a.terminal_reason AS attempt_reason,
+  i.execution_authority_expires_at AS intent_execution,a.execution_authority_expires_at AS execution,
+  i.canonical_retention_expires_at AS canonical,a.auth_session_id,i.auth_session_id AS intent_auth_session_id,
+  a.auth_actor_kind,a.original_authority,clock_timestamp() AS checked_at
+  FROM legacy_chat_task_intents i JOIN legacy_chat_task_attempts a
+  ON a.account_id=i.account_id AND a.intent_id=i.id AND a.id=i.current_attempt_id
+    AND a.actor_user_id=i.actor_user_id AND a.task_id=i.task_id AND a.fencing_generation=i.fencing_generation`;
+function finite(value: Date | null): value is Date {
+  return value instanceof Date && Number.isFinite(value.valueOf());
+}
+function boundOwner(row: StoredOwner): LifecycleMaintenanceOwner | null {
+  if (row.operation_scope !== "create_chat_task" || !finite(row.execution) || !finite(row.intent_execution)
+    || !finite(row.canonical) || !finite(row.checked_at) || row.intent_execution.valueOf() !== row.execution.valueOf()) return null;
+  let original;
+  try { original = parseOriginalAuthority(row.original_authority); } catch { return null; }
+  if (original.kind !== "ordinary" || original.session.accountID !== row.account_id
+    || original.session.userID !== row.actor_user_id || original.session.id !== row.auth_session_id
+    || row.intent_auth_session_id !== row.auth_session_id || original.session.actorKind !== row.auth_actor_kind
+    || original.session.expiresAt !== row.execution.valueOf()) return null;
+  const fencingGeneration = Number(row.fencing_generation);
+  if (!Number.isSafeInteger(fencingGeneration) || fencingGeneration < 1) return null;
+  return { accountID: row.account_id, actorUserID: row.actor_user_id, operationScope: "create_chat_task",
+    intentID: row.intent_id, taskID: row.task_id, attemptID: row.attempt_id,
+    runID: row.run_id, fencingGeneration };
+}
+function expiryReason(row: StoredOwner): ExpiryReason | null {
+  if (!finite(row.execution) || !finite(row.canonical) || !finite(row.checked_at)) return null;
+  // The original clocks have distinct purposes. Choose the earliest original
+  // cutoff deterministically, without treating lease age or task age as expiry.
+  const canonicalFirst = row.canonical.valueOf() <= row.execution.valueOf();
+  const first = canonicalFirst ? row.canonical : row.execution;
+  return first.valueOf() <= row.checked_at.valueOf()
+    ? canonicalFirst ? "canonical_retention_expired" : "execution_authority_expired" : null;
+}
+function values(owner: LifecycleMaintenanceOwner): unknown[] {
+  return [owner.accountID,owner.actorUserID,owner.intentID,owner.taskID,owner.attemptID,owner.runID,owner.fencingGeneration];
+}
+const exact = `i.account_id=$1 AND i.actor_user_id=$2 AND i.id=$3 AND i.task_id=$4
+  AND a.id=$5 AND a.run_id=$6 AND a.fencing_generation=$7 AND i.operation_scope='create_chat_task'`;
+
+/** One candidate, two NOWAIT locks, one short metadata transaction. No producer await. */
+async function retireOrReconcile(pool: Pool, owner: LifecycleMaintenanceOwner,
+  reconcileOnly: boolean): Promise<{ owner: LifecycleMaintenanceOwner; reason: ExpiryReason; retired: boolean } | null> {
+  const client = await pool.connect();
+  let committed = false;
+  try {
+    await client.query("BEGIN");
+    // Match the producer's attempt-first order. Intent-first authenticated
+    // cancellation remains safe because neither maintenance lock ever waits.
+    const attempt = await client.query(`SELECT id FROM legacy_chat_task_attempts
+      WHERE account_id=$1 AND actor_user_id=$2 AND intent_id=$3 AND task_id=$4 AND id=$5 AND run_id=$6
+        AND fencing_generation=$7 FOR UPDATE NOWAIT`, values(owner));
+    if (!attempt.rowCount) { await client.query("ROLLBACK"); return null; }
+    const intent = await client.query(`SELECT id FROM legacy_chat_task_intents
+      WHERE account_id=$1 AND actor_user_id=$2 AND id=$3 AND task_id=$4 AND current_attempt_id=$5
+        AND fencing_generation=$6 AND operation_scope='create_chat_task' FOR UPDATE NOWAIT`, values(owner).filter((_, n) => n !== 5));
+    // Separate parameter vector keeps the unused run id out of this statement.
+    if (!intent.rowCount) { await client.query("ROLLBACK"); return null; }
+    const row = (await client.query<StoredOwner>(`${joinedOwner} WHERE ${exact}`, values(owner))).rows[0];
+    if (!row) { await client.query("ROLLBACK"); return null; }
+    const current = boundOwner(row), reason = expiryReason(row);
+    if (!current || !reason) { await client.query("ROLLBACK"); return null; }
+    if (row.intent_state === "revoked" && row.attempt_state === "revoked"
+      && row.intent_reason === reason && row.attempt_reason === reason) {
+      // A previous server COMMIT may have succeeded while its acknowledgement
+      // was lost. Fresh exact durable readback authorizes notification; the old
+      // call is never credited with a confirmed COMMIT and never retries work.
+      await client.query("COMMIT"); committed = true;
+      return { owner: current, reason, retired: false };
+    }
+    if (reconcileOnly || !active.has(row.intent_state) || !active.has(row.attempt_state)) {
+      await client.query("ROLLBACK"); return null;
+    }
+    const retiredAttempt = await client.query(`UPDATE legacy_chat_task_attempts
+      SET state='revoked',terminal_reason=$8,ended_at=clock_timestamp(),
+        usage_uncertain=usage_uncertain OR dispatch_state<>'not_dispatched'
+      WHERE account_id=$1 AND actor_user_id=$2 AND intent_id=$3 AND task_id=$4 AND id=$5
+        AND run_id=$6 AND fencing_generation=$7 AND state IN ('admitted','running','cancelling')`, [...values(owner),reason]);
+    const retiredIntent = await client.query(`UPDATE legacy_chat_task_intents
+      SET state='revoked',terminal_reason=$7,revision=revision+1,updated_at=clock_timestamp()
+      WHERE account_id=$1 AND actor_user_id=$2 AND id=$3 AND task_id=$4 AND current_attempt_id=$5
+        AND fencing_generation=$6 AND operation_scope='create_chat_task' AND state IN ('admitted','running','cancelling')`, [...values(owner).filter((_, n) => n !== 5),reason]);
+    if (retiredAttempt.rowCount !== 1 || retiredIntent.rowCount !== 1)
+      throw new Error("LEGACY_CHAT_METADATA_MAINTENANCE_CAS_LOST");
+    await client.query("COMMIT"); committed = true;
+    return { owner: current, reason, retired: true };
+  } catch (error) {
+    if (!committed) await client.query("ROLLBACK").catch(() => undefined);
+    if (error && typeof error === "object" && "code" in error && error.code === "55P03") return null;
+    throw error;
+  } finally { client.release(); }
+}
+function notify(result: Awaited<ReturnType<typeof retireOrReconcile>>): void {
+  if (!result) return;
+  // The short transaction and its client have both ended. An aborted physical
+  // owner remains registered until its actual promise and settlement finish.
+  notifyLifecycleMaintenanceOwner(result.owner, new ApiError(409,"LEGACY_CHAT_AUTHORITY_EXPIRED",
+    "The original authorization for this request expired before completion."));
+}
+async function execute(pool: Pool): Promise<number> {
+  for (const owner of pendingLifecycleMaintenanceOwners()) notify(await retireOrReconcile(pool,owner,true));
+  let retired = 0, after: string | null = null;
+  const last = (await pool.query<{ id: string }>(`SELECT i.id FROM legacy_chat_task_intents i
+    JOIN legacy_chat_task_attempts a ON a.account_id=i.account_id AND a.id=i.current_attempt_id
+    WHERE i.operation_scope='create_chat_task' AND i.state IN ('admitted','running','cancelling')
+      AND a.state IN ('admitted','running','cancelling') AND a.original_authority->>'kind'='ordinary'
+      AND (a.execution_authority_expires_at<=clock_timestamp() OR i.canonical_retention_expires_at<=clock_timestamp())
+    ORDER BY i.id DESC LIMIT 1`)).rows[0]?.id;
+  if (!last) return retired;
+  // Pages bound each metadata read, never total work. Busy candidates are
+  // skipped for this pass and revisited by a later tick.
+  for (;;) {
+    const page: { rows: StoredOwner[] } = await pool.query<StoredOwner>(`${joinedOwner}
+      WHERE i.operation_scope='create_chat_task' AND i.state IN ('admitted','running','cancelling')
+        AND a.state IN ('admitted','running','cancelling') AND a.original_authority->>'kind'='ordinary'
+        AND ($1::uuid IS NULL OR i.id>$1::uuid) AND i.id<=$2::uuid
+        AND (a.execution_authority_expires_at<=clock_timestamp() OR i.canonical_retention_expires_at<=clock_timestamp())
+      ORDER BY i.id LIMIT 256`,[after,last]);
+    if (!page.rows.length) break;
+    for (const row of page.rows) {
+      const owner = boundOwner(row);
+      if (!owner) continue;
+      const result = await retireOrReconcile(pool,owner,false);
+      if (result?.retired) retired++;
+      notify(result);
+    }
+    after = page.rows[page.rows.length-1]!.intent_id;
+  }
+  return retired;
+}
+const running = new WeakMap<Pool, Promise<number>>();
+/** Startup and every app timer share one metadata-only pass per pool. */
+export function maintainOrdinaryChatLifecycle(pool: Pool): Promise<number> {
+  const existing = running.get(pool);
+  if (existing) return existing;
+  const pending = Promise.resolve().then(() => execute(pool)).finally(() => {
+    if (running.get(pool) === pending) running.delete(pool);
+  });
+  running.set(pool,pending);
+  return pending;
+}
+/** Drain metadata acquisition/transactions only; this never waits for a provider. */
+export async function drainOrdinaryChatLifecycleMaintenance(pool: Pool): Promise<void> {
+  await running.get(pool);
+}

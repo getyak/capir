@@ -1,0 +1,156 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  analyzeScreenshotWithBigModel,
+  getBigModelAvailability,
+} from "./bigModel";
+
+function modelPayload() {
+  return JSON.stringify({
+    platform: "wechat",
+    captured_at: null,
+    transcription_notes: ["The screenshot owner was not specified."],
+    messages: [
+      {
+        source_message_id: "m1",
+        visual_direction: "unknown",
+        speaker: "unknown",
+        text: "周五上午可以聊，时间还需要确认。",
+      },
+    ],
+    assertions: [
+      {
+        field: "availability",
+        status: "ambiguous",
+        value: "周五上午",
+        evidence_message_id: "m1",
+        evidence_quote: "周五上午可以聊",
+        ambiguity: "Speaker ownership is not confirmed.",
+      },
+    ],
+    action: null,
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("BigModel screenshot analysis", () => {
+  it("uses the official host, pinned model, Base64 Data URL, and thinking mode", async () => {
+    vi.stubEnv("TALENT_SIGNAL_AI_ENABLED", "true");
+    vi.stubEnv("TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING", "true");
+    vi.stubEnv("ZHIPU_API_KEY", "test-key");
+    vi.stubEnv("TALENT_SIGNAL_ZHIPU_SCREENSHOT_MODEL", "glm-5.3-flash");
+    let requestUrl = "";
+    let requestBody: Record<string, unknown> | null = null;
+    const fetchImpl = vi.fn(
+      async (url: string | URL | Request, init?: RequestInit) => {
+        requestUrl = String(url);
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({
+            id: "bigmodel-request-1",
+            model: "glm-5.3-flash",
+            choices: [{ message: { content: modelPayload() } }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    );
+
+    const result = await analyzeScreenshotWithBigModel({
+      bytes: new Uint8Array([1, 2, 3, 4]),
+      mimeType: "image/png",
+      contactName: "Synthetic Candidate",
+      assignmentLabel: "Synthetic search",
+      screenshotOwner: "unknown",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    expect(requestBody).not.toHaveProperty("max_tokens");
+    expect(requestUrl).toBe(
+      "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    );
+    expect(requestBody).toMatchObject({
+      model: "glm-5.3-flash",
+      thinking: { type: "enabled" },
+      response_format: { type: "json_object" },
+    });
+    expect(JSON.stringify(requestBody)).toContain(
+      '"url":"data:image/png;base64,AQIDBA=="',
+    );
+    expect(result.meta).toEqual({
+      provider: "Zhipu BigModel",
+      model: "glm-5.3-flash",
+      request_id: "bigmodel-request-1",
+      raw_image_stored_by_talent_signal: false,
+    });
+    expect(result.draft.disposition).toBe("clarify");
+  });
+
+  it("rejects a length-stopped response even when its partial JSON parses", async () => {
+    vi.stubEnv("TALENT_SIGNAL_AI_ENABLED", "true");
+    vi.stubEnv("TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING", "true");
+    vi.stubEnv("ZHIPU_API_KEY", "test-key");
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      model: "glm-5.3-flash",
+      choices: [{ finish_reason: "length", message: { content: modelPayload() } }],
+    }), { status: 200 }));
+    await expect(analyzeScreenshotWithBigModel({ bytes: new Uint8Array([1]), mimeType: "image/png",
+      contactName: "Synthetic", assignmentLabel: "Synthetic", screenshotOwner: "unknown",
+      fetchImpl: fetchImpl as typeof fetch })).rejects.toThrow("MODEL_OUTPUT_TRUNCATED");
+  });
+
+  it("requires both AI and sensitive-processing gates", () => {
+    vi.stubEnv("TALENT_SIGNAL_AI_ENABLED", "true");
+    vi.stubEnv("TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING", "false");
+    vi.stubEnv("ZHIPU_API_KEY", "test-key");
+
+    expect(getBigModelAvailability().enabled).toBe(false);
+  });
+
+  it("rejects non-official hosts and dynamic model aliases", async () => {
+    vi.stubEnv("TALENT_SIGNAL_AI_ENABLED", "true");
+    vi.stubEnv("TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING", "true");
+    vi.stubEnv("ZHIPU_API_KEY", "test-key");
+    vi.stubEnv("ZHIPU_BASE_URL", "https://example.com/api/paas/v4");
+
+    await expect(
+      analyzeScreenshotWithBigModel({
+        bytes: new Uint8Array([1]),
+        mimeType: "image/png",
+        contactName: "Synthetic Candidate",
+        assignmentLabel: "Synthetic search",
+        screenshotOwner: "unknown",
+        fetchImpl: vi.fn(),
+      }),
+    ).rejects.toThrow("official BigModel");
+
+    vi.stubEnv("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4");
+    vi.stubEnv("TALENT_SIGNAL_ZHIPU_SCREENSHOT_MODEL", "glm-latest");
+    expect(() => getBigModelAvailability()).toThrow("固定版本的 GLM 视觉模型");
+  });
+
+  it("does not expose provider response content on failure", async () => {
+    vi.stubEnv("TALENT_SIGNAL_AI_ENABLED", "true");
+    vi.stubEnv("TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING", "true");
+    vi.stubEnv("ZHIPU_API_KEY", "secret-must-not-appear");
+    const error = await analyzeScreenshotWithBigModel({
+      bytes: new Uint8Array([1]),
+      mimeType: "image/png",
+      contactName: "Synthetic Candidate",
+      assignmentLabel: "Synthetic search",
+      screenshotOwner: "unknown",
+      fetchImpl: vi.fn(async () =>
+        new Response("private evidence and secret-must-not-appear", {
+          status: 429,
+        }),
+      ) as typeof fetch,
+    }).catch((caught: unknown) => caught);
+
+    expect(String(error)).toContain("429");
+    expect(String(error)).not.toContain("private evidence");
+    expect(String(error)).not.toContain("secret-must-not-appear");
+  });
+});

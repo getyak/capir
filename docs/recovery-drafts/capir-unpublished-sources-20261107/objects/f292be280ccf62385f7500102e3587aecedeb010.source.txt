@@ -1,0 +1,32 @@
+/** Fixed protocol helper. It receives output bytes only, through owned pipes. */
+import { WriteStream } from 'node:tty';
+
+const target = new WriteStream(3);
+let buffered = Buffer.alloc(0), busy = false;
+const fail = () => process.exit(3);
+process.stdin.on('error', fail); target.on('error', fail); process.stdout.on('error', fail);
+const processFrame = () => {
+  if (busy || buffered.length < 8) return;
+  const id = buffered.readUInt32BE(0), length = buffered.readUInt32BE(4);
+  if (!id || !length || length > 32768) { fail(); return; }
+  if (buffered.length < 8 + length) return;
+  const bytes = buffered.subarray(8, 8 + length); buffered = buffered.subarray(8 + length);
+  busy = true; process.stdin.pause();
+  // START proves actual helper admission; DONE follows actual TTY callback.
+  process.stdout.write(`${id}:start\n`, error => {
+    if (error) { fail(); return; }
+    target.write(bytes, error => {
+      if (error) { fail(); return; }
+      process.stdout.write(`${id}:done\n`, error => {
+        if (error) { fail(); return; }
+        busy = false; processFrame(); process.stdin.resume();
+      });
+    });
+  });
+};
+process.stdin.on('data', (chunk: Buffer) => {
+  buffered = Buffer.concat([buffered, chunk]);
+  if (buffered.length > 32776) { fail(); return; }
+  processFrame();
+});
+process.stdin.on('end', () => { if (busy || buffered.length) fail(); else process.exit(0); });

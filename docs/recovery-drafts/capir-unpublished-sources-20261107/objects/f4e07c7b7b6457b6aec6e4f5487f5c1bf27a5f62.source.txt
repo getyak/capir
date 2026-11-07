@@ -1,0 +1,141 @@
+import { describe, expect, it } from "vitest";
+
+import { DESKTOP_AUTH_CONFIRM_PATH } from "@talent-signal/contracts";
+
+import {
+  browserAttemptCookieName,
+  continuationCookieName,
+  desktopCallbackURL,
+  desktopCancelCallbackURL,
+  desktopReturnPath,
+  formMatchesCurrentRound,
+  pairingCookieName,
+  parseDesktopCallback,
+  readSubmittedAttemptRef,
+  resolveDesktopProviderReturn,
+} from "./desktop-auth-protocol";
+
+/**
+ * Pure handoff protocol policy (ADR 0019 / ADR 0020). Backend state-machine
+ * and endpoint coverage lives in the backend integration suite; actual Web
+ * consumer coverage lives in `app/desktop-auth-chain.test.ts`; native
+ * generation and callback validation are covered by the macOS tests.
+ */
+
+describe("attempt-specific cookie ownership", () => {
+  it("names one cookie per attempt in each jar family", () => {
+    expect(pairingCookieName("attempt-12345678")).toBe("talent-signal.desktop-pair-attempt-12345678");
+    expect(browserAttemptCookieName("attempt-12345678")).toBe(
+      "talent-signal.desktop-browser-attempt-attempt-12345678",
+    );
+    expect(continuationCookieName("attempt-12345678")).toBe(
+      "talent-signal.desktop-continuation-attempt-12345678",
+    );
+    // A delayed A response can only write or delete A's own cookie names.
+    for (const name of [pairingCookieName, browserAttemptCookieName, continuationCookieName]) {
+      expect(name("attempt-aaaaaaaa")).not.toBe(name("attempt-bbbbbbbb"));
+    }
+  });
+
+  it("refuses malformed attempt identifiers instead of inventing cookie names", () => {
+    for (const name of [pairingCookieName, browserAttemptCookieName, continuationCookieName]) {
+      expect(() => name("")).toThrow();
+      expect(() => name("attempt/../session")).toThrow();
+      expect(() => name("attempt value")).toThrow();
+    }
+  });
+});
+
+describe("provider return routing", () => {
+  it("routes only its own round to the handoff", () => {
+    expect(
+      resolveDesktopProviderReturn({
+        attemptIdFromCallback: "attempt-12345678",
+        callbackPath: DESKTOP_AUTH_CONFIRM_PATH,
+      }),
+    ).toEqual({ kind: "desktop", attemptId: "attempt-12345678" });
+  });
+
+  it("treats a preexisting browser login as never fresh provider proof", () => {
+    expect(
+      resolveDesktopProviderReturn({ attemptIdFromCallback: null, callbackPath: "/onboarding" }),
+    ).toEqual({ kind: "ordinary" });
+  });
+
+  it("fails closed when the confirm path is reached without its own round", () => {
+    expect(
+      resolveDesktopProviderReturn({ attemptIdFromCallback: null, callbackPath: DESKTOP_AUTH_CONFIRM_PATH }),
+    ).toEqual({ kind: "fail-closed" });
+  });
+
+  it("never hijacks an unrelated provider round while an attempt is live", () => {
+    expect(
+      resolveDesktopProviderReturn({
+        attemptIdFromCallback: "attempt-12345678",
+        callbackPath: "/onboarding",
+      }),
+    ).toEqual({ kind: "ordinary" });
+  });
+});
+
+describe("fixed callback variants", () => {
+  it("fixes the success callback to the native scheme with only attempt, code and state", () => {
+    const parsed = parseDesktopCallback(
+      desktopCallbackURL("attempt-12345678", "code-abcdefghijklmnopqrstuvwxyz012345", "state-0123456789abcdef"),
+    );
+    expect(parsed).toEqual({
+      kind: "success",
+      attemptId: "attempt-12345678",
+      code: "code-abcdefghijklmnopqrstuvwxyz012345",
+      state: "state-0123456789abcdef",
+    });
+  });
+
+  it("fixes the terminal cancel callback with outcome=cancelled mutually exclusive with code", () => {
+    const parsed = parseDesktopCallback(
+      desktopCancelCallbackURL("attempt-12345678", "state-0123456789abcdef"),
+    );
+    expect(parsed).toEqual({ kind: "cancelled", attemptId: "attempt-12345678", state: "state-0123456789abcdef" });
+    expect(desktopCancelCallbackURL("attempt-12345678", "state-0123456789abcdef")).not.toContain("code=");
+  });
+
+  it("rejects fragments, trailing slashes, duplicates, empty and unknown keys", () => {
+    const base = "com.talentsignal.macos.auth://complete";
+    const valid = "?attempt=attempt-12345678&code=code-abcdefghijklmnopqrstuvwxyz012345&state=state-0123456789abcdef";
+    expect(parseDesktopCallback(base + valid + "#frag")).toBeNull();
+    expect(parseDesktopCallback("com.talentsignal.macos.auth://complete/" + valid)).toBeNull();
+    expect(parseDesktopCallback(base + "?attempt=attempt-12345678&attempt=attempt-12345678&code=code-abcdefghijklmnopqrstuvwxyz012345&state=state-0123456789abcdef")).toBeNull();
+    expect(parseDesktopCallback(base + "?attempt=attempt-12345678&code=&state=state-0123456789abcdef")).toBeNull();
+    expect(parseDesktopCallback(base + valid + "&next=https://evil.example")).toBeNull();
+    expect(parseDesktopCallback(base + "?attempt=attempt-12345678&state=state-0123456789abcdef&outcome=cancelled&code=code-abcdefghijklmnopqrstuvwxyz012345")).toBeNull();
+    expect(parseDesktopCallback(base + "?attempt=attempt-12345678&state=state-0123456789abcdef&outcome=success")).toBeNull();
+    expect(parseDesktopCallback("https://evil.example/complete" + valid)).toBeNull();
+    expect(parseDesktopCallback("com.talentsignal.macos.auth://other" + valid)).toBeNull();
+    expect(parseDesktopCallback("com.talentsignal.macos.auth://complete@evil.example" + valid)).toBeNull();
+  });
+
+  it("keeps return paths fixed by purpose", () => {
+    expect(desktopReturnPath("login")).toBe("/login");
+    expect(desktopReturnPath("credential_round")).toBe("/workspace/settings");
+  });
+});
+
+describe("immutable submitted form references", () => {
+  it("accepts one non-empty reference and rejects duplicates and empties", () => {
+    expect(readSubmittedAttemptRef([])).toEqual({ kind: "absent" });
+    expect(readSubmittedAttemptRef(["attempt-12345678"])).toEqual({ kind: "single", attemptId: "attempt-12345678" });
+    expect(readSubmittedAttemptRef(["attempt-12345678", "attempt-12345678"])).toEqual({ kind: "invalid" });
+    expect(readSubmittedAttemptRef([""])).toEqual({ kind: "invalid" });
+    expect(readSubmittedAttemptRef(["bad id"])).toEqual({ kind: "invalid" });
+  });
+
+  it("binds a rendered form only to the current sealed round", () => {
+    expect(formMatchesCurrentRound({ kind: "single", attemptId: "attempt-aaaaaaaa" }, "attempt-aaaaaaaa")).toBe(true);
+    // Stale A form with current B is refused without touching B.
+    expect(formMatchesCurrentRound({ kind: "single", attemptId: "attempt-aaaaaaaa" }, "attempt-bbbbbbbb")).toBe(false);
+    // A plain form post without a reference may act on the current round only.
+    expect(formMatchesCurrentRound({ kind: "absent" }, "attempt-bbbbbbbb")).toBe(true);
+    expect(formMatchesCurrentRound({ kind: "absent" }, null)).toBe(false);
+    expect(formMatchesCurrentRound({ kind: "invalid" }, "attempt-bbbbbbbb")).toBe(false);
+  });
+});

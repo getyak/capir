@@ -1,0 +1,87 @@
+import { Writable } from "node:stream";
+import Fastify from "fastify";
+import { expect, it, vi } from "vitest";
+import type { Pool } from "pg";
+import { buildApp } from "../app.js";
+import * as requestLogging from "./requestLogger.js";
+import { requestLoggerOptions } from "./requestLogger.js";
+
+it("redacts ephemeral conversation content and credentials while keeping diagnostic codes", async () => {
+  let output = "";
+  const stream = new Writable({ write(chunk, _encoding, done) { output += String(chunk); done(); } });
+  const app = Fastify({ logger: { ...requestLoggerOptions("info"), stream } });
+  app.log.info({ code: "PRIVATE_CONVERSATION_TIMEOUT", body: {
+    messages: [{ role: "user", content: "private-content-canary" }],
+    password: "password-canary", access_token: "token-canary",
+    code: "desktop-code-canary", verifier: "desktop-verifier-canary",
+    state: "desktop-state-canary", cancel_secret: "desktop-cancel-canary",
+  }, headers: { authorization: "authorization-canary" } });
+  await app.close();
+  expect(output).toContain("PRIVATE_CONVERSATION_TIMEOUT");
+  for (const canary of ["private-content-canary", "password-canary", "token-canary", "authorization-canary",
+    "desktop-code-canary", "desktop-verifier-canary", "desktop-state-canary", "desktop-cancel-canary"]) expect(output).not.toContain(canary);
+});
+
+it("automatic request logs keep paths but never query proofs", async () => {
+  let output = "";
+  const stream = new Writable({ write(chunk, _encoding, done) { output += String(chunk); done(); } });
+  const app = Fastify({ logger: { ...requestLoggerOptions("info"), stream } });
+  app.get("/v1/desktop-browser-login/:id/grant", () => ({ status: "prepared" }));
+  await app.inject("/v1/desktop-browser-login/example/grant?state=url-state-canary&web_origin=origin-canary");
+  await app.close();
+  expect(output).toContain("/v1/desktop-browser-login/example/grant");
+  expect(output).not.toContain("url-state-canary");
+  expect(output).not.toContain("origin-canary");
+});
+
+it("actual unhandled HTTP errors keep stable metadata without private error contents", async () => {
+  let output = "";
+  const stream = new Writable({ write(chunk, _encoding, done) { output += String(chunk); done(); } });
+  const originalOptions = requestLogging.requestLoggerOptions;
+  const logger = vi.spyOn(requestLogging, "requestLoggerOptions")
+    .mockImplementation(() => ({ ...originalOptions("info"), stream }));
+  let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+  const sentinels = ["private-message-canary", "private-detail-canary", "private-stack-canary",
+    "private-cause-canary", "private-sql-canary", "private-table-canary", "private-constraint-canary",
+    "private-name-canary", "CANAR", "private-json-canary"];
+  const errors = [Object.assign(new Error(sentinels[0]), { code: "23514", severity: "ERROR",
+    detail: sentinels[1], stack: sentinels[2], cause: new Error(sentinels[3]),
+    sql: sentinels[4], table: sentinels[5], constraint: sentinels[6], name: sentinels[7],
+    toJSON: () => ({ raw: sentinels[9] }) }),
+  Object.assign(new Error(sentinels[0]), { code: sentinels[8], severity: sentinels[7],
+    stack: sentinels[2], cause: { sql: sentinels[4] } })];
+  try {
+    app = await buildApp({ config: { databaseUrl: "postgresql://synthetic-only", host: "127.0.0.1", port: 0,
+      allowedOrigins: [], appleSignInAudiences: [], appleSignInEnabled: false, passwordAuthEnabled: false,
+      passwordRegistrationEnabled: false, simulatedAuthEnabled: false, internalLabEnabled: false,
+      retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3600 },
+    pool: { query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }) } as unknown as Pool,
+    conversationQueueWorkerEnabled: false, remoteChatProvider: null, personResearchProvider: null,
+    privateConversationProvider: null, screenshotContact: null });
+    app.get("/synthetic-unhandled/:kind", request => {
+      throw errors[(request.params as { kind: string }).kind === "pg" ? 0 : 1];
+    });
+    for (const kind of ["pg", "runtime"]) {
+      const response = await app.inject(`/synthetic-unhandled/${kind}`);
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ error: { code: "INTERNAL_ERROR",
+        message: "The request could not be completed.", request_id: expect.any(String) } });
+    }
+    // An unsafe getter must not make serialization fail or expose a raw object.
+    const malformed = Object.defineProperties({}, {
+      code: { get() { throw new Error(sentinels[0]); } },
+      severity: { get() { throw new Error(sentinels[1]); } },
+      toJSON: { value: () => ({ raw: sentinels[9] }) },
+    });
+    app.log.error({ err: malformed }, "Synthetic diagnostic getter");
+    await app.close(); app = undefined;
+  } finally { await app?.close(); logger.mockRestore(); }
+  for (const sentinel of sentinels) expect(output).not.toContain(sentinel);
+  const rows = output.split("\n").filter(Boolean).map(line => JSON.parse(line));
+  const failures = rows.filter(row => row.msg === "Unhandled control-plane request failure");
+  expect(failures).toHaveLength(2);
+  expect(failures[0].err).toEqual({ type: "Error", message: "Error details withheld", stack: "", code: "23514", severity: "ERROR" });
+  expect(failures[1].err).toEqual({ type: "Error", message: "Error details withheld", stack: "" });
+  expect(failures.every(row => typeof row.reqId === "string")).toBe(true);
+  expect(rows.find(row => row.msg === "Synthetic diagnostic getter").err).toEqual({ type: "Error", message: "Error details withheld", stack: "" });
+});

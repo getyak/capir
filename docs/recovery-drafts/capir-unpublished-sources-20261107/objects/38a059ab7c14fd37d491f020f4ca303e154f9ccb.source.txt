@@ -1,0 +1,402 @@
+import { randomUUID } from "node:crypto";
+
+import {
+  CONTRACT_VERSION,
+  type TimeActivityListResponse,
+  type TimeScope,
+} from "@talent-signal/contracts";
+import type { Pool } from "pg";
+
+import { inTransaction, type DatabaseClient } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import type { AuthContext } from "./auth.js";
+import {
+  MAX_ACTIVITY_PAGE,
+  MAX_SNAPSHOT_ITEMS,
+  SNAPSHOT_TTL_MINUTES,
+  TIME_COVERAGE_NOTE,
+  decodeTimeActivityCursor,
+  encodeTimeActivityCursor,
+  timeActivityContentQuery,
+  timeActivityFromContentRow,
+  timeScopeFingerprint,
+  type TimeActivityContentRow,
+  type TimeActivityCursor,
+} from "./timeWorkspaceShared.js";
+
+interface SnapshotItemRow {
+  activity_id: string;
+  kind: string;
+  source_id: string;
+  local_day: string;
+  sort_micros: string;
+}
+
+interface SnapshotRow {
+  created_at: Date;
+  expires_at: Date;
+  scope_fingerprint: string;
+}
+
+const MAX_ACTIVE_SNAPSHOTS = 5;
+const SNAPSHOT_STATEMENT_TIMEOUT_MS = 12_000;
+
+async function purgeExpiredSnapshots(
+  client: DatabaseClient,
+  auth: AuthContext,
+): Promise<void> {
+  await client.query(
+    `DELETE FROM time_activity_snapshots
+     WHERE account_id=$1 AND created_by_user_id=$2
+       AND expires_at<=statement_timestamp()`,
+    [auth.accountId, auth.userId],
+  );
+}
+
+/**
+ * Serializes snapshot creation per account+owner, purges expired rows, and
+ * enforces an active-snapshot cap so repeated first-page requests cannot
+ * allocate unbounded 5k-row snapshots for the full TTL window.
+ */
+async function reserveSnapshotSlot(
+  client: DatabaseClient,
+  auth: AuthContext,
+): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+    `time-activity-snapshot:${auth.accountId}:${auth.userId}`,
+  ]);
+  await purgeExpiredSnapshots(client, auth);
+  const active = (
+    await client.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM time_activity_snapshots
+       WHERE account_id=$1 AND created_by_user_id=$2`,
+      [auth.accountId, auth.userId],
+    )
+  ).rows[0]!;
+  if (Number(active.count) >= MAX_ACTIVE_SNAPSHOTS) {
+    throw new ApiError(
+      429,
+      "TIME_ACTIVITY_SNAPSHOT_LIMIT",
+      "Too many active activity snapshots; finish or wait for current pagination before starting another.",
+    );
+  }
+}
+
+async function insertSnapshot(
+  client: DatabaseClient,
+  auth: AuthContext,
+  scope: TimeScope,
+  fingerprint: string,
+  limit: number | null,
+): Promise<{ snapshotID: string; createdAt: Date; itemCount: number }> {
+  await reserveSnapshotSlot(client, auth);
+  const snapshotID = randomUUID();
+  const created = (
+    await client.query<{ created_at: Date }>(
+      `INSERT INTO time_activity_snapshots(
+         account_id,id,created_by_user_id,scope_fingerprint,expires_at
+       ) VALUES($1,$2,$3,$4,statement_timestamp()+($5||' minutes')::interval)
+       RETURNING created_at`,
+      [
+        auth.accountId,
+        snapshotID,
+        auth.userId,
+        fingerprint,
+        String(SNAPSHOT_TTL_MINUTES),
+      ],
+    )
+  ).rows[0]!;
+  const inserted = await client.query(
+    `INSERT INTO time_activity_snapshot_items(
+       account_id,snapshot_id,activity_id,kind,source_id,local_day,sort_micros
+     )
+     SELECT $1,$2,content.activity_id,content.kind,content.source_id,
+            content.local_day,
+            (extract(epoch FROM content.occurred_at)*1000000)::bigint
+     FROM time_activity_content(
+       $1,$3,$4::date,$5::date,$6,$7::uuid,$8::text,NULL::uuid[]
+     ) content
+     ORDER BY content.occurred_at DESC, content.activity_id DESC
+     LIMIT $9`,
+    [
+      auth.accountId,
+      snapshotID,
+      auth.userId,
+      scope.from,
+      scope.to,
+      scope.time_zone,
+      scope.person_id ?? null,
+      scope.kind ?? null,
+      limit,
+    ],
+  );
+  return {
+    snapshotID,
+    createdAt: created.created_at,
+    itemCount: inserted.rowCount ?? 0,
+  };
+}
+
+async function loadSnapshot(
+  client: DatabaseClient,
+  auth: AuthContext,
+  snapshotID: string,
+): Promise<SnapshotRow | null> {
+  const row = (
+    await client.query<SnapshotRow>(
+      `SELECT created_at,expires_at,scope_fingerprint
+       FROM time_activity_snapshots
+       WHERE account_id=$1 AND id=$2 AND created_by_user_id=$3`,
+      [auth.accountId, snapshotID, auth.userId],
+    )
+  ).rows[0];
+  if (!row) return null;
+  if (row.expires_at.valueOf() <= Date.now()) {
+    await client.query(
+      `DELETE FROM time_activity_snapshots WHERE account_id=$1 AND id=$2`,
+      [auth.accountId, snapshotID],
+    );
+    return null;
+  }
+  return row;
+}
+
+async function readPageItems(
+  client: DatabaseClient,
+  auth: AuthContext,
+  snapshotID: string,
+  cursor: TimeActivityCursor,
+  limit: number | null,
+): Promise<SnapshotItemRow[]> {
+  const params: unknown[] = [auth.accountId, snapshotID, limit];
+  let before = "";
+  if (cursor.before_us !== null) {
+    before = "AND (sort_micros,activity_id) < ($4::bigint,$5::text)";
+    params.push(cursor.before_us, cursor.before_activity_id);
+  }
+  return (
+    await client.query<SnapshotItemRow>(
+      `SELECT activity_id,kind,source_id,local_day::text AS local_day,
+              sort_micros::text AS sort_micros
+       FROM time_activity_snapshot_items
+       WHERE account_id=$1 AND snapshot_id=$2 ${before}
+       ORDER BY sort_micros DESC,activity_id DESC
+       LIMIT $3`,
+      params,
+    )
+  ).rows;
+}
+
+async function loadCurrentContent(
+  client: DatabaseClient,
+  auth: AuthContext,
+  scope: TimeScope,
+  sourceIDs: readonly string[],
+): Promise<Map<string, TimeActivityContentRow>> {
+  const map = new Map<string, TimeActivityContentRow>();
+  if (!sourceIDs.length) return map;
+  const rows = (
+    await client.query<TimeActivityContentRow>(timeActivityContentQuery(), [
+      auth.accountId,
+      auth.userId,
+      scope.from,
+      scope.to,
+      scope.time_zone,
+      scope.person_id ?? null,
+      scope.kind ?? null,
+      [...sourceIDs],
+    ])
+  ).rows;
+  for (const row of rows) map.set(row.activity_id, row);
+  return map;
+}
+
+/**
+ * Materialize only activity identities and immutable ordering keys, then read
+ * one page of content from current sources. Removed or no-longer-authorized
+ * rows are dropped without skipping valid successors; the snapshot stays the
+ * ordering authority for the whole paginated read.
+ */
+export async function listTimeActivities(
+  pool: Pool,
+  auth: AuthContext,
+  scope: TimeScope,
+  after?: string,
+): Promise<TimeActivityListResponse> {
+  return inTransaction(pool, async (client) => {
+    await client.query(
+      `SET LOCAL statement_timeout = ${SNAPSHOT_STATEMENT_TIMEOUT_MS}`,
+    );
+    const fingerprint = timeScopeFingerprint(scope);
+    let cursor: TimeActivityCursor;
+    let snapshotCreatedAt: Date;
+    if (after) {
+      cursor = decodeTimeActivityCursor(after);
+      if (cursor.scope_fingerprint !== fingerprint) {
+        throw new ApiError(
+          400,
+          "TIME_ACTIVITY_CURSOR_SCOPE_MISMATCH",
+          "The activity cursor does not belong to this account scope.",
+        );
+      }
+      const snapshot = await loadSnapshot(client, auth, cursor.snapshot_id);
+      if (!snapshot) {
+        throw new ApiError(
+          410,
+          "TIME_ACTIVITY_CURSOR_EXPIRED",
+          "The activity snapshot expired; restart from the first page.",
+        );
+      }
+      if (snapshot.scope_fingerprint !== fingerprint) {
+        throw new ApiError(
+          400,
+          "TIME_ACTIVITY_CURSOR_SCOPE_MISMATCH",
+          "The activity cursor does not belong to this account scope.",
+        );
+      }
+      snapshotCreatedAt = snapshot.created_at;
+    } else {
+      const created = await insertSnapshot(
+        client,
+        auth,
+        scope,
+        fingerprint,
+        MAX_SNAPSHOT_ITEMS + 1,
+      );
+      if (created.itemCount > MAX_SNAPSHOT_ITEMS) {
+        await client.query(
+          `DELETE FROM time_activity_snapshots WHERE account_id=$1 AND id=$2`,
+          [auth.accountId, created.snapshotID],
+        );
+        throw new ApiError(
+          413,
+          "TIME_ACTIVITY_LIST_TOO_LARGE",
+          "The activity range is too large to snapshot safely. Narrow the date range or filters.",
+        );
+      }
+      cursor = {
+        v: 1,
+        scope_fingerprint: fingerprint,
+        snapshot_id: created.snapshotID,
+        before_us: null,
+        before_activity_id: null,
+      };
+      snapshotCreatedAt = created.createdAt;
+    }
+    const fetched = await readPageItems(
+      client,
+      auth,
+      cursor.snapshot_id,
+      cursor,
+      MAX_ACTIVITY_PAGE + 1,
+    );
+    const hasMore = fetched.length > MAX_ACTIVITY_PAGE;
+    const pageItems = fetched.slice(0, MAX_ACTIVITY_PAGE);
+    const content = await loadCurrentContent(
+      client,
+      auth,
+      scope,
+      [...new Set(pageItems.map((item) => item.source_id))],
+    );
+    const activities = pageItems
+      .map((item) => content.get(item.activity_id))
+      .filter((row): row is TimeActivityContentRow => row !== undefined)
+      .map((row) => timeActivityFromContentRow(row, scope));
+    const complete = !hasMore;
+    let nextCursor: string | null = null;
+    if (hasMore) {
+      const last = pageItems.at(-1)!;
+      nextCursor = encodeTimeActivityCursor({
+        v: 1,
+        scope_fingerprint: fingerprint,
+        snapshot_id: cursor.snapshot_id,
+        before_us: last.sort_micros,
+        before_activity_id: last.activity_id,
+      });
+    }
+    if (complete) {
+      await client.query(
+        `DELETE FROM time_activity_snapshots WHERE account_id=$1 AND id=$2`,
+        [auth.accountId, cursor.snapshot_id],
+      );
+    }
+    return {
+      contract_version: CONTRACT_VERSION,
+      scope,
+      activities,
+      complete,
+      next_cursor: nextCursor,
+      snapshot_at: snapshotCreatedAt.toISOString(),
+      coverage_note: TIME_COVERAGE_NOTE,
+    };
+  });
+}
+
+export interface CollectedTimeActivities {
+  activities: TimeActivityListResponse["activities"];
+  complete: boolean;
+  snapshot_at: string;
+}
+
+/**
+ * One bounded read for an ephemeral review. The snapshot is always removed
+ * after the read; at most `limit` activities are admitted.
+ */
+export async function collectTimeActivities(
+  pool: Pool,
+  auth: AuthContext,
+  scope: TimeScope,
+  limit: number | null = MAX_ACTIVITY_PAGE,
+): Promise<CollectedTimeActivities> {
+  return inTransaction(pool, async (client) => {
+    await client.query(
+      `SET LOCAL statement_timeout = ${SNAPSHOT_STATEMENT_TIMEOUT_MS}`,
+    );
+    const bounded = limit === null ? null : Math.min(MAX_ACTIVITY_PAGE, Math.max(1, limit));
+    const fingerprint = timeScopeFingerprint(scope);
+    const created = await insertSnapshot(
+      client,
+      auth,
+      scope,
+      fingerprint,
+      bounded === null ? null : bounded + 1,
+    );
+    try {
+      const fetched = await readPageItems(
+        client,
+        auth,
+        created.snapshotID,
+        {
+          v: 1,
+          scope_fingerprint: fingerprint,
+          snapshot_id: created.snapshotID,
+          before_us: null,
+          before_activity_id: null,
+        },
+        bounded === null ? null : bounded + 1,
+      );
+      const hasMore = bounded !== null && fetched.length > bounded;
+      const pageItems = bounded === null ? fetched : fetched.slice(0, bounded);
+      const content = await loadCurrentContent(
+        client,
+        auth,
+        scope,
+        [...new Set(pageItems.map((item) => item.source_id))],
+      );
+      const activities = pageItems
+        .map((item) => content.get(item.activity_id))
+        .filter((row): row is TimeActivityContentRow => row !== undefined)
+        .map((row) => timeActivityFromContentRow(row, scope));
+      return {
+        activities,
+        complete: !hasMore,
+        snapshot_at: created.createdAt.toISOString(),
+      };
+    } finally {
+      await client.query(
+        `DELETE FROM time_activity_snapshots WHERE account_id=$1 AND id=$2`,
+        [auth.accountId, created.snapshotID],
+      );
+    }
+  });
+}

@@ -1,0 +1,125 @@
+import {
+  PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+  type PersonResearchServiceResponse,
+} from "@talent-signal/agent";
+import { describe, expect, it } from "vitest";
+
+import { personResearchChatBlock } from "./personResearchChat.js";
+
+const runID = "55555555-5555-4555-8555-555555555555";
+
+function receipt(
+  status: "artifact_created" | "no_action",
+): PersonResearchServiceResponse["receipt"] {
+  return {
+    run_id: runID,
+    status,
+    reason_code: status === "artifact_created" ? "ARTIFACT_CREATED" : "NO_ACTION_RECORDED",
+    artifact_id: status === "artifact_created"
+      ? "66666666-6666-4666-8666-666666666666"
+      : null,
+    no_action_id: status === "no_action"
+      ? "77777777-7777-4777-8777-777777777777"
+      : null,
+    candidate_fingerprint: "a".repeat(64),
+    external_effects: [],
+    permission_denials: [],
+    provider_session_id: null,
+    usage: {
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 15,
+      estimated_usd: 0.001,
+      turns: 2,
+      tool_calls: status === "artifact_created" ? 2 : 0,
+      duration_ms: 30,
+    },
+    completed_at: "2026-08-31T00:00:00.000Z",
+  };
+}
+
+describe("person research Chat projection", () => {
+  it("renders public enrichment as an unconfirmed review block with inspectable sources", () => {
+    const response: PersonResearchServiceResponse = {
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+      run_id: runID,
+      receipt: receipt("artifact_created"),
+      result: {
+        kind: "artifact",
+        identity_status: "possible_match",
+        title: "Possible public profile",
+        summary: "One public profile shares the screenshot handle.",
+        limitations: "Visible text only; identity is not confirmed.",
+        observed_clues: [{
+          kind: "handle",
+          value: "@synthetic",
+          source_artifact_id: "fixture",
+          observation_status: "unreviewed_screenshot_observation",
+        }],
+        candidates: [{
+          result_id: "b".repeat(64),
+          match_basis: "The public handle matches the screenshot handle.",
+        }],
+        claims: [{
+          statement: "TikHub returned a profile with handle synthetic.",
+          epistemic_status: "provider_observation",
+          source_refs: ["b".repeat(64)],
+        }],
+        sources: [{
+          result_id: "b".repeat(64),
+          platform: "tiktok",
+          profile_url: "https://www.tiktok.com/@synthetic",
+          display_name: "Synthetic Fixture",
+          handle: "synthetic",
+          biography: "Public fixture biography",
+          avatar_url: null,
+          verified: false,
+          content_hash: "c".repeat(64),
+          retrieved_at: "2026-08-31T00:00:00.000Z",
+          provider_id: "tikhub",
+          provider_request_id: "provider-request-1",
+        }],
+      },
+    };
+
+    expect(personResearchChatBlock(response)).toMatchObject({
+      kind: "person_research",
+      status: "needs_review",
+      requires_user_decision: true,
+      citation_dependency_ids: [],
+      public_source_refs: [{
+        platform: "tiktok",
+        profile_url: "https://www.tiktok.com/@synthetic",
+        match_basis: "The public handle matches the screenshot handle.",
+      }],
+    });
+  });
+
+  it("keeps long research observations complete in the Chat projection", () => {
+    const reason = "public observation ".repeat(700) + " END_OF_RESEARCH";
+    const response: PersonResearchServiceResponse = {
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION, run_id: runID,
+      receipt: receipt("no_action"),
+      result: { kind: "no_action", reason_code: "NO_VISIBLE_IDENTITY_CLUE", reason },
+    };
+    expect(personResearchChatBlock(response).body).toContain("END_OF_RESEARCH");
+  });
+
+  it("renders abstention without inventing a person or requiring a decision", () => {
+    const response: PersonResearchServiceResponse = {
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+      run_id: runID,
+      receipt: receipt("no_action"),
+      result: {
+        kind: "no_action",
+        reason_code: "NO_VISIBLE_IDENTITY_CLUE",
+        reason: "No usable visible identity clue was present.",
+      },
+    };
+    expect(personResearchChatBlock(response)).toMatchObject({
+      kind: "person_research",
+      status: "informational",
+      requires_user_decision: false,
+    });
+  });
+});

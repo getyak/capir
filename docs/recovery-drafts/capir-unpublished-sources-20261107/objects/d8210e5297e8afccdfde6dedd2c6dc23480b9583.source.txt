@@ -1,0 +1,100 @@
+import { createHash, randomUUID } from "node:crypto";
+import { readFile, writeFile, rename, rm } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+
+export const contentHash = text => createHash("sha256").update(text).digest("hex");
+
+export function promptModule(text) {
+  // Remote text remains a string literal, including backticks and interpolation syntax.
+  const literal = text.replace(/\\/gu, "\\\\").replace(/`/gu, "\\`").replace(/\$\{/gu, "\\${")
+    .replace(/\r/gu, "\\r").replace(/\u0000/gu, "\\x00");
+  return `// Formal prompt source. Build and deploy to change application behavior.\nconst prompt: string = \`${literal}\`;\n\nexport default prompt;\n`;
+}
+
+export function validateVersion(value) {
+  if (!value || typeof value.id !== "string" || !value.id || typeof value.commit !== "string" || !value.commit
+    || typeof value.template !== "string" || !value.template.trim()
+    || (value.template_structure !== undefined && value.template_structure !== "text")
+    || (value.variables !== undefined && (!Array.isArray(value.variables) || value.variables.length > 0))) {
+    throw new Error("Incompatible Opik version: use a non-empty Text prompt without template variables.");
+  }
+  return value;
+}
+
+export async function readSource(path) {
+  const source = await readFile(path, "utf8");
+  // These are owner-authored local TypeScript modules, not downloaded code.
+  const { default: text } = await import(`${pathToFileURL(path).href}?revision=${contentHash(source)}`);
+  if (typeof text !== "string" || !text.trim()) throw new Error(`Invalid prompt source: ${path}`);
+  return { source, text };
+}
+
+export async function importSource(path, expectedSource, text) {
+  if (await readFile(path, "utf8") !== expectedSource) throw new Error("Prompt source changed during import; retry after reviewing local edits.");
+  const next = promptModule(text);
+  if (expectedSource === next) return false;
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, next, { flag: "wx" });
+    if (await readFile(path, "utf8") !== expectedSource) throw new Error("Prompt source changed during import; retry after reviewing local edits.");
+    await rename(temporary, path);
+  } finally { await rm(temporary, { force: true }); }
+  return true;
+}
+
+export function opikClient({ base, project, workspace = "default", apiKey, fetcher = fetch }) {
+  const url = new URL(base);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Invalid Opik URL");
+  const headers = { "content-type": "application/json", "Comet-Workspace": workspace,
+    ...(apiKey ? { authorization: apiKey } : {}) };
+  async function api(path, method = "GET", body) {
+    const response = await fetcher(`${url.toString().replace(/\/$/u, "")}/v1/private/${path}`, {
+      method, headers, redirect: "error", signal: AbortSignal.timeout(15_000),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    if (response.headers.has("X-Opik-Deprecation")) throw new Error("Refusing legacy cross-project prompt fallback");
+    if (response.status === 404) { await response.body?.cancel(); return null; }
+    if (!response.ok) { await response.body?.cancel(); throw new Error(`Opik ${method} ${path}: HTTP ${response.status}`); }
+    if (response.status === 204 || response.headers.get("content-length") === "0") return {};
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Empty Opik response");
+    const chunks = []; let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 131_072) throw new Error("Opik response is too large");
+        chunks.push(value);
+      }
+    } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  }
+  const retrieve = (name, selector = {}) => api("prompts/versions/retrieve", "POST", { name, project_name: project, ...selector });
+  async function ensureMirrorEnvironment() {
+    const page = await api("environments?page=1&size=100");
+    if (!Array.isArray(page?.content)) throw new Error("Invalid Opik environment registry response");
+    if (page.content.some(environment => environment.name === "repository")) return;
+    if (page.total > page.content.length) throw new Error("Create the repository environment in Opik before syncing this workspace.");
+    await api("environments", "POST", { name: "repository", description: "Mirrored repository source. Application releases load bundled prompts; this label does not deploy code." });
+  }
+  async function mirror(name, text, metadata) {
+    let version = await retrieve(name, { environment: "repository" });
+    if (!version || version.template !== text) {
+      version = await api("prompts/versions", "POST", { name, project_name: project,
+        version: { template: text, type: "mustache", metadata,
+          change_description: `Repository source ${metadata.content_sha256.slice(0, 12)} (${metadata.git_commit ?? "no Git commit"}${metadata.worktree_dirty ? ", dirty worktree" : ""})`,
+          tags: ["talent-signal", "repository-source"] } });
+    }
+    validateVersion(version);
+    if (version.template !== text) throw new Error(`Mirror content mismatch: ${name}`);
+    // This label identifies mirrored source; no runtime follows it.
+    await api(`prompts/versions/${encodeURIComponent(version.id)}/environments`, "PATCH", {
+      environments: [...new Set([...(version.environments ?? []), "repository"])],
+    });
+    const readback = validateVersion(await retrieve(name, { environment: "repository" }));
+    if (readback.id !== version.id || readback.template !== text) throw new Error(`Mirror readback failed: ${name}`);
+    return readback;
+  }
+  return { retrieve, mirror, ensureMirrorEnvironment };
+}

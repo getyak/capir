@@ -1,0 +1,185 @@
+import {
+  PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+  PersonResearchServiceResponseSchema,
+  type PersonResearchServiceResponse,
+} from "@talent-signal/agent";
+import { AgentSessionDisplayBlockSchema, ChatResponseBlockSchema } from "@talent-signal/contracts";
+import { FormatRegistry } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
+import { beforeAll, describe, expect, it } from "vitest";
+import Fastify from "fastify";
+
+import { personResearchChatBlock } from "./personResearchChat.js";
+
+const runID = "55555555-5555-4555-8555-555555555555";
+
+beforeAll(() => {
+  if (!FormatRegistry.Has("uuid")) {
+    FormatRegistry.Set("uuid", (value) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value),
+    );
+  }
+  if (!FormatRegistry.Has("date-time")) {
+    FormatRegistry.Set("date-time", (value) => Number.isFinite(Date.parse(value)));
+  }
+});
+
+function receipt(
+  status: "artifact_created" | "no_action",
+): PersonResearchServiceResponse["receipt"] {
+  return {
+    run_id: runID,
+    status,
+    reason_code: status === "artifact_created" ? "ARTIFACT_CREATED" : "NO_ACTION_RECORDED",
+    artifact_id: status === "artifact_created"
+      ? "66666666-6666-4666-8666-666666666666"
+      : null,
+    no_action_id: status === "no_action"
+      ? "77777777-7777-4777-8777-777777777777"
+      : null,
+    candidate_fingerprint: "a".repeat(64),
+    external_effects: [],
+    permission_denials: [],
+    provider_session_id: null,
+    usage: {
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 15,
+      estimated_usd: 0.001,
+      turns: 2,
+      tool_calls: status === "artifact_created" ? 2 : 0,
+      duration_ms: 30,
+    },
+    completed_at: "2026-08-31T00:00:00.000Z",
+  };
+}
+
+describe("person research Chat projection", () => {
+  it("preserves unknown, false and empty public-source scalars through real HTTP codecs", async () => {
+    const app = Fastify();
+    app.post("/display", { schema: { body: AgentSessionDisplayBlockSchema,
+      response: { 200: AgentSessionDisplayBlockSchema } } }, (request) => request.body);
+    try {
+      for (const values of [
+        { handle: null, biography: null, avatar_url: null, verified: null },
+        { handle: "", biography: "", avatar_url: "", verified: false },
+        { handle: "synthetic", biography: "Complete profile🙂", avatar_url: "https://example.test/avatar", verified: true },
+      ]) {
+        const source = { result_id: "b".repeat(64), provider_id: "tikhub", platform: "tiktok",
+          profile_url: "https://example.test/profile", display_name: "Synthetic", match_basis: "Unconfirmed",
+          content_hash: "c".repeat(64), retrieved_at: "2026-08-31T00:00:00Z", ...values };
+        const block = { id: runID, kind: "person_research", title: "Synthetic", body: "Synthetic source",
+          status: "needs_review", citation_dependency_ids: [], requires_user_decision: false,
+          public_source_refs: [source] };
+        const response = await app.inject({ method: "POST", url: "/display", payload: block });
+        expect(response.statusCode, response.body).toBe(200);
+        expect(response.json().public_source_refs[0]).toEqual(source);
+      }
+    } finally { await app.close(); }
+  });
+  it("renders public enrichment as an unconfirmed review block with inspectable sources", async () => {
+    const biography = "  " + "Public professional observation🙂 ".repeat(700) + " END_OF_PROFILE  ";
+    const response: PersonResearchServiceResponse = {
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+      run_id: runID,
+      receipt: receipt("artifact_created"),
+      result: {
+        kind: "artifact",
+        identity_status: "possible_match",
+        title: "Possible public profile",
+        summary: "One public profile shares the screenshot handle.",
+        limitations: "Visible text only; identity is not confirmed.",
+        observed_clues: [{
+          kind: "handle",
+          value: "@synthetic",
+          source_artifact_id: "fixture",
+          observation_status: "unreviewed_screenshot_observation",
+        }],
+        candidates: [{
+          result_id: "b".repeat(64),
+          match_basis: "The public handle matches the screenshot handle.",
+        }],
+        claims: [{
+          statement: "TikHub returned a profile with handle synthetic.",
+          epistemic_status: "provider_observation",
+          source_refs: ["b".repeat(64)],
+        }],
+        sources: [{
+          result_id: "b".repeat(64),
+          platform: "tiktok",
+          profile_url: "https://www.tiktok.com/@synthetic",
+          display_name: "Synthetic Fixture",
+          handle: "synthetic",
+          biography,
+          avatar_url: null,
+          verified: false,
+          content_hash: "c".repeat(64),
+          retrieved_at: "2026-08-31T00:00:00.000Z",
+          provider_id: "tikhub",
+          provider_request_id: "provider-request-1",
+        }],
+      },
+    };
+
+    const block = personResearchChatBlock(PersonResearchServiceResponseSchema.parse(response));
+    expect(Value.Check(ChatResponseBlockSchema, block)).toBe(true);
+    expect(block.public_source_refs?.[0]?.biography).toBe(biography);
+    expect(block.body).toContain("END_OF_PROFILE");
+    expect(block).toMatchObject({
+      kind: "person_research",
+      status: "needs_review",
+      requires_user_decision: true,
+      citation_dependency_ids: [],
+      public_source_refs: [{
+        platform: "tiktok",
+        profile_url: "https://www.tiktok.com/@synthetic",
+        match_basis: "The public handle matches the screenshot handle.",
+      }],
+    });
+    const app = Fastify();
+    app.get("/chat", { schema: { response: { 200: ChatResponseBlockSchema } } }, () => block);
+    app.get("/unknown", { schema: { response: { 200: ChatResponseBlockSchema } } }, () => ({
+      ...block, public_source_refs: block.public_source_refs!.map((source) => ({
+        ...source, handle: null, biography: null, avatar_url: null, verified: null,
+      })),
+    }));
+    try {
+      const response = await app.inject({ method: "GET", url: "/chat" });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().public_source_refs).toEqual(block.public_source_refs);
+      const unknown = await app.inject({ method: "GET", url: "/unknown" });
+      expect(unknown.statusCode, unknown.body).toBe(200);
+      expect(unknown.json().public_source_refs[0]).toMatchObject({
+        handle: null, biography: null, avatar_url: null, verified: null,
+      });
+    } finally { await app.close(); }
+  });
+
+  it("keeps long research observations complete in the Chat projection", () => {
+    const reason = "public observation ".repeat(700) + " END_OF_RESEARCH";
+    const response: PersonResearchServiceResponse = {
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION, run_id: runID,
+      receipt: receipt("no_action"),
+      result: { kind: "no_action", reason_code: "NO_VISIBLE_IDENTITY_CLUE", reason },
+    };
+    expect(personResearchChatBlock(response).body).toContain("END_OF_RESEARCH");
+  });
+
+  it("renders abstention without inventing a person or requiring a decision", () => {
+    const response: PersonResearchServiceResponse = {
+      contract_version: PERSON_RESEARCH_SERVICE_CONTRACT_VERSION,
+      run_id: runID,
+      receipt: receipt("no_action"),
+      result: {
+        kind: "no_action",
+        reason_code: "NO_VISIBLE_IDENTITY_CLUE",
+        reason: "No usable visible identity clue was present.",
+      },
+    };
+    expect(personResearchChatBlock(response)).toMatchObject({
+      kind: "person_research",
+      status: "informational",
+      requires_user_decision: false,
+    });
+  });
+});

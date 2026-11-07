@@ -1,0 +1,66 @@
+import { CapirCliError } from '../errors.js';
+export type Provider = 'openai-compatible' | 'anthropic';
+export interface ModelProfile {
+  provider: Provider;
+  base_url: string;
+  model: string;
+  auth: 'environment' | 'none';
+  api_key_env?: string;
+  token_limit_field?: 'max_completion_tokens' | 'max_tokens';
+  system_role?: 'system' | 'developer';
+  stream_usage?: boolean;
+}
+export interface ModelConfig {
+  schema_version: 'capir.models.v1';
+  default_profile: string | null;
+  profiles: Record<string, ModelProfile>;
+}
+export interface SelectedProfile {
+  name: string;
+  profile: ModelProfile;
+}
+export interface ModelArgs {
+  command: string;
+  positionals: string[];
+  values: Record<string, string>;
+  flags: Set<string>;
+}
+export interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+}
+/** Provider-owned signed state is opaque and never replaces human history. */
+export interface CompactionBlock extends Record<string, unknown> {
+  type: 'compaction';
+  content: string;
+  signature: string;
+}
+export type WireMessage = Message | { role: 'assistant'; content: [CompactionBlock] };
+export interface Usage {
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+}
+export interface ModelResponse {
+  finish_reason: string | null;
+  usage: Usage;
+}
+export const LIMIT = { event: 256 * 1024, body: 8 * 1024 * 1024, error: 8192, config: 64 * 1024, discovery: 1024 * 1024 };
+export function fail(code: string, message: string, exit: 0 | 1 | 2 | 3 | 4 | 5 | 130 = 2): never { throw new CapirCliError(code, exit, message); }
+export function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
+export function numeric(value: unknown): number | null { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null; }
+/** Preserve exact Unicode identities; malformed code units must never be replaced. */
+export function wellFormed(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(++i);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+    }
+    else if (unit >= 0xdc00 && unit <= 0xdfff) return false;
+  }
+  return true;
+}
+export function modelIdentity(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && wellFormed(value) && !/[\x00-\x1f\x7f-\x9f]/.test(value);
+}

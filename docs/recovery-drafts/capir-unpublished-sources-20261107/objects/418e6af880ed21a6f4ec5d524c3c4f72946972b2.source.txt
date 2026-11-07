@@ -1,0 +1,82 @@
+import { randomUUID } from "node:crypto";
+
+import { CONTRACT_VERSION, ResourceCaptureResponseSchema, type ResourceCaptureRequest } from "@talent-signal/contracts";
+import { FormatRegistry } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
+import { Pool } from "pg";
+import { afterAll, expect, it } from "vitest";
+
+import type { AuthContext } from "./auth.js";
+import { deleteCapture } from "./captures.js";
+import { extractResearchPage, researchPageFragments } from "./research.js";
+import { createResourceCapture, loadResourceCapture } from "./resourceIntake.js";
+
+FormatRegistry.Set("uuid", value => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value));
+FormatRegistry.Set("date-time", value => Number.isFinite(Date.parse(value)));
+
+const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) {
+  throw new Error("Research persistence proof requires an isolated local synthetic database.");
+}
+const pool = database ? new Pool({ connectionString: database, max: 2 }) : null;
+afterAll(async () => { await pool?.end(); });
+
+it.skipIf(!database)("persists and reads every admitted research fragment including the late tail and exact Unicode offsets", async () => {
+  const accountId = randomUUID();
+  const userId = randomUUID();
+  const slug = `research-proof-${accountId}`;
+  await pool!.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,$3)", [accountId, slug, "Synthetic research proof"]);
+  await pool!.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,$4,'simulated_human')",
+    [userId, accountId, `${slug}@synthetic.local`, "Synthetic researcher"]);
+  const auth: AuthContext = { accountId, accountSlug: slug, userId, userEmail: `${slug}@synthetic.local`,
+    userKind: "simulated_human", sessionId: randomUUID() };
+  const text = "a".repeat(34_999) + "😀" + "研究".repeat(50_000) + "LATE_RESEARCH_PERSISTENCE_TAIL";
+  const url = "https://profile.example/synthetic-long-page";
+  const extracted = extractResearchPage(new URL(url), "text/html", new TextEncoder().encode(`<main>${text}</main>`), "profile.example");
+  const observedAt = new Date().toISOString();
+  const fragments = researchPageFragments("synthetic-long-research", { text: extracted.text, canonicalUrl: url, retrievedAt: new Date(observedAt) });
+  const request: ResourceCaptureRequest = {
+    contract_version: CONTRACT_VERSION, idempotency_key: randomUUID(), channel: "chat",
+    purpose: "Preserve explicitly admitted synthetic research text", captured_at: observedAt, source_timezone: "UTC",
+    person_scope: { status: "unresolved", display_name_hint: "Synthetic research subject", handles: [], reason: "Do not infer identity from this fixture." },
+    resource: { client_resource_id: "synthetic-long-research", kind: "public_url", display_name: "Synthetic page",
+      media_type: "text/html", observed_at: observedAt, source_timezone: "UTC", content_hash: "a".repeat(64), source_locator: url,
+      retention: { requested_mode: "ephemeral", source_scope: "reviewed_extracted_text" } },
+    fragments,
+  };
+  const stored = await createResourceCapture(pool!, auth, request);
+  const readback = await loadResourceCapture(pool!, accountId, stored.body.capture_id);
+  expect(Value.Check(ResourceCaptureResponseSchema, readback)).toBe(true);
+  expect(readback.resource.fragment_count).toBe(fragments.length);
+  const rows = await pool!.query<{ text_content: string; locator: ResourceCaptureRequest["fragments"][number]["locator"]; sequence: number }>(
+    "SELECT text_content,locator,sequence FROM evidence_fragments WHERE account_id=$1 AND resource_id=$2 AND status='active' ORDER BY sequence",
+    [accountId, readback.resource.id]);
+  expect(rows.rows.map(row => row.text_content).join("")).toBe(text);
+  expect(rows.rows.at(-1)?.text_content).toContain("LATE_RESEARCH_PERSISTENCE_TAIL");
+  expect(rows.rows.map(row => ({ text: row.text_content, locator: row.locator, sequence: row.sequence })))
+    .toEqual(fragments.map(fragment => ({ text: fragment.text, locator: fragment.locator, sequence: fragment.sequence })));
+  expect(rows.rows[0]?.text_content.length).toBe(34_999);
+  expect(rows.rows[1]?.locator).toMatchObject({ start_character: 34_999 });
+  let offset = 0;
+  for (const [sequence, row] of rows.rows.entries()) {
+    expect(row.sequence).toBe(sequence);
+    expect(row.locator).toMatchObject({ kind: "url_excerpt", start_character: offset,
+      end_character: offset + row.text_content.length, canonical_url: url });
+    expect(text.slice(offset, offset + row.text_content.length)).toBe(row.text_content);
+    expect(row.text_content).not.toMatch(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/u);
+    offset += row.text_content.length;
+  }
+  expect(offset).toBe(text.length);
+  const replay = await createResourceCapture(pool!, auth, request);
+  expect(replay.replayed).toBe(true);
+  expect(replay.body.capture_id).toBe(readback.capture_id);
+  const count = await pool!.query<{ n: string }>("SELECT count(*) AS n FROM evidence_fragments WHERE account_id=$1 AND resource_id=$2", [accountId, readback.resource.id]);
+  expect(Number(count.rows[0]?.n)).toBe(fragments.length);
+  await deleteCapture(pool!, auth, readback.capture_id, { idempotency_key: randomUUID(), reason: "Withdraw the synthetic admitted research source." });
+  await expect(loadResourceCapture(pool!, accountId, readback.capture_id)).rejects.toMatchObject({ code: "RESOURCE_CAPTURE_DELETED" });
+  await expect(createResourceCapture(pool!, auth, request)).rejects.toMatchObject({ code: "IDEMPOTENCY_STATE_UNAVAILABLE" });
+  const retired = await pool!.query<{ text_content: string | null; status: string }>(
+    "SELECT text_content,status FROM evidence_fragments WHERE account_id=$1 AND resource_id=$2", [accountId, readback.resource.id]);
+  expect(retired.rows).toHaveLength(fragments.length);
+  expect(retired.rows.every(row => row.status === "deleted" && row.text_content === null)).toBe(true);
+}, 30_000);

@@ -1,0 +1,135 @@
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { MailPreview } from "@/lib/mail-integration";
+const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
+vi.mock("./workspace-session-request", () => ({ workspaceSessionFetch: mocks.fetch, WORKSPACE_SESSION_EXPIRED_EVENT: "test-workspace-expired" }));
+import { IntegrationOnboarding } from "./integration-onboarding";
+let root: Root; let host: HTMLDivElement; let connected: boolean; let version: string;
+let preview: MailPreview;
+let testResponse: (() => Response | Promise<Response>) | null;
+function response(value: unknown, status = 200) { return Response.json(value, { status }); }
+async function mount(configured = true, result?: string) {
+  await act(async () => root.render(createElement(IntegrationOnboarding, { configured: { gmail: configured, outlook: configured }, sessionVersion: "synthetic-session", returnTo: "/workspace/sessions", result })));
+}
+function button(label: string) { return Array.from(host.querySelectorAll("button")).find(node => node.textContent?.includes(label))!; }
+beforeEach(() => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.clearAllMocks(); connected = true; version = "grant-fixture-a"; testResponse = null;
+  vi.stubGlobal("BroadcastChannel", undefined);
+  preview = { provider: "gmail", account: "synthetic@example.com", checkedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString(),
+    scope: "inbox_metadata_sample", connectionVersion: version, status: "verified", items: [{ id: "fixture-1", subject: "Synthetic client conversation", participants: "partner@example.com → synthetic@example.com", occurredAt: "2026-10-01T09:00:00Z", sourceUrl: "https://mail.google.com/mail/?authuser=synthetic%40example.com#all/thread1" }] };
+  mocks.fetch.mockImplementation(async (url: string) => {
+    if (url.endsWith("/status")) return response({ configured: true, connected: url.includes("gmail") && connected, expiresAt: connected ? preview.expiresAt : null, connectionVersion: connected ? version : null });
+    if (url.endsWith("/test")) return testResponse ? testResponse() : response(preview);
+    if (url.endsWith("/disconnect")) { connected = false; return response({ disconnected: true }); }
+    return response({ message: "Unexpected operation" }, 500);
+  });
+  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+});
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
+async function testRead() { await act(async () => button("测试读取，查看结果").click()); }
+it("does not read mail on entry or call OAuth because login exists; explicit test displays an inspectable result", async () => {
+  await mount();
+  expect(mocks.fetch.mock.calls.every(([url]) => String(url).endsWith("/status"))).toBe(true);
+  expect(host.textContent).toContain("已授权 · 等待读取测试");
+  expect(host.textContent).not.toContain("Synthetic client conversation");
+  await testRead();
+  expect(host.textContent).toContain("读取已验证，这是你的真实互动");
+  expect(host.textContent).toContain("Synthetic client conversation");
+  expect(host.querySelector('a[href*="authuser="]')?.getAttribute("href")).toBe(preview.items[0].sourceUrl);
+  expect(mocks.fetch.mock.calls.some(([, init]) => init.headers["x-workspace-session"] === "synthetic-session")).toBe(true);
+});
+it("clears prior success before retrying and keeps a failed read honest", async () => {
+  await mount(); await testRead();
+  let resolve!: (value: Response) => void;
+  testResponse = () => new Promise<Response>(done => { resolve = done; });
+  await act(async () => button("重新测试").click());
+  expect(host.textContent).not.toContain("Synthetic client conversation");
+  expect(host.textContent).toContain("正在测试真实读取");
+  await act(async () => resolve(response({ message: "读取超时，尚未验证。", code: "MAIL_TIMEOUT" }, 504)));
+  expect(host.textContent).toContain("读取超时，尚未验证");
+  expect(host.textContent).not.toContain("读取已验证，这是你的真实互动");
+});
+it("empty read verifies access without inventing an interaction", async () => {
+  preview = { ...preview, status: "empty", items: [] };
+  await mount(); await testRead();
+  expect(host.textContent).toContain("读取已验证，收件箱没有返回邮件");
+  expect(host.textContent).toContain("这次没有互动可预览");
+  expect(host.querySelector('a[href*="authuser="]')).toBeNull();
+});
+it("disconnect clears preview and offers reconnect without claiming provider revocation", async () => {
+  await mount(); await testRead();
+  await act(async () => button("清除测试授权").click());
+  expect(host.textContent).not.toContain("Synthetic client conversation");
+  expect(host.textContent).toContain("服务商权限可在账号设置中单独撤销");
+  expect(button("前往 Gmail 授权")).toBeDefined();
+});
+it("a workspace-expired event clears an old result and refuses a late response", async () => {
+  await mount(); await testRead();
+  let resolve!: (value: Response) => void;
+  testResponse = () => new Promise<Response>(done => { resolve = done; });
+  await act(async () => button("重新测试").click());
+  await act(async () => window.dispatchEvent(new Event("test-workspace-expired")));
+  await act(async () => resolve(response(preview)));
+  expect(host.textContent).not.toContain("Synthetic client conversation");
+  expect(host.textContent).toContain("登录或工作区已变化");
+  expect(button("测试读取，查看结果").disabled).toBe(true);
+});
+it("foreground status revalidation clears a preview whose grant changed in another tab", async () => {
+  await mount(); await testRead();
+  version = "grant-fixture-b";
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(host.textContent).not.toContain("Synthetic client conversation");
+  expect(host.textContent).toContain("旧预览已清除");
+});
+it("content-free cross-tab notification clears the result and late in-flight reply", async () => {
+  let listener: (() => void) | undefined;
+  vi.stubGlobal("BroadcastChannel", class {
+    addEventListener(_event: string, value: () => void) { listener = value; }
+    close() {} postMessage() {}
+  });
+  await mount(); await testRead();
+  let resolve!: (value: Response) => void;
+  testResponse = () => new Promise<Response>(done => { resolve = done; });
+  await act(async () => button("重新测试").click());
+  connected = false;
+  await act(async () => listener!());
+  await act(async () => resolve(response(preview)));
+  expect(host.textContent).not.toContain("Synthetic client conversation");
+  expect(host.textContent).toContain("旧预览已清除");
+});
+it("unconfigured sources expose scope and recovery rather than a fake connect success", async () => {
+  connected = false;
+  mocks.fetch.mockImplementation(async () => response({ configured: false, connected: false, expiresAt: null, connectionVersion: null }));
+  await mount(false);
+  await act(async () => button("Gmail").click());
+  expect(host.textContent).toContain("此部署尚未启用 Gmail 账号连接");
+  expect(button("前往 Gmail 授权").disabled).toBe(true);
+  expect(host.querySelector('a[href="/workspace/extensions"]')).not.toBeNull();
+  expect(host.textContent).not.toContain("读取已验证");
+});
+it("a late grant-expired error cannot overwrite the newly reconnected grant", async () => {
+  let listener: (() => void) | undefined;
+  vi.stubGlobal("BroadcastChannel", class {
+    addEventListener(_event: string, value: () => void) { listener = value; }
+    close() {} postMessage() {}
+  });
+  await mount();
+  let resolve!: (value: Response) => void;
+  testResponse = () => new Promise<Response>(done => { resolve = done; });
+  await act(async () => button("测试读取，查看结果").click());
+  version = "grant-fixture-new";
+  await act(async () => listener!());
+  await act(async () => resolve(response({ code: "MAIL_GRANT_EXPIRED", message: "old grant" }, 401)));
+  expect(button("测试读取，查看结果")).toBeDefined();
+  expect(host.textContent).not.toContain("前往 Gmail 授权");
+  expect(host.textContent).not.toContain("old grant");
+});
+it("a forged authorized query never establishes mailbox authority", async () => {
+  connected = false;
+  await mount(true, "authorized");
+  expect(host.textContent).not.toContain("账号已授权。现在测试一次读取");
+  expect(host.textContent).toContain("授权状态尚未核验");
+});

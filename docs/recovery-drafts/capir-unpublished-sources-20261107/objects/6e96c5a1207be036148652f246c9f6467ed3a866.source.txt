@@ -1,0 +1,368 @@
+import Foundation
+
+/// The authority boundary a synchronous invalidation crosses.
+///
+/// An authentication boundary (sign-out, account replacement, explicit new
+/// load) invalidates every older authority ticket. A relationship-scope
+/// boundary (scope re-selection, keep-unresolved, deliberate Today scope jump)
+/// invalidates older scope and submitted-intake authority but preserves the
+/// authenticated login. A submitted-intake boundary (clear/stop, superseding
+/// submission) invalidates older submitted-intake authority only, so a source
+/// edit or an unrelated local-only attachment never forces a new login and
+/// never revokes an unrelated previously approved canonical operation.
+enum MacRelationshipAuthorityBoundary: String, Equatable, Sendable {
+    case authentication
+    case relationshipScope
+    case submittedIntake
+}
+
+/// Three distinct authority generations. Keeping them distinct is what lets a
+/// source edit avoid unnecessary reauthentication while an authentication
+/// boundary still invalidates all older authority.
+struct MacRelationshipAuthorityGenerations: Equatable, Hashable, Sendable {
+    let authentication: UInt64
+    let relationshipScope: UInt64
+    let submittedIntake: UInt64
+
+    static let initial = MacRelationshipAuthorityGenerations(
+        authentication: 1,
+        relationshipScope: 1,
+        submittedIntake: 1
+    )
+}
+
+/// One operation's captured authority: the generations that were current when
+/// the operation started, the exact operation identity, and the monotonic
+/// revocation generations of the exact selected sources it is bound to. Every
+/// async return, catch, and deferred cleanup checks its own ticket before it
+/// may mutate state, dispatch work, or save/remove durable recovery.
+struct MacRelationshipAuthorityTicket: Equatable, Sendable {
+    let operation: String
+    let generations: MacRelationshipAuthorityGenerations
+    /// Captured revocation generation per bound selected source. Revocation is
+    /// monotonic: restoring a source never lowers its generation, so a revoked
+    /// then restored source can never revive an obsolete operation.
+    let sourceGenerations: [String: UInt64]
+    var sourceExpiresAt: Date? = nil
+}
+
+/// Which authority layer a dispatch or result admission must verify.
+enum MacRelationshipAuthorityLayer: Equatable, Sendable {
+    /// Source-free exact admission metadata requires current authentication only.
+    case authentication
+    /// Credential layer: authentication plus relationship scope. Used by
+    /// scope, readback, decision, and reconciliation work that an unrelated
+    /// intake change must not kill.
+    case credential
+    /// Submitted-intake layer: every generation plus the bound selected-source
+    /// generations. Used by source workflows whose dispatch must stop after
+    /// clear/stop, supersession, or an exact source withdrawal.
+    case submittedIntake
+}
+
+/// A small lock-protected, Sendable generation fence. It is deliberately
+/// nonisolated so AppModel can invalidate authority synchronously, before any
+/// suspension, while the service keeps all token, readback, scope, and
+/// decision state actor-isolated.
+final class MacRelationshipAuthorityFence: @unchecked Sendable {
+    private let lock: NSRecursiveLock
+    private var generations: MacRelationshipAuthorityGenerations = .initial
+    private var sourceGenerations: [String: UInt64] = [:]
+
+    init(synchronization: NSRecursiveLock = NSRecursiveLock()) {
+        lock = synchronization
+    }
+
+    /// Both the fence and private credential/operation mirror use this same
+    /// lock. Synchronous nested checks are safe; no async or network work is
+    /// permitted within this boundary.
+    func synchronized<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
+
+    /// Checks and installs state under the same boundary as withdrawal.
+    /// Metadata persistence here is bounded and synchronous; a failed write
+    /// throws before any consequential request can be admitted.
+    func admit(_ ticket: MacRelationshipAuthorityTicket,
+               authenticationOnly: Bool = false,
+               _ body: () throws -> Void) rethrows -> Bool {
+        try synchronized {
+            let current = authenticationOnly ? preservesAuthentication(ticket) : preservesAuthority(ticket)
+            guard current else { return false }
+            try body()
+            return true
+        }
+    }
+
+    func currentGenerations() -> MacRelationshipAuthorityGenerations {
+        lock.lock()
+        defer { lock.unlock() }
+        return generations
+    }
+
+    func ticket(
+        _ operation: String,
+        boundSources: [String] = [],
+        sourceExpiresAt: Date? = nil
+    ) -> MacRelationshipAuthorityTicket {
+        lock.lock()
+        defer { lock.unlock() }
+        var captured: [String: UInt64] = [:]
+        for sourceID in boundSources {
+            captured[sourceID] = sourceGenerations[sourceID] ?? 0
+        }
+        return MacRelationshipAuthorityTicket(
+            operation: operation,
+            generations: generations,
+            sourceGenerations: captured,
+            sourceExpiresAt: sourceExpiresAt
+        )
+    }
+
+    /// Operation-bound invalidation for one exact selected source. Only
+    /// operations frozen over that source see it; unrelated local-only
+    /// attachments and unaffected approved operations are untouched.
+    func invalidateSelectedSource(_ sourceID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        sourceGenerations[sourceID, default: 0] += 1
+    }
+
+    /// Invalidates older tickets at this boundary and below. An authentication
+    /// boundary invalidates all old authority; a scope boundary invalidates old
+    /// scope and submitted-intake authority; an intake boundary invalidates
+    /// only old submitted-intake authority.
+    @discardableResult
+    func invalidate(_ boundary: MacRelationshipAuthorityBoundary) -> MacRelationshipAuthorityGenerations {
+        lock.lock()
+        defer { lock.unlock() }
+        switch boundary {
+        case .authentication:
+            generations = MacRelationshipAuthorityGenerations(
+                authentication: generations.authentication &+ 1,
+                relationshipScope: generations.relationshipScope &+ 1,
+                submittedIntake: generations.submittedIntake &+ 1
+            )
+        case .relationshipScope:
+            generations = MacRelationshipAuthorityGenerations(
+                authentication: generations.authentication,
+                relationshipScope: generations.relationshipScope &+ 1,
+                submittedIntake: generations.submittedIntake &+ 1
+            )
+        case .submittedIntake:
+            generations = MacRelationshipAuthorityGenerations(
+                authentication: generations.authentication,
+                relationshipScope: generations.relationshipScope,
+                submittedIntake: generations.submittedIntake &+ 1
+            )
+        }
+        return generations
+    }
+
+    /// True while the ticket's authentication and relationship-scope authority
+    /// still holds. Submitted-intake and selected-source churn is judged per
+    /// operation instead: a frozen submission stays valid while its exact
+    /// selected-item snapshot is unchanged, even after unrelated local-only
+    /// additions, and an unaffected approved decision or reconciliation is
+    /// never killed by source editing it does not depend on.
+    func preservesAuthority(_ ticket: MacRelationshipAuthorityTicket) -> Bool {
+        let current = currentGenerations()
+        return current.authentication == ticket.generations.authentication &&
+            current.relationshipScope == ticket.generations.relationshipScope
+    }
+
+    /// True while every generation the ticket captured still holds, ignoring
+    /// bound-source revocation. Used to distinguish an obsolete source result
+    /// (reportable as stale) from a replaced, cleared, or superseded workspace
+    /// (which must stay silent and land nothing).
+    func preservesGenerations(_ ticket: MacRelationshipAuthorityTicket) -> Bool {
+        currentGenerations() == ticket.generations
+    }
+
+    /// True while every generation the ticket captured still holds, including
+    /// the exact selected sources it is bound to. Used by source workflows that
+    /// explicit clear/stop, superseding submission, or an exact source
+    /// withdrawal must invalidate.
+    func preserves(_ ticket: MacRelationshipAuthorityTicket) -> Bool {
+        guard preservesGenerations(ticket), ticket.sourceExpiresAt.map({ $0 > Date() }) ?? true else { return false }
+        return preservesSelectedSources(ticket)
+    }
+
+    /// True while none of the ticket's bound selected sources was revoked after
+    /// capture. Restoring a source never revives an obsolete operation.
+    func preservesSelectedSources(_ ticket: MacRelationshipAuthorityTicket) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        for (sourceID, generation) in ticket.sourceGenerations {
+            if (sourceGenerations[sourceID] ?? 0) != generation { return false }
+        }
+        return true
+    }
+
+    /// True while only the authentication authority the ticket captured still
+    /// holds. Used by workspace initialization/load and local intake
+    /// transactions, which survive scope and intake churn that does not cross
+    /// an authenticated account boundary.
+    func preservesAuthentication(_ ticket: MacRelationshipAuthorityTicket) -> Bool {
+        currentGenerations().authentication == ticket.generations.authentication
+    }
+}
+
+/// Opaque session-retirement ticket. Callers and the UI only ever see this
+/// token; the retiring bearer never leaves private synchronized state.
+struct SessionRetirementTicket: Hashable, Sendable {
+    let id: UUID
+
+    init(id: UUID = UUID()) {
+        self.id = id
+    }
+}
+
+/// Private synchronized generation-bound credential retirement state. The real
+/// original credential is mirrored here exactly when it is admitted and
+/// installed, so the synchronous authentication-withdrawal boundary can freeze
+/// it without ever reading actor-isolated token state from a nonisolated call.
+/// A frozen retirement is never erased or replaced by a later flush, load, or
+/// authentication, and the bearer is never returned to the UI or persisted.
+final class MacRelationshipRetirementAuthority: @unchecked Sendable {
+    enum Retirement: Equatable, Sendable {
+        /// The exact original credential, consumed now for its one logout,
+        /// with the exact original operation identity frozen at withdrawal.
+        case original(token: String, operation: RetiringOperation?)
+        /// No original credential existed for this retirement: local-only.
+        case none(operation: RetiringOperation?)
+        /// The ticket already spent its one original logout.
+        case alreadyConsumed
+        /// Original local operation identity was not positively inspectable.
+        /// Keep remote credential retirement separate from this local unknown.
+        case unavailable(token: String?, generation: UInt64, detail: String)
+    }
+
+    /// Immutable operation identity frozen at withdrawal alongside the
+    /// credential. Captured at DURABLE admission, never guessed from whichever
+    /// static-scope record happens to be current at a later sign-out.
+    struct RetiringOperation: Equatable, Sendable {
+        let operationID: String
+        let accountID: String
+        let workspaceID: String
+        /// The accepted authentication generation captured with this admission.
+        let generation: UInt64
+    }
+
+    private let lock: NSRecursiveLock
+    private var installedToken: (token: String, generation: UInt64)?
+    private var admittedOperations: [RetiringOperation] = []
+    private var retirements: [UUID: (token: String?, operation: RetiringOperation?, unavailable: String?, generation: UInt64)] = [:]
+    private var inspectedEmptyGeneration: UInt64?
+    private var unavailableOperations: [UInt64: String] = [:]
+    private var freshAdmissionGenerations: Set<UInt64> = []
+    private var lastWithdrawnGeneration: UInt64?
+
+    init(synchronization: NSRecursiveLock = NSRecursiveLock()) {
+        lock = synchronization
+    }
+
+    /// Mirrors the credential exactly when it is admitted and installed, under
+    /// the SAME synchronization as withdrawal and bound to its accepted
+    /// authentication generation. An old response can never enter the mirror
+    /// after withdrawal.
+    func installCredential(_ token: String, generation: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let retired = lastWithdrawnGeneration, generation <= retired { return }
+        installedToken = (token, generation)
+    }
+
+    /// Mirrors the exact operation identity at DURABLE admission under the same
+    /// synchronization and generation. Operations admitted with a newer
+    /// generation than an older withdrawal can never enter that old ticket.
+    func admitOperation(_ operation: RetiringOperation, isRecovery: Bool = false) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let retired = lastWithdrawnGeneration, operation.generation <= retired { return }
+        admittedOperations.append(operation)
+        if !isRecovery { freshAdmissionGenerations.insert(operation.generation) }
+    }
+
+    func observedNoOperation(generation: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        if let retired = lastWithdrawnGeneration, generation <= retired { return }
+        inspectedEmptyGeneration = generation
+        unavailableOperations.removeValue(forKey: generation)
+        admittedOperations.removeAll { $0.generation == generation }
+    }
+
+    func operationUnavailable(generation: UInt64, detail: String) {
+        lock.lock(); defer { lock.unlock() }
+        if let retired = lastWithdrawnGeneration, generation <= retired { return }
+        inspectedEmptyGeneration = nil
+        unavailableOperations[generation] = detail
+        // An exact already-known identity survives a later read failure.
+    }
+
+    /// Positive inspection belongs to one exact generation; an older queued
+    /// retirement cannot poison an already admitted newer operation or empty home.
+    func hasObservedOperationHome(generation: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return inspectedEmptyGeneration == generation ||
+            freshAdmissionGenerations.contains(generation)
+    }
+
+    /// Synchronous withdrawal: freezes the exact retiring credential AND the
+    /// exact admitted original operation identity for this ticket, then clears
+    /// the live mirrors. Later flush, load, authentication, or a newer durable
+    /// admission can never erase or replace the frozen values.
+    func withdraw(acceptedGeneration: UInt64) -> SessionRetirementTicket {
+        lock.lock()
+        defer { lock.unlock() }
+        let ticket = SessionRetirementTicket()
+        // One generation-aware atomic boundary: only credential/operation
+        // metadata accepted at THIS generation is frozen into the ticket. A
+        // new mirror landing between fence invalidation and this lock can never
+        // enter the old ticket, and an old response can never install after it.
+        lastWithdrawnGeneration = max(lastWithdrawnGeneration ?? acceptedGeneration, acceptedGeneration)
+        let token = (installedToken?.generation == acceptedGeneration) ? installedToken?.token : nil
+        let operation = admittedOperations.last { $0.generation == acceptedGeneration }
+        let unavailable = operation == nil && inspectedEmptyGeneration != acceptedGeneration
+            ? unavailableOperations[acceptedGeneration] ?? "The original protected operation home was not positively inspected." : nil
+        retirements[ticket.id] = (token, operation, unavailable, acceptedGeneration)
+        if let installed = installedToken, installed.generation <= acceptedGeneration {
+            installedToken = nil
+        }
+        admittedOperations.removeAll { $0.generation <= acceptedGeneration }
+        freshAdmissionGenerations = freshAdmissionGenerations.filter { $0 > acceptedGeneration }
+        unavailableOperations = unavailableOperations.filter { $0.key > acceptedGeneration }
+        return ticket
+    }
+
+    /// Consumes the ticket at most once: at most one original logout can use
+    /// the exact original credential. Live unconsumed credentials are never
+    /// evicted wholesale; only consumed, token-free metadata is dropped.
+    func consume(_ ticket: SessionRetirementTicket) -> Retirement {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let frozen = retirements.removeValue(forKey: ticket.id) else {
+            return .alreadyConsumed
+        }
+        // Only consumed, token-free metadata is dropped; live unconsumed        // credentials and their tickets are never evicted wholesale.
+        if let detail = frozen.unavailable {
+            return .unavailable(token: frozen.token, generation: frozen.generation, detail: detail)
+        }
+        if let token = frozen.token {
+            return .original(token: token, operation: frozen.operation)
+        }
+        return .none(operation: frozen.operation)
+    }
+
+}
+
+/// The exact identity of one follow-up reminder operation. Durable reminder
+/// recovery is account-scoped, but a captured account key alone is
+/// insufficient: stale callbacks and stale cleanups must also compare the
+/// exact operation identity before writing or deleting.
+struct ReminderOperationIdentity: Equatable, Hashable, Sendable {
+    let accountID: String
+    let idempotencyKey: String
+}

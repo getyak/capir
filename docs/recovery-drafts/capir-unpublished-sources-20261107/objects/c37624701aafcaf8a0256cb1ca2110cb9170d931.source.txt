@@ -1,0 +1,99 @@
+import { CONTRACT_VERSION, type SessionResponse } from "@talent-signal/contracts";
+import { expect, it } from "vitest";
+
+import {
+  assertLabSession,
+  capirSessionClaims,
+  parseHandoffBody,
+  requestOriginFrom,
+  secondsUntil,
+} from "./capirHandoff";
+
+function labSession(overrides: Partial<SessionResponse> = {}): SessionResponse {
+  return {
+    contract_version: CONTRACT_VERSION,
+    access_token: "k".repeat(43),
+    expires_at: "2026-10-01T09:00:00.000Z",
+    account: {
+      id: "11111111-1111-4111-8111-111111111111",
+      slug: "lab-22222222-2222-4222-8222-222222222222",
+      name: "Test workspace",
+    },
+    user: {
+      id: "33333333-3333-4333-8333-333333333333",
+      email: "test-22222222@lab.invalid",
+      display_name: "Test user",
+      kind: "lab_human",
+      role: "member",
+      username: null,
+    },
+    ...overrides,
+  };
+}
+
+it("validates the private handoff body shape", () => {
+  expect(parseHandoffBody({ handoff_secret: "s".repeat(43) }).ok).toBe(true);
+  for (const bad of [
+    undefined,
+    {},
+    { handoff_secret: "short" },
+    { handoff_secret: 42 },
+    { handoff_secret: "s".repeat(43) + "!" },
+  ]) {
+    expect(parseHandoffBody(bad).ok, JSON.stringify(bad)).toBe(false);
+  }
+});
+
+it("never falls back to a main or fixture account", () => {
+  expect(() => assertLabSession(labSession())).not.toThrow();
+  const main = labSession();
+  const mainAccount = { ...main.account, slug: "fixture-alpha" };
+  expect(() =>
+    assertLabSession({ ...main, account: mainAccount }),
+  ).toThrow(/scoped Lab account/);
+  const passwordUser = { ...main.user, kind: "password_human" as const };
+  expect(() => assertLabSession({ ...main, user: passwordUser })).toThrow();
+  const admin = { ...main.user, role: "admin" as const };
+  expect(() => assertLabSession({ ...main, user: admin })).toThrow();
+});
+
+it("maps the verified Lab account to capir-bound session claims", () => {
+  const claims = capirSessionClaims(labSession());
+  expect(claims.sub).toBe("33333333-3333-4333-8333-333333333333");
+  expect(claims.backendAccountSlug.startsWith("lab-")).toBe(true);
+  expect(claims.capir.sandbox_id).toBe("22222222-2222-4222-8222-222222222222");
+  expect(claims.capir.entry_path).toBe(
+    "/capir/sandboxes/22222222-2222-4222-8222-222222222222",
+  );
+  expect(claims.backendRole).toBe("member");
+});
+
+it("caps the session cookie lifetime at the real entry expiry", () => {
+  const now = Date.parse("2026-10-01T08:00:00.000Z");
+  expect(secondsUntil("2026-10-01T09:00:00.000Z", now)).toBe(3600);
+  expect(secondsUntil("2026-10-01T07:00:00.000Z", now)).toBe(1);
+});
+
+it("derives the exact configured Web origin from the Host header", () => {
+  // Regression: Next normalizes request.url hosts (127.0.0.1 → localhost)
+  // while grants and handoffs bind the exact configured origin. The exchange
+  // must send the origin the caller actually addressed.
+  const normalized = {
+    url: "http://localhost:55971/capir/handoff",
+    headers: new Headers({ host: "127.0.0.1:55971" }),
+  };
+  expect(requestOriginFrom(normalized)).toBe("http://127.0.0.1:55971");
+  expect(
+    requestOriginFrom({
+      url: "http://127.0.0.1:3000/capir/handoff",
+      headers: new Headers({ host: "127.0.0.1:3000", "x-forwarded-proto": "https" }),
+    }),
+  ).toBe("https://127.0.0.1:3000");
+  // Without a Host header the URL origin is the only honest fallback.
+  expect(
+    requestOriginFrom({
+      url: "http://127.0.0.1:3000/capir/handoff",
+      headers: new Headers({}),
+    }),
+  ).toBe("http://127.0.0.1:3000");
+});

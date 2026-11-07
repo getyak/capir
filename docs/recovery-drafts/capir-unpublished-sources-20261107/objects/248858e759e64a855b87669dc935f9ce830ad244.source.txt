@@ -1,0 +1,2862 @@
+import XCTest
+@testable import TalentSignalMac
+
+@MainActor
+final class AppModelSafetyTests: XCTestCase {
+    func testFirstNativeInitializationIsSharedAndDoesNotReloadOverACollectedDraft() async {
+        let service = SwitchingAccountService(accountIDs: ["real-account", "unexpected-reload"])
+        let model = AppModel(service: service, accountID: "pending-live-account")
+        async let first = model.ensureInitialized()
+        async let second = model.ensureInitialized()
+        let initialized = await (first, second)
+        XCTAssertTrue(initialized.0)
+        XCTAssertTrue(initialized.1)
+        model.addSelectedText("Synthetic first Quick Panel selection")
+        let itemIDs = model.capsule.items.map(\.id)
+        let readyAgain = await model.ensureInitialized()
+        XCTAssertTrue(readyAgain)
+        XCTAssertEqual(model.capsule.items.map(\.id), itemIDs)
+        XCTAssertEqual(model.relationshipScopeOptions.first?.id, "scope-real-account")
+    }
+
+    func testFirstUsefulInsightAppearsBeforeIdentityOrScopeConfirmation() throws {
+        let model = AppModel(service: FixtureRelationshipService(initialMode: .ready))
+
+        model.addSelectedText("I'd prefer a hybrid setup, ideally two days from home.")
+
+        let insight = try XCTUnwrap(model.provisionalInsight)
+        XCTAssertEqual(model.scopeReviewStatus, .proposed)
+        XCTAssertNil(model.selectedScopeOptionID)
+        XCTAssertFalse(model.canSubmitCapsule)
+        XCTAssertEqual(insight.change, "A work-arrangement factor surfaced")
+        XCTAssertTrue(model.capsule.items[0].preview.contains(insight.exactEvidence))
+        XCTAssertNotNil(model.companionTrialMetrics.firstValueMilliseconds)
+        XCTAssertLessThan(model.companionTrialMetrics.firstValueMilliseconds ?? .infinity, 5_000)
+
+        model.prepareLocalDraft()
+        XCTAssertEqual(model.localDraftStatus, .prepared)
+        XCTAssertTrue(model.editableFollowUpDraft.contains("work-arrangement"))
+        XCTAssertNotNil(model.companionTrialMetrics.draftPreparedMilliseconds)
+
+        model.recordEvidenceSupport(.supported)
+        XCTAssertEqual(model.companionTrialMetrics.evidenceSupport, .supported)
+    }
+
+    func testExplicitMacSelectionServiceRequestIsHandledExactlyOnce() {
+        let model = AppModel(service: FixtureRelationshipService(initialMode: .ready))
+        let requestID = UUID()
+
+        XCTAssertTrue(model.addServiceSelectedText("I prefer a hybrid setup.", requestID: requestID))
+        XCTAssertFalse(model.addServiceSelectedText("I prefer a hybrid setup.", requestID: requestID))
+
+        XCTAssertEqual(model.capsule.items.count, 1)
+        XCTAssertTrue(model.intakeControlReceipt?.contains("explicitly invoked") == true)
+        XCTAssertTrue(model.intakeControlReceipt?.contains("No clipboard polling") == true)
+    }
+
+    func testScopeMustBeExplicitlySelectedAndConfirmedBeforeSubmission() async {
+        let model = AppModel(service: FixtureRelationshipService(initialMode: .ready))
+        model.addSelectedText("Reviewed source fragment")
+        let itemID = try! XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+
+        XCTAssertNil(model.selectedScopeOptionID)
+        XCTAssertEqual(model.presentation.candidateName, "Choose a Person or keep identity unresolved")
+        XCTAssertFalse(model.canSubmitCapsule)
+
+        model.recordConsequenceReviewStarted()
+        XCTAssertNotNil(model.companionTrialMetrics.scopeReviewStartedMilliseconds)
+
+        model.selectFirstRelationshipScopeFromKeyboard()
+        XCTAssertFalse(model.canSubmitCapsule, "Selection is not confirmation.")
+
+        await model.confirmRelationshipScope()
+        XCTAssertTrue(model.canSubmitCapsule)
+        XCTAssertNotNil(model.companionTrialMetrics.scopeConfirmedMilliseconds)
+
+        model.keepRelationshipScopeUnresolved()
+        XCTAssertNil(model.selectedScopeOptionID)
+        XCTAssertFalse(model.canSubmitCapsule)
+        XCTAssertEqual(model.mode, .ambiguousIdentity)
+    }
+
+    func testSyntheticDecisionReviewPreservesTheExactSubmittedEvidence() async throws {
+        let model = AppModel(service: FixtureRelationshipService(initialMode: .ready))
+        let submittedEvidence = "I can decide Friday once the client confirms the exact remote policy."
+        model.addSelectedText(submittedEvidence)
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        await model.confirmRelationshipScope()
+
+        await model.submitCurrentInsight()
+
+        let review = try XCTUnwrap(model.pendingDecision)
+        XCTAssertEqual(model.mode, .needsDecision)
+        XCTAssertEqual(review.evidence.map(\.text), [submittedEvidence])
+        XCTAssertTrue(review.evidence[0].source.contains("User-selected text"))
+        XCTAssertEqual(review.items[0].evidenceRefs, review.evidence.map(\.id))
+        let expiry = try XCTUnwrap(ISO8601DateFormatter().date(from: review.expiresAt))
+        XCTAssertGreaterThan(expiry, Date())
+    }
+
+    func testCurrentInsightSaveCannotReuseAnEarlierReviewedSource() async throws {
+        let model = AppModel(service: FixtureRelationshipService(initialMode: .ready))
+        model.addSelectedText("Earlier evidence that was already reviewed.")
+        let earlierID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: earlierID, actorKind: .candidate)
+        model.confirmAttribution(id: earlierID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        await model.confirmRelationshipScope()
+        await model.submitCurrentInsight()
+        XCTAssertTrue(model.currentInsightHasSubmittedManifest)
+
+        let currentEvidence = "I can decide Friday once the client confirms the exact remote policy."
+        model.addSelectedText(currentEvidence)
+        let currentID = try XCTUnwrap(model.capsule.items.last?.id)
+
+        XCTAssertFalse(model.currentInsightHasSubmittedManifest)
+        XCTAssertFalse(model.canSubmitCurrentInsight)
+        XCTAssertTrue(model.canSubmitCapsule, "The general Capsule still contains an earlier reviewed item.")
+
+        model.setAttribution(id: currentID, actorKind: .candidate)
+        model.confirmAttribution(id: currentID)
+        XCTAssertTrue(model.canSubmitCurrentInsight)
+        await model.submitCurrentInsight()
+
+        XCTAssertEqual(model.lastSubmittedManifest?.selectedItems.map(\.sourceID), [currentID.uuidString])
+        XCTAssertEqual(model.lastSubmittedManifest?.selectedItems.map(\.reviewedContent), [currentEvidence])
+        XCTAssertEqual(model.pendingDecision?.evidence.map(\.text), [currentEvidence])
+        XCTAssertTrue(model.currentInsightHasSubmittedManifest)
+    }
+
+    func testRemoteSignOutFailureStillClearsLocalAuthorityAndCapsule() async {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let reminderRecoveryStore = AccountFixtureReminderRecoveryStore()
+        let model = AppModel(
+            service: FailingSignOutService(),
+            initialMode: .ready,
+            capsuleStore: DeletingCapsuleStore(),
+            followUpReminderService: reminderService,
+            reminderRecoveryStore: reminderRecoveryStore
+        )
+        model.addSelectedText("Sensitive reviewed fragment")
+        model.selectRelationshipScopeOption(id: "synthetic-scope")
+
+        await model.signOutAndClearLocalData()
+
+        XCTAssertTrue(model.isSignedOut)
+        XCTAssertTrue(model.isPaused)
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        XCTAssertTrue(model.relationshipScopeOptions.isEmpty)
+        XCTAssertNil(model.selectedScopeOptionID)
+        XCTAssertEqual(model.accountID, "signed-out")
+        XCTAssertFalse(model.canSubmitCapsule)
+        XCTAssertTrue(model.deletionReceipt?.contains("outcome-unknown") == true)
+        XCTAssertTrue(model.deletionReceipt?.contains("Deleted encrypted Capsule recovery") == true)
+        XCTAssertTrue(model.errorMessage?.contains("Signed out locally") == true)
+        XCTAssertEqual(reminderService.clearRecoveryCallCount, 1)
+        XCTAssertEqual(reminderRecoveryStore.clearedAccountIDs, ["synthetic-account"])
+    }
+
+    func testStopIntakeDeletesOnlyLocalDraftAndDoesNotClaimCanonicalCancellation() {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            initialMode: .ready,
+            capsuleStore: DeletingCapsuleStore()
+        )
+        model.addSelectedText("Unsubmitted local fragment")
+
+        model.stopContextIntake()
+
+        XCTAssertTrue(model.isPaused)
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        XCTAssertEqual(model.mode, .deleted)
+        XCTAssertTrue(model.intakeControlReceipt?.contains("deleted 1 visible local item") == true)
+        XCTAssertTrue(model.intakeControlReceipt?.contains("No canonical Task was active") == true)
+    }
+
+    func testOpeningModelCreatesNoWindowCaptureAndExplicitPickerAddsOneLocalItem() async {
+        let capture = StubWindowCapture(payload: .init(
+            recognizedText: "Synthetic reviewed window text",
+            imagePNG: Data([1, 2, 3, 4]),
+            pixelWidth: 800,
+            pixelHeight: 600,
+            sourceFingerprint: "window-hash",
+            localTextRecognition: .available
+        ))
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            windowCapture: capture
+        )
+
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        XCTAssertEqual(capture.callCount, 0)
+
+        await model.addSystemSelectedWindow()
+
+        XCTAssertEqual(capture.callCount, 1)
+        XCTAssertEqual(model.capsule.items.count, 1)
+        XCTAssertEqual(model.capsule.items[0].kind, .window)
+        XCTAssertTrue(model.capsule.items[0].localOnly)
+        XCTAssertTrue(model.windowCaptureReceipt?.contains("exactly one frame") == true)
+        XCTAssertTrue(model.windowCaptureReceipt?.contains("No cursor or audio") == true)
+    }
+
+    func testWindowChoiceCanBeCancelledFromTheQuickPanelWithoutCapturing() async {
+        let capture = CancellableStubWindowCapture()
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            windowCapture: capture
+        )
+
+        let task = Task { await model.addSystemSelectedWindow() }
+        await Task.yield()
+        await Task.yield()
+        XCTAssertTrue(model.isSelectingWindow)
+
+        model.cancelSystemSelectedWindow()
+        await task.value
+
+        XCTAssertFalse(model.isSelectingWindow)
+        XCTAssertEqual(capture.cancelCallCount, 1)
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        XCTAssertEqual(model.windowCaptureReceipt, "Window selection cancelled. Nothing was captured or retained.")
+    }
+
+    func testLateWindowResultCannotRepopulateOrCrossChangedIntakeBoundary() async throws {
+        for boundary in ["clear", "stop", "pause-resume", "sign-out", "account-change", "cancel"] {
+            let capture = LateWindowCapture()
+            let store = AccountFixtureCapsuleStore()
+            let service = SwitchingAccountService(accountIDs: ["account-a", "account-b"])
+            let model = AppModel(service: service, accountID: "account-a", capsuleStore: store, windowCapture: capture)
+            await model.load()
+            let task = Task { await model.addSystemSelectedWindow() }
+            while !capture.started { await Task.yield() }
+            switch boundary {
+            case "clear": model.clearLocalContext()
+            case "stop": model.stopContextIntake()
+            case "pause-resume": model.togglePause(); model.togglePause()
+            case "sign-out": await model.signOutAndClearLocalData()
+            case "account-change": await model.load()
+            default: model.cancelSystemSelectedWindow()
+            }
+            capture.completeLate()
+            await task.value
+            XCTAssertTrue(model.capsule.items.isEmpty, boundary)
+            XCTAssertFalse(model.isSelectingWindow, boundary)
+            for account in ["account-a", "account-b", "signed-out"] {
+                XCTAssertTrue(try store.load(accountID: account, now: Date()).draft.items.isEmpty, "\(boundary)/\(account)")
+            }
+        }
+    }
+
+    func testExplicitScreenshotFileProducesLocalFirstValueWithoutScopeOrUpload() async throws {
+        let extraction = LocalFileTextExtraction(
+            displayName: "authorized-screenshot.png",
+            recognizedText: "The candidate said another process reaches final interviews on September 3, 2026, and I need the exact remote-work policy before then.",
+            rawData: Data([1, 2, 3, 4]),
+            mediaType: "image/png",
+            sourceFingerprint: "synthetic-image-fingerprint",
+            method: .localImageOCR
+        )
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            localFileTextExtractor: StubLocalFileTextExtractor(result: .success(extraction))
+        )
+
+        await model.addFiles([URL(fileURLWithPath: "/tmp/authorized-screenshot.png")])
+
+        let item = try XCTUnwrap(model.capsule.items.last)
+        XCTAssertEqual(item.kind, .file)
+        XCTAssertEqual(item.preview, extraction.recognizedText)
+        XCTAssertEqual(item.localAssetData, extraction.rawData)
+        XCTAssertEqual(item.localAssetMediaType, "image/png")
+        XCTAssertTrue(item.localOnly)
+        XCTAssertTrue(item.hasReviewedTextDerivative)
+        XCTAssertNil(model.selectedScopeOptionID)
+        XCTAssertNotNil(model.provisionalInsight)
+        XCTAssertTrue(model.fileIngestReceipt?.contains("reviewable local text") == true)
+        XCTAssertTrue(model.capsule.sharedItems.isEmpty)
+    }
+
+    func testUnsupportedChosenFileIsNotRetainedOrPresentedAsReviewed() async {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            localFileTextExtractor: StubLocalFileTextExtractor(result: .failure(.unsupportedType))
+        )
+
+        await model.addFiles([URL(fileURLWithPath: "/tmp/unsupported.bin")])
+
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        XCTAssertNil(model.provisionalInsight)
+        XCTAssertEqual(model.fileIngestReceipt, "No file was retained or added to the Capsule.")
+        XCTAssertTrue(model.errorMessage?.contains("Nothing was retained") == true)
+    }
+
+    func testClearingContextInvalidatesLateFileExtractionResult() async {
+        let extraction = LocalFileTextExtraction(
+            displayName: "late-screenshot.png",
+            recognizedText: "Candidate needs the remote policy before September 3, 2026.",
+            rawData: Data([9, 8, 7]),
+            mediaType: "image/png",
+            sourceFingerprint: "late-file-fingerprint",
+            method: .localImageOCR
+        )
+        let extractor = SuspendedLocalFileTextExtractor()
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            localFileTextExtractor: extractor
+        )
+
+        let importTask = Task {
+            await model.addFiles([URL(fileURLWithPath: "/tmp/late-screenshot.png")])
+        }
+        for _ in 0..<100 {
+            if await extractor.didStart() { break }
+            await Task.yield()
+        }
+        XCTAssertTrue(model.isImportingFiles)
+
+        model.clearLocalContext()
+        await extractor.finish(with: extraction)
+        await importTask.value
+
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        XCTAssertNil(model.provisionalInsight)
+        XCTAssertFalse(model.isImportingFiles)
+        XCTAssertNil(model.fileIngestReceipt)
+        XCTAssertTrue(model.deletionReceipt?.contains("No external record was changed") == true)
+    }
+
+    func testLocalRecognitionLossKeepsRawCaptureLocalWithoutCloudFallback() async {
+        let capture = StubWindowCapture(payload: .init(
+            recognizedText: "",
+            imagePNG: Data([7, 8, 9]),
+            pixelWidth: 640,
+            pixelHeight: 480,
+            sourceFingerprint: "ocr-outage-window",
+            localTextRecognition: .unavailable
+        ))
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            windowCapture: capture
+        )
+
+        await model.addSystemSelectedWindow()
+
+        XCTAssertEqual(model.capsule.items.count, 1)
+        XCTAssertTrue(model.capsule.items[0].localOnly)
+        XCTAssertEqual(model.capsule.items[0].localAssetData, Data([7, 8, 9]))
+        XCTAssertFalse(model.capsule.canSubmit)
+        XCTAssertTrue(model.windowCaptureReceipt?.contains("Local text recognition was unavailable") == true)
+        XCTAssertTrue(model.windowCaptureReceipt?.contains("no cloud fallback") == true)
+    }
+
+    func testClipboardFailureNeverClaimsCopiedOrSent() {
+        let clipboard = StubPreparedDraftClipboard(result: false)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .needsDecision),
+            initialMode: .needsDecision,
+            preparedDraftClipboard: clipboard
+        )
+        model.addSelectedText("I need clarity on the remote policy before Friday.")
+        model.prepareLocalDraft()
+
+        model.copyPreparedDraft()
+
+        XCTAssertEqual(clipboard.callCount, 1)
+        XCTAssertEqual(model.localDraftStatus, .prepared)
+        XCTAssertTrue(model.errorMessage?.contains("did not confirm the clipboard write") == true)
+        XCTAssertTrue(model.errorMessage?.contains("nothing was sent") == true)
+    }
+
+    func testClipboardSuccessClaimsCopiedButNeverSent() {
+        let clipboard = StubPreparedDraftClipboard(result: true)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .needsDecision),
+            initialMode: .needsDecision,
+            preparedDraftClipboard: clipboard
+        )
+        model.addSelectedText("I need clarity on the remote policy before Friday.")
+        model.prepareLocalDraft()
+
+        model.copyPreparedDraft()
+
+        XCTAssertEqual(model.localDraftStatus, .copied)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(clipboard.lastText, model.editableFollowUpDraft)
+    }
+
+    func testCopyWithoutSupportedDraftDoesNotWriteClipboardOrFabricateText() {
+        let clipboard = StubPreparedDraftClipboard(result: true)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            preparedDraftClipboard: clipboard
+        )
+
+        model.copyPreparedDraft()
+
+        XCTAssertEqual(clipboard.callCount, 0)
+        XCTAssertTrue(model.editableFollowUpDraft.isEmpty)
+        XCTAssertEqual(model.localDraftStatus, .awaitingDecision)
+        XCTAssertTrue(model.errorMessage?.contains("Nothing was copied or sent") == true)
+    }
+
+    func testFourDraftPurposesRemainLocalAndDoNotOpenMailUntilExplicitlyAsked() throws {
+        let mail = StubPreparedMailDraftService(result: .failure(.systemRejectedOpen))
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            preparedMailDraftService: mail
+        )
+        model.addSelectedText("The candidate needs the exact remote policy before September 3, 2026.")
+
+        for kind in PreparedDraftKind.allCases {
+            model.prepareDraft(kind: kind)
+
+            XCTAssertEqual(model.preparedDraftKind, kind)
+            XCTAssertEqual(model.editableMailSubject, kind.mailSubject)
+            XCTAssertFalse(model.editableFollowUpDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            XCTAssertEqual(model.localDraftStatus, .prepared)
+            XCTAssertEqual(model.mailDraftHandoffStatus, .notOpened)
+            XCTAssertEqual(model.capsule.localPreparedDraft?.kind, kind)
+        }
+
+        XCTAssertEqual(mail.callCount, 0)
+    }
+
+    func testMailDraftHandoffUsesExactlyReviewedSubjectAndBodyWithoutClaimingSend() throws {
+        let mail = StubPreparedMailDraftService(result: .success(.init(
+            subject: "Reviewed client question",
+            openedAt: Date(timeIntervalSince1970: 1_788_000_000)
+        )))
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            preparedMailDraftService: mail
+        )
+        model.addSelectedText("I need clarity on the remote policy before Friday.")
+        model.prepareClientQuestion()
+        model.editableMailSubject = "Reviewed client question"
+        model.editableFollowUpDraft = "Could you confirm the remote policy before Friday?"
+
+        model.openPreparedMailDraft()
+
+        XCTAssertEqual(mail.callCount, 1)
+        XCTAssertEqual(mail.lastSubject, "Reviewed client question")
+        XCTAssertEqual(mail.lastBody, "Could you confirm the remote policy before Friday?")
+        guard case .opened(let receipt) = model.mailDraftHandoffStatus else {
+            return XCTFail("Expected the system draft open request to be acknowledged")
+        }
+        XCTAssertEqual(receipt.subject, "Reviewed client question")
+        XCTAssertNil(model.errorMessage)
+    }
+
+    func testMailDraftHandoffFailureNeverClaimsOpenedOrSent() {
+        let mail = StubPreparedMailDraftService(result: .failure(.systemRejectedOpen))
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            preparedMailDraftService: mail
+        )
+        model.addSelectedText("I need clarity on the remote policy before Friday.")
+        model.prepareClientQuestion()
+
+        model.openPreparedMailDraft()
+
+        XCTAssertEqual(mail.callCount, 1)
+        guard case .failed(let message) = model.mailDraftHandoffStatus else {
+            return XCTFail("Expected a fail-closed mail handoff state")
+        }
+        XCTAssertTrue(message.contains("did not open"))
+        XCTAssertTrue(message.contains("Nothing was sent"))
+    }
+
+    func testFieldTrialExportContainsMeasuresButNoCandidateRelationshipOrDraftContent() throws {
+        let draftClipboard = StubPreparedDraftClipboard(result: true)
+        let exportClipboard = StubCompanionTrialExportClipboard(result: true)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            preparedDraftClipboard: draftClipboard,
+            companionTrialExportClipboard: exportClipboard
+        )
+        model.addSelectedText("PRIVATE_TRIAL_SENTINEL Alex needs the remote policy before Friday.")
+        model.prepareClientQuestion()
+        model.editableFollowUpDraft = "PRIVATE_DRAFT_SENTINEL ask Alex about the confidential role."
+        model.markPreparedDraftEdited()
+        model.copyPreparedDraft()
+        model.recordChangeUnderstanding(.yes)
+        model.recordEvidenceSupport(.supported)
+        model.recordReuseIntent(.yes)
+
+        model.copyCompanionTrialExport()
+
+        let export = try XCTUnwrap(exportClipboard.lastText)
+        XCTAssertTrue(export.contains("draft_copied"))
+        XCTAssertTrue(export.contains("\"schemaVersion\" : 2"))
+        XCTAssertTrue(export.contains("\"changeUnderstanding\" : \"yes\""))
+        XCTAssertTrue(export.contains("\"actionWasAdopted\" : true"))
+        XCTAssertTrue(export.contains("\"actionWasEdited\" : true"))
+        XCTAssertTrue(export.contains("supported"))
+        XCTAssertTrue(export.contains("\"reuseIntent\" : \"yes\""))
+        XCTAssertFalse(export.contains("PRIVATE_TRIAL_SENTINEL"))
+        XCTAssertFalse(export.contains("PRIVATE_DRAFT_SENTINEL"))
+        XCTAssertFalse(export.localizedCaseInsensitiveContains("Alex"))
+        XCTAssertFalse(export.localizedCaseInsensitiveContains("remote policy"))
+        XCTAssertFalse(export.localizedCaseInsensitiveContains(model.presentation.pursuitTitle))
+        XCTAssertEqual(model.companionTrialExportReceipt, "Content-free session measures copied")
+    }
+
+    func testUnchangedDraftIsAdoptedWithoutBeingMisclassifiedAsEdited() throws {
+        let clipboard = StubPreparedDraftClipboard(result: true)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            preparedDraftClipboard: clipboard
+        )
+        model.addSelectedText("I need clarity on the remote policy before Friday.")
+        model.prepareClientQuestion()
+
+        model.markPreparedDraftEdited()
+        model.copyPreparedDraft()
+
+        XCTAssertFalse(model.companionTrialMetrics.actionWasEdited)
+        let export = try XCTUnwrap(model.companionTrialExportJSON())
+        XCTAssertTrue(export.contains("\"actionWasAdopted\" : true"))
+        XCTAssertTrue(export.contains("\"actionWasEdited\" : false"))
+    }
+
+    func testDraftPurposeOrReminderEditRecordsAdaptationWithoutContent() {
+        let model = AppModel(service: FixtureRelationshipService(initialMode: .ready))
+        model.addSelectedText("I need clarity on the remote policy before Friday.")
+        model.prepareClientQuestion()
+
+        model.prepareDraft(kind: .meetingQuestion)
+
+        XCTAssertTrue(model.companionTrialMetrics.actionWasEdited)
+
+        let reminderModel = AppModel(service: FixtureRelationshipService(initialMode: .ready))
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        reminderModel.addSelectedText("I need clarity on the remote policy before Friday.")
+        reminderModel.beginReminderPreparation(now: now)
+        XCTAssertFalse(reminderModel.companionTrialMetrics.actionWasEdited)
+
+        reminderModel.reminderTitle = "Reviewed follow-up"
+        reminderModel.markReminderEdited()
+
+        XCTAssertTrue(reminderModel.companionTrialMetrics.actionWasEdited)
+    }
+
+    func testCancelledConsequenceReviewCanProduceAContentFreeDropOffMeasure() throws {
+        let model = AppModel(service: FixtureRelationshipService(initialMode: .ready))
+        model.addSelectedText("I need clarity on the remote policy before Friday.")
+        model.recordConsequenceReviewStarted()
+
+        model.recordConsequenceReviewAbandoned()
+        model.recordChangeUnderstanding(.unsure)
+
+        XCTAssertNotNil(model.companionTrialMetrics.consequenceReviewAbandonedMilliseconds)
+        XCTAssertTrue(model.shouldShowCompanionTrialFeedback)
+        XCTAssertFalse(model.hasCompletedCompanionAction)
+        let export = try XCTUnwrap(model.companionTrialExportJSON())
+        XCTAssertTrue(export.contains("\"changeUnderstanding\" : \"unsure\""))
+        XCTAssertTrue(export.contains("\"actionWasAdopted\" : false"))
+        XCTAssertFalse(export.localizedCaseInsensitiveContains("remote policy"))
+    }
+
+    func testUnsentDraftRecoversOnlyWithItsAccountAndExactSelectedSource() async throws {
+        let store = AccountFixtureCapsuleStore()
+        let option = Self.scopeOption(id: "recovery", person: "Alex Chen", pursuit: "Platform VP")
+        let service = ScopeOptionsService(options: [option], accountID: "draft-account")
+        let first = AppModel(service: service, capsuleStore: store)
+        await first.load()
+        first.addSelectedText("Alex Chen needs clarity on the remote policy before Friday.")
+        first.prepareClientQuestion()
+        first.editableMailSubject = "Reviewed subject"
+        first.editableFollowUpDraft = "Reviewed unsent body"
+        first.markMailDraftEdited()
+
+        let recovered = AppModel(service: service, capsuleStore: store)
+        await recovered.load()
+
+        XCTAssertEqual(recovered.editableMailSubject, "Reviewed subject")
+        XCTAssertEqual(recovered.editableFollowUpDraft, "Reviewed unsent body")
+        XCTAssertEqual(recovered.preparedDraftKind, .clientQuestion)
+        XCTAssertEqual(recovered.localDraftStatus, .prepared)
+        XCTAssertEqual(recovered.mailDraftHandoffStatus, .notOpened)
+        XCTAssertTrue(recovered.localRecoveryNotice?.contains("nothing was sent") == true)
+
+        let otherAccount = AppModel(
+            service: ScopeOptionsService(options: [option], accountID: "other-account"),
+            capsuleStore: store
+        )
+        await otherAccount.load()
+        XCTAssertEqual(otherAccount.localDraftStatus, .awaitingDecision)
+        XCTAssertTrue(otherAccount.editableFollowUpDraft.isEmpty)
+    }
+
+    func testUnsentDraftFromOlderCompilerVersionFailsClosed() async throws {
+        let store = AccountFixtureCapsuleStore()
+        let option = Self.scopeOption(id: "old-compiler", person: "Alex Chen", pursuit: "Platform VP")
+        let service = ScopeOptionsService(options: [option], accountID: "old-compiler-account")
+        let now = Date()
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Alex Chen needs clarity on the remote policy before Friday.", now: now)
+        let item = try XCTUnwrap(draft.items.first)
+        let insight = try XCTUnwrap(CandidateFollowUpCompiler.compile(item: item, now: now))
+        draft.localPreparedDraft = LocalPreparedDraftRecovery(
+            sourceItemID: item.id,
+            sourceDigest: insight.sourceDigest,
+            derivationVersion: "candidate-follow-up-local-v2",
+            kind: .clientQuestion,
+            subject: "Stale subject",
+            body: "Stale unsent body",
+            savedAt: now,
+            expiresAt: now.addingTimeInterval(3_600)
+        )
+        store.setDraft(draft, for: "old-compiler-account")
+
+        let model = AppModel(service: service, capsuleStore: store)
+        await model.load()
+
+        XCTAssertEqual(model.localDraftStatus, .awaitingDecision)
+        XCTAssertTrue(model.editableFollowUpDraft.isEmpty)
+        XCTAssertNil(model.capsule.localPreparedDraft)
+        XCTAssertNil(try store.load(accountID: "old-compiler-account", now: Date()).draft.localPreparedDraft)
+    }
+
+    func testDiscardPreparedDraftDeletesRecoveryButKeepsSelectedConversation() async throws {
+        let store = AccountFixtureCapsuleStore()
+        let option = Self.scopeOption(id: "discard", person: "Alex Chen", pursuit: "Platform VP")
+        let service = ScopeOptionsService(options: [option], accountID: "discard-account")
+        let model = AppModel(service: service, capsuleStore: store)
+        await model.load()
+        model.addSelectedText("Alex Chen needs clarity before Friday.")
+        model.prepareClientQuestion()
+        XCTAssertNotNil(try store.load(accountID: "discard-account", now: Date()).draft.localPreparedDraft)
+
+        model.discardPreparedDraft()
+
+        let stored = try store.load(accountID: "discard-account", now: Date()).draft
+        XCTAssertNil(stored.localPreparedDraft)
+        XCTAssertEqual(stored.items.count, 1)
+        XCTAssertEqual(model.localDraftStatus, .awaitingDecision)
+        XCTAssertTrue(model.editableFollowUpDraft.isEmpty)
+        XCTAssertTrue(model.intakeControlReceipt?.contains("Nothing was sent") == true)
+    }
+
+    func testFailureRecoveryReturnsToLocalReviewWithoutRetryAuthority() {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .failed),
+            initialMode: .failed
+        )
+        model.errorMessage = "Synthetic task failure."
+
+        model.returnToCapsuleAfterFailure()
+
+        XCTAssertEqual(model.mode, .empty)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertTrue(model.intakeControlReceipt?.contains("No Task, decision, or external action was retried") == true)
+    }
+
+    func testAccountSwitchClearsPriorMemoryAndRecoversOnlyCurrentAccount() async {
+        let store = AccountFixtureCapsuleStore()
+        store.setDraft(Self.draft("Account A private excerpt"), for: "account-a")
+        store.setDraft(Self.draft("Account B private excerpt"), for: "account-b")
+        let service = SwitchingAccountService(accountIDs: ["account-a", "account-b", "account-a"])
+        let model = AppModel(service: service, capsuleStore: store)
+
+        await model.load()
+        XCTAssertEqual(model.accountID, "account-a")
+        XCTAssertEqual(model.capsule.items.first?.preview, "Account A private excerpt")
+
+        await model.load()
+        XCTAssertEqual(model.accountID, "account-b")
+        XCTAssertEqual(model.capsule.items.first?.preview, "Account B private excerpt")
+        XCTAssertFalse(model.capsule.items.contains { $0.preview.contains("Account A") })
+
+        await model.load()
+        XCTAssertEqual(model.accountID, "account-a")
+        XCTAssertEqual(model.capsule.items.first?.preview, "Account A private excerpt")
+        XCTAssertFalse(model.capsule.items.contains { $0.preview.contains("Account B") })
+    }
+
+    func testMenuBarPrivacyCopyNeverContainsRelationshipOrEvidenceContent() {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .needsDecision),
+            initialMode: .needsDecision
+        )
+        model.addSelectedText("PRIVATE_NOTIFICATION_SENTINEL candidate compensation evidence")
+        let copy = model.menuBarPrivacySummary.lowercased()
+
+        XCTAssertFalse(copy.contains(model.presentation.candidateName.lowercased()))
+        XCTAssertFalse(copy.contains(model.presentation.pursuitTitle.lowercased()))
+        XCTAssertFalse(copy.contains(model.presentation.evidenceQuote.lowercased()))
+        XCTAssertFalse(copy.contains("remote-work"))
+        XCTAssertFalse(copy.contains("private_notification_sentinel"))
+        XCTAssertFalse(copy.contains("compensation"))
+        XCTAssertTrue(copy.contains("no private source content"))
+    }
+
+    func testUniqueVisibleCandidateNameSuggestsScopeWithoutSelectingOrBindingIt() async throws {
+        let alex = Self.scopeOption(id: "alex", person: "Alex Chen", pursuit: "Platform VP")
+        let mia = Self.scopeOption(id: "mia", person: "Mia Rivera", pursuit: "Revenue Lead")
+        let model = AppModel(service: ScopeOptionsService(options: [alex, mia]))
+        await model.load()
+
+        model.addSelectedText("Alex Chen said the other process is moving quickly and needs clarity by Friday.")
+
+        XCTAssertEqual(model.suggestedRelationshipScopeOption?.id, alex.id)
+        XCTAssertNil(model.selectedScopeOptionID, "A local suggestion must never select relationship scope.")
+        XCTAssertEqual(model.scopeReviewStatus, .proposed)
+        XCTAssertFalse(model.canSubmitCapsule)
+    }
+
+    func testSharedCandidateNameAbstainsFromScopeSuggestion() async {
+        let first = Self.scopeOption(id: "alex-platform", person: "Alex Chen", pursuit: "Platform VP")
+        let second = Self.scopeOption(id: "alex-revenue", person: "Alex Chen", pursuit: "Revenue Lead")
+        let model = AppModel(service: ScopeOptionsService(options: [first, second]))
+        await model.load()
+
+        model.addSelectedText("Alex Chen needs clarity by Friday.")
+
+        XCTAssertNil(model.suggestedRelationshipScopeOption)
+        XCTAssertNil(model.selectedScopeOptionID)
+        XCTAssertEqual(model.scopeReviewStatus, .proposed)
+    }
+
+    func testTodayOpensTheExactCurrentProjectionWithoutSelectingRelationshipAuthority() async throws {
+        let option = Self.scopeOption(id: "alex", person: "Alex Chen", pursuit: "Platform VP")
+        let item = Self.todayItem(id: "proposal-alex", scopeOptionID: option.id)
+        let model = AppModel(service: ScopeOptionsService(
+            options: [option],
+            todayAttention: .init(items: [item], noActionCount: 0, totalPursuitCount: 1)
+        ))
+        await model.load()
+
+        model.openFirstTodayAttentionFromKeyboard()
+
+        XCTAssertEqual(model.focusedTodayAttentionItem, item)
+        XCTAssertEqual(model.focusedTodayRelationshipScopeOption?.id, option.id)
+        XCTAssertEqual(model.selectedNavigation, .workspace)
+        XCTAssertNil(model.selectedScopeOptionID, "Today navigation must not select relationship scope.")
+        XCTAssertNil(model.pursuitID)
+        XCTAssertNil(model.personID)
+        XCTAssertEqual(model.scopeReviewStatus, .proposed)
+        XCTAssertFalse(model.canSubmitCapsule)
+
+        model.selectRelationshipScopeOption(id: option.id)
+        XCTAssertNil(model.focusedTodayAttentionItem, "An explicit consequence-scope choice replaces the read-only Today projection.")
+        XCTAssertEqual(model.selectedScopeOptionID, option.id)
+        XCTAssertFalse(model.canSubmitCapsule, "Selection still is not confirmation.")
+    }
+
+    func testStaleTodayProjectionCannotOpenAsCurrentRelationshipContext() async {
+        let item = Self.todayItem(id: "current-item", scopeOptionID: nil)
+        let model = AppModel(service: ScopeOptionsService(
+            options: [],
+            todayAttention: .init(items: [item], noActionCount: 0, totalPursuitCount: 1)
+        ))
+        await model.load()
+
+        model.openTodayAttention(id: "superseded-item")
+
+        XCTAssertNil(model.focusedTodayAttentionItem)
+        XCTAssertEqual(model.selectedNavigation, .today)
+        XCTAssertTrue(model.errorMessage?.contains("changed") == true)
+    }
+
+    func testTodayProposalOpensTheExactDecisionGateWithoutPreselectingAChoice() async throws {
+        let option = Self.scopeOption(id: "alex", person: "Alex Chen", pursuit: "Platform VP")
+        let item = Self.todayItem(id: "proposal-alex", scopeOptionID: option.id)
+        let model = AppModel(service: ScopeOptionsService(
+            options: [option],
+            todayAttention: .init(items: [item], noActionCount: 0, totalPursuitCount: 1)
+        ))
+        await model.load()
+        model.openFirstTodayAttentionFromKeyboard()
+
+        await model.reviewFocusedTodayProposal()
+
+        let review = try XCTUnwrap(model.pendingDecision)
+        XCTAssertEqual(model.mode, .needsDecision)
+        XCTAssertEqual(review.proposalID, "20000000-0000-4000-8000-000000000003")
+        XCTAssertTrue(model.decisionSelections.isEmpty)
+        XCTAssertFalse(model.canResolveCanonicalDecision)
+        XCTAssertNil(model.focusedTodayAttentionItem)
+    }
+
+    func testSyntheticTodayRemovesResolvedProposalButKeepsReversibleResult() async throws {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .needsDecision),
+            initialMode: .needsDecision,
+            showsSyntheticTodayPreview: true
+        )
+        model.addSelectedText("I need clarity on the remote policy before Friday because the other process has accelerated.")
+        await model.load()
+
+        XCTAssertTrue(model.todayAttention.items.contains { $0.kind == .proposalReview })
+        XCTAssertEqual(model.todayAttention.noActionCount, 2)
+
+        model.decideNextCanonicalItem(.accept)
+        await model.resolveCanonicalDecision()
+
+        XCTAssertEqual(model.mode, .receipt)
+        XCTAssertFalse(model.todayAttention.items.contains { $0.kind == .proposalReview })
+        XCTAssertEqual(model.todayAttention.noActionCount, 3)
+        XCTAssertEqual(model.todayAttention.totalPursuitCount, 5)
+        XCTAssertEqual(model.actionCenterProjections.map(\.status), [.reversible])
+
+        model.prepareCurrentConversationNextStep()
+
+        XCTAssertEqual(model.localDraftStatus, .prepared)
+        XCTAssertEqual(model.preparedDraftKind, .clientQuestion)
+        XCTAssertEqual(model.quickPanelNavigationRequest?.destination, .insight)
+        XCTAssertNotNil(model.canonicalReceipt, "Preparing the next local step must not erase the saved relationship receipt.")
+        XCTAssertEqual(model.actionCenterProjections.map(\.status), [.reversible])
+
+        model.clearLocalContext()
+
+        XCTAssertNil(model.quickPanelNavigationRequest, "Deleting the local conversation must invalidate an unconsumed Quick Panel route.")
+        XCTAssertEqual(model.localDraftStatus, .awaitingDecision)
+    }
+
+    func testNoActionReviewCannotCreateDuplicateWorkFromToday() async {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .noAction),
+            initialMode: .noAction,
+            showsSyntheticTodayPreview: true
+        )
+        await model.load()
+
+        XCTAssertFalse(model.canPrepareCurrentConversationNextStep)
+        model.prepareCurrentConversationNextStep()
+
+        XCTAssertEqual(model.localDraftStatus, .awaitingDecision)
+        XCTAssertNil(model.quickPanelNavigationRequest)
+        XCTAssertTrue(model.errorMessage?.contains("no new action") == true)
+    }
+
+    func testStaleAuthorityBecomesRefreshStateInsteadOfGenericFailure() async {
+        let model = AppModel(
+            service: StaleDecisionService(),
+            initialMode: .needsDecision
+        )
+
+        await model.load()
+        model.decideNextCanonicalItem(.accept)
+        await model.resolveCanonicalDecision()
+
+        XCTAssertEqual(model.mode, .stale)
+        XCTAssertNil(model.pendingDecision)
+        XCTAssertTrue(model.errorMessage?.contains("no longer has current authority") == true)
+        XCTAssertTrue(model.presentation.actionProjections.allSatisfy {
+            $0.status == .stale && $0.route == .reviewStaleSource
+        })
+    }
+
+    func testReminderDestinationIsNotReadBeforeScopeAndAttributionReview() async {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            followUpReminderService: reminderService
+        )
+        model.addSelectedText("I need to decide by Friday.")
+        model.beginReminderPreparation(now: Date(timeIntervalSince1970: 1_788_000_000))
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+
+        await model.loadReminderDestinationPreview()
+
+        XCTAssertEqual(reminderService.previewCallCount, 0)
+        guard case .failed(let message) = model.reminderOperationState else {
+            return XCTFail("Expected a fail-closed reminder preview state")
+        }
+        XCTAssertTrue(message.contains("Confirm the relationship"))
+    }
+
+    func testSelectingRelationshipPreservesEditedReminderProposal() async throws {
+        let option = Self.scopeOption(id: "alex", person: "Alex Chen", pursuit: "Platform VP")
+        let model = AppModel(service: ScopeOptionsService(options: [option]))
+        await model.load()
+        model.addSelectedText("I need to decide by Friday.")
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let reviewedDueAt = now.addingTimeInterval(36_000)
+        model.beginReminderPreparation(now: now)
+        model.reminderTitle = "Confirm exact remote policy"
+        model.reminderDueAt = reviewedDueAt
+
+        model.selectRelationshipScopeOption(id: option.id)
+
+        XCTAssertEqual(model.reminderTitle, "Confirm exact remote policy")
+        XCTAssertEqual(model.reminderDueAt, reviewedDueAt)
+        XCTAssertEqual(model.reminderOperationState, .notPrepared)
+        XCTAssertEqual(model.selectedScopeOptionID, option.id)
+    }
+
+    func testExistingCanonicalActionBlocksReminderUntilRecruiterConfirmsItIsSeparate() async throws {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let option = Self.scopeOption(
+            id: "alex",
+            person: "Alex Chen",
+            pursuit: "Platform VP",
+            preflight: Self.preflightWithOpenAction
+        )
+        let model = AppModel(
+            service: ScopeOptionsService(options: [option]),
+            followUpReminderService: reminderService
+        )
+        await model.load()
+        model.addSelectedText("I need to decide by Friday.")
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectRelationshipScopeOption(id: option.id)
+        await model.confirmRelationshipScope()
+        model.beginReminderPreparation()
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+
+        XCTAssertEqual(model.reminderDuplicateActionDecision, .unreviewed)
+        XCTAssertFalse(model.canPreviewReminderDestination)
+        await model.loadReminderDestinationPreview()
+        XCTAssertEqual(reminderService.previewCallCount, 0)
+
+        model.confirmSeparateReminderAfterExistingActionReview()
+
+        XCTAssertEqual(model.reminderDuplicateActionDecision, .separateReminderConfirmed)
+        XCTAssertTrue(model.canPreviewReminderDestination)
+        await model.loadReminderDestinationPreview()
+        XCTAssertEqual(reminderService.previewCallCount, 1)
+    }
+
+    func testRecruiterCanUseExistingCanonicalActionWithoutTouchingEventKit() async throws {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let option = Self.scopeOption(
+            id: "alex",
+            person: "Alex Chen",
+            pursuit: "Platform VP",
+            preflight: Self.preflightWithOpenAction
+        )
+        let model = AppModel(
+            service: ScopeOptionsService(options: [option]),
+            followUpReminderService: reminderService
+        )
+        await model.load()
+        model.addSelectedText("I need to decide by Friday.")
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectRelationshipScopeOption(id: option.id)
+        await model.confirmRelationshipScope()
+
+        model.useExistingOwnedActionInstead()
+
+        XCTAssertEqual(model.reminderDuplicateActionDecision, .useExistingAction)
+        XCTAssertFalse(model.canPreviewReminderDestination)
+        XCTAssertEqual(reminderService.previewCallCount, 0)
+        XCTAssertEqual(reminderService.executeCallCount, 0)
+        XCTAssertTrue(model.intakeControlReceipt?.contains("No Apple Reminder was created") == true)
+    }
+
+    func testMissingCanonicalConsequencePreflightFailsReminderClosed() async throws {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let option = Self.scopeOption(id: "alex", person: "Alex Chen", pursuit: "Platform VP")
+        let model = AppModel(
+            service: ScopeOptionsService(options: [option]),
+            followUpReminderService: reminderService
+        )
+        await model.load()
+        model.addSelectedText("I need to decide by Friday.")
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectRelationshipScopeOption(id: option.id)
+        await model.confirmRelationshipScope()
+        model.beginReminderPreparation()
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+
+        XCTAssertEqual(model.reminderDuplicateActionDecision, .unavailable)
+        XCTAssertFalse(model.canPreviewReminderDestination)
+        await model.loadReminderDestinationPreview()
+        XCTAssertEqual(reminderService.previewCallCount, 0)
+    }
+
+    func testReminderRequiresPreviewApprovalAndVerifiedDestinationReadback() async throws {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            followUpReminderService: reminderService
+        )
+        model.addSelectedText("I need to decide by Friday.")
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        await model.confirmRelationshipScope()
+        model.beginReminderPreparation()
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+
+        await model.loadReminderDestinationPreview()
+        XCTAssertEqual(model.reminderDestination?.title, "Follow Up")
+        XCTAssertEqual(reminderService.previewCallCount, 1)
+        XCTAssertEqual(reminderService.executeCallCount, 0)
+
+        await model.approveAndCreateReminder()
+
+        XCTAssertEqual(reminderService.executeCallCount, 1)
+        guard case .saved(let receipt) = model.reminderOperationState else {
+            return XCTFail("Expected verified reminder receipt")
+        }
+        XCTAssertEqual(receipt.destinationTitle, "Follow Up")
+        XCTAssertEqual(receipt.title, model.reminderTitle)
+    }
+
+    func testUncertainReminderWriteDoesNotRetryAndCanOnlyReconcile() async throws {
+        let reminderService = StubFollowUpReminderService(executeFailure: .saveFailed("response lost"))
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            followUpReminderService: reminderService
+        )
+        model.addSelectedText("I need to decide by Friday.")
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        await model.confirmRelationshipScope()
+        model.beginReminderPreparation()
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+        await model.loadReminderDestinationPreview()
+
+        await model.approveAndCreateReminder()
+
+        XCTAssertEqual(reminderService.executeCallCount, 1)
+        guard case .unknown = model.reminderOperationState else {
+            return XCTFail("A lost write response must remain outcome-unknown")
+        }
+
+        await model.reconcileReminderOutcome()
+
+        XCTAssertEqual(reminderService.executeCallCount, 1, "Reconciliation must not create another reminder.")
+        XCTAssertEqual(reminderService.reconcileCallCount, 1)
+        guard case .saved = model.reminderOperationState else {
+            return XCTFail("Expected reconciliation readback receipt")
+        }
+    }
+
+    func testReminderCreationFailsClosedWhenProtectedRecoveryCannotBeSaved() async throws {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            followUpReminderService: reminderService,
+            reminderRecoveryStore: FailingReminderRecoveryStore()
+        )
+        model.addSelectedText("I need to decide by Friday.")
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        await model.confirmRelationshipScope()
+        model.beginReminderPreparation()
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+        await model.loadReminderDestinationPreview()
+
+        await model.approveAndCreateReminder()
+
+        XCTAssertEqual(reminderService.executeCallCount, 0)
+        guard case .failed(let message) = model.reminderOperationState else {
+            return XCTFail("Expected reminder creation to fail before the external write")
+        }
+        XCTAssertTrue(message.contains("nothing was created"))
+    }
+
+    func testUnreadableReminderRecoveryBlocksNewWritesAndBlindReconciliation() async {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let model = AppModel(
+            service: ScopeOptionsService(
+                options: [Self.scopeOption(id: "alex", person: "Alex Chen", pursuit: "Platform VP")],
+                accountID: "unreadable-recovery-account"
+            ),
+            followUpReminderService: reminderService,
+            reminderRecoveryStore: UnreadableReminderRecoveryStore()
+        )
+
+        await model.load()
+
+        guard case .unknown(let message) = model.reminderOperationState else {
+            return XCTFail("Unreadable protected recovery must remain consequence-bearing")
+        }
+        XCTAssertTrue(message.contains("cannot be opened"))
+        XCTAssertTrue(model.reminderNeedsActionCenter)
+        XCTAssertFalse(model.canReconcileReminderOutcome)
+
+        model.addSelectedText("I need to decide by Friday.")
+        model.beginReminderPreparation()
+        XCTAssertTrue(model.errorMessage?.contains("Finish checking or removing the earlier reminder") == true)
+
+        await model.reconcileReminderOutcome()
+        XCTAssertEqual(reminderService.executeCallCount, 0)
+        XCTAssertEqual(reminderService.reconcileCallCount, 0)
+        guard case .unknown = model.reminderOperationState else {
+            return XCTFail("An unreadable recovery must not degrade into retry authority")
+        }
+    }
+
+    func testReminderRecoverySurvivesRelaunchAndReconcilesWithoutCreate() async throws {
+        let accountID = "reminder-recovery-account"
+        let option = Self.scopeOption(id: "alex", person: "Alex Chen", pursuit: "Platform VP")
+        let proposal = FollowUpReminderProposal.make(
+            sourceItemID: UUID(uuidString: "10000000-0000-4000-8000-000000000010")!,
+            sourceDigest: "opaque-source-digest",
+            title: "Confirm exact remote policy",
+            dueAt: Date(timeIntervalSinceNow: 86_400),
+            timeZone: .current,
+            evidenceQuote: "not stored in recovery",
+            destination: .init(identifier: "follow-up-list", title: "Follow Up")
+        )
+        let recoveryStore = AccountFixtureReminderRecoveryStore()
+        try recoveryStore.save(
+            ReminderOperationRecovery(proposal: proposal, stage: .executionPending),
+            accountID: accountID
+        )
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let model = AppModel(
+            service: ScopeOptionsService(options: [option], accountID: accountID),
+            followUpReminderService: reminderService,
+            reminderRecoveryStore: recoveryStore
+        )
+
+        await model.load()
+
+        guard case .unknown = model.reminderOperationState else {
+            return XCTFail("Expected an unfinished write to recover as outcome unknown")
+        }
+        XCTAssertTrue(model.reminderNeedsActionCenter)
+        XCTAssertEqual(model.reminderTitle, proposal.title)
+        XCTAssertEqual(model.reminderDestination, proposal.destination)
+        XCTAssertTrue(model.reminderRecoveryNotice?.contains("original operation") == true)
+
+        await model.reconcileReminderOutcome()
+
+        XCTAssertEqual(reminderService.executeCallCount, 0)
+        XCTAssertEqual(reminderService.reconcileCallCount, 1)
+        guard case .saved(let receipt) = model.reminderOperationState else {
+            return XCTFail("Expected exact-ID reconciliation to restore a verified receipt")
+        }
+        XCTAssertEqual(receipt.idempotencyKey, proposal.idempotencyKey)
+        XCTAssertEqual(recoveryStore.recoveries[accountID]?.stage, .verified)
+
+        let relaunchedService = StubFollowUpReminderService(executeFailure: nil)
+        let relaunched = AppModel(
+            service: ScopeOptionsService(options: [option], accountID: accountID),
+            followUpReminderService: relaunchedService,
+            reminderRecoveryStore: recoveryStore
+        )
+        await relaunched.load()
+        guard case .saved(let recoveredReceipt) = relaunched.reminderOperationState else {
+            return XCTFail("Expected the verified reminder and reversal path after relaunch")
+        }
+
+        await relaunched.removeVerifiedReminder(recoveredReceipt)
+
+        XCTAssertEqual(relaunchedService.removeCallCount, 1)
+        guard case .removed = relaunched.reminderOperationState else {
+            return XCTFail("Expected verified removal")
+        }
+        XCTAssertNil(recoveryStore.recoveries[accountID])
+    }
+
+    func testVerifiedReminderCanBeRemovedOnlyThroughVerifiedRemovalReadback() async throws {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            followUpReminderService: reminderService
+        )
+        model.addSelectedText("I need to decide by Friday.")
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        await model.confirmRelationshipScope()
+        model.beginReminderPreparation()
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+        await model.loadReminderDestinationPreview()
+        await model.approveAndCreateReminder()
+        guard case .saved(let receipt) = model.reminderOperationState else {
+            return XCTFail("Expected verified reminder receipt")
+        }
+        XCTAssertTrue(model.reminderNeedsActionCenter)
+        XCTAssertEqual(model.actionCenterCount, 1)
+
+        await model.removeVerifiedReminder(receipt)
+
+        XCTAssertEqual(reminderService.removeCallCount, 1)
+        guard case .removed(let removalReceipt) = model.reminderOperationState else {
+            return XCTFail("Expected verified removal receipt")
+        }
+        XCTAssertEqual(removalReceipt.reminderIdentifier, receipt.reminderIdentifier)
+        XCTAssertFalse(model.reminderNeedsActionCenter)
+        XCTAssertEqual(model.actionCenterCount, 0)
+    }
+
+    func testClearingSensitiveConversationPreservesVerifiedExternalReminderRecovery() async throws {
+        let reminderService = StubFollowUpReminderService(executeFailure: nil)
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ready),
+            initialMode: .ready,
+            capsuleStore: DeletingCapsuleStore(),
+            followUpReminderService: reminderService
+        )
+        model.addSelectedText("I need to decide by Friday.")
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        await model.confirmRelationshipScope()
+        model.beginReminderPreparation()
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+        await model.loadReminderDestinationPreview()
+        await model.approveAndCreateReminder()
+        guard case .saved(let receiptBeforeClear) = model.reminderOperationState else {
+            return XCTFail("Expected a verified reminder before local evidence deletion")
+        }
+
+        model.clearLocalContext()
+
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        guard case .saved(let receiptAfterClear) = model.reminderOperationState else {
+            return XCTFail("Deleting sensitive context must not hide a real external reminder")
+        }
+        XCTAssertEqual(receiptAfterClear, receiptBeforeClear)
+        XCTAssertTrue(model.reminderNeedsActionCenter)
+        XCTAssertEqual(model.actionCenterCount, 1)
+        XCTAssertTrue(model.deletionReceipt?.contains("remains visible in Needs your review") == true)
+    }
+
+    func testLateSubmitSuccessAfterSignOutCannotRestoreTheSignedOutWorkspace() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(
+            service: service,
+            accountID: "live-account",
+            capsuleStore: DeletingCapsuleStore()
+        )
+        try await prepareConfirmedSubmission(in: model, service: service, text: "Reviewed evidence that must not come back.")
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+
+        let signOut = Task { await model.signOutAndClearLocalData() }
+        await waitForCall(service, method: "signOut")
+        await service.finishSignOut(with: .revoked(.init(sessionID: "session-1", revokedAt: "2026-10-08T00:00:00Z")))
+        await signOut.value
+
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-late",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await submit.value
+
+        XCTAssertTrue(model.isSignedOut)
+        XCTAssertEqual(model.accountID, "signed-out")
+        XCTAssertEqual(model.mode, .empty)
+        XCTAssertNil(model.pendingDecision)
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        XCTAssertNil(model.lastSubmittedManifest)
+    }
+
+    func testLateSubmitErrorAfterSignOutDoesNotLandAnOldFailure() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(
+            service: service,
+            accountID: "live-account",
+            capsuleStore: DeletingCapsuleStore()
+        )
+        try await prepareConfirmedSubmission(in: model, service: service, text: "Reviewed evidence for a lost response.")
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        let signOut = Task { await model.signOutAndClearLocalData() }
+        await waitForCall(service, method: "signOut")
+        await service.finishSignOut(with: .revoked(.init(sessionID: "session-1", revokedAt: "2026-10-08T00:00:00Z")))
+        await signOut.value
+
+        await service.finish("submit", with: .failure("Synthetic transport loss from the old session."))
+        await submit.value
+
+        XCTAssertTrue(model.isSignedOut)
+        XCTAssertEqual(model.mode, .empty)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.deletionReceipt?.contains("transport loss") == true)
+    }
+
+    func testLateSubmitAfterAccountReplacementCannotRestoreOldAccountState() async throws {
+        let service = ControlledRelationshipService()
+        let store = AccountFixtureCapsuleStore()
+        let model = AppModel(service: service, accountID: "account-a", capsuleStore: store)
+        try await prepareConfirmedSubmission(in: model, service: service, text: "Account A evidence.")
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+
+        store.setDraft(Self.draft("Account B private excerpt"), for: "account-b")
+        await service.finish("loadWorkspace", with: .response(Self.connected(
+            accountID: "account-b",
+            options: [Self.scopeOption(id: "b", person: "B Person", pursuit: "B Pursuit")]
+        )))
+        await model.load()
+        XCTAssertEqual(model.accountID, "account-b")
+
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "account-a",
+            taskID: "task-old-account",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await submit.value
+
+        XCTAssertEqual(model.accountID, "account-b")
+        XCTAssertEqual(model.capsule.items.map(\.preview), ["Account B private excerpt"])
+        XCTAssertNil(model.pendingDecision)
+        XCTAssertEqual(model.mode, .ready)
+    }
+
+    func testLateSubmitAfterKeepUnresolvedIsDiscarded() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: DeletingCapsuleStore())
+        try await prepareConfirmedSubmission(in: model, service: service, text: "Evidence pending an unresolved scope.")
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        model.keepRelationshipScopeUnresolved()
+
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-after-unresolved",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await submit.value
+
+        XCTAssertEqual(model.scopeReviewStatus, .unresolved)
+        XCTAssertEqual(model.mode, .ambiguousIdentity)
+        XCTAssertNil(model.pendingDecision)
+    }
+
+    func testLateSubmitAfterStopCannotRepopulateTheLocalCapsule() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: DeletingCapsuleStore())
+        try await prepareConfirmedSubmission(in: model, service: service, text: "Evidence that stop must retire.")
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        model.stopContextIntake()
+
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-after-stop",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await submit.value
+
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        XCTAssertNil(model.pendingDecision)
+        XCTAssertEqual(model.mode, .deleted)
+    }
+
+    func testUnrelatedLocalOnlyAttachmentDoesNotInvalidateAnUnchangedSelectedSourceSubmission() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(
+            service: service,
+            accountID: "live-account",
+            capsuleStore: DeletingCapsuleStore(),
+            localFileTextExtractor: Self.unrelatedFileExtractor()
+        )
+        try await prepareConfirmedSubmission(in: model, service: service, text: "Reviewed evidence that stays authoritative.")
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        await model.addFiles([URL(fileURLWithPath: "/tmp/unrelated-local-note.png")])
+        XCTAssertEqual(model.capsule.items.count, 2)
+
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-unaffected",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await submit.value
+
+        XCTAssertEqual(model.mode, .needsDecision)
+        XCTAssertNotNil(model.pendingDecision)
+        XCTAssertEqual(model.capsule.items.count, 2, "An unrelated local-only attachment must survive the landed submission.")
+    }
+
+    func testChangedSelectedSourceMakesTheOldSubmitResultObsolete() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: DeletingCapsuleStore())
+        let sourceID = try await prepareConfirmedSubmission(
+            in: model,
+            service: service,
+            text: "Reviewed secret evidence that gets redacted."
+        )
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        model.redactCapsuleItem(id: sourceID, exactTerms: ["secret"])
+
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-obsolete",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await submit.value
+
+        XCTAssertEqual(model.mode, .stale)
+        XCTAssertNil(model.pendingDecision)
+        XCTAssertTrue(model.errorMessage?.contains("obsolete") == true)
+    }
+
+    func testOldScopeConfirmationCannotLandAfterReselectionOrUnresolved() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: DeletingCapsuleStore())
+        await service.finish("loadWorkspace", with: .response(Self.connected(
+            accountID: "live-account",
+            options: [
+                Self.scopeOption(id: "a", person: "A Person", pursuit: "A Pursuit"),
+                Self.scopeOption(id: "b", person: "B Person", pursuit: "B Pursuit")
+            ]
+        )))
+        await model.load()
+
+        model.selectRelationshipScopeOption(id: "a")
+        let confirm = Task { await model.confirmRelationshipScope() }
+        await waitForCall(service, method: "confirmScope")
+        model.selectRelationshipScopeOption(id: "b")
+
+        await service.finish("confirmScope", with: .accepted)
+        await confirm.value
+
+        XCTAssertEqual(model.scopeReviewStatus, .proposed, "An old confirmation can never confirm a replaced scope.")
+        XCTAssertEqual(model.selectedScopeOptionID, "b")
+
+        let confirmAgain = Task { await model.confirmRelationshipScope() }
+        await waitForCall(service, method: "confirmScope", atLeast: 2)
+        model.keepRelationshipScopeUnresolved()
+
+        await service.finish("confirmScope", with: .accepted)
+        await confirmAgain.value
+
+        XCTAssertEqual(model.scopeReviewStatus, .unresolved)
+    }
+
+    func testSupersedingSubmissionWinsAndTheOlderSubmitResultIsDiscarded() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: DeletingCapsuleStore())
+        try await prepareConfirmedSubmission(in: model, service: service, text: "First reviewed source.")
+
+        let older = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+
+        model.addSelectedText("Second reviewed source for a superseding submission.")
+        let secondID = try XCTUnwrap(model.capsule.items.last?.id)
+        model.setAttribution(id: secondID, actorKind: .candidate)
+        model.confirmAttribution(id: secondID)
+        let newer = Task { await model.submitCapsule() }
+        await waitForCall(service, method: "submit", atLeast: 2)
+
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-older",
+            displayMode: .failed
+        )))
+        await older.value
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-newer",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await newer.value
+
+        XCTAssertEqual(model.mode, .needsDecision, "Only the superseding submission may land its result.")
+    }
+
+    func testOldInitializationCannotClearALaterLoginMemory() async throws {
+        let service = ControlledRelationshipService()
+        let store = AccountFixtureCapsuleStore()
+        store.setDraft(Self.draft("Later login private excerpt"), for: "account-later")
+        let model = AppModel(service: service, accountID: "pending-live-account", capsuleStore: store)
+
+        let initialization = Task { await model.ensureInitialized() }
+        await waitForCall(service, method: "loadWorkspace")
+        let reload = Task { await model.load() }
+        await waitForCall(service, method: "loadWorkspace", atLeast: 2)
+
+        await service.finish("loadWorkspace", with: .response(Self.connected(accountID: "account-old", options: [])))
+        await service.finish("loadWorkspace", with: .response(Self.connected(accountID: "account-later", options: [])))
+        let initialized = await initialization.value
+        await reload.value
+
+        XCTAssertFalse(initialized)
+        XCTAssertEqual(model.accountID, "account-later")
+        XCTAssertEqual(model.capsule.items.map(\.preview), ["Later login private excerpt"])
+    }
+
+    func testLateSignOutCannotDeleteANewerSameAccountLoginData() async throws {
+        let service = ControlledRelationshipService()
+        let store = AccountFixtureCapsuleStore()
+        store.setDraft(Self.draft("Old session private excerpt"), for: "shared-account")
+        let model = AppModel(service: service, accountID: "shared-account", capsuleStore: store)
+
+        let signOut = Task { await model.signOutAndClearLocalData() }
+        await waitForCall(service, method: "signOut")
+        XCTAssertEqual(
+            store.draftCount(for: "shared-account"), 0,
+            "The captured old local data is cleared before the first logout await."
+        )
+
+        await service.finish("loadWorkspace", with: .response(Self.connected(accountID: "shared-account", options: [])))
+        await model.load()
+        model.addSelectedText("Newer login private excerpt")
+        XCTAssertEqual(store.draftCount(for: "shared-account"), 1)
+
+        await service.finishSignOut(with: .revoked(.init(sessionID: "session-old", revokedAt: "2026-10-08T00:00:00Z")))
+        await signOut.value
+
+        XCTAssertEqual(model.accountID, "shared-account")
+        XCTAssertFalse(model.isSignedOut)
+        XCTAssertEqual(model.capsule.items.map(\.preview), ["Newer login private excerpt"])
+        XCTAssertEqual(store.draftCount(for: "shared-account"), 1, "A late logout must not delete the newer login's data or key.")
+        XCTAssertFalse(model.isPaused, "A late logout cannot leave the newer session paused out of its own intake.")
+    }
+
+    func testDecisionDispatchedBeforeLogoutWithLateFailureStaysUnrestored() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: DeletingCapsuleStore())
+        try await prepareConfirmedSubmission(in: model, service: service, text: "Evidence for the dispatched decision.")
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-decision",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await model.submitCurrentInsight()
+        let review = try XCTUnwrap(model.pendingDecision)
+        model.setDecision(itemID: review.items[0].id, choice: .accept)
+
+        let resolve = Task { await model.resolveCanonicalDecision() }
+        await waitForCall(service, method: "resolveDecision")
+        let signOut = Task { await model.signOutAndClearLocalData() }
+        await waitForCall(service, method: "signOut")
+
+        await service.finish("resolveDecision", with: .failure("The dispatched decision write returned a lost response."))
+        await resolve.value
+        await service.finishSignOut(with: .failure("Remote revocation is outcome-unknown."))
+        await signOut.value
+
+        XCTAssertTrue(model.isSignedOut)
+        XCTAssertEqual(model.mode, .empty)
+        XCTAssertNil(model.pendingDecision)
+        XCTAssertNil(model.canonicalReceipt)
+        XCTAssertFalse(model.errorMessage?.contains("lost response") == true)
+    }
+
+    func testDelayedReminderOutcomeAcrossAccountReplacementLandsOnlyUnderTheOriginalAccount() async throws {
+        let service = ControlledRelationshipService()
+        let reminderService = ControlledFollowUpReminderService()
+        reminderService.holdsExecute = true
+        let store = AccountFixtureReminderRecoveryStore()
+        let model = AppModel(
+            service: service,
+            accountID: "account-a",
+            capsuleStore: DeletingCapsuleStore(),
+            followUpReminderService: reminderService,
+            reminderRecoveryStore: store
+        )
+        try await prepareConfirmedSubmission(in: model, service: service, text: "I need to decide by Friday.")
+        model.beginReminderPreparation()
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+        await model.loadReminderDestinationPreview()
+
+        let create = Task { await model.approveAndCreateReminder() }
+        for _ in 0..<500 where reminderService.executeCallCount == 0 { await Task.yield() }
+        XCTAssertEqual(reminderService.executeCallCount, 1)
+
+        await service.finish("loadWorkspace", with: .response(Self.connected(accountID: "account-b", options: [])))
+        await model.load()
+        XCTAssertEqual(model.accountID, "account-b")
+
+        reminderService.completeExecuteWithVerifiedReceipt()
+        await create.value
+
+        XCTAssertNil(store.recoveries["account-b"], "An old callback must not persist account A source under account B.")
+        XCTAssertEqual(
+            store.recoveries["account-a"]?.stage,
+            .verified,
+            "The original account keeps its governed, reconcilable already-dispatched outcome."
+        )
+        guard case .notPrepared = model.reminderOperationState else {
+            return XCTFail("Old reminder state must not land in the replaced workspace.")
+        }
+    }
+
+    func testReminderCleanupComparesExactOperationAndKeepsANewerOperationReceipt() async throws {
+        let service = ControlledRelationshipService()
+        let reminderService = ControlledFollowUpReminderService()
+        reminderService.holdsRemove = true
+        let store = AccountFixtureReminderRecoveryStore()
+        let model = AppModel(
+            service: service,
+            accountID: "account-a",
+            capsuleStore: DeletingCapsuleStore(),
+            followUpReminderService: reminderService,
+            reminderRecoveryStore: store
+        )
+        try await prepareConfirmedSubmission(in: model, service: service, text: "I need to decide by Friday.")
+        model.beginReminderPreparation()
+        model.reminderDueAt = Date(timeIntervalSinceNow: 86_400)
+        await model.loadReminderDestinationPreview()
+        await model.approveAndCreateReminder()
+        guard case .saved(let receipt) = model.reminderOperationState else {
+            return XCTFail("Expected a verified reminder receipt")
+        }
+
+        let removal = Task { await model.removeVerifiedReminder(receipt) }
+        for _ in 0..<500 where reminderService.removeCallCount == 0 { await Task.yield() }
+        XCTAssertEqual(reminderService.removeCallCount, 1)
+
+        // A newer operation for the same account saves its own receipt while
+        // the older removal is still in flight.
+        let newerProposal = FollowUpReminderProposal.make(
+            sourceItemID: UUID(),
+            sourceDigest: "newer-op-source-digest",
+            title: "A newer reminder operation",
+            dueAt: Date(timeIntervalSinceNow: 172_800),
+            timeZone: .current,
+            evidenceQuote: "",
+            destination: .init(identifier: "follow-up-list", title: "Follow Up")
+        )
+        let newerReceipt = FollowUpReminderReceipt(
+            idempotencyKey: newerProposal.idempotencyKey,
+            reminderIdentifier: "newer-reminder",
+            title: newerProposal.title,
+            dueAt: newerProposal.dueAt,
+            destinationIdentifier: newerProposal.destination.identifier,
+            destinationTitle: newerProposal.destination.title,
+            verifiedAt: Date()
+        )
+        try store.save(
+            ReminderOperationRecovery(proposal: newerProposal, stage: .verified, receipt: newerReceipt),
+            accountID: "account-a"
+        )
+
+        reminderService.completeRemoveWithSuccess(idempotencyKey: receipt.idempotencyKey, reminderIdentifier: receipt.reminderIdentifier)
+        await removal.value
+
+        XCTAssertEqual(
+            store.recoveries["account-a"]?.title,
+            newerProposal.title,
+            "Old cleanup must not delete a new recovery receipt with a different operation identity."
+        )
+    }
+
+    func testTerminalWorkflowCleanupRemovesOnlyItsOwnTaskOnlySourceAndKeepsNewFiles() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(
+            service: service,
+            accountID: "live-account",
+            capsuleStore: DeletingCapsuleStore(),
+            localFileTextExtractor: Self.unrelatedFileExtractor()
+        )
+        let sourceID = try await prepareConfirmedSubmission(in: model, service: service, text: "Task-only reviewed source.")
+        XCTAssertEqual(model.capsule.items.first?.retention, .taskOnly)
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        await model.addFiles([URL(fileURLWithPath: "/tmp/new-local-file.png")])
+        XCTAssertEqual(model.capsule.items.count, 2)
+
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-terminal",
+            displayMode: .noAction
+        )))
+        await submit.value
+
+        XCTAssertFalse(model.capsule.items.contains { $0.id == sourceID }, "The retiring workflow-bound taskOnly copy is removed.")
+        XCTAssertEqual(model.capsule.items.count, 1, "A newly added local-only file survives terminal cleanup.")
+        XCTAssertTrue(model.localRecoveryNotice?.contains("after the canonical task ended") == true)
+    }
+
+    func testOldTerminalReadbackCannotPurgeASourceANewerOperationOwnsOrAnAmendedSource() async throws {
+        let service = ControlledRelationshipService()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: DeletingCapsuleStore())
+        let sourceID = try await prepareConfirmedSubmission(in: model, service: service, text: "Shared source for two workflows.")
+
+        let older = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-w1",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await older.value
+
+        model.addSelectedText("Extra shared source for the newer workflow.")
+        let extraID = try XCTUnwrap(model.capsule.items.last?.id)
+        model.setAttribution(id: extraID, actorKind: .candidate)
+        model.confirmAttribution(id: extraID)
+        let newer = Task { await model.submitCapsule() }
+        await waitForCall(service, method: "submit", atLeast: 2)
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-w2",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await newer.value
+
+        let olderTerminal = Task {
+            await model.openActionProjection(Self.actionProjection(id: "task-w1"))
+        }
+        await waitForCall(service, method: "openProjection")
+        await service.finish("openProjection", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-w1",
+            displayMode: .noAction
+        )))
+        await olderTerminal.value
+
+        XCTAssertTrue(
+            model.capsule.items.contains { $0.id == sourceID },
+            "A source a newer operation still owns survives the older terminal cleanup."
+        )
+        XCTAssertTrue(model.capsule.items.contains { $0.id == extraID })
+
+        let newerTerminal = Task {
+            await model.openActionProjection(Self.actionProjection(id: "task-w2"))
+        }
+        await waitForCall(service, method: "openProjection", atLeast: 2)
+        model.redactCapsuleItem(id: sourceID, exactTerms: ["Shared"])
+        await service.finish("openProjection", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-w2",
+            displayMode: .receipt,
+            receipt: Self.canonicalReceipt(accountID: "live-account", taskID: "task-w2")
+        )))
+        await newerTerminal.value
+
+        XCTAssertTrue(model.capsule.items.contains { $0.id == sourceID }, "An amended source survives its workflow's terminal cleanup.")
+        XCTAssertFalse(model.capsule.items.contains { $0.id == extraID }, "The retiring unamended copy is removed.")
+    }
+
+    func testSameAccountReplacementKeepsNewSessionItemsFromAnOldTerminalReadback() async throws {
+        let service = ControlledRelationshipService()
+        let store = AccountFixtureCapsuleStore()
+        let model = AppModel(service: service, accountID: "shared-account", capsuleStore: store)
+        try await prepareConfirmedSubmission(in: model, service: service, text: "Old session source.")
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        let signOut = Task { await model.signOutAndClearLocalData() }
+        await waitForCall(service, method: "signOut")
+        await service.finishSignOut(with: .revoked(.init(sessionID: "old", revokedAt: "2026-10-08T00:00:00Z")))
+        await signOut.value
+
+        await service.finish("loadWorkspace", with: .response(Self.connected(accountID: "shared-account", options: [])))
+        await model.load()
+        model.addSelectedText("New session source.")
+
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "shared-account",
+            taskID: "task-old-session",
+            displayMode: .noAction
+        )))
+        await submit.value
+
+        XCTAssertEqual(model.capsule.items.map(\.preview), ["New session source."], "An old terminal readback cannot purge a newer same-account session's items.")
+        XCTAssertFalse(model.localRecoveryNotice?.contains("after the canonical task ended") == true)
+    }
+
+    func testHydratedOldCapsuleIsDetachedBeforeTheLogoutAwaitAndNeverRePersists() async throws {
+        let service = ControlledRelationshipService()
+        let store = AccountFixtureCapsuleStore()
+        store.setDraft(Self.draft("Hydrated old private excerpt"), for: "shared-account")
+        let model = AppModel(service: service, accountID: "shared-account", capsuleStore: store)
+
+        // Hydrate the old source into the model, not only into the store.
+        await service.finish("loadWorkspace", with: .response(Self.connected(accountID: "shared-account", options: [])))
+        await model.load()
+        XCTAssertEqual(model.capsule.items.map(\.preview), ["Hydrated old private excerpt"])
+
+        let signOut = Task { await model.signOutAndClearLocalData() }
+        await waitForCall(service, method: "signOut")
+
+        // The explicit sign-out clear is synchronous, before the first logout
+        // suspension: the old in-memory source is already gone at the boundary.
+        XCTAssertTrue(
+            model.capsule.items.isEmpty,
+            "The retiring in-memory Capsule is detached before the first logout await."
+        )
+        XCTAssertNil(model.provisionalInsight)
+        XCTAssertEqual(model.accountID, "signed-out")
+
+        await service.finish("loadWorkspace", with: .response(Self.connected(accountID: "shared-account", options: [])))
+        await model.load()
+        model.addSelectedText("Newer login private excerpt")
+
+        await service.finishSignOut(with: .revoked(.init(sessionID: "old", revokedAt: "2026-10-08T00:00:00Z")))
+        await signOut.value
+
+        XCTAssertEqual(model.capsule.items.map(\.preview), ["Newer login private excerpt"])
+        XCTAssertEqual(store.draftCount(for: "shared-account"), 1)
+        XCTAssertFalse(model.isSignedOut)
+    }
+
+    func testRestartTerminalCleanupTargetsOnlyTheRecoveredWorkflow() async throws {
+        let service = ControlledRelationshipService()
+        let store = AccountFixtureCapsuleStore()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: store)
+        let sourceID = try await prepareConfirmedSubmission(in: model, service: service, text: "Restart workflow source.")
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        // An unrelated addition after the frozen submission is not owned by it.
+        model.addSelectedText("Unrelated note outside the workflow.")
+        let unrelatedID = try XCTUnwrap(model.capsule.items.last?.id)
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-restart",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await submit.value
+        XCTAssertEqual(
+            store.drafts(for: "live-account")?.workflowOwnerships?.map(\.workflowID),
+            ["task-restart"],
+            "Exact source/account/workflow/operation ownership is persisted with the encrypted Capsule."
+        )
+
+        // Restart: a fresh model recovers the exact bindings, then the real
+        // terminal readback retires only this workflow's copy.
+        let restarted = AppModel(service: service, accountID: "live-account", capsuleStore: store)
+        await service.finish("loadWorkspace", with: .response(Self.connected(accountID: "live-account", options: [])))
+        await restarted.load()
+        XCTAssertEqual(restarted.capsule.items.count, 2)
+
+        let terminal = Task {
+            await restarted.openActionProjection(Self.actionProjection(id: "task-restart"))
+        }
+        await waitForCall(service, method: "openProjection")
+        await service.finish("openProjection", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-restart",
+            displayMode: .noAction
+        )))
+        await terminal.value
+
+        XCTAssertFalse(restarted.capsule.items.contains { $0.id == sourceID })
+        XCTAssertTrue(
+            restarted.capsule.items.contains { $0.id == unrelatedID },
+            "Restart terminal cleanup never erases unrelated additions outside the workflow."
+        )
+        XCTAssertTrue(restarted.localRecoveryNotice?.contains("after the canonical task ended") == true)
+    }
+
+    func testCanonicalFirstBootstrapAdoptsOwnershipBeforeTerminalCleanup() async throws {
+        let service = ControlledRelationshipService()
+        let store = AccountFixtureCapsuleStore()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: store)
+        let sourceID = try await prepareConfirmedSubmission(in: model, service: service, text: "Canonical-first source.")
+
+        let submit = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        // The unrelated day-long attachment is added AFTER the exact selected
+        // source was frozen, so it is never part of this workflow.
+        model.addSelectedText("Unrelated day-long source.")
+        let unrelatedID = try XCTUnwrap(model.capsule.items.last?.id)
+        model.setRetention(id: unrelatedID, value: .twentyFourHours)
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-canonical-first",
+            displayMode: .needsDecision,
+            pendingDecision: FixtureRelationshipService.decisionReviewFixture()
+        )))
+        await submit.value
+
+        // Production-style relaunch: placeholder account and EMPTY in-memory
+        // capsule while encrypted ownership survives; the FIRST response is        // canonical, not connected.
+        let restarted = AppModel(
+            service: service,
+            accountID: "pending-live-account",
+            capsuleStore: store
+        )
+        await service.finish("loadWorkspace", with: .response(.canonical(
+            Self.canonicalReadbackRecord(
+                accountID: "live-account",
+                taskID: "task-canonical-first",
+                displayMode: .outcomeUnknown
+            )
+        )))
+        await restarted.load()
+        XCTAssertEqual(restarted.accountID, "live-account")
+        XCTAssertEqual(restarted.capsule.items.count, 2, "Encrypted sources and ownership recover on the canonical-first path.")
+
+        let terminal = Task { await restarted.reconcileCanonicalDecision() }
+        await waitForCall(service, method: "reconcileDecisionOutcome")
+        await service.finish("reconcileDecisionOutcome", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-canonical-first",
+            displayMode: .noAction
+        )))
+        await terminal.value
+
+        XCTAssertFalse(restarted.capsule.items.contains { $0.id == sourceID })
+        XCTAssertTrue(
+            restarted.capsule.items.contains { $0.id == unrelatedID },
+            "Terminal cleanup deletes ONLY the exact workflow-owned copy."
+        )
+    }
+
+    func testFailedOwnershipPersistenceBlocksSubmissionDispatchCompletely() async throws {
+        let service = ControlledRelationshipService()
+        let store = FailingSaveCapsuleStore()
+        store.failSaves = true
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: store)
+        try await prepareConfirmedSubmission(in: model, service: service, text: "Barrier-protected source.")
+
+        await model.submitCurrentInsight()
+
+        let dispatched = await service.callCount("submit")
+        XCTAssertEqual(
+            dispatched,
+            0,
+            "A failed durable ownership write blocks the pre-dispatch barrier: zero service/model/task dispatch."
+        )
+        XCTAssertTrue(model.errorMessage?.contains("could not be") == true, "The failure notice is retained.")
+    }
+
+    func testSupersededPreDispatchRegistrationRetiresOnlyOnHostProof() async throws {
+        let service = ControlledRelationshipService()
+        let store = AccountFixtureCapsuleStore()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: store)
+        let sourceID = try await prepareConfirmedSubmission(in: model, service: service, text: "Superseded workflow source.")
+
+        let older = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        model.addSelectedText("Unrelated local attachment that advances the version.")
+        let unrelatedID = try XCTUnwrap(model.capsule.items.last?.id)
+
+        let newer = Task { await model.submitCapsule() }
+        await waitForCall(service, method: "submit", atLeast: 2)
+
+        // Positive host proof: the old task POST was never dispatched.
+        await service.finish("submit", with: .taskNotDispatched(
+            "The source workflow stopped before any Agent Task write was dispatched; no task was created."
+        ))
+        await older.value
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-newer",
+            displayMode: .noAction
+        )))
+        await newer.value
+
+        XCTAssertFalse(
+            model.capsule.items.contains { $0.id == sourceID },
+            "A provably-never-dispatched older owner must not block the newer terminal retirement."
+        )
+        XCTAssertTrue(
+            model.capsule.items.contains { $0.id == unrelatedID },
+            "The unrelated attachment survives terminal cleanup."
+        )
+    }
+
+    func testUnknownTaskOutcomeKeepsExactCorrelationAndStillProtectsTheSource() async throws {
+        let service = ControlledRelationshipService()
+        let store = AccountFixtureCapsuleStore()
+        let model = AppModel(service: service, accountID: "live-account", capsuleStore: store)
+        let sourceID = try await prepareConfirmedSubmission(in: model, service: service, text: "Unknown-outcome source.")
+
+        let older = Task { await model.submitCurrentInsight() }
+        await waitForCall(service, method: "submit")
+        model.addSelectedText("Unrelated local attachment.")
+        let unrelatedID = try XCTUnwrap(model.capsule.items.last?.id)
+        let newer = Task { await model.submitCapsule() }
+        await waitForCall(service, method: "submit", atLeast: 2)
+
+        // Unknown transport outcome: never presumed canceled, so the source
+        // stays protected and the correlation survives for reconciliation.
+        await service.finish("submit", with: .failure("The dispatched task write returned a lost response."))
+        await older.value
+        await service.finish("submit", with: .response(Self.canonicalReadback(
+            accountID: "live-account",
+            taskID: "task-newer",
+            displayMode: .noAction
+        )))
+        await newer.value
+
+        XCTAssertTrue(
+            model.capsule.items.contains { $0.id == sourceID },
+            "An unknown old task outcome still protects the same source from deletion."
+        )
+        XCTAssertTrue(model.capsule.items.contains { $0.id == unrelatedID })
+        XCTAssertEqual(
+            store.drafts(for: "live-account")?.workflowOwnerships?.contains {
+                $0.phase == .taskOutcomeUnknown
+            },
+            true,
+            "The unknown task keeps its exact operation correlation for governed read reconciliation."
+        )
+    }
+
+    @discardableResult
+    private func prepareConfirmedSubmission(
+        in model: AppModel,
+        service: ControlledRelationshipService,
+        text: String
+    ) async throws -> UUID {
+        model.addSelectedText(text)
+        let itemID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: itemID, actorKind: .candidate)
+        model.confirmAttribution(id: itemID)
+        model.selectRelationshipScopeOption(id: "synthetic-scope")
+        let confirm = Task { await model.confirmRelationshipScope() }
+        await waitForCall(service, method: "confirmScope")
+        await service.finish("confirmScope", with: .accepted)
+        await confirm.value
+        XCTAssertEqual(model.scopeReviewStatus, .confirmed)
+        return itemID
+    }
+
+    private func waitForCall(
+        _ service: ControlledRelationshipService,
+        method: String,
+        atLeast count: Int = 1
+    ) async {
+        for _ in 0..<1_000 {
+            if await service.callCount(method) >= count { return }
+            await Task.yield()
+        }
+        XCTFail("Controlled service never started \(method) (wanted at least \(count) calls)")
+    }
+
+    private static func connected(
+        accountID: String,
+        options: [RelationshipScopeOption]
+    ) -> MacRelationshipServiceResponse {
+        .connected(ConnectedRelationshipScope(
+            workspaceID: "workspace-\(accountID)",
+            accountID: accountID,
+            options: options,
+            presentation: options.first?.presentation ?? .cleared
+        ))
+    }
+
+    private static func canonicalReadbackRecord(
+        accountID: String,
+        taskID: String,
+        displayMode: WorkspaceMode,
+        pendingDecision: CanonicalProposalReview? = nil,
+        receipt: CanonicalPursuitReceipt? = nil
+    ) -> CanonicalRelationshipReadback {
+        CanonicalRelationshipReadback(
+            workspaceID: "workspace-\(accountID)",
+            accountID: accountID,
+            pursuitID: "synthetic-pursuit",
+            personID: "synthetic-person",
+            relationshipContextID: "synthetic-relationship-context",
+            captureID: "capture-\(taskID)",
+            evidenceFragmentIDs: ["fragment-\(taskID)"],
+            taskID: taskID,
+            taskStatus: displayMode == .receipt ? "completed" : displayMode == .failed ? "failed" : "no_action",
+            externalEffects: [],
+            displayMode: displayMode,
+            presentation: .cleared,
+            runAudit: nil,
+            clarification: nil,
+            pendingDecision: pendingDecision,
+            receipt: receipt
+        )
+    }
+
+    private static func canonicalReadback(
+        accountID: String,
+        taskID: String,
+        displayMode: WorkspaceMode,
+        pendingDecision: CanonicalProposalReview? = nil,
+        receipt: CanonicalPursuitReceipt? = nil
+    ) -> MacRelationshipServiceResponse {
+        .canonical(canonicalReadbackRecord(
+            accountID: accountID,
+            taskID: taskID,
+            displayMode: displayMode,
+            pendingDecision: pendingDecision,
+            receipt: receipt
+        ))
+    }
+
+    private static func canonicalReceipt(accountID: String, taskID: String) -> CanonicalPursuitReceipt {
+        CanonicalPursuitReceipt(
+            id: "receipt-\(taskID)",
+            operationID: "operation-\(taskID)",
+            workspaceID: "workspace-\(accountID)",
+            pursuitID: "synthetic-pursuit",
+            proposalID: "proposal-\(taskID)",
+            outcome: "canonical_applied",
+            summary: "Controlled canonical receipt.",
+            beforeRevision: 1,
+            afterRevision: 2,
+            changedFields: [],
+            externalEffects: [],
+            occurredAt: "2026-10-08T00:00:00Z"
+        )
+    }
+
+    private static func actionProjection(id: String) -> ActionProjection {
+        ActionProjection(
+            id: id,
+            objectName: "Controlled workflow",
+            consequence: "No external effect",
+            authority: "Controlled test readback",
+            status: .awaitingDecision,
+            nextOperation: "Open the canonical Task",
+            route: .openCurrent
+        )
+    }
+
+    private static func unrelatedFileExtractor() -> StubLocalFileTextExtractor {
+        StubLocalFileTextExtractor(result: .success(LocalFileTextExtraction(
+            displayName: "unrelated-local-note.png",
+            recognizedText: "Unrelated local-only attachment.",
+            rawData: Data([4, 5, 6]),
+            mediaType: "image/png",
+            sourceFingerprint: "unrelated-file",
+            method: .localImageOCR
+        )))
+    }
+
+    private static func draft(_ text: String) -> ContextCapsuleDraft {
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText(text)
+        return draft
+    }
+
+    private static func scopeOption(
+        id: String,
+        person: String,
+        pursuit: String,
+        preflight: RelationshipConsequencePreflight? = nil
+    ) -> RelationshipScopeOption {
+        RelationshipScopeOption(
+            id: id,
+            pursuitID: "pursuit-\(id)",
+            pursuitRevision: 1,
+            pursuitTitle: pursuit,
+            personID: "person-\(id)",
+            personDisplayLabel: person,
+            relationshipContextID: "context-\(id)",
+            relationshipContextLabel: "Candidate in \(pursuit)",
+            consequencePreflight: preflight
+        )
+    }
+
+    private static func todayItem(
+        id: String,
+        scopeOptionID: String?,
+        proposalID: String? = "proposal-alex"
+    ) -> TodayAttentionItem {
+        TodayAttentionItem(
+            id: id,
+            pursuitID: "pursuit-alex",
+            pursuitTitle: "Platform VP",
+            personLabel: "Alex Chen",
+            kind: .proposalReview,
+            whyNow: "Remote-policy expectation needs review",
+            unresolved: "Two proposed changes remain unconfirmed.",
+            owner: "You",
+            dueAt: nil,
+            dueFallback: "Pursuit target Sep 3",
+            nextMove: "Review each proposed change against its exact evidence.",
+            evidenceAvailability: "available",
+            scopeOptionID: scopeOptionID,
+            proposalID: proposalID
+        )
+    }
+
+    private static let preflightWithOpenAction = RelationshipConsequencePreflight(
+        milestone: "Decision dependency review",
+        targetDate: "2026-09-03",
+        evidenceAvailability: "available",
+        openActions: [
+            .init(
+                id: "action-existing",
+                title: "Clarify remote policy with client",
+                owner: "Recruiter",
+                dueAt: Date(timeIntervalSince1970: 1_788_364_800),
+                status: "open"
+            )
+        ],
+        openGaps: []
+    )
+}
+
+private struct ScopeOptionsService: MacRelationshipServing {
+    let options: [RelationshipScopeOption]
+    var accountID = "scope-suggestion-account"
+    var todayAttention: TodayAttentionProjection = .empty
+
+    func loadWorkspace() async throws -> MacRelationshipServiceResponse {
+        .connected(.init(
+            workspaceID: "scope-suggestion-workspace",
+            accountID: accountID,
+            options: options,
+            presentation: options.first?.presentation ?? .cleared,
+            todayAttention: todayAttention
+        ))
+    }
+
+    func confirmScope(_ selection: RelationshipScopeSelection) async throws { }
+    func submit(manifest: SubmittedContextManifest) async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func resolveDecision(_ request: CanonicalDecisionRequest) async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func reconcileDecisionOutcome() async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func openTodayProposalReview(pursuitID: String, proposalID: String) async throws -> MacRelationshipServiceResponse {
+        guard pursuitID == "pursuit-alex", proposalID == "proposal-alex" else {
+            throw AppModelSafetyTestError.unavailable
+        }
+        return .syntheticFixture(FixtureRelationshipService.fixture(mode: .needsDecision))
+    }
+    func openProjection(_ projection: CanonicalProjectionRequest) async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func signOut() async throws -> SessionSignOutOutcome { throw AppModelSafetyTestError.unavailable }
+}
+
+private struct StaleDecisionService: MacRelationshipServing {
+    func loadWorkspace() async throws -> MacRelationshipServiceResponse {
+        .syntheticFixture(FixtureRelationshipService.fixture(mode: .needsDecision))
+    }
+
+    func confirmScope(_ selection: RelationshipScopeSelection) async throws { }
+
+    func submit(manifest: SubmittedContextManifest) async throws -> MacRelationshipServiceResponse {
+        .syntheticFixture(FixtureRelationshipService.fixture(mode: .needsDecision))
+    }
+
+    func resolveDecision(_ request: CanonicalDecisionRequest) async throws -> MacRelationshipServiceResponse {
+        throw RelationshipServiceError.staleAuthority("Synthetic source version changed. No decision was sent.")
+    }
+
+    func reconcileDecisionOutcome() async throws -> MacRelationshipServiceResponse {
+        throw RelationshipServiceError.invalidResponse("No unknown operation exists.")
+    }
+
+    func openProjection(_ projection: CanonicalProjectionRequest) async throws -> MacRelationshipServiceResponse {
+        .syntheticFixture(FixtureRelationshipService.fixture(mode: .stale))
+    }
+
+    func signOut() async throws -> SessionSignOutOutcome {
+        SessionSignOutOutcome(
+            remote: .revoked(.init(sessionID: "stale-test", revokedAt: "2026-08-31T00:00:00Z")),
+            localRetirement: .notRequired("Synthetic stale service.")
+        )
+    }
+}
+
+private enum AppModelSafetyTestError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? { "Synthetic transport loss." }
+}
+
+private struct FailingSignOutService: MacRelationshipServing {
+    func loadWorkspace() async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func confirmScope(_ selection: RelationshipScopeSelection) async throws { }
+    func submit(manifest: SubmittedContextManifest) async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func resolveDecision(_ request: CanonicalDecisionRequest) async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func reconcileDecisionOutcome() async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func openProjection(_ projection: CanonicalProjectionRequest) async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func signOut() async throws -> SessionSignOutOutcome { throw AppModelSafetyTestError.unavailable }
+}
+
+private struct DeletingCapsuleStore: LocalCapsulePersisting {
+    func load(accountID: String, now: Date) throws -> CapsuleRecoveryResult {
+        .init(draft: ContextCapsuleDraft(), expiredItemCount: 0)
+    }
+
+    func save(_ draft: ContextCapsuleDraft, accountID: String, now: Date) throws { }
+
+    func clear(accountID: String, deleteKey: Bool) throws -> LocalCapsuleDeletionReceipt {
+        .init(deletedFile: true, deletedKey: deleteKey)
+    }
+}
+
+@MainActor
+private final class StubWindowCapture: WindowCapturing {
+    let payload: WindowCapturePayload
+    var callCount = 0
+
+    init(payload: WindowCapturePayload) {
+        self.payload = payload
+    }
+
+    func captureOneWindow() async throws -> WindowCapturePayload {
+        callCount += 1
+        return payload
+    }
+}
+
+/// Simulates an OS still completing even after cancellation was requested.
+@MainActor
+private final class LateWindowCapture: WindowCapturing {
+    private var continuation: CheckedContinuation<WindowCapturePayload, Error>?
+    var started: Bool { continuation != nil }
+    func captureOneWindow() async throws -> WindowCapturePayload {
+        try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+    func cancelCapture() { }
+    func completeLate() {
+        continuation?.resume(returning: .init(recognizedText: "LATE PRIVATE WINDOW",
+            imagePNG: Data([1, 2, 3]), pixelWidth: 20, pixelHeight: 20,
+            sourceFingerprint: "late-window", localTextRecognition: .available))
+        continuation = nil
+    }
+}
+
+@MainActor
+private final class CancellableStubWindowCapture: WindowCapturing {
+    var cancelCallCount = 0
+    private var continuation: CheckedContinuation<WindowCapturePayload, Error>?
+
+    func captureOneWindow() async throws -> WindowCapturePayload {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func cancelCapture() {
+        cancelCallCount += 1
+        continuation?.resume(throwing: WindowCaptureError.cancelled)
+        continuation = nil
+    }
+}
+
+private struct StubLocalFileTextExtractor: LocalFileTextExtracting {
+    let result: Result<LocalFileTextExtraction, LocalFileTextExtractionError>
+
+    func extract(url _: URL) async throws -> LocalFileTextExtraction {
+        try result.get()
+    }
+}
+
+private actor SuspendedLocalFileTextExtractor: LocalFileTextExtracting {
+    private var started = false
+    private var continuation: CheckedContinuation<LocalFileTextExtraction, Error>?
+
+    func extract(url _: URL) async throws -> LocalFileTextExtraction {
+        started = true
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func didStart() -> Bool { started }
+
+    func finish(with extraction: LocalFileTextExtraction) {
+        continuation?.resume(returning: extraction)
+        continuation = nil
+    }
+}
+
+@MainActor
+private final class StubPreparedDraftClipboard: PreparedDraftCopying {
+    let result: Bool
+    var callCount = 0
+    var lastText: String?
+
+    init(result: Bool) {
+        self.result = result
+    }
+
+    func copyPreparedDraft(_ text: String) -> Bool {
+        callCount += 1
+        lastText = text
+        return result
+    }
+}
+
+@MainActor
+private final class StubPreparedMailDraftService: PreparedMailDraftOpening {
+    let result: Result<MailDraftHandoffReceipt, MailDraftHandoffFailure>
+    var callCount = 0
+    var lastSubject: String?
+    var lastBody: String?
+
+    init(result: Result<MailDraftHandoffReceipt, MailDraftHandoffFailure>) {
+        self.result = result
+    }
+
+    func openDraft(subject: String, body: String) -> Result<MailDraftHandoffReceipt, MailDraftHandoffFailure> {
+        callCount += 1
+        lastSubject = subject
+        lastBody = body
+        return result
+    }
+}
+
+@MainActor
+private final class StubCompanionTrialExportClipboard: CompanionTrialExportCopying {
+    let result: Bool
+    var lastText: String?
+
+    init(result: Bool) {
+        self.result = result
+    }
+
+    func copyTrialExport(_ text: String) -> Bool {
+        lastText = text
+        return result
+    }
+}
+
+@MainActor
+private final class StubFollowUpReminderService: FollowUpReminderServing {
+    let executeFailure: FollowUpReminderFailure?
+    var previewCallCount = 0
+    var executeCallCount = 0
+    var reconcileCallCount = 0
+    var removeCallCount = 0
+    var reconcileRemovalCallCount = 0
+    var clearRecoveryCallCount = 0
+    var recoveryAccountScopes: [String] = []
+
+    init(executeFailure: FollowUpReminderFailure?) {
+        self.executeFailure = executeFailure
+    }
+
+    func setLocalRecoveryAccount(_ accountID: String) {
+        recoveryAccountScopes.append(accountID)
+    }
+
+    func clearLocalRecovery() {
+        clearRecoveryCallCount += 1
+    }
+
+    func previewDestination() async -> Result<FollowUpReminderDestination, FollowUpReminderFailure> {
+        previewCallCount += 1
+        return .success(.init(identifier: "follow-up-list", title: "Follow Up"))
+    }
+
+    func execute(_ proposal: FollowUpReminderProposal) async -> Result<FollowUpReminderReceipt, FollowUpReminderFailure> {
+        executeCallCount += 1
+        if let executeFailure { return .failure(executeFailure) }
+        return .success(receipt(for: proposal))
+    }
+
+    func reconcile(_ proposal: FollowUpReminderProposal) async -> Result<FollowUpReminderReceipt, FollowUpReminderFailure> {
+        reconcileCallCount += 1
+        return .success(receipt(for: proposal))
+    }
+
+    func remove(_ receipt: FollowUpReminderReceipt) async -> Result<FollowUpReminderRemovalReceipt, FollowUpReminderFailure> {
+        removeCallCount += 1
+        return .success(removalReceipt(for: receipt, alreadyAbsent: false))
+    }
+
+    func reconcileRemoval(_ receipt: FollowUpReminderReceipt) async -> Result<FollowUpReminderRemovalReceipt, FollowUpReminderFailure> {
+        reconcileRemovalCallCount += 1
+        return .success(removalReceipt(for: receipt, alreadyAbsent: false))
+    }
+
+    private func receipt(for proposal: FollowUpReminderProposal) -> FollowUpReminderReceipt {
+        FollowUpReminderReceipt(
+            idempotencyKey: proposal.idempotencyKey,
+            reminderIdentifier: "verified-reminder",
+            title: proposal.title,
+            dueAt: proposal.dueAt,
+            destinationIdentifier: proposal.destination.identifier,
+            destinationTitle: proposal.destination.title,
+            verifiedAt: Date()
+        )
+    }
+
+    private func removalReceipt(
+        for receipt: FollowUpReminderReceipt,
+        alreadyAbsent: Bool
+    ) -> FollowUpReminderRemovalReceipt {
+        FollowUpReminderRemovalReceipt(
+            idempotencyKey: receipt.idempotencyKey,
+            reminderIdentifier: receipt.reminderIdentifier,
+            destinationTitle: receipt.destinationTitle,
+            removedAt: Date(),
+            wasAlreadyAbsent: alreadyAbsent
+        )
+    }
+}
+
+private final class AccountFixtureCapsuleStore: LocalCapsulePersisting, @unchecked Sendable {
+    private var drafts: [String: ContextCapsuleDraft] = [:]
+
+    func setDraft(_ draft: ContextCapsuleDraft, for accountID: String) {
+        drafts[accountID] = draft
+    }
+
+    func load(accountID: String, now: Date) throws -> CapsuleRecoveryResult {
+        .init(draft: drafts[accountID] ?? ContextCapsuleDraft(), expiredItemCount: 0)
+    }
+
+    func save(_ draft: ContextCapsuleDraft, accountID: String, now: Date) throws {
+        drafts[accountID] = draft
+    }
+
+    func clear(accountID: String, deleteKey: Bool) throws -> LocalCapsuleDeletionReceipt {
+        .init(deletedFile: drafts.removeValue(forKey: accountID) != nil, deletedKey: deleteKey)
+    }
+
+    func draftCount(for accountID: String) -> Int {
+        drafts[accountID] == nil ? 0 : 1
+    }
+
+    func drafts(for accountID: String) -> ContextCapsuleDraft? {
+        drafts[accountID]
+    }
+}
+
+private final class AccountFixtureReminderRecoveryStore: ReminderOperationRecoveryPersisting, @unchecked Sendable {
+    var recoveries: [String: ReminderOperationRecovery] = [:]
+    var clearedAccountIDs: [String] = []
+
+    func load(accountID: String, now: Date) throws -> ReminderOperationRecovery? {
+        guard let recovery = recoveries[accountID], recovery.expiresAt > now else {
+            recoveries.removeValue(forKey: accountID)
+            return nil
+        }
+        return recovery
+    }
+
+    func save(_ recovery: ReminderOperationRecovery, accountID: String) throws {
+        recoveries[accountID] = recovery
+    }
+
+    func clear(accountID: String) throws -> Bool {
+        clearedAccountIDs.append(accountID)
+        return recoveries.removeValue(forKey: accountID) != nil
+    }
+}
+
+private struct FailingReminderRecoveryStore: ReminderOperationRecoveryPersisting {
+    private struct SaveFailure: Error { }
+
+    func load(accountID: String, now: Date) throws -> ReminderOperationRecovery? { nil }
+    func save(_ recovery: ReminderOperationRecovery, accountID: String) throws { throw SaveFailure() }
+    func clear(accountID: String) throws -> Bool { false }
+}
+
+private struct UnreadableReminderRecoveryStore: ReminderOperationRecoveryPersisting {
+    private struct ReadFailure: Error { }
+
+    func load(accountID: String, now: Date) throws -> ReminderOperationRecovery? { throw ReadFailure() }
+    func save(_ recovery: ReminderOperationRecovery, accountID: String) throws { }
+    func clear(accountID: String) throws -> Bool { false }
+}
+
+private actor SwitchingAccountService: MacRelationshipServing {
+    private let accountIDs: [String]
+    private var index = 0
+
+    init(accountIDs: [String]) {
+        self.accountIDs = accountIDs
+    }
+
+    func loadWorkspace() async throws -> MacRelationshipServiceResponse {
+        let accountID = accountIDs[min(index, accountIDs.count - 1)]
+        index += 1
+        let option = RelationshipScopeOption(
+            id: "scope-\(accountID)",
+            pursuitID: "pursuit-\(accountID)",
+            pursuitRevision: 1,
+            pursuitTitle: "Synthetic Pursuit",
+            personID: "person-\(accountID)",
+            personDisplayLabel: "Synthetic Person",
+            relationshipContextID: "context-\(accountID)",
+            relationshipContextLabel: "Synthetic relationship"
+        )
+        return .connected(.init(
+            workspaceID: accountID,
+            accountID: accountID,
+            options: [option],
+            presentation: option.presentation
+        ))
+    }
+
+    func confirmScope(_ selection: RelationshipScopeSelection) async throws { }
+    func submit(manifest: SubmittedContextManifest) async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func resolveDecision(_ request: CanonicalDecisionRequest) async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func reconcileDecisionOutcome() async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func openProjection(_ projection: CanonicalProjectionRequest) async throws -> MacRelationshipServiceResponse { throw AppModelSafetyTestError.unavailable }
+    func signOut() async throws -> SessionSignOutOutcome { throw AppModelSafetyTestError.unavailable }
+}
+
+
+/// A relationship service whose every async call suspends until the test
+/// releases it. Controlled continuations are what make late success, late
+/// error, replacement, and superseding orderings observable.
+private actor ControlledRelationshipService: MacRelationshipServing {
+    enum Outcome: Sendable {
+        case accepted
+        case response(MacRelationshipServiceResponse)
+        case failure(String)
+        /// Positive host proof that no Agent Task write ever left the service.
+        case taskNotDispatched(String)
+    }
+
+    enum SignOutOutcome: Sendable {
+        case revoked(SessionSignOutReceipt)
+        case localOnly(String)
+        case remoteUnknown(String)
+        case failure(String)
+    }
+
+    /// Local retirement status surfaced by the controlled service; the real
+    /// encrypted retirement-store proofs live in the boundary tests.
+    var signOutLocalRetirement: LocalRetirementStatus = .notRequired(
+        "The controlled service manages no durable unknown-operation correlation."
+    )
+
+    private var queued: [String: [Outcome]] = [:]
+    private var waiters: [String: [CheckedContinuation<Outcome, Error>]] = [:]
+    private var queuedSignOut: [SignOutOutcome] = []
+    private var signOutWaiters: [CheckedContinuation<SessionSignOutOutcome, Error>] = []
+    private var callCounts: [String: Int] = [:]
+
+    func callCount(_ method: String) -> Int { callCounts[method] ?? 0 }
+
+    func finish(_ method: String, with outcome: Outcome) {
+        var waiter: CheckedContinuation<Outcome, Error>?
+        if var pending = waiters[method], !pending.isEmpty {
+            waiter = pending.removeFirst()
+            waiters[method] = pending
+        } else {
+            queued[method, default: []].append(outcome)
+        }
+        if let waiter {
+            switch outcome {
+            case .accepted, .response:
+                waiter.resume(returning: outcome)
+            case .failure(let message):
+                waiter.resume(throwing: ControlledServiceError(message))
+            case .taskNotDispatched(let message):
+                waiter.resume(throwing: RelationshipServiceError.sourceWorkflowStopped(message))
+            }
+        }
+    }
+
+    func finishSignOut(with outcome: SignOutOutcome) {
+        var waiter: CheckedContinuation<SessionSignOutOutcome, Error>?
+        if !signOutWaiters.isEmpty {
+            waiter = signOutWaiters.removeFirst()
+        } else {
+            queuedSignOut.append(outcome)
+        }
+        guard let waiter else { return }
+        switch outcome {
+        case .revoked, .localOnly, .remoteUnknown:
+            waiter.resume(returning: outcome.sessionOutcome(localRetirement: signOutLocalRetirement))
+        case .failure(let message):
+            waiter.resume(throwing: ControlledServiceError(message))
+        }
+    }
+
+    private func perform(_ method: String) async throws -> Outcome {
+        callCounts[method, default: 0] += 1
+        if var pending = queued[method], !pending.isEmpty {
+            let outcome = pending.removeFirst()
+            queued[method] = pending
+            return outcome
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            waiters[method, default: []].append(continuation)
+        }
+    }
+
+    private static func response(_ method: String, from outcome: Outcome) throws -> MacRelationshipServiceResponse {
+        switch outcome {
+        case .response(let response):
+            return response
+        case .accepted:
+            return .syntheticFixture(FixtureRelationshipService.fixture(mode: .ready))
+        case .failure(let message):
+            throw ControlledServiceError(message)
+        case .taskNotDispatched(let message):
+            throw RelationshipServiceError.sourceWorkflowStopped(message)
+        }
+    }
+
+    func loadWorkspace() async throws -> MacRelationshipServiceResponse {
+        try Self.response("loadWorkspace", from: try await perform("loadWorkspace"))
+    }
+
+    func confirmScope(_ selection: RelationshipScopeSelection) async throws {
+        guard case .accepted = try await perform("confirmScope") else {
+            throw ControlledServiceError("confirmScope expected an accepted outcome.")
+        }
+    }
+
+    func submit(manifest: SubmittedContextManifest) async throws -> MacRelationshipServiceResponse {
+        try Self.response("submit", from: try await perform("submit"))
+    }
+
+    func resolveDecision(_ request: CanonicalDecisionRequest) async throws -> MacRelationshipServiceResponse {
+        try Self.response("resolveDecision", from: try await perform("resolveDecision"))
+    }
+
+    func reconcileDecisionOutcome() async throws -> MacRelationshipServiceResponse {
+        try Self.response("reconcileDecisionOutcome", from: try await perform("reconcileDecisionOutcome"))
+    }
+
+    func openProjection(_ projection: CanonicalProjectionRequest) async throws -> MacRelationshipServiceResponse {
+        try Self.response("openProjection", from: try await perform("openProjection"))
+    }
+
+    func signOut() async throws -> SessionSignOutOutcome {
+        callCounts["signOut", default: 0] += 1
+        if queuedSignOut.isEmpty {
+            return try await withCheckedThrowingContinuation { continuation in
+                signOutWaiters.append(continuation)
+            }
+        }
+        let outcome = queuedSignOut.removeFirst()
+        switch outcome {
+        case .revoked, .localOnly, .remoteUnknown:
+            return outcome.sessionOutcome(localRetirement: signOutLocalRetirement)
+        case .failure(let message):
+            throw ControlledServiceError(message)
+        }
+    }
+}
+
+private extension ControlledRelationshipService.SignOutOutcome {
+    func sessionOutcome(localRetirement: LocalRetirementStatus) -> SessionSignOutOutcome {
+        let remote: SessionSignOutOutcome.Remote = switch self {
+        case .revoked(let receipt):
+            .revoked(receipt)
+        case .localOnly(let detail):
+            .localOnly(detail)
+        case .remoteUnknown(let detail):
+            .remoteUnknown(detail)
+        case .failure(let message):
+            .remoteUnknown(message)
+        }
+        return SessionSignOutOutcome(remote: remote, localRetirement: localRetirement)
+    }
+}
+
+private struct ControlledServiceError: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
+
+/// A reminder service that can hold one executed write or removal in flight so
+/// delayed landing behavior is testable across account, sign-out, and scope
+/// changes.
+@MainActor
+private final class ControlledFollowUpReminderService: FollowUpReminderServing {
+    var holdsExecute = false
+    var holdsRemove = false
+    private(set) var executeCallCount = 0
+    private(set) var removeCallCount = 0
+    private var executedProposal: FollowUpReminderProposal?
+    private var executeContinuation: CheckedContinuation<Result<FollowUpReminderReceipt, FollowUpReminderFailure>, Never>?
+    private var removeContinuation: CheckedContinuation<Result<FollowUpReminderRemovalReceipt, FollowUpReminderFailure>, Never>?
+
+    func setLocalRecoveryAccount(_ accountID: String) { }
+    func clearLocalRecovery() { }
+
+    func previewDestination() async -> Result<FollowUpReminderDestination, FollowUpReminderFailure> {
+        .success(.init(identifier: "follow-up-list", title: "Follow Up"))
+    }
+
+    func execute(_ proposal: FollowUpReminderProposal) async -> Result<FollowUpReminderReceipt, FollowUpReminderFailure> {
+        executeCallCount += 1
+        executedProposal = proposal
+        if !holdsExecute { return .success(verifiedReceipt(for: proposal)) }
+        return await withCheckedContinuation { executeContinuation = $0 }
+    }
+
+    func completeExecuteWithVerifiedReceipt() {
+        guard let proposal = executedProposal else { return }
+        executeContinuation?.resume(returning: .success(verifiedReceipt(for: proposal)))
+        executeContinuation = nil
+    }
+
+    func reconcile(_ proposal: FollowUpReminderProposal) async -> Result<FollowUpReminderReceipt, FollowUpReminderFailure> {
+        .success(verifiedReceipt(for: proposal))
+    }
+
+    func remove(_ receipt: FollowUpReminderReceipt) async -> Result<FollowUpReminderRemovalReceipt, FollowUpReminderFailure> {
+        removeCallCount += 1
+        if !holdsRemove { return .success(removalReceipt(for: receipt)) }
+        return await withCheckedContinuation { removeContinuation = $0 }
+    }
+
+    func completeRemoveWithSuccess(idempotencyKey: String, reminderIdentifier: String) {
+        removeContinuation?.resume(returning: .success(FollowUpReminderRemovalReceipt(
+            idempotencyKey: idempotencyKey,
+            reminderIdentifier: reminderIdentifier,
+            destinationTitle: "Follow Up",
+            removedAt: Date(),
+            wasAlreadyAbsent: false
+        )))
+        removeContinuation = nil
+    }
+
+    func reconcileRemoval(_ receipt: FollowUpReminderReceipt) async -> Result<FollowUpReminderRemovalReceipt, FollowUpReminderFailure> {
+        .success(removalReceipt(for: receipt))
+    }
+
+    private func verifiedReceipt(for proposal: FollowUpReminderProposal) -> FollowUpReminderReceipt {
+        FollowUpReminderReceipt(
+            idempotencyKey: proposal.idempotencyKey,
+            reminderIdentifier: "controlled-reminder",
+            title: proposal.title,
+            dueAt: proposal.dueAt,
+            destinationIdentifier: proposal.destination.identifier,
+            destinationTitle: proposal.destination.title,
+            verifiedAt: Date()
+        )
+    }
+
+    private func removalReceipt(for receipt: FollowUpReminderReceipt) -> FollowUpReminderRemovalReceipt {
+        FollowUpReminderRemovalReceipt(
+            idempotencyKey: receipt.idempotencyKey,
+            reminderIdentifier: receipt.reminderIdentifier,
+            destinationTitle: receipt.destinationTitle,
+            removedAt: Date(),
+            wasAlreadyAbsent: false
+        )
+    }
+}
+
+
+/// Capsule store whose save seam can fail so real persistence barriers are
+/// testable; a plain successful roundtrip is not a failure test.
+private final class FailingSaveCapsuleStore: LocalCapsulePersisting, @unchecked Sendable {
+    var failSaves = false
+    private var drafts: [String: ContextCapsuleDraft] = [:]
+
+    func load(accountID: String, now: Date) throws -> CapsuleRecoveryResult {
+        .init(draft: drafts[accountID] ?? ContextCapsuleDraft(), expiredItemCount: 0)
+    }
+
+    func save(_ draft: ContextCapsuleDraft, accountID: String, now: Date) throws {
+        if failSaves {
+            throw LocalCapsuleStoreError.encryptionFailed
+        }
+        drafts[accountID] = draft
+    }
+
+    func clear(accountID: String, deleteKey: Bool) throws -> LocalCapsuleDeletionReceipt {
+        .init(deletedFile: drafts.removeValue(forKey: accountID) != nil, deletedKey: deleteKey)
+    }
+}

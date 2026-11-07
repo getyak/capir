@@ -1,0 +1,130 @@
+/**
+ * Durable conversation queue.
+ *
+ * Split by responsibility:
+ * - conversationQueueState: storage, claims, leases, fencing, snapshots.
+ * - conversationQueueAdmission: admission and client queue mutations.
+ * - conversationQueueCompletion: governed lineage + canonical Session write.
+ * - conversationQueueRunner: bounded worker and recovery.
+ * - conversationQueueSweep: retention and revocation cascade.
+ *
+ * This barrel also owns the incomplete-sync queue fence boundary: while a
+ * Session is visibly incomplete, admission, claim, continue, retry and
+ * prioritize are refused so restored pending work can never run early. Stop,
+ * withdrawal, edit, source revocation and deletion stay usable.
+ */
+import type { Pool, PoolClient } from "pg";
+import type {
+  ConversationQueueAdmitRequest,
+  ConversationQueueAdmitResponse,
+  ConversationQueueMutationRequest,
+} from "@talent-signal/contracts";
+import {
+  admitConversationQueueEntry as admitConversationQueueEntryImpl,
+  mutateConversationQueueEntry as mutateConversationQueueEntryImpl,
+} from "./conversationQueueAdmission.js";
+import {
+  conversationQueueSyncComplete,
+  lockConversationQueueSession,
+} from "./conversationQueueState.js";
+import type { AuthContext } from "./auth.js";
+import { inTransaction } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+
+export {
+  CONVERSATION_QUEUE_LEASE_MS,
+  CONVERSATION_QUEUE_MAX_CONCURRENT_RUNS,
+  CONVERSATION_QUEUE_MAX_ENTRIES,
+  ConversationQueueLeaseLostError,
+  allocateConversationQueueSequence,
+  assertConversationQueueContextCurrent,
+  assertConversationQueueLiveClaim,
+  assertConversationQueueOwnedClaim,
+  assertConversationQueueSyncComplete,
+  bumpConversationQueueState,
+  claimNextConversationQueueEntry,
+  conversationQueueSyncComplete,
+  finalizeConversationQueueEntry,
+  listRunnableConversationQueueSessions,
+  listStaleRunningConversationQueueEntries,
+  lockConversationQueueSession,
+  markConversationQueuePersistencePending,
+  readConversationQueueEntryStatus,
+  readConversationQueueResult,
+  readConversationQueueSnapshot,
+  readConversationQueueState,
+  reclaimStaleConversationQueueEntry,
+  recordConversationQueueResult,
+  refreshConversationQueueLease,
+  runnerAuthContext,
+  type ClaimedConversationQueueEntry,
+  type ConversationQueueRunFence,
+  type ConversationQueueTerminalStatus,
+} from "./conversationQueueState.js";
+
+export {
+  CONVERSATION_QUEUE_OPERATION_SCOPE,
+} from "./conversationQueueAdmission.js";
+
+export {
+  persistConversationQueueCancellation,
+  persistConversationQueueCompletion,
+  recordConversationQueueLineage,
+  type ConversationQueueAuditMetadata,
+  type ConversationQueueExecutionResult,
+} from "./conversationQueueCompletion.js";
+
+export {
+  ConversationQueueRunner,
+  type ConversationQueueProviderSelection,
+  type ConversationQueueProviderSelector,
+  type ConversationQueueRunnerLogger,
+  type ConversationQueueRunnerOptions,
+} from "./conversationQueueRunner.js";
+
+export {
+  purgeConversationQueueForAccount,
+  sweepConversationQueue,
+} from "./conversationQueueSweep.js";
+
+async function assertQueueWorkAdmissible(
+  pool: Pool,
+  accountId: string,
+  sessionId: string,
+): Promise<void> {
+  await inTransaction(pool, async (client: PoolClient) => {
+    await lockConversationQueueSession(client, sessionId);
+    if (!(await conversationQueueSyncComplete(client, accountId, sessionId))) {
+      throw new ApiError(
+        409,
+        "CONVERSATION_QUEUE_SYNC_INCOMPLETE",
+        "This conversation is still synchronizing its history. Queued work resumes when the sync completes.",
+      );
+    }
+  });
+}
+
+/** Admission is fenced while a Session is visibly incomplete: a partial
+ * canonical history accepts no new queued work until its transfer finalizes. */
+export async function admitConversationQueueEntry(
+  pool: Pool,
+  auth: AuthContext,
+  request: ConversationQueueAdmitRequest,
+): Promise<{ response: ConversationQueueAdmitResponse; replayed: boolean }> {
+  await assertQueueWorkAdmissible(pool, auth.accountId, request.session_id);
+  return admitConversationQueueEntryImpl(pool, auth, request);
+}
+
+/** Continue, retry and prioritize move work toward running; they share the
+ * incomplete-sync fence. Stop, edit and withdrawal remain usable. */
+export async function mutateConversationQueueEntry(
+  pool: Pool,
+  auth: AuthContext,
+  sessionId: string,
+  request: ConversationQueueMutationRequest,
+): Promise<Awaited<ReturnType<typeof mutateConversationQueueEntryImpl>>> {
+  if (["continue", "retry", "prioritize"].includes(request.kind)) {
+    await assertQueueWorkAdmissible(pool, auth.accountId, sessionId);
+  }
+  return mutateConversationQueueEntryImpl(pool, auth, sessionId, request);
+}

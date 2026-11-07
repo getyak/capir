@@ -1,0 +1,50 @@
+import { describe, expect, it, vi } from "vitest";
+import { privateConversationMessages, readPrivateConversation, type PrivateTurn } from "./private-conversation";
+
+const encoder = new TextEncoder();
+function stream(text: string, split = 3) {
+  const bytes = encoder.encode(text);
+  return new ReadableStream<Uint8Array>({ start(controller) {
+    for (let index = 0; index < bytes.length; index += split) controller.enqueue(bytes.slice(index, index + split));
+    controller.close();
+  } });
+}
+const turn = (id: string, status: PrivateTurn["status"] = "complete"): PrivateTurn => ({ id, prompt: `question-${id}`, answer: `answer-${id}`, status });
+describe("transient private conversation", () => {
+  it("reassembles UTF-8 text and requires an explicit successful terminal frame", async () => {
+    const update = vi.fn();
+    await expect(readPrivateConversation(stream('{"type":"text","text":"你好"}\n{"type":"text","text":"世界"}\n{"type":"done"}\n', 1), update, new AbortController().signal)).resolves.toBe("你好世界");
+    expect(update.mock.calls.map(call => call[0])).toEqual(["你好", "你好世界"]);
+  });
+  it.each([
+    '{"type":"text","text":"partial"}\n',
+    '{"type":"done"}\n',
+    '{"type":"error","code":"PRIVATE_UPSTREAM_FAILED"}\n',
+    '{"type":"text","text":"ok"}\n{"type":"done"}\n{"type":"text","text":"late"}\n',
+    'not json\n',
+  ])("does not present incomplete or malformed output as success (%s)", async text => {
+    await expect(readPrivateConversation(stream(text), () => {}, new AbortController().signal)).rejects.toThrow();
+  });
+  it("cancels a blocked reader immediately on exit", async () => {
+    const cancel = vi.fn(); const controller = new AbortController();
+    const promise = readPrivateConversation(new ReadableStream({ cancel }), () => {}, controller.signal);
+    controller.abort();
+    await expect(promise).rejects.toThrow();
+    expect(cancel).toHaveBeenCalled();
+  });
+  it("preserves long complete output beyond the former character ceiling", async () => {
+    const text = "a".repeat(50_000) + "final conclusion";
+    await expect(readPrivateConversation(stream(JSON.stringify({type:"text",text})+'\n{"type":"done"}\n', 64_000), () => {}, new AbortController().signal)).resolves.toBe(text);
+  });
+  it("never carries partial/failed replies or normal workspace context", () => {
+    expect(privateConversationMessages([turn("1"), turn("2", "stopped"), turn("3", "failed"), turn("4", "pending")], "next"))
+      .toEqual([{role:"user",content:"question-1"},{role:"assistant",content:"answer-1"},{role:"user",content:"next"}]);
+  });
+  it("retains every complete transient turn without clipping", () => {
+    const messages = privateConversationMessages(Array.from({length:30},(_,i)=>({...turn(`${i}`),prompt:"p".repeat(4_000),answer:"a".repeat(12_000)})), "latest");
+    expect(messages).toHaveLength(61);
+    expect(messages[1].content).toBe("a".repeat(12_000));
+    expect(messages[0].role).toBe("user");
+    expect(messages.at(-1)).toEqual({role:"user",content:"latest"});
+  });
+});

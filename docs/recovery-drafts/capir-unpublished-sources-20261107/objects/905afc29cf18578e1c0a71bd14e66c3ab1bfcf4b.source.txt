@@ -1,0 +1,156 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { lstat, mkdtemp, readFile, readdir, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { SessionStore } from "@anthropic-ai/claude-agent-sdk";
+
+const PREFIX = "talent-signal-harness-v1-";
+const MARKER = ".harness-owner.json";
+const active = new Set<string>();
+interface ResumeCopy { name: string; dev: number; ino: number }
+/** `deadline` is present only for explicitly time-bounded Runs. An absent
+ * deadline is a live unbounded Run and is never treated as expired; the owning
+ * process identity still cleans dead payloads. No infinite timestamps. */
+interface Owner { version: 1; pid: number; processIdentity?: string; deadline?: number; sessionID?: string; projectKey?: string; resumeCopies?: ResumeCopy[] }
+const safeResume = /^claude-resume-[a-z0-9-]+$/iu;
+const safeSession = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const safeProject = /^[a-zA-Z0-9_-]{1,1000}$/u;
+function processExists(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+}
+const runProcessMetadata = promisify(execFile);
+async function processIdentity(pid: number): Promise<string | null> {
+  try {
+    if (process.platform === "linux") {
+      const [stat, boot] = await Promise.all([readFile(`/proc/${pid}/stat`, "utf8"), readFile("/proc/sys/kernel/random/boot_id", "utf8")]);
+      // comm can contain spaces and parentheses; fields after the LAST ')' begin at field 3.
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/u);
+      return `linux:${boot.trim()}:${fields[19]}`;
+    }
+    const { stdout } = await runProcessMetadata("ps", ["-p", String(pid), "-o", "lstart="], { timeout: 5_000, maxBuffer: 4096 });
+    return stdout.trim() ? `unix:${stdout.trim()}` : null;
+  } catch { return null; }
+}
+async function info(path: string) {
+  try { return await lstat(path); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+}
+async function ownDirectory(path: string) {
+  const stat = await info(path);
+  return Boolean(stat?.isDirectory() && (!process.getuid || stat.uid === process.getuid()));
+}
+async function readOwner(directory: string): Promise<Owner | null> {
+  const file = join(directory, MARKER), stat = await info(file);
+  if (!stat?.isFile() || stat.size > 4096) return null;
+  let value: Owner;
+  try { value = JSON.parse(await readFile(file, "utf8")) as Owner; } catch { return null; }
+  if (value?.version !== 1 || !Number.isSafeInteger(value.pid) || value.pid <= 0
+    || (value.processIdentity !== undefined && (typeof value.processIdentity !== "string" || value.processIdentity.length > 200))
+    || (value.deadline !== undefined && (!Number.isSafeInteger(value.deadline) || value.deadline <= 0))
+    || (value.sessionID !== undefined && !safeSession.test(value.sessionID))
+    || (value.projectKey !== undefined && !safeProject.test(value.projectKey))
+    || (value.resumeCopies !== undefined && (!Array.isArray(value.resumeCopies) || value.resumeCopies.length > 10
+      || value.resumeCopies.some(copy => !safeResume.test(copy.name) || !Number.isSafeInteger(copy.dev) || !Number.isSafeInteger(copy.ino))))) return null;
+  return value;
+}
+async function persistOwner(directory: string, owner: Owner) {
+  const temporary = join(directory, `${MARKER}.new`);
+  await writeFile(temporary, JSON.stringify(owner), { mode: 0o600, flush: true });
+  await rename(temporary, join(directory, MARKER));
+}
+async function discoverResumeCopies(root: string, directory: string, owner: Owner) {
+  if (!owner.sessionID || !owner.projectKey) return;
+  for (const item of await readdir(root, { withFileTypes: true })) {
+    if (!item.isDirectory() || !safeResume.test(item.name)) continue;
+    const resume = join(root, item.name), projects = join(resume, "projects"), project = join(projects, owner.projectKey);
+    if (!await ownDirectory(resume) || !await ownDirectory(projects) || !await ownDirectory(project)) continue;
+    // The project key was journaled BEFORE SDK load returned any private data.
+    // It includes this Run's unique cwd. It covers a crash even before the SDK
+    // writes the first transcript byte or invokes SessionStart.
+    const children = await readdir(projects);
+    if (children.length !== 1 || children[0] !== owner.projectKey) continue;
+    const stat = await info(resume);
+    if (stat && !owner.resumeCopies?.some(copy => copy.name === item.name)) {
+      owner.resumeCopies = [...(owner.resumeCopies ?? []), { name: item.name, dev: stat.dev, ino: stat.ino }];
+      if (owner.resumeCopies.length > 10) throw new Error("HARNESS_WORKSPACE_COPY_LIMIT");
+      // Persist stable root identity before ANY recursive delete can remove the
+      // project directory used to recognize it, including SDK-owned cleanup.
+      await persistOwner(directory, owner);
+    }
+  }
+}
+async function removeWorkspace(root: string, directory: string, owner: Owner) {
+  await discoverResumeCopies(root, directory, owner);
+  for (const copy of owner.resumeCopies ?? []) {
+    const path = join(root, copy.name), stat = await info(path);
+    if (!stat) continue;
+    if (!stat.isDirectory() || stat.dev !== copy.dev || stat.ino !== copy.ino || (process.getuid && stat.uid !== process.getuid())) {
+      throw new Error("HARNESS_WORKSPACE_COPY_IDENTITY_CHANGED");
+    }
+    await rm(path, { recursive: true, force: true });
+  }
+  // Keep the owner marker until every payload child has been removed. Recursive
+  // rm on the Run root itself can delete the journal first and then fail.
+  for (const name of await readdir(directory)) if (name !== MARKER) await rm(join(directory, name), { recursive: true, force: true });
+  await rm(join(directory, MARKER));
+  await rmdir(directory);
+}
+
+/** Sweep only positively owned SDK workspaces, never arbitrary Claude sessions.
+ * A live owner keeps its files. A bounded deadline additionally handles PID
+ * reuse after a crash; an unbounded live Run is never swept by an expired
+ * artificial deadline, while a dead owner's payload is still cleaned.
+ * Run at service startup, periodically, and before admitting model data.
+ */
+export async function sweepClaudeHarnessWorkspaces(root = tmpdir(), now = Date.now()): Promise<void> {
+  for (const item of await readdir(root, { withFileTypes: true })) {
+    if (!item.isDirectory() || !item.name.startsWith(PREFIX)) continue;
+    const directory = join(root, item.name);
+    if (active.has(directory) || !await ownDirectory(directory)) continue;
+    const owner = await readOwner(directory);
+    if (!owner) continue;
+    const alive = processExists(owner.pid);
+    const currentIdentity = alive && owner.processIdentity ? await processIdentity(owner.pid) : null;
+    const sameOwner = alive && (!owner.processIdentity || !currentIdentity || currentIdentity === owner.processIdentity);
+    if (sameOwner && (owner.deadline === undefined || owner.deadline > now)) continue;
+    await removeWorkspace(root, directory, owner);
+  }
+}
+
+export async function createClaudeHarnessWorkspace(durationMs?: number, sessionID?: string, root = tmpdir()) {
+  await sweepClaudeHarnessWorkspaces(root);
+  const directory = await mkdtemp(join(root, PREFIX));
+  active.add(directory);
+  const identity = await processIdentity(process.pid);
+  if (!identity) { active.delete(directory); await rm(directory, { recursive: true, force: true }); throw new Error("HARNESS_OWNER_IDENTITY_UNAVAILABLE"); }
+  const owner: Owner = { version: 1, pid: process.pid, processIdentity: identity,
+    ...(durationMs !== undefined && Number.isSafeInteger(Date.now() + durationMs + 60_000) ? { deadline: Date.now() + durationMs + 60_000 } : {}),
+    ...(sessionID ? { sessionID } : {}) };
+  const persist = () => persistOwner(directory, owner);
+  try { await persist(); }
+  catch (error) { active.delete(directory); await rm(directory, { recursive: true, force: true }); throw error; }
+  return { directory,
+    rememberResumeCopies: () => discoverResumeCopies(root, directory, owner),
+    wrapStore(store: SessionStore): SessionStore {
+      return { append: store.append.bind(store),
+        ...(store.delete ? { delete: store.delete.bind(store) } : {}),
+        listSubkeys: async key => {
+          await discoverResumeCopies(root, directory, owner);
+          return store.listSubkeys ? store.listSubkeys(key) : [];
+        },
+        load: async key => {
+        if (key.sessionId !== sessionID || !safeProject.test(key.projectKey)) throw new Error("HARNESS_WORKSPACE_IDENTITY_INVALID");
+        if (owner.projectKey && owner.projectKey !== key.projectKey) throw new Error("HARNESS_WORKSPACE_PROJECT_CHANGED");
+        if (!owner.projectKey) { owner.projectKey = key.projectKey; await persist(); }
+        return store.load(key);
+      } };
+    },
+    async dispose() {
+      // Keep the journal when cleanup fails so the next sweep can retry.
+      try { await removeWorkspace(root, directory, owner); }
+      finally { active.delete(directory); }
+    },
+  };
+}

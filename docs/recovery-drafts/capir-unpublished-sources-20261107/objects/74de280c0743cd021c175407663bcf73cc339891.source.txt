@@ -1,0 +1,41 @@
+-- CLI tokens deliberately live outside ordinary product sessions.
+CREATE TABLE capir_authorization_codes (
+ id uuid PRIMARY KEY, account_id uuid NOT NULL, user_id uuid NOT NULL,
+ owner_session_id uuid NOT NULL, code_hash text NOT NULL UNIQUE,
+ state_hash text NOT NULL, challenge text NOT NULL, redirect_uri text NOT NULL,
+ web_origin text NOT NULL, backend_origin text NOT NULL, client_label text NOT NULL,
+ expires_at timestamptz NOT NULL, consumed_at timestamptz,
+ FOREIGN KEY(account_id,user_id) REFERENCES users(account_id,id)
+);
+CREATE TABLE capir_grants (
+ id uuid PRIMARY KEY, account_id uuid NOT NULL, user_id uuid NOT NULL,
+ parent_session_id uuid NOT NULL UNIQUE, token_hash text NOT NULL UNIQUE,
+ client_label text NOT NULL, expires_at timestamptz NOT NULL, revoked_at timestamptz,
+ web_origin text NOT NULL, backend_origin text NOT NULL,
+ FOREIGN KEY(account_id,user_id) REFERENCES users(account_id,id)
+);
+CREATE TABLE capir_sandboxes (
+ id uuid PRIMARY KEY, grant_id uuid NOT NULL REFERENCES capir_grants(id),
+ request_digest text NOT NULL, request jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL, scenario_id text NOT NULL CHECK(scenario_id IN ('daily','empty')),
+ scenario_version text NOT NULL CHECK(scenario_version='1'), scenario_digest text NOT NULL,
+ generation integer NOT NULL DEFAULT 1 CHECK(generation>0),
+ preparation_state text NOT NULL DEFAULT 'preparing' CHECK(preparation_state IN ('preparing','ready','failed')),
+ failure_code text, loaded_at timestamptz, stop_id uuid UNIQUE,
+ model_policy text NOT NULL DEFAULT 'strict_replay' CHECK(model_policy='strict_replay')
+);
+CREATE TABLE capir_handoffs (
+ id uuid PRIMARY KEY, account_id uuid NOT NULL, user_id uuid NOT NULL,
+ grant_id uuid NOT NULL REFERENCES capir_grants(id), sandbox_id uuid NOT NULL REFERENCES capir_sandboxes(id),
+ secret_hash text NOT NULL UNIQUE, web_origin text NOT NULL,
+ expires_at timestamptz NOT NULL, consumed_at timestamptz,
+ FOREIGN KEY(account_id,user_id) REFERENCES users(account_id,id)
+);
+INSERT INTO lab_test_workspace_table_manifest(table_name,scope) VALUES
+ ('capir_authorization_codes','account'),('capir_grants','account'),
+ ('capir_sandboxes','global'),('capir_handoffs','account');
+DO $$ DECLARE item text; BEGIN
+ FOREACH item IN ARRAY ARRAY['capir_authorization_codes','capir_grants','capir_handoffs'] LOOP
+ EXECUTE format('CREATE TRIGGER account_retirement_fence BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION enforce_account_retirement_fence(''account_id'')',item);
+ EXECUTE format('CREATE TRIGGER lab_test_workspace_write_guard BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION lab_test_workspace_write_guard()',item);
+ END LOOP;
+END $$;

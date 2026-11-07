@@ -1,0 +1,1983 @@
+import XCTest
+import CryptoKit
+@testable import TalentSignalMac
+
+final class RelationshipServiceBoundaryTests: XCTestCase {
+    func testFixtureServiceCanOnlyReturnSyntheticFixtureCase() async throws {
+        let response = try await FixtureRelationshipService(initialMode: .needsDecision).loadWorkspace()
+        switch response {
+        case .syntheticFixture(let fixture):
+            XCTAssertEqual(fixture.mode, .needsDecision)
+            XCTAssertTrue(fixture.fixtureID.hasPrefix("synthetic-"))
+        case .canonical, .connected:
+            XCTFail("Fixture service must never manufacture canonical or connected readback.")
+        }
+    }
+
+    func testCanonicalProofRequiresEveryScopeAndNoExternalEffects() {
+        let presentation = FixtureRelationshipService.fixture(mode: .ready).presentation
+        let valid = CanonicalRelationshipReadback(
+            workspaceID: "workspace",
+            accountID: "account",
+            pursuitID: "pursuit",
+            personID: "person",
+            relationshipContextID: "context",
+            captureID: "capture",
+            evidenceFragmentIDs: ["fragment"],
+            taskID: "task",
+            taskStatus: "completed",
+            externalEffects: [],
+            displayMode: .noAction,
+            presentation: presentation,
+            runAudit: nil,
+            clarification: nil,
+            pendingDecision: nil,
+            receipt: nil
+        )
+        XCTAssertTrue(valid.provesCanonicalSafeReadback)
+
+        let unsafe = CanonicalRelationshipReadback(
+            workspaceID: "workspace",
+            accountID: "account",
+            pursuitID: "pursuit",
+            personID: "person",
+            relationshipContextID: "context",
+            captureID: "capture",
+            evidenceFragmentIDs: ["fragment"],
+            taskID: "task",
+            taskStatus: "completed",
+            externalEffects: ["message.send"],
+            displayMode: .noAction,
+            presentation: presentation,
+            runAudit: nil,
+            clarification: nil,
+            pendingDecision: nil,
+            receipt: nil
+        )
+        XCTAssertFalse(unsafe.provesCanonicalSafeReadback)
+    }
+
+    func testEveryRequiredLocalStateHasPlainLanguageAndNoPersonRankingCopy() {
+        XCTAssertEqual(Set(WorkspaceMode.allCases), Set([
+            .empty, .ready, .working, .needsDecision, .noAction, .receipt,
+            .clarification, .ambiguousIdentity, .identityReviewSaved, .stale, .failed, .outcomeUnknown, .deleted
+        ]))
+        XCTAssertTrue(WorkspaceMode.allCases.allSatisfy { !$0.title.isEmpty })
+
+        let fixture = FixtureRelationshipService.fixture(mode: .needsDecision).presentation
+        let visibleCopy = [
+            fixture.candidateName,
+            fixture.pursuitTitle,
+            fixture.changedSummary,
+            fixture.dependency,
+            fixture.proposal
+        ].joined(separator: " ").lowercased()
+        let prohibitedRankingLanguage = ["fit" + " score", "candidate" + " quality", "acceptance" + " probability", "culture" + " fit"]
+        XCTAssertTrue(prohibitedRankingLanguage.allSatisfy { !visibleCopy.contains($0) })
+    }
+
+    func testClarificationReadbackRequiresExactOpenRequestForTheSameTask() {
+        let presentation = FixtureRelationshipService.fixture(mode: .clarification).presentation
+        let clarification = CanonicalClarification(
+            id: "clarification",
+            taskID: "task",
+            taskRevision: 2,
+            requestRevision: 1,
+            question: "What exact calendar date, timezone, duration, and meeting consent apply?",
+            reason: "A relative time phrase is not scheduling authority.",
+            status: "open",
+            expiresAt: "2026-09-02T09:00:00Z"
+        )
+        let valid = CanonicalRelationshipReadback(
+            workspaceID: "workspace",
+            accountID: "account",
+            pursuitID: "pursuit",
+            personID: "person",
+            relationshipContextID: "context",
+            captureID: "capture",
+            evidenceFragmentIDs: ["fragment"],
+            taskID: "task",
+            taskStatus: "waiting_for_clarification",
+            externalEffects: [],
+            displayMode: .clarification,
+            presentation: presentation,
+            runAudit: nil,
+            clarification: clarification,
+            pendingDecision: nil,
+            receipt: nil
+        )
+        XCTAssertTrue(valid.provesCanonicalSafeReadback)
+
+        let missing = CanonicalRelationshipReadback(
+            workspaceID: valid.workspaceID,
+            accountID: valid.accountID,
+            pursuitID: valid.pursuitID,
+            personID: valid.personID,
+            relationshipContextID: valid.relationshipContextID,
+            captureID: valid.captureID,
+            evidenceFragmentIDs: valid.evidenceFragmentIDs,
+            taskID: valid.taskID,
+            taskStatus: valid.taskStatus,
+            externalEffects: [],
+            displayMode: .clarification,
+            presentation: presentation,
+            runAudit: nil,
+            clarification: nil,
+            pendingDecision: nil,
+            receipt: nil
+        )
+        XCTAssertFalse(missing.provesCanonicalSafeReadback)
+    }
+
+    func testLiveServiceRejectsNonLoopbackBackends() {
+        XCTAssertThrowsError(
+            try URLMacRelationshipService(
+                configuration: .init(
+                    baseURL: URL(string: "https://example.com")!,
+                    accountSlug: "example",
+                    userEmail: "recruiter@example.com"
+                )
+            )
+        )
+    }
+
+    func testOutcomeUnknownCorrelationIsEncryptedAndSurvivesStoreRecreation() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-unknown-resolution-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keyProvider = FixedUnknownResolutionKeyProvider()
+        let firstStore = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: keyProvider
+        )
+        let scopeKey = "http://127.0.0.1:4321|fixture-alpha|recruiter@alpha.local"
+        let expected = DurableUnknownResolution(
+            schemaVersion: DurableUnknownResolution.currentSchemaVersion,
+            operationID: "11111111-1111-4111-8111-111111111111",
+            bundleID: "22222222-2222-4222-8222-222222222222",
+            taskID: "33333333-3333-4333-8333-333333333333",
+            taskRevision: 2,
+            bundleRevision: 1,
+            proposalID: "44444444-4444-4444-8444-444444444444",
+            baseRevision: 7,
+            reason: "The recruiter confirmed the exact review-only diff.",
+            decisions: [.init(
+                itemID: "55555555-5555-4555-8555-555555555555",
+                choice: CanonicalDecisionChoice.accept.rawValue
+            )],
+            workspaceID: "66666666-6666-4666-8666-666666666666",
+            accountID: "66666666-6666-4666-8666-666666666666",
+            pursuitID: "77777777-7777-4777-8777-777777777777",
+            personID: "88888888-8888-4888-8888-888888888888",
+            relationshipContextID: "99999999-9999-4999-8999-999999999999",
+            captureID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            resourceID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            evidenceIDs: ["cccccccc-cccc-4ccc-8ccc-cccccccccccc"],
+            savedAt: Date(timeIntervalSince1970: 1_788_200_000),
+            transportError: "The response was lost after dispatch."
+        )
+
+        try firstStore.save(expected, scopeKey: scopeKey)
+        let files = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        let file = try XCTUnwrap(files.first)
+        let encrypted = try Data(contentsOf: file)
+        XCTAssertNil(encrypted.range(of: Data(expected.operationID.utf8)))
+
+        let recreatedStore = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: keyProvider
+        )
+        XCTAssertEqual(try recreatedStore.load(scopeKey: scopeKey), expected)
+        try recreatedStore.clear(scopeKey: scopeKey)
+        XCTAssertNil(try recreatedStore.load(scopeKey: scopeKey))
+    }
+
+    @MainActor
+    func testDecisionRequiresAnExplicitChoiceForEveryItemBeforeReceipt() async throws {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .needsDecision),
+            initialMode: .needsDecision
+        )
+
+        await model.load()
+        let item = try XCTUnwrap(model.pendingDecision?.items.first)
+        XCTAssertFalse(model.canResolveCanonicalDecision)
+        XCTAssertNil(model.canonicalReceipt)
+
+        model.setDecision(itemID: item.id, choice: .accept)
+        XCTAssertTrue(model.canResolveCanonicalDecision)
+
+        await model.resolveCanonicalDecision()
+        XCTAssertEqual(model.mode, .receipt)
+        XCTAssertEqual(model.canonicalReceipt?.externalEffects, [])
+        XCTAssertEqual(model.canonicalReceipt?.beforeRevision, 7)
+        XCTAssertEqual(model.canonicalReceipt?.afterRevision, 8)
+    }
+
+    @MainActor
+    func testClearScrubsRelationshipDecisionAndReceiptProjections() async {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .receipt),
+            initialMode: .receipt
+        )
+        await model.load()
+        XCTAssertNotNil(model.canonicalReceipt)
+
+        model.clearLocalContext()
+
+        XCTAssertEqual(model.mode, .deleted)
+        XCTAssertNil(model.pendingDecision)
+        XCTAssertNil(model.canonicalReceipt)
+        XCTAssertTrue(model.decisionSelections.isEmpty)
+        XCTAssertEqual(model.presentation.candidateName, "No relationship details displayed")
+        XCTAssertTrue(model.presentation.actionProjections.isEmpty)
+    }
+
+    @MainActor
+    func testSaveIdentityReviewCreatesNonBindingReceipt() async {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .ambiguousIdentity),
+            initialMode: .ambiguousIdentity
+        )
+        await model.load()
+
+        model.saveIdentityForReview()
+
+        XCTAssertEqual(model.mode, .identityReviewSaved)
+        XCTAssertNotNil(model.identityReviewReceipt)
+        XCTAssertNil(model.pendingDecision)
+        XCTAssertNil(model.canonicalReceipt)
+    }
+
+    @MainActor
+    func testFactConfirmationDoesNotPrepareCopyOrSendLocalDraft() {
+        let model = AppModel(
+            service: FixtureRelationshipService(initialMode: .needsDecision),
+            initialMode: .needsDecision
+        )
+
+        model.confirmFactProposal()
+
+        XCTAssertEqual(model.factReviewStatus, .confirmed)
+        XCTAssertEqual(model.localDraftStatus, .awaitingDecision)
+        XCTAssertNil(model.canonicalReceipt)
+    }
+
+    func testRevokedAuthorityAdmitsNoNewDispatchAndCannotReinstallAnOldLogin() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+
+        let firstLoad = Task { try await service.loadWorkspace() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "simulated-login") == 0 {
+            await Task.yield()
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "simulated-login"), 1)
+
+        service.invalidateAuthority(.authentication)
+
+        // The login response lands only after the revocation boundary.
+        ControlledURLProtocol.answer(matching: "simulated-login", with: .ok(Self.loginBody(token: "token-old")))
+        do {
+            _ = try await firstLoad.value
+            XCTFail("A response that lands after revocation must not install authority.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("revoked"))
+        }
+
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "v1/pursuits"),
+            0,
+            "No scope readback may be dispatched after revocation."
+        )
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "v1/"),
+            1,
+            "Only the already admitted login ran; no further request left this process."
+        )
+
+        // The discarded login cannot be reinstalled or reused: the next load
+        // must authenticate again and only the fresh credential may travel.
+        let secondLoad = Task { try await service.loadWorkspace() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "simulated-login") < 2 {
+            await Task.yield()
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "simulated-login"), 2)
+        ControlledURLProtocol.answer(matching: "simulated-login", with: .ok(Self.loginBody(token: "token-new")))
+        ControlledURLProtocol.answer(matching: "v1/pursuits", with: .failure)
+        ControlledURLProtocol.answer(matching: "v1/people", with: .failure)
+        ControlledURLProtocol.answer(matching: "v1/pursuit-proposals", with: .failure)
+        _ = try? await secondLoad.value
+
+        let dispatchedTokens = ControlledURLProtocol.authorizations(matching: "v1/")
+        XCTAssertFalse(dispatchedTokens.contains("Bearer token-old"), "Revoked credentials are never dispatched again.")
+        XCTAssertTrue(dispatchedTokens.contains("Bearer token-new"))
+    }
+
+    func testLogoutCleanupComparesOperationIdentityAndPreservesANewerOperationRecord() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-unknown-resolution-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+        try store.save(Self.durableResolution(operationID: "operation-old"), scopeKey: Self.controlledScopeKey)
+        let service = try Self.makeControlledService(store: store)
+        // A REAL original login is warmed before retirement; the zero-login
+        // case is covered separately and stays truthfully local-only.
+        try await Self.completeWorkspaceLoad(service: service, token: "token-logout")
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "simulated-login"), 1)
+
+        let retirement = service.withdrawAuthentication()
+        let signOut = Task { try await service.signOut(ticket: retirement) }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "logout") == 0 {
+            await Task.yield()
+        }
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "logout"),
+            1,
+            "The captured credential is used only for this exact logout."
+        )
+
+        // A newer operation's record lands while the logout is still in
+        // flight. The static scope key alone must not delete it.
+        try store.save(Self.durableResolution(operationID: "operation-new"), scopeKey: Self.controlledScopeKey)
+
+        ControlledURLProtocol.answer(matching: "logout", with: .ok(Self.logoutBody))
+        let outcome = try await signOut.value
+
+        guard case .revoked = outcome.remote else {
+            return XCTFail("Expected a verified remote revocation of the original session")
+        }
+        XCTAssertEqual(
+            try store.load(scopeKey: Self.controlledScopeKey)?.operationID,
+            "operation-new",
+            "Logout cleanup compares the captured operation identity and never deletes a newer operation's record."
+        )
+    }
+
+    func testLogoutCleanupDeletesExactlyItsOwnCapturedOperationRecord() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-unknown-resolution-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+        try store.save(Self.durableResolution(operationID: "operation-mine"), scopeKey: Self.controlledScopeKey)
+        let service = try Self.makeControlledService(store: store)
+
+        // Restore and validate the exact durable identity under the real
+        // authenticated scope before withdrawal. Logout itself never logs in
+        // or guesses the current file into a previously frozen retirement.
+        try await Self.completeWorkspaceLoad(service: service, token: "token-logout")
+        let signOut = Task { try await service.signOut() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "logout") == 0 {
+            await Task.yield()
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "logout"), 1)
+        ControlledURLProtocol.answer(matching: "logout", with: .ok(Self.logoutBody))
+        let outcome = try await signOut.value
+        guard case .revoked = outcome.remote else {
+            return XCTFail("The exact original authenticated session must be revoked.")
+        }
+
+        XCTAssertNil(
+            try store.load(scopeKey: Self.controlledScopeKey),
+            "The exact captured operation record is cleared at sign-out."
+        )
+    }
+
+    func testDispatchedDecisionWriteStaysUnknownAndNeverRecreatesAClearedRecoveryFile() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-unknown-resolution-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+        try store.save(Self.durableResolution(operationID: "operation-seed"), scopeKey: Self.controlledScopeKey)
+        let service = try Self.makeControlledService(store: store)
+
+        let load = Task { try await service.loadWorkspace() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "simulated-login") == 0 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "simulated-login", with: .ok(Self.loginBody(token: "token-live")))
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "v1/pursuits") == 0 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "v1/pursuits", with: .ok(Self.pursuitsBody))
+        ControlledURLProtocol.answer(matching: "v1/people", with: .ok(Self.peopleBody))
+        ControlledURLProtocol.answer(matching: "v1/pursuit-proposals", with: .ok(Self.proposalsBody))
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "contexts/") == 0 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "contexts/", with: .ok(Self.relationshipBody))
+        let loaded = try await load.value
+        guard case .canonical(let restored) = loaded, restored.displayMode == .outcomeUnknown else {
+            return XCTFail("Expected the durable outcome-unknown operation to be restored without a new write.")
+        }
+
+        let request = CanonicalDecisionRequest(
+            bundleID: "bundle-1",
+            taskID: "task-1",
+            taskRevision: 2,
+            bundleRevision: 1,
+            proposalID: "proposal-1",
+            baseRevision: 7,
+            reason: "Controlled dispatch.",
+            decisions: []
+        )
+        let resolve = Task { try await service.resolveDecision(request) }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "resources/") == 0 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "resources/", with: .ok(Self.resourceBody))
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "resolve") == 0 {
+            await Task.yield()
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resolve"), 1)
+        XCTAssertEqual(
+            try store.load(scopeKey: Self.controlledScopeKey)?.operationID != "operation-seed",
+            true,
+            "The exact dispatched operation identity is persisted before the write leaves this process."
+        )
+
+        // Sign-out cleanup clears the durable file before the lost response
+        // lands. The late catch must never recreate it.
+        try store.clear(scopeKey: Self.controlledScopeKey)
+        for _ in 0..<4 { ControlledURLProtocol.answer(matching: "v1/operations/", with: .failure) }
+        ControlledURLProtocol.answer(matching: "resolve", with: .failure)
+
+        let resolved = try await resolve.value
+        guard case .canonical(let unknown) = resolved, unknown.displayMode == .outcomeUnknown else {
+            return XCTFail("An already dispatched write must stay outcome-unknown, never be reported as canceled.")
+        }
+        XCTAssertNil(
+            try store.load(scopeKey: Self.controlledScopeKey),
+            "A late decision catch must never recreate the cleared durable recovery file."
+        )
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "resolve"),
+            1,
+            "Reconciliation and recovery must never manufacture a second decision write."
+        )
+    }
+
+    @MainActor
+    func testSignOutRevokesTheOriginalSessionWithoutCreatingANewLogin() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-unknown-resolution-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+        let service = try Self.makeControlledService(store: store)
+        try await Self.completeWorkspaceLoad(service: service, token: "token-live")
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "simulated-login"), 1)
+
+        let model = AppModel(
+            service: service,
+            accountID: "pending-live-account",
+            capsuleStore: NullLocalCapsuleStore()
+        )
+        let signOut = Task { await model.signOutAndClearLocalData() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "logout") == 0 {
+            await Task.yield()
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "logout"), 1)
+        ControlledURLProtocol.answer(matching: "logout", with: .ok(Self.logoutBody))
+        await signOut.value
+
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "simulated-login"),
+            1,
+            "No new login may be created just to sign out; the original session is revoked with its captured credential."
+        )
+        XCTAssertTrue(
+            ControlledURLProtocol.authorizations(matching: "logout").contains("Bearer token-live"),
+            "The logout uses the exact original retiring credential."
+        )
+        XCTAssertTrue(model.deletionReceipt?.contains("was revoked") == true)
+        XCTAssertTrue(model.isSignedOut)
+    }
+
+    @MainActor
+    func testSignOutWithoutOriginalCredentialDispatchesNothingAndStaysTruthfullyLocalOnly() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+        let model = AppModel(
+            service: service,
+            accountID: "pending-live-account",
+            capsuleStore: NullLocalCapsuleStore()
+        )
+
+        await model.signOutAndClearLocalData()
+
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "v1/"),
+            0,
+            "Without an original credential nothing is dispatched: no session is created just to sign it out."
+        )
+        XCTAssertTrue(model.isSignedOut)
+        XCTAssertTrue(
+            model.deletionReceipt?.contains("No original remote session credential existed") == true,
+            "Local-only sign-out is reported truthfully."
+        )
+        XCTAssertFalse(model.deletionReceipt?.contains("was revoked") == true)
+    }
+
+    @MainActor
+    func testLogoutRetiresTheOldCorrelationBeforeSuspensionAndKeepsANewerOne() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-unknown-resolution-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+        try store.save(Self.durableResolution(operationID: "operation-old"), scopeKey: Self.controlledScopeKey)
+        let service = try Self.makeControlledService(store: store)
+        try await Self.completeWorkspaceLoad(service: service, token: "token-live")
+
+        let signOut = Task { await Self.modellessSignOut(service) }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "logout") == 0 {
+            await Task.yield()
+        }
+        // The captured old correlation is retired before the first suspension,
+        // so a legitimate new load during the logout cannot restore it.
+        XCTAssertNil(try store.load(scopeKey: Self.controlledScopeKey))
+
+        // A newer operation's record lands while the logout is in flight.
+        try store.save(Self.durableResolution(operationID: "operation-new"), scopeKey: Self.controlledScopeKey)
+        ControlledURLProtocol.answer(matching: "logout", with: .ok(Self.logoutBody))
+        _ = await signOut.value
+
+        XCTAssertEqual(
+            try store.load(scopeKey: Self.controlledScopeKey)?.operationID,
+            "operation-new",
+            "Logout retirement compares the captured operation identity and keeps a newer operation's record."
+        )
+    }
+
+    @MainActor
+    func testSourceWithdrawalStopsTheSubmitWorkflowInTheRealService() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+        try await Self.completeWorkspaceLoad(service: service, token: "token-live")
+        try await service.confirmScope(.init(
+            pursuitID: "pursuit-1",
+            personID: "person-1",
+            relationshipContextID: "context-1"
+        ))
+        let manifest = try Self.frozenManifest(sourceText: "Reviewed source that gets withdrawn.")
+        let sourceID = manifest.selectedItems[0].sourceID
+
+        let home = try TaskAdmissionTestHome(manifest: manifest)
+        let submit = Task { try await service.submit(manifest: manifest, taskLifecycle: home.observer) }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "resource-captures") == 0 {
+            await Task.yield()
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 1)
+
+        // Exact selected-source withdrawal reaches the real actor while the
+        // capture response is still in flight.
+        service.invalidateSelectedSource(sourceID)
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .ok(Self.captureBody))
+
+        do {
+            _ = try await submit.value
+            XCTFail("A withdrawn selected source must stop the old workflow's dispatch.")
+        } catch {
+            guard case RelationshipServiceError.sourceWorkflowStopped = error else {
+                return XCTFail("The service must positively prove Task POST was never admitted: \(error)")
+            }
+        }
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "v1/resources/"),
+            0,
+            "No follow-up resource readback may be dispatched for a withdrawn source."
+        )
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "agent-tasks"),
+            0,
+            "No Agent Task write may be admitted for a withdrawn source."
+        )
+    }
+
+    @MainActor
+    func testUnrelatedSourceInvalidationKeepsTheSelectedSourceWorkflowValid() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+        try await Self.completeWorkspaceLoad(service: service, token: "token-live")
+        try await service.confirmScope(.init(
+            pursuitID: "pursuit-1",
+            personID: "person-1",
+            relationshipContextID: "context-1"
+        ))
+        let manifest = try Self.frozenManifest(sourceText: "Reviewed source that stays authoritative.")
+
+        let home = try TaskAdmissionTestHome(manifest: manifest)
+        let submit = Task { try await service.submit(manifest: manifest, taskLifecycle: home.observer) }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "resource-captures") == 0 {
+            await Task.yield()
+        }
+
+        // An unrelated local-only attachment is not an invalidation of this
+        // source at all; even an explicit unrelated source revocation is
+        // operation-bound and cannot stop this workflow.
+        service.invalidateSelectedSource("unrelated-local-only-source")
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .ok(Self.captureBody))
+
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "v1/resources/") == 0 {
+            await Task.yield()
+        }
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "v1/resources/"),
+            1,
+            "An unchanged selected source keeps its workflow dispatching."
+        )
+        ControlledURLProtocol.answer(matching: "v1/resources/", with: .ok(Self.resourceBody))
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "agent-tasks") == 0 {
+            await Task.yield()
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "agent-tasks"), 1)
+        ControlledURLProtocol.answerEveryHeld(with: .failure)
+        _ = try? await submit.value
+    }
+
+    @MainActor
+    func testScopeChangeFlushesScopeCachesButPreservesTheLogin() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+        try await Self.completeWorkspaceLoad(service: service, token: "token-live")
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "v1/pursuits"), 1)
+
+        service.invalidateAuthority(.relationshipScope)
+
+        let confirm = Task {
+            try await service.confirmScope(.init(
+                pursuitID: "pursuit-1",
+                personID: "person-1",
+                relationshipContextID: "context-1"
+            ))
+        }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "v1/pursuits") >= 2 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "v1/pursuits", with: .ok(Self.pursuitsBody))
+        ControlledURLProtocol.answer(matching: "v1/people", with: .ok(Self.peopleBody))
+        ControlledURLProtocol.answer(matching: "v1/pursuit-proposals", with: .ok(Self.proposalsBody))
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "contexts/") >= 2 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "contexts/", with: .ok(Self.relationshipBody))
+        try await confirm.value
+
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "simulated-login"),
+            1,
+            "A scope change flushes scope caches but never forces a new login."
+        )
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "v1/pursuits"), 2)
+    }
+
+    private static func modellessSignOut(
+        _ service: URLMacRelationshipService
+    ) async -> SessionSignOutOutcome {
+        (try? await service.signOut()) ?? SessionSignOutOutcome(
+            remote: .remoteUnknown("Controlled logout failure."),
+            localRetirement: .pending("The service did not report its durable operation retirement status.")
+        )
+    }
+
+    private static func completeWorkspaceLoad(
+        service: URLMacRelationshipService,
+        token: String
+    ) async throws {
+        let load = Task { try await service.loadWorkspace() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "simulated-login") == 0 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "simulated-login", with: .ok(loginBody(token: token)))
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "v1/pursuits") == 0 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "v1/pursuits", with: .ok(pursuitsBody))
+        ControlledURLProtocol.answer(matching: "v1/people", with: .ok(peopleBody))
+        ControlledURLProtocol.answer(matching: "v1/pursuit-proposals", with: .ok(proposalsBody))
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "contexts/") == 0 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "contexts/", with: .ok(relationshipBody))
+        _ = try await load.value
+    }
+
+    private static func frozenManifest(sourceText: String) throws -> SubmittedContextManifest {
+        var draft = ContextCapsuleDraft()
+        draft.purpose = "Identify the decision dependency and propose the smallest safe recruiter-owned next step."
+        draft.addSelectedText(sourceText)
+        let sourceID = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: sourceID, value: .candidate)
+        draft.confirmAttribution(id: sourceID)
+        return try draft.freeze(accountID: "account-1", pursuitID: "pursuit-1", personID: "person-1")
+    }
+
+    private static let captureBody = json([
+        "contract_version": "2026-08-24.10",
+        "capture_id": "capture-1",
+        "identity": [
+            "status": "bound",
+            "person_id": "person-1",
+            "relationship_context_id": "context-1"
+        ] as [String: Any],
+        "resource": ["id": "resource-1", "fragment_count": 1]
+    ])
+
+    func testRetirementBarrierIsDurableAndRetiredOperationNeverRestores() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-unknown-resolution-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+        try store.save(Self.durableResolution(operationID: "operation-retired"), scopeKey: Self.controlledScopeKey)
+
+        let outcome = try store.retireOperation(
+            scopeKey: Self.controlledScopeKey,
+            retirement: Self.retirement(operationID: "operation-retired"),
+            now: Date()
+        )
+        XCTAssertEqual(
+            outcome,
+            .established(correlationRemoved: true, newerOperationPreserved: false)
+        )
+        XCTAssertNil(try store.load(scopeKey: Self.controlledScopeKey), "A retired operation never restores.")
+        XCTAssertNotNil(try store.retirementState(scopeKey: Self.controlledScopeKey, operationID: "operation-retired"))
+
+        // Restart: a fresh store instance still refuses to restore it, and a
+        // newer operation's record and key survive untouched.
+        let restarted = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+        XCTAssertNil(try restarted.load(scopeKey: Self.controlledScopeKey))
+        try restarted.save(Self.durableResolution(operationID: "operation-new"), scopeKey: Self.controlledScopeKey)
+        XCTAssertEqual(try restarted.load(scopeKey: Self.controlledScopeKey)?.operationID, "operation-new")
+
+        // A stale retirement of the old operation never deletes the newer one.
+        let stale = try restarted.retireOperation(
+            scopeKey: Self.controlledScopeKey,
+            retirement: Self.retirement(operationID: "operation-retired"),
+            now: Date()
+        )
+        XCTAssertEqual(
+            stale,
+            .established(correlationRemoved: false, newerOperationPreserved: true),
+            "Atomic compare preserves the newer operation's record."
+        )
+        XCTAssertEqual(try restarted.load(scopeKey: Self.controlledScopeKey)?.operationID, "operation-new")
+    }
+
+    @MainActor
+    func testRemoteReceiptSurvivesLocalRetirementFailureAndStaysVisiblyPending() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let store = ControlledRetirementFailureStore()
+        // Seed the ACTUAL encrypted correlation before the failure seam: the
+        // marker write failure must report pending, never notRequired.
+        try store.save(Self.durableResolution(operationID: "operation-retired"), scopeKey: Self.controlledScopeKey)
+        store.retireResult = .failure(UnknownResolutionStoreError.encryptionFailed)
+        let service = try Self.makeControlledService(store: store)
+        try await Self.completeWorkspaceLoad(service: service, token: "token-old")
+        let retirement = service.withdrawAuthentication()
+        let signOut = Task { try await service.signOut(ticket: retirement) }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "logout") == 0 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "logout", with: .ok(Self.logoutBody))
+        let outcome = try await signOut.value
+
+        guard case .revoked = outcome.remote else {
+            return XCTFail("The verified remote receipt survives local cleanup failure: \(outcome)")
+        }
+        guard case .pending = outcome.localRetirement else {
+            return XCTFail("A failed marker write stays visibly pending, never claimed cleared: \(outcome)")
+        }
+    }
+
+    @MainActor
+    func testRetirementTicketFreezesTheOriginalCredentialAcrossFlushAndNewLogin() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+        try await Self.completeWorkspaceLoad(service: service, token: "token-old")
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "simulated-login"), 1)
+
+        // The synchronous withdrawal freezes the exact original credential.
+        let retirement = service.withdrawAuthentication()
+
+        // A queued actor entry runs first: flush + a fresh login with token-new.
+        let reload = Task { try await service.loadWorkspace() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "simulated-login") >= 2 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "simulated-login", with: .ok(Self.loginBody(token: "token-new")))
+        ControlledURLProtocol.answer(matching: "v1/pursuits", with: .ok(Self.pursuitsBody))
+        ControlledURLProtocol.answer(matching: "v1/people", with: .ok(Self.peopleBody))
+        ControlledURLProtocol.answer(matching: "v1/pursuit-proposals", with: .ok(Self.proposalsBody))
+        ControlledURLProtocol.answer(matching: "contexts/", with: .ok(Self.relationshipBody))
+        _ = try await reload.value
+
+        let signOut = Task { try await service.signOut(ticket: retirement) }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "logout") == 0 {
+            await Task.yield()
+        }
+        ControlledURLProtocol.answer(matching: "logout", with: .ok(Self.logoutBody))
+        let outcome = try await signOut.value
+
+        guard case .revoked = outcome.remote else {
+            return XCTFail("Expected the original session to be revoked: \(outcome)")
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "logout"), 1, "At most one original logout.")
+        XCTAssertEqual(
+            ControlledURLProtocol.authorizations(matching: "logout"),
+            ["Bearer token-old"],
+            "The logout uses the exact credential frozen at the withdrawal boundary, never a newer one."
+        )
+        XCTAssertEqual(
+            ControlledURLProtocol.recordedCount(matching: "simulated-login"),
+            2,
+            "No login is created just to log out; only the warm login and the legitimate reload authenticate."
+        )
+        XCTAssertTrue(
+            ControlledURLProtocol.authorizations(matching: "v1/pursuits").contains("Bearer token-new"),
+            "The newer login's credential remains usable."
+        )
+    }
+
+    func testRetirementAndMarkerCleanupReturnPromptlyWithoutLockDeadlock() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-unknown-resolution-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+        try store.save(Self.durableResolution(operationID: "operation-old"), scopeKey: Self.controlledScopeKey)
+        let operationFile = Self.operationFile(directory: directory)
+        let interruptedCorrelation = try Data(contentsOf: operationFile)
+
+        // Normal retirement of an EXISTING correlation must return promptly:
+        // the nested clear runs inside the shared namespace lock without
+        // deadlocking on the nonrecursive lock.
+        let box = RetiredBox()
+        Thread.detachNewThread {
+            box.result = try? store.retireOperation(
+                scopeKey: Self.controlledScopeKey,
+                retirement: Self.retirement(operationID: "operation-old"),
+                now: Date()
+            )
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while box.result == nil && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertNotNil(box.result, "retirement of an existing correlation must return promptly (no nested-lock deadlock)")
+        XCTAssertEqual(box.result, .established(correlationRemoved: true, newerOperationPreserved: false))
+
+        // Fresh-store marker-backed cleanup on restart must also return
+        // promptly and never restore the retired operation.
+        let restarted = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+        XCTAssertThrowsError(try restarted.save(Self.durableResolution(operationID: "operation-old"), scopeKey: Self.controlledScopeKey))
+        // Owned synthetic crash fixture: leave the original encrypted bytes as
+        // if marker persistence completed but correlation unlink did not.
+        try interruptedCorrelation.write(to: operationFile)
+        let reloadBox = RetiredBox()
+        Thread.detachNewThread {
+            reloadBox.value = try? restarted.load(scopeKey: Self.controlledScopeKey)
+        }
+        let reloadDeadline = Date().addingTimeInterval(5)
+        while reloadBox.finishedAfterRead == false && Date() < reloadDeadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertTrue(reloadBox.finishedAfterRead, "marker-backed restart cleanup must return promptly (no nested-lock deadlock)")
+        XCTAssertNil(reloadBox.value, "A retired operation never restores across restart.")
+    }
+
+    func testActualEncryptedMarkerSurvivesClearFailureAndFreshStoreRetriesLocally() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "retirement-clear-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let removal = BlockedOperationRemovalFileManager()
+        let store = SecureUnknownResolutionStore(directory: directory, keyProvider: FixedUnknownResolutionKeyProvider(), fileManager: removal)
+        try store.save(Self.durableResolution(operationID: "old-clear-failure"), scopeKey: Self.controlledScopeKey)
+        XCTAssertThrowsError(try store.retireOperation(scopeKey: Self.controlledScopeKey,
+          retirement: Self.retirement(operationID: "old-clear-failure"), now: Date()))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: Self.operationFile(directory: directory).path))
+        XCTAssertNotNil(try store.retirementState(scopeKey: Self.controlledScopeKey, operationID: "old-clear-failure"))
+        let restarted = SecureUnknownResolutionStore(directory: directory, keyProvider: FixedUnknownResolutionKeyProvider())
+        XCTAssertNil(try restarted.load(scopeKey: Self.controlledScopeKey), "The durable marker prohibits restore and fresh-store retries only local unlink.")
+        try restarted.save(Self.durableResolution(operationID: "new-clear-survivor"), scopeKey: Self.controlledScopeKey)
+        XCTAssertEqual(try restarted.retireOperation(scopeKey: Self.controlledScopeKey,
+          retirement: Self.retirement(operationID: "old-clear-failure"), now: Date()),
+          .established(correlationRemoved: false, newerOperationPreserved: true))
+        XCTAssertEqual(try restarted.load(scopeKey: Self.controlledScopeKey)?.operationID, "new-clear-survivor")
+    }
+
+    func testActualMarkerFilesystemFailureStaysUnavailableUntilExactRetryPersistsBarrier() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "retirement-marker-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(directory: directory, keyProvider: FixedUnknownResolutionKeyProvider())
+        try store.save(Self.durableResolution(operationID: "old-marker-failure"), scopeKey: Self.controlledScopeKey)
+        let blocked = Self.operationFile(directory: directory).deletingPathExtension().appendingPathExtension("operation-retirement")
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+        XCTAssertThrowsError(try store.retireOperation(scopeKey: Self.controlledScopeKey,
+          retirement: Self.retirement(operationID: "old-marker-failure"), now: Date()))
+        XCTAssertThrowsError(try store.load(scopeKey: Self.controlledScopeKey))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: Self.operationFile(directory: directory).path))
+        try FileManager.default.removeItem(at: blocked)
+        let restarted = SecureUnknownResolutionStore(directory: directory, keyProvider: FixedUnknownResolutionKeyProvider())
+        XCTAssertEqual(try restarted.load(scopeKey: Self.controlledScopeKey)?.operationID, "old-marker-failure",
+          "Before any barrier could persist, restart cannot magically know the failed withdrawal.")
+        _ = try restarted.retireOperation(scopeKey: Self.controlledScopeKey,
+          retirement: Self.retirement(operationID: "old-marker-failure"), now: Date())
+        XCTAssertNil(try restarted.load(scopeKey: Self.controlledScopeKey))
+    }
+
+    func testActualCorruptLoadCannotBeReportedAsNoRecordAndNewerRecordSurvivesExactRetirement() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "retirement-load-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(directory: directory, keyProvider: FixedUnknownResolutionKeyProvider())
+        try store.save(Self.durableResolution(operationID: "old-corrupt"), scopeKey: Self.controlledScopeKey)
+        try Data("synthetic invalid ciphertext".utf8).write(to: Self.operationFile(directory: directory))
+        XCTAssertThrowsError(try store.load(scopeKey: Self.controlledScopeKey))
+        XCTAssertThrowsError(try store.retireOperation(scopeKey: Self.controlledScopeKey,
+          retirement: Self.retirement(operationID: "old-corrupt"), now: Date()))
+        XCTAssertNotNil(try store.retirementState(scopeKey: Self.controlledScopeKey, operationID: "old-corrupt"))
+        try store.save(Self.durableResolution(operationID: "new-after-corrupt"), scopeKey: Self.controlledScopeKey)
+        XCTAssertEqual(try store.retireOperation(scopeKey: Self.controlledScopeKey,
+          retirement: Self.retirement(operationID: "old-corrupt"), now: Date()),
+          .established(correlationRemoved: false, newerOperationPreserved: true))
+        XCTAssertEqual(try store.load(scopeKey: Self.controlledScopeKey)?.operationID, "new-after-corrupt")
+    }
+
+    func testRetirementMarkersNeverEvictOlderBarriersByCount() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "retirement-many-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(directory: directory, keyProvider: FixedUnknownResolutionKeyProvider())
+        for index in 0..<34 {
+            _ = try store.retireOperation(scopeKey: Self.controlledScopeKey,
+              retirement: Self.retirement(operationID: "retired-\(index)"), now: Date())
+        }
+        let restarted = SecureUnknownResolutionStore(directory: directory, keyProvider: FixedUnknownResolutionKeyProvider())
+        XCTAssertNotNil(try restarted.retirementState(scopeKey: Self.controlledScopeKey, operationID: "retired-0"))
+        XCTAssertThrowsError(try restarted.save(Self.durableResolution(operationID: "retired-0"), scopeKey: Self.controlledScopeKey))
+        XCTAssertNil(try restarted.load(scopeKey: Self.controlledScopeKey))
+    }
+
+    private static func operationFile(directory: URL) -> URL {
+        let digest = SHA256.hash(data: Data(controlledScopeKey.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appending(path: "\(digest).operation")
+    }
+
+    private static func retirement(operationID: String) -> DurableUnknownRetirement {
+        DurableUnknownRetirement(
+            schemaVersion: DurableUnknownRetirement.currentSchemaVersion,
+            operationID: operationID,
+            accountID: "account-1",
+            workspaceID: "account-1",
+            retiredAt: Date(timeIntervalSince1970: 1_788_200_100)
+        )
+    }
+
+    @MainActor
+    func testDelayedUnavailableRetirementCannotPoisonAnActuallyEmptyNewLogin() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "talent-signal-empty-retirement-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(directory: directory, keyProvider: FixedUnknownResolutionKeyProvider())
+        let service = try Self.makeControlledService(store: store)
+        // No original login/home inspection: unavailable is frozen, not empty.
+        let oldTicket = service.withdrawAuthentication()
+        try await Self.completeWorkspaceLoad(service: service, token: "token-new")
+        let outcome = try await service.signOut(ticket: oldTicket)
+        guard case .pending = outcome.localRetirement else {
+            return XCTFail("The old uninspected home must remain truthfully pending.")
+        }
+        _ = try await service.loadWorkspace()
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "simulated-login"), 1)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "logout"), 0)
+        XCTAssertNil(try store.load(scopeKey: Self.controlledScopeKey))
+    }
+
+    @MainActor
+    func testUnavailableRetirementCanRetryActualEmptyHomeWithoutInventingAnIdentity() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "talent-signal-retry-retirement-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureUnknownResolutionStore(directory: directory, keyProvider: FixedUnknownResolutionKeyProvider())
+        let service = try Self.makeControlledService(store: store)
+        let outcome = try await service.signOut(ticket: service.withdrawAuthentication())
+        guard case .pending = outcome.localRetirement else {
+            return XCTFail("An uninspected physical home is pending, never notRequired.")
+        }
+        try await Self.completeWorkspaceLoad(service: service, token: "token-new")
+        _ = try await service.loadWorkspace()
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "simulated-login"), 1)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "logout"), 0)
+    }
+
+    @MainActor
+    func testTaskAckSaveFailureRecoversExactIDAfterRestartAndRetriesOnlyTerminalLocalCleanup() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "talent-signal-task-ack-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: directory.appendingPathExtension("held")) }
+        let faultStore = PhysicalTaskCapsuleFailureStore(directory: directory, failAt: .canonicalAssociation)
+        let service = try Self.makeControlledService()
+        let first = AppModel(service: service, accountID: "pending-live-account", capsuleStore: faultStore)
+        Self.stageWorkspace(token: "token-first")
+        let initialized = await first.ensureInitialized()
+        XCTAssertTrue(initialized)
+        first.addSelectedText("Unrelated local-only source B must survive.")
+        let sourceB = try XCTUnwrap(first.capsule.items.first?.id)
+        first.setLocalOnly(id: sourceB, value: true)
+        first.addSelectedText("Reviewed task-only source A.")
+        let sourceA = try XCTUnwrap(first.capsule.items.last?.id)
+        first.setAttribution(id: sourceA, actorKind: .candidate)
+        first.confirmAttribution(id: sourceA)
+        first.selectFirstRelationshipScopeFromKeyboard()
+        // Actual scope selection revokes the old service scope cache.
+        Self.stageScope()
+        await first.confirmRelationshipScope()
+        XCTAssertEqual(first.scopeReviewStatus, .confirmed, first.errorMessage ?? "No scope error")
+        let originalExpiry = try XCTUnwrap(first.capsule.items.last).capturedAt.addingTimeInterval(3_600)
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .ok(Self.captureBody))
+        ControlledURLProtocol.answer(matching: "v1/resources/", with: .ok(Self.resourceBody))
+        ControlledURLProtocol.answer(matching: "POST /v1/pursuits/pursuit-1/agent-tasks", with: .ok(Self.taskAcknowledgementBody))
+        await first.submitCurrentInsight()
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 1)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "GET /v1/agent-tasks/"), 0, "ACK must be persisted before polling.")
+        XCTAssertTrue(first.errorMessage?.contains("acknowledgement") == true, first.errorMessage ?? "No acknowledgement error")
+        try faultStore.repairPhysicalFault()
+        let saved = try faultStore.backing.load(accountID: "account-1", now: Date()).draft
+        let prepared = try XCTUnwrap(saved.workflowOwnerships?.first)
+        let originalReference = try XCTUnwrap(prepared.taskAdmission)
+        XCTAssertEqual(prepared.phase, .taskOutcomeUnknown)
+        XCTAssertEqual(prepared.workflowID, "")
+        XCTAssertEqual(originalReference.expiresAt, originalExpiry)
+        XCTAssertEqual(Set(saved.items.map(\.id)), Set([sourceA, sourceB]))
+
+        ControlledURLProtocol.reset()
+        let cleanupFailure = PhysicalTaskCapsuleFailureStore(directory: directory, failAt: .terminalCleanup)
+        let secondService = try Self.makeControlledService()
+        let second = AppModel(service: secondService, accountID: "pending-live-account", capsuleStore: cleanupFailure)
+        Self.stageWorkspace(token: "token-second")
+        ControlledURLProtocol.answer(matching: "agent-task-admission", with: .ok(Self.admissionBody(state: "accepted", taskID: Self.admittedTaskID, status: "completed", authority: "not_current")))
+        let recovered = await second.ensureInitialized()
+        XCTAssertTrue(recovered)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "agent-task-admission"), 1)
+        XCTAssertEqual(ControlledURLProtocol.queryValues(name: "idempotency_key"), [originalReference.taskIdempotencyKey])
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 0)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 0)
+        XCTAssertTrue(second.localRecoveryNotice?.contains("retry authority") == true)
+        try cleanupFailure.repairPhysicalFault()
+        let stillPending = try cleanupFailure.backing.load(accountID: "account-1", now: Date()).draft
+        XCTAssertEqual(stillPending.workflowOwnerships?.first?.workflowID, Self.admittedTaskID)
+        XCTAssertEqual(stillPending.workflowOwnerships?.first?.taskAdmission, originalReference)
+        XCTAssertEqual(Set(stillPending.items.map(\.id)), Set([sourceA, sourceB]))
+
+        ControlledURLProtocol.reset()
+        let freshStore = SecureLocalCapsuleStore(directory: directory, keyProvider: TaskAdmissionTestKeyProvider())
+        let third = AppModel(service: try Self.makeControlledService(), accountID: "pending-live-account", capsuleStore: freshStore)
+        Self.stageWorkspace(token: "token-third")
+        ControlledURLProtocol.answer(matching: "agent-task-admission", with: .ok(Self.admissionBody(state: "accepted", taskID: Self.admittedTaskID, status: "completed", authority: "not_current")))
+        let retried = await third.ensureInitialized()
+        XCTAssertTrue(retried)
+        let final = try freshStore.load(accountID: "account-1", now: Date()).draft
+        XCTAssertEqual(final.items.map(\.id), [sourceB], "Only source A's original task-only copy is retired; B survives.")
+        XCTAssertNil(final.workflowOwnerships)
+        XCTAssertEqual(ControlledURLProtocol.queryValues(name: "idempotency_key"), [originalReference.taskIdempotencyKey])
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 0)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "GET /v1/agent-tasks/"), 0, "not_current recovery grants no task-body authority.")
+    }
+
+    @MainActor
+    func testUnknownAdmissionStatesAndForeignActorNeverReplayOrRenewOriginalCorrelation() async throws {
+        for state in ["not_observed", "processing", "unavailable", "http_401", "http_410", "http_500", "malformed_accepted", "foreign_actor"] {
+            ControlledURLProtocol.reset()
+            let manifest = try Self.frozenManifest(sourceText: "Original authorized synthetic source.")
+            let home = try TaskAdmissionTestHome(manifest: manifest)
+            let reference = MacTaskAdmissionReference(backendOrigin: "http://127.0.0.1:4321", accountID: "account-1",
+                actorID: Self.admittedActorID, pursuitID: "pursuit-1", pursuitRevision: 3,
+                captureID: "capture-1", taskIdempotencyKey: "opaque & + % ? / 中文", operationID: manifest.idempotencyKey,
+                originalRuntimeID: home.observer.runtimeID, originalAttemptID: home.observer.attemptID, originalAuthenticationGeneration: 8,
+                expiresAt: home.observer.expiresAt)
+            try home.observer.observe(.prepared(reference))
+            let before = try home.store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships
+            let model = AppModel(service: try Self.makeControlledService(), accountID: "pending-live-account", capsuleStore: home.store)
+            Self.stageWorkspace(token: "token-recovery", actorID: state == "foreign_actor" ? "49a6d1dd-9459-46cf-9c99-fd31e02fca6f" : Self.admittedActorID)
+            if state.hasPrefix("http_"), let status = Int(state.dropFirst(5)) {
+                ControlledURLProtocol.answer(matching: "agent-task-admission", with: .init(statusCode: status, body: Data("{}".utf8)))
+            } else if state == "malformed_accepted" {
+                ControlledURLProtocol.answer(matching: "agent-task-admission", with: .ok(Self.admissionBody(state: "accepted", taskID: Self.admittedTaskID, status: "invented_terminal", authority: "current")))
+            } else if state != "foreign_actor" {
+                ControlledURLProtocol.answer(matching: "agent-task-admission", with: .ok(Self.admissionBody(state: state, taskID: nil, status: nil, authority: "unknown")))
+            }
+            let ready = await model.ensureInitialized()
+            XCTAssertTrue(ready)
+            XCTAssertEqual(try home.store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships, before)
+            XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "agent-task-admission"), state == "foreign_actor" ? 0 : 1)
+            if state != "foreign_actor" { XCTAssertEqual(ControlledURLProtocol.queryValues(name: "idempotency_key"), [reference.taskIdempotencyKey]) }
+            XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 0)
+            XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 0)
+            XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "GET /v1/agent-tasks/"), 0)
+        }
+        ControlledURLProtocol.reset()
+    }
+
+    func testRealServiceLegacySubmissionCannotBypassTheDurableObserver() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+        do {
+            _ = try await service.submit(manifest: Self.frozenManifest(sourceText: "No observer."))
+            XCTFail("The real legacy entry must fail closed.")
+        } catch {
+            guard case RelationshipServiceError.sourceWorkflowStopped = error else { return XCTFail("Expected positive no-dispatch proof.") }
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 0)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "agent-tasks"), 0)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "simulated-login"), 0)
+    }
+
+    @MainActor
+    func testPreparedPersistenceCrossingOriginalExpiryProvesNoTaskPost() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+        try await Self.completeWorkspaceLoad(service: service, token: "token-live")
+        try await service.confirmScope(.init(pursuitID: "pursuit-1", personID: "person-1", relationshipContextID: "context-1"))
+        let (manifest, draft) = try Self.nearExpiryManifest(remaining: 1.0)
+        let home = try TaskAdmissionTestHome(manifest: manifest, originalDraft: draft)
+        let observation = TaskLifecycleTestObservation()
+        let observer = MacTaskLifecycleObserver(runtimeID: home.observer.runtimeID, attemptID: home.observer.attemptID, expiresAt: home.observer.expiresAt, observe: { event in
+            try home.observer.observe(event)
+            if case .prepared = event {
+                observation.preparedCount += 1
+                // Actual encrypted persistence completed, then owner scheduling
+                // crossed the original deadline before POST admission.
+                while Date() <= home.observer.expiresAt { Thread.sleep(forTimeInterval: 0.01) }
+            }
+        })
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .ok(Self.captureBody))
+        ControlledURLProtocol.answer(matching: "v1/resources/", with: .ok(Self.resourceBody))
+        do {
+            _ = try await service.submit(manifest: manifest, taskLifecycle: observer)
+            XCTFail("Original expiry must stop POST even after prepared persistence.")
+        } catch {
+            guard case RelationshipServiceError.sourceWorkflowStopped = error else { return XCTFail("Expected positive no-POST proof: \(error)") }
+        }
+        XCTAssertEqual(observation.preparedCount, 1)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 0)
+    }
+
+    @MainActor
+    func testTerminalTaskReplyCrossingOriginalExpiryCannotLoadAuditOrInstallBody() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+        try await Self.completeWorkspaceLoad(service: service, token: "token-live")
+        try await service.confirmScope(.init(pursuitID: "pursuit-1", personID: "person-1", relationshipContextID: "context-1"))
+        let (manifest, draft) = try Self.nearExpiryManifest(remaining: 1.0)
+        let home = try TaskAdmissionTestHome(manifest: manifest, originalDraft: draft)
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .ok(Self.captureBody))
+        ControlledURLProtocol.answer(matching: "v1/resources/", with: .ok(Self.resourceBody))
+        ControlledURLProtocol.answer(matching: "POST /v1/pursuits/pursuit-1/agent-tasks", with: .ok(Self.taskAcknowledgementBody))
+        let submit = Task { try await service.submit(manifest: manifest, taskLifecycle: home.observer) }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "GET /v1/agent-tasks/") == 0 { await Task.yield() }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "GET /v1/agent-tasks/"), 1)
+        let protected = try home.store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first
+        XCTAssertEqual(protected?.workflowID, Self.admittedTaskID, "Canonical association must already be protected before poll.")
+        XCTAssertEqual(protected?.taskAdmission?.expiresAt, home.observer.expiresAt)
+        let remaining = max(home.observer.expiresAt.timeIntervalSinceNow + 0.03, 0)
+        try await Task.sleep(for: .seconds(remaining))
+        var response = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.taskAcknowledgementBody) as? [String: Any])
+        var task = try XCTUnwrap(response["task"] as? [String: Any])
+        task["status"] = "completed"
+        task["latest_run"] = ["id": "late-run-id", "proposal_id": NSNull(), "no_action_id": NSNull()]
+        response["task"] = task
+        ControlledURLProtocol.answer(matching: "GET /v1/agent-tasks/", with: .ok(try JSONSerialization.data(withJSONObject: response)))
+        do { _ = try await submit.value; XCTFail("Expired source cannot install a terminal body.") }
+        catch {
+            guard case RelationshipServiceError.staleAuthority = error else { return XCTFail("The entered POST remains unknown/stale, never nondispatch: \(error)") }
+        }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 1)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "agent-runs"), 0)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "decision"), 0)
+    }
+
+    private static func nearExpiryManifest(remaining: TimeInterval) throws -> (SubmittedContextManifest, ContextCapsuleDraft) {
+        var draft = ContextCapsuleDraft()
+        draft.addSelectedText("Original near-expiry synthetic source.", now: Date().addingTimeInterval(-3_600 + remaining))
+        let id = try XCTUnwrap(draft.items.first?.id)
+        draft.setActorKind(id: id, value: .candidate)
+        draft.confirmAttribution(id: id)
+        let manifest = try draft.freeze(accountID: "account-1", pursuitID: "pursuit-1", personID: "person-1")
+        return (manifest, draft)
+    }
+
+    @MainActor
+    func testActualPreparedDiskFailureStopsBeforeTaskPost() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "talent-signal-task-prepared-failure-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: directory.appendingPathExtension("held")) }
+        let store = PhysicalTaskCapsuleFailureStore(directory: directory, failAt: .taskPreparation)
+        let model = AppModel(service: try Self.makeControlledService(), accountID: "pending-live-account", capsuleStore: store)
+        Self.stageWorkspace(token: "token-prepared")
+        let ready = await model.ensureInitialized()
+        XCTAssertTrue(ready)
+        model.addSelectedText("Reviewed synthetic source for actual pre-task disk failure.")
+        let sourceID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: sourceID, actorKind: .candidate)
+        model.confirmAttribution(id: sourceID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        Self.stageScope()
+        await model.confirmRelationshipScope()
+        XCTAssertEqual(model.scopeReviewStatus, .confirmed)
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .ok(Self.captureBody))
+        ControlledURLProtocol.answer(matching: "v1/resources/", with: .ok(Self.resourceBody))
+        await model.submitCurrentInsight()
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 1, "The capture may exist; only Task nondispatch is proved.")
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 0)
+        XCTAssertTrue(model.errorMessage?.contains("No Task POST") == true, model.errorMessage ?? "No error")
+        XCTAssertTrue(model.localRecoveryNotice?.contains("proven-never-dispatched") == true)
+        try store.repairPhysicalFault()
+        let disk = try store.backing.load(accountID: "account-1", now: Date()).draft
+        XCTAssertEqual(disk.items.map(\.id), [sourceID])
+        XCTAssertEqual(disk.workflowOwnerships?.first?.phase, .admittedPreDispatch)
+        XCTAssertNil(disk.workflowOwnerships?.first?.taskAdmission, "Failed prepared persistence never fabricates a protected key.")
+    }
+
+    @MainActor
+    func testLateTaskAcknowledgementCannotRecreateAnActuallyClearedCapsule() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "talent-signal-task-cleared-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureLocalCapsuleStore(directory: directory, keyProvider: TaskAdmissionTestKeyProvider())
+        let model = AppModel(service: try Self.makeControlledService(), accountID: "pending-live-account", capsuleStore: store)
+        Self.stageWorkspace(token: "token-clear")
+        let ready = await model.ensureInitialized()
+        XCTAssertTrue(ready)
+        model.addSelectedText("Original source explicitly cleared while Task POST is in flight.")
+        let id = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: id, actorKind: .candidate)
+        model.confirmAttribution(id: id)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        Self.stageScope()
+        await model.confirmRelationshipScope()
+        XCTAssertEqual(model.scopeReviewStatus, .confirmed)
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .ok(Self.captureBody))
+        ControlledURLProtocol.answer(matching: "v1/resources/", with: .ok(Self.resourceBody))
+        let submit = Task { await model.submitCurrentInsight() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks") == 0 { await Task.yield() }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 1)
+        XCTAssertNotNil(try store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first?.taskAdmission)
+        model.clearLocalContext()
+        ControlledURLProtocol.answer(matching: "POST /v1/pursuits/pursuit-1/agent-tasks", with: .ok(Self.taskAcknowledgementBody))
+        await submit.value
+        XCTAssertEqual(model.mode, .deleted)
+        XCTAssertTrue(model.capsule.items.isEmpty)
+        XCTAssertTrue(try store.load(accountID: "account-1", now: Date()).draft.items.isEmpty)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).count, 0, "No late callback recreates the encrypted Capsule.")
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "GET /v1/agent-tasks/"), 0)
+    }
+
+    @MainActor
+    func testLateAdmissionLookupAfterClearOrSignOutNeverRecreatesEncryptedRecovery() async throws {
+        for boundary in ["clear", "sign_out"] {
+            ControlledURLProtocol.reset()
+            let manifest = try Self.frozenManifest(sourceText: "Original synthetic source cleared during admission lookup.")
+            let home = try TaskAdmissionTestHome(manifest: manifest)
+            let reference = MacTaskAdmissionReference(backendOrigin: "http://127.0.0.1:4321", accountID: "account-1",
+                actorID: Self.admittedActorID, pursuitID: "pursuit-1", pursuitRevision: 3,
+                captureID: "capture-1", taskIdempotencyKey: "original-key", operationID: manifest.idempotencyKey,
+                originalRuntimeID: home.observer.runtimeID, originalAttemptID: home.observer.attemptID, originalAuthenticationGeneration: 8,
+                expiresAt: home.observer.expiresAt)
+            try home.observer.observe(.prepared(reference))
+            let model = AppModel(service: try Self.makeControlledService(), accountID: "pending-live-account", capsuleStore: home.store)
+            Self.stageWorkspace(token: "token-old")
+            let load = Task { await model.ensureInitialized() }
+            for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "agent-task-admission") == 0 { await Task.yield() }
+            XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "agent-task-admission"), 1)
+            if boundary == "clear" { model.clearLocalContext() }
+            else {
+                ControlledURLProtocol.answer(matching: "logout", with: .ok(Self.logoutBody))
+                await model.signOutAndClearLocalData()
+            }
+            ControlledURLProtocol.answer(matching: "agent-task-admission", with: .ok(Self.admissionBody(state: "accepted", taskID: Self.admittedTaskID, status: "completed", authority: "not_current")))
+            _ = await load.value
+            XCTAssertTrue(model.capsule.items.isEmpty)
+            XCTAssertTrue(try home.store.load(accountID: "account-1", now: Date()).draft.items.isEmpty)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: home.directory.path).count, 0)
+            XCTAssertEqual(model.isSignedOut, boundary == "sign_out")
+            XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 0)
+            XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "GET /v1/agent-tasks/"), 0)
+        }
+        ControlledURLProtocol.reset()
+    }
+
+    @MainActor
+    func testTaskCompletesAfterMoreThanFortyActivePollsWithProtectedCanonicalAssociation() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let service = try Self.makeControlledService()
+        try await Self.completeWorkspaceLoad(service: service, token: "token-live")
+        try await service.confirmScope(.init(pursuitID: "pursuit-1", personID: "person-1", relationshipContextID: "context-1"))
+        let manifest = try Self.frozenManifest(sourceText: "Synthetic source for a long-running already-admitted task.")
+        let home = try TaskAdmissionTestHome(manifest: manifest)
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .ok(Self.captureBody))
+        ControlledURLProtocol.answer(matching: "v1/resources/", with: .ok(Self.resourceBody))
+        ControlledURLProtocol.answer(matching: "POST /v1/pursuits/pursuit-1/agent-tasks", with: .ok(Self.taskAcknowledgementBody))
+        // The previous client stopped after40 active polls. Every response
+        // here comes through the actual URLSession parser and authority fence.
+        for _ in 0..<41 {
+            ControlledURLProtocol.answer(matching: "GET /v1/agent-tasks/", with: .ok(Self.taskAcknowledgementBody))
+        }
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.taskAcknowledgementBody) as? [String: Any])
+        var task = try XCTUnwrap(envelope["task"] as? [String: Any])
+        task["status"] = "failed" // A genuine terminal projection with no effects or invented Run audit.
+        envelope["task"] = task
+        let terminal = try JSONSerialization.data(withJSONObject: envelope)
+        // One terminal poll and the existing optional no-Run metadata reads.
+        for _ in 0..<9 { ControlledURLProtocol.answer(matching: "GET /v1/agent-tasks/", with: .ok(terminal)) }
+        let started = Date()
+        let submitted = try await service.submit(manifest: manifest, taskLifecycle: home.observer)
+        guard case .canonical(let readback) = submitted else { return XCTFail("The real service must return its canonical terminal projection.") }
+        XCTAssertGreaterThan(Date().timeIntervalSince(started), 10)
+        XCTAssertEqual(ControlledURLProtocol.deliveredTaskStatuses().filter { $0 == "active" }.count, 41)
+        XCTAssertEqual(readback.taskID, Self.admittedTaskID)
+        XCTAssertEqual(readback.taskStatus, "failed")
+        XCTAssertTrue(readback.externalEffects.isEmpty)
+        let record = try home.store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first
+        XCTAssertEqual(record?.workflowID, Self.admittedTaskID)
+        XCTAssertEqual(record?.phase, .canonicalTask)
+        XCTAssertEqual(record?.taskAdmission?.expiresAt, home.observer.expiresAt)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 1)
+    }
+
+    @MainActor
+    func testSameKeyRepeatedSubmissionRetainsOriginalPreDispatchAttemptAndDoesNotDispatchAgain() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "talent-signal-same-key-capture-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureLocalCapsuleStore(directory: directory, keyProvider: TaskAdmissionTestKeyProvider())
+        let model = AppModel(service: try Self.makeControlledService(), accountID: "pending-live-account", capsuleStore: store)
+        Self.stageWorkspace(token: "token-same-key-capture")
+        let ready = await model.ensureInitialized()
+        XCTAssertTrue(ready)
+        model.addSelectedText("One unchanged reviewed source for a repeated submission.")
+        let sourceID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: sourceID, actorKind: .candidate)
+        model.confirmAttribution(id: sourceID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        Self.stageScope()
+        await model.confirmRelationshipScope()
+        XCTAssertEqual(model.scopeReviewStatus, .confirmed)
+        let original = Task { await model.submitCurrentInsight() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "resource-captures") == 0 { await Task.yield() }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 1)
+        let before = try XCTUnwrap(store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first)
+        XCTAssertNotNil(before.localAttemptID)
+        XCTAssertEqual(before.phase, .admittedPreDispatch)
+        await model.submitCurrentInsight()
+        let after = try XCTUnwrap(store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first)
+        XCTAssertEqual(after, before, "The repeated unchanged intent cannot replace or renew the original attempt.")
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 1)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "agent-task-admission"), 0)
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .init(statusCode: 500, body: Data("{}".utf8)))
+        await original.value
+        let settled = try store.load(accountID: "account-1", now: Date()).draft
+        XCTAssertNil(settled.workflowOwnerships, "Only the original positively never-dispatched attempt is retired.")
+        XCTAssertEqual(settled.items.map(\.id), [sourceID])
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 0)
+    }
+
+    @MainActor
+    func testSameKeyPreparedSubmissionOnlyReadsOriginalAdmissionAndPreservesCanonicalAttempt() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "talent-signal-same-key-task-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureLocalCapsuleStore(directory: directory, keyProvider: TaskAdmissionTestKeyProvider())
+        let model = AppModel(service: try Self.makeControlledService(), accountID: "pending-live-account", capsuleStore: store)
+        Self.stageWorkspace(token: "token-same-key-task")
+        let ready = await model.ensureInitialized()
+        XCTAssertTrue(ready)
+        model.addSelectedText("One unchanged original source whose Task POST is still in flight.")
+        let sourceID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: sourceID, actorKind: .candidate)
+        model.confirmAttribution(id: sourceID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        Self.stageScope()
+        await model.confirmRelationshipScope()
+        XCTAssertEqual(model.scopeReviewStatus, .confirmed)
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .ok(Self.captureBody))
+        ControlledURLProtocol.answer(matching: "v1/resources/", with: .ok(Self.resourceBody))
+        let original = Task { await model.submitCurrentInsight() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks") == 0 { await Task.yield() }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 1)
+        let before = try XCTUnwrap(store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first)
+        let reference = try XCTUnwrap(before.taskAdmission)
+        XCTAssertEqual(before.localAttemptID, reference.originalAttemptID)
+        ControlledURLProtocol.answer(matching: "agent-task-admission", with: .ok(Self.admissionBody(state: "processing", taskID: nil, status: nil, authority: "unknown")))
+        await model.submitCurrentInsight()
+        XCTAssertEqual(try store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first, before)
+        XCTAssertEqual(ControlledURLProtocol.queryValues(name: "idempotency_key"), [reference.taskIdempotencyKey])
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 1)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 1)
+        ControlledURLProtocol.answer(matching: "POST /v1/pursuits/pursuit-1/agent-tasks", with: .ok(Self.taskAcknowledgementBody))
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "GET /v1/agent-tasks/") == 0 { await Task.yield() }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "GET /v1/agent-tasks/"), 1, "The first owner retains its generation and reaches polling.")
+        let canonical = try XCTUnwrap(store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first)
+        XCTAssertEqual(canonical.localAttemptID, before.localAttemptID)
+        XCTAssertEqual(canonical.taskAdmission, reference)
+        XCTAssertEqual(canonical.workflowID, Self.admittedTaskID)
+        XCTAssertEqual(canonical.phase, .canonicalTask)
+        XCTAssertEqual(canonical.expiresAt, before.expiresAt)
+        model.clearLocalContext()
+        ControlledURLProtocol.answer(matching: "GET /v1/agent-tasks/", with: .ok(Self.taskAcknowledgementBody))
+        await original.value
+        XCTAssertTrue(try store.load(accountID: "account-1", now: Date()).draft.items.isEmpty)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/pursuit-1/agent-tasks"), 1)
+    }
+
+    @MainActor
+    func testSameKeyAfterActualScopeReselectionDoesNotQueryOrReplayOriginalTask() async throws {
+        ControlledURLProtocol.reset()
+        defer { ControlledURLProtocol.reset() }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "talent-signal-scope-key-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SecureLocalCapsuleStore(directory: directory, keyProvider: TaskAdmissionTestKeyProvider())
+        let model = AppModel(service: try Self.makeControlledService(), accountID: "pending-live-account", capsuleStore: store)
+        ControlledURLProtocol.answer(matching: "simulated-login", with: .ok(Self.json([
+            "contract_version": "2026-08-24.10", "access_token": "token-scope-key",
+            "account": ["id": "account-1"], "user": ["id": Self.admittedActorID]
+        ])))
+        try Self.stageTwoPursuitScopes()
+        let ready = await model.ensureInitialized()
+        XCTAssertTrue(ready)
+        model.addSelectedText("Unchanged source reviewed under the original Pursuit.")
+        let sourceID = try XCTUnwrap(model.capsule.items.first?.id)
+        model.setAttribution(id: sourceID, actorKind: .candidate)
+        model.confirmAttribution(id: sourceID)
+        model.selectFirstRelationshipScopeFromKeyboard()
+        try Self.stageTwoPursuitScopes()
+        await model.confirmRelationshipScope()
+        XCTAssertEqual(model.pursuitID, "pursuit-1")
+        XCTAssertEqual(model.scopeReviewStatus, .confirmed)
+        let original = Task { await model.submitCurrentInsight() }
+        for _ in 0..<1_000 where ControlledURLProtocol.recordedCount(matching: "resource-captures") == 0 { await Task.yield() }
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 1)
+        let before = try XCTUnwrap(store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first)
+        let version = model.capsule.version
+        await model.load()
+        let other = try XCTUnwrap(model.relationshipScopeOptions.first(where: { $0.pursuitID == "pursuit-2" }))
+        model.selectRelationshipScopeOption(id: other.id)
+        try Self.stageTwoPursuitScopes()
+        await model.confirmRelationshipScope()
+        XCTAssertEqual(model.pursuitID, "pursuit-2")
+        XCTAssertEqual(model.scopeReviewStatus, .confirmed)
+        XCTAssertEqual(model.capsule.version, version, "Scope selection does not change this original external key.")
+        await model.submitCurrentInsight()
+        XCTAssertTrue(model.localRecoveryNotice?.contains("different or unverified relationship scope") == true)
+        XCTAssertEqual(try store.load(accountID: "account-1", now: Date()).draft.workflowOwnerships?.first, before)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "resource-captures"), 1)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "agent-task-admission"), 0)
+        XCTAssertEqual(ControlledURLProtocol.recordedCount(matching: "POST /v1/pursuits/"), 0)
+        ControlledURLProtocol.answer(matching: "resource-captures", with: .init(statusCode: 500, body: Data("{}".utf8)))
+        await original.value
+        XCTAssertEqual(try store.load(accountID: "account-1", now: Date()).draft.items.map(\.id), [sourceID])
+    }
+
+    private static func stageTwoPursuitScopes() throws {
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: pursuitsBody) as? [String: Any])
+        let pursuits = try XCTUnwrap(envelope["pursuits"] as? [[String: Any]])
+        var second = try XCTUnwrap(pursuits.first)
+        second["id"] = "pursuit-2"
+        second["title"] = "Another reviewed Pursuit"
+        envelope["pursuits"] = pursuits + [second]
+        ControlledURLProtocol.answer(matching: "v1/pursuits", with: .ok(try JSONSerialization.data(withJSONObject: envelope)))
+        ControlledURLProtocol.answer(matching: "v1/people", with: .ok(peopleBody))
+        ControlledURLProtocol.answer(matching: "v1/pursuit-proposals", with: .ok(proposalsBody))
+        for _ in 0..<2 { ControlledURLProtocol.answer(matching: "contexts/", with: .ok(relationshipBody)) }
+    }
+
+    private static let admittedActorID = "742b8a69-a739-4244-9366-b978a62845b4"
+    private static let admittedTaskID = "9fc1d679-9be4-460f-a6ed-9dfcd296f955"
+
+    private static func admissionBody(state: String, taskID: String?, status: String?, authority: String) -> Data {
+        json(["contract_version": "2026-08-24.10", "admission_state": state,
+            "task_id": taskID as Any? ?? NSNull(), "task_status": status as Any? ?? NSNull(), "authority_state": authority])
+    }
+
+    private static let taskAcknowledgementBody = json([
+        "contract_version": "2026-08-24.10", "task": [
+            "id": admittedTaskID, "workspace_id": "account-1", "pursuit_id": "pursuit-1",
+            "requested_by_user_id": admittedActorID, "status": "active", "task_revision": 1,
+            "semantic_snapshot": ["pursuit_revision": 3, "evidence_manifest_digest": "digest-1"],
+            "latest_run": NSNull(), "artifact": NSNull(), "clarification": NSNull(),
+            "decision_bundle": NSNull(), "external_effects": [] as [String]
+        ] as [String: Any]
+    ])
+
+    private static func stageWorkspace(token: String, actorID: String = admittedActorID) {
+        ControlledURLProtocol.answer(matching: "simulated-login", with: .ok(json([
+            "contract_version": "2026-08-24.10", "access_token": token,
+            "account": ["id": "account-1"], "user": ["id": actorID]
+        ])))
+        stageScope()
+    }
+
+    private static func stageScope() {
+        ControlledURLProtocol.answer(matching: "v1/pursuits", with: .ok(pursuitsBody))
+        ControlledURLProtocol.answer(matching: "v1/people", with: .ok(peopleBody))
+        ControlledURLProtocol.answer(matching: "v1/pursuit-proposals", with: .ok(proposalsBody))
+        ControlledURLProtocol.answer(matching: "contexts/", with: .ok(relationshipBody))
+    }
+
+    private static let controlledScopeKey = "http://127.0.0.1:4321|fixture-alpha|recruiter@alpha.local"
+
+    private static func makeControlledService(
+        store: UnknownResolutionPersisting = NullUnknownResolutionStore()
+    ) throws -> URLMacRelationshipService {
+        try URLMacRelationshipService(
+            configuration: .init(
+                baseURL: URL(string: "http://127.0.0.1:4321")!,
+                accountSlug: "fixture-alpha",
+                userEmail: "recruiter@alpha.local"
+            ),
+            session: ControlledURLProtocol.session,
+            unknownResolutionStore: store
+        )
+    }
+
+    private static func json(_ object: [String: Any]) -> Data {
+        try! JSONSerialization.data(withJSONObject: object)
+    }
+
+    private static func loginBody(token: String) -> Data {
+        json([
+            "contract_version": "2026-08-24.10",
+            "access_token": token,
+            "account": ["id": "account-1"] as [String: Any],
+            "user": ["id": "742b8a69-a739-4244-9366-b978a62845b4"] as [String: Any]
+        ])
+    }
+
+    private static let logoutBody = json([
+        "contract_version": "2026-08-24.10",
+        "revoked_session_id": "session-1",
+        "revoked_at": "2026-10-08T00:00:00Z"
+    ])
+
+    private static let pursuitsBody = json([
+        "contract_version": "2026-08-24.10",
+        "workspace_id": "account-1",
+        "pursuits": [[
+            "id": "pursuit-1",
+            "workspace_id": "account-1",
+            "title": "VP Engineering",
+            "target_outcome": "hire",
+            "target_date": "2026-12-01",
+            "status": "active",
+            "milestone": "shortlist_review",
+            "milestone_authority": ["evidence_state": ["availability": "available"]] as [String: Any],
+            "revision": 3,
+            "roles": [[
+                "subject_ref": ["type": "person", "id": "person-1"],
+                "role_type": "candidate",
+                "status": "active",
+                "confidence": "confirmed"
+            ]] as [[String: Any]],
+            "gaps": [] as [[String: Any]],
+            "actions": [] as [[String: Any]]
+        ]] as [[String: Any]]
+    ])
+
+    private static let peopleBody = json([
+        "contract_version": "2026-08-24.10",
+        "people": [[
+            "id": "person-1",
+            "display_label": "Alex Chen",
+            "contexts": [["id": "context-1", "display_label": "Candidate"]] as [[String: Any]]
+        ]] as [[String: Any]]
+    ])
+
+    private static let proposalsBody = json([
+        "contract_version": "2026-08-24.10",
+        "workspace_id": "account-1",
+        "proposals": [] as [[String: Any]]
+    ])
+
+    private static let relationshipBody = json([
+        "contract_version": "2026-08-24.10",
+        "person": ["id": "person-1", "display_label": "Alex Chen"],
+        "relationship_context": ["id": "context-1", "display_label": "Candidate"]
+    ])
+
+    private static let resourceBody = json([
+        "contract_version": "2026-08-24.10",
+        "resource": [
+            "id": "resource-1",
+            "capture_id": "capture-1",
+            "processing_state": "ready",
+            "source_access_state": "available",
+            "source_authorization_state": "authorized",
+            "source_authorization_expires_at": "2099-01-01T00:00:00Z"
+        ] as [String: Any],
+        "fragments": [[
+            "id": "fragment-1",
+            "capture_id": "capture-1",
+            "resource_id": "resource-1",
+            "text": "Reviewed evidence for the controlled dispatch.",
+            "review_status": "reviewed",
+            "attribution": ["actor_kind": "candidate", "status": "confirmed"]
+        ]] as [[String: Any]]
+    ])
+
+    private static func durableResolution(operationID: String) -> DurableUnknownResolution {
+        DurableUnknownResolution(
+            schemaVersion: DurableUnknownResolution.currentSchemaVersion,
+            operationID: operationID,
+            bundleID: "bundle-1",
+            taskID: "task-1",
+            taskRevision: 2,
+            bundleRevision: 1,
+            proposalID: "proposal-1",
+            baseRevision: 7,
+            reason: "Controlled dispatch.",
+            decisions: [],
+            workspaceID: "account-1",
+            accountID: "account-1",
+            pursuitID: "pursuit-1",
+            personID: "person-1",
+            relationshipContextID: "context-1",
+            captureID: "capture-1",
+            resourceID: "resource-1",
+            evidenceIDs: ["fragment-1"],
+            savedAt: Date(timeIntervalSince1970: 1_788_200_000),
+            transportError: "The response was lost after dispatch."
+        )
+    }
+}
+
+private final class ControlledURLProtocol: URLProtocol {
+    struct Reply: Sendable {
+        let statusCode: Int
+        let body: Data
+
+        static func ok(_ body: Data) -> Reply { Reply(statusCode: 200, body: body) }
+        static let failure = Reply(statusCode: 500, body: Data("{}".utf8))
+    }
+
+    /// One held request. A single struct keeps the tuple-order question moot.
+    fileprivate struct HeldRequest {
+        let key: String
+        let requestProtocol: URLProtocol
+    }
+
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var held: [HeldRequest] = []
+        var pendingAnswers: [(fragment: String, reply: Reply)] = []
+        var recorded: [(key: String, authorization: String?)] = []
+        var requestURLs: [URL] = []
+        var deliveredStatuses: [String] = []
+    }
+
+    private static let state = State()
+    static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ControlledURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }()
+
+    private static func key(for request: URLRequest) -> String {
+        "\(request.httpMethod ?? "GET") \(request.url?.path ?? "")"
+    }
+
+    static func reset() {
+        state.lock.lock()
+        defer { state.lock.unlock() }
+        state.held = []
+        state.pendingAnswers = []
+        state.recorded = []
+        state.requestURLs = []
+        state.deliveredStatuses = []
+    }
+
+    static func recordedCount(matching fragment: String) -> Int {
+        state.lock.lock()
+        defer { state.lock.unlock() }
+        return state.recorded.filter { $0.key.contains(fragment) }.count
+    }
+
+    static func authorizations(matching fragment: String) -> [String] {
+        state.lock.lock()
+        defer { state.lock.unlock() }
+        return state.recorded.filter { $0.key.contains(fragment) }.compactMap(\.authorization)
+    }
+
+    static func deliveredTaskStatuses() -> [String] {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return state.deliveredStatuses
+    }
+
+    static func queryValues(name: String) -> [String] {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return state.requestURLs.compactMap { url in
+            guard let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQuery else { return nil }
+            for part in query.split(separator: "&") {
+                let fields = part.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                if fields.count == 2 && String(fields[0]).removingPercentEncoding == name {
+                    return String(fields[1]).replacingOccurrences(of: "+", with: " ").removingPercentEncoding
+                }
+            }
+            return nil
+        }
+    }
+
+    /// Answers the first held request matching the fragment, or stages the
+    /// reply for the next matching request. Held requests stay in flight until
+    /// answered, which is the seam for revocation races.
+    static func answer(matching fragment: String, with reply: Reply) {
+        var waiter: HeldRequest?
+        state.lock.lock()
+        if let index = state.held.firstIndex(where: { $0.key.contains(fragment) }) {
+            waiter = state.held.remove(at: index)
+        } else {
+            state.pendingAnswers.append((fragment, reply))
+        }
+        state.lock.unlock()
+        (waiter?.requestProtocol as? ControlledURLProtocol)?.deliver(reply)
+    }
+
+    /// Releases every currently held request, e.g. to finish a test cleanly.
+    static func answerEveryHeld(with reply: Reply) {
+        var waiters: [HeldRequest] = []
+        state.lock.lock()
+        waiters = state.held
+        state.held = []
+        state.lock.unlock()
+        for waiter in waiters {
+            (waiter.requestProtocol as? ControlledURLProtocol)?.deliver(reply)
+        }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let request = self.request
+        let key = Self.key(for: request)
+        var reply: Reply?
+        Self.state.lock.lock()
+        Self.state.recorded.append((key, request.value(forHTTPHeaderField: "authorization")))
+        if let url = request.url { Self.state.requestURLs.append(url) }
+        if let index = Self.state.pendingAnswers.firstIndex(where: { key.contains($0.fragment) }) {
+            reply = Self.state.pendingAnswers.remove(at: index).reply
+        } else {
+            Self.state.held.append(HeldRequest(key: key, requestProtocol: self))
+        }
+        Self.state.lock.unlock()
+        if let reply { deliver(reply) }
+    }
+
+    override func stopLoading() {
+        Self.state.lock.lock()
+        Self.state.held.removeAll { $0.requestProtocol === self }
+        Self.state.lock.unlock()
+    }
+
+    private func deliver(_ reply: Reply) {
+        if request.httpMethod == "GET", request.url?.path.contains("/v1/agent-tasks/") == true,
+           let envelope = try? JSONSerialization.jsonObject(with: reply.body) as? [String: Any],
+           let task = envelope["task"] as? [String: Any], let status = task["status"] as? String {
+            Self.state.lock.lock()
+            Self.state.deliveredStatuses.append(status)
+            Self.state.lock.unlock()
+        }
+        guard let url = request.url, let client else { return }
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: reply.statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["content-type": "application/json"]
+        )!
+        client.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client.urlProtocol(self, didLoad: reply.body)
+        client.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private struct FixedUnknownResolutionKeyProvider: UnknownResolutionKeyProviding {
+    func key(scopeKey: String) throws -> Data {
+        Data(repeating: 0x5a, count: 32)
+    }
+}
+
+
+/// Wraps the actual encrypted retirement home and injects exact failure seams
+/// for load, clear, and marker writes.
+private final class ControlledRetirementFailureStore: UnknownResolutionPersisting, @unchecked Sendable {
+    let backing: SecureUnknownResolutionStore
+
+    init() {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-retirement-failure-\(UUID().uuidString)", directoryHint: .isDirectory)
+        backing = SecureUnknownResolutionStore(
+            directory: directory,
+            keyProvider: FixedUnknownResolutionKeyProvider()
+        )
+    }
+    var loadResult: Result<Void, Error> = .success(())
+    var retireResult: Result<UnknownRetirementEstablishment, Error> = .success(
+        .established(correlationRemoved: true, newerOperationPreserved: false)
+    )
+
+    func load(scopeKey: String) throws -> DurableUnknownResolution? {
+        try loadResult.get()
+        return try backing.load(scopeKey: scopeKey)
+    }
+
+    func save(_ resolution: DurableUnknownResolution, scopeKey: String) throws {
+        try backing.save(resolution, scopeKey: scopeKey)
+    }
+
+    func clear(scopeKey: String) throws {
+        try backing.clear(scopeKey: scopeKey)
+    }
+
+    func retireOperation(
+        scopeKey: String,
+        retirement: DurableUnknownRetirement,
+        now: Date
+    ) throws -> UnknownRetirementEstablishment {
+        try retireResult.get()
+    }
+
+    func retirementState(scopeKey: String, operationID: String) throws -> DurableUnknownRetirement? {
+        try backing.retirementState(scopeKey: scopeKey, operationID: operationID)
+    }
+}
+
+
+/// Tiny thread-safe result box for deadlock-regression timing checks.
+private final class RetiredBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedResult: UnknownRetirementEstablishment?
+    private var storedValue: DurableUnknownResolution?
+    private var didReadValue = false
+    private var done = false
+
+    var result: UnknownRetirementEstablishment? {
+        get { lock.lock(); defer { lock.unlock() }; return storedResult }
+        set { lock.lock(); defer { lock.unlock() }; storedResult = newValue; done = true }
+    }
+
+    var value: DurableUnknownResolution? {
+        get { lock.lock(); defer { lock.unlock() }; return storedValue }
+        set { lock.lock(); defer { lock.unlock() }; storedValue = newValue; didReadValue = true; done = true }
+    }
+
+    var finishedAfterRead: Bool {
+        lock.lock(); defer { lock.unlock() }; return done && didReadValue
+    }
+
+    var finished: Bool {
+        lock.lock(); defer { lock.unlock() }; return done
+    }
+}
+
+
+private final class BlockedOperationRemovalFileManager: FileManager, @unchecked Sendable {
+    override func removeItem(at url: URL) throws {
+        if url.pathExtension == "operation" {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError)
+        }
+        try super.removeItem(at: url)
+    }
+}
+
+/// Creates an actual ENOTDIR atomic-write failure, preserving the original
+/// encrypted file in an owned renamed directory. No stubs report a save pass.
+private final class PhysicalTaskCapsuleFailureStore: LocalCapsulePersisting, @unchecked Sendable {
+    enum Point { case canonicalAssociation, terminalCleanup, taskPreparation }
+    let backing: SecureLocalCapsuleStore
+    private let directory: URL
+    private let held: URL
+    private let failAt: Point
+    private var didFail = false
+    init(directory: URL, failAt: Point) {
+        self.directory = directory
+        held = directory.appendingPathExtension("held")
+        self.failAt = failAt
+        backing = SecureLocalCapsuleStore(directory: directory, keyProvider: TaskAdmissionTestKeyProvider())
+    }
+    func load(accountID: String, now: Date) throws -> CapsuleRecoveryResult { try backing.load(accountID: accountID, now: now) }
+    func clear(accountID: String, deleteKey: Bool) throws -> LocalCapsuleDeletionReceipt { try backing.clear(accountID: accountID, deleteKey: deleteKey) }
+    func save(_ draft: ContextCapsuleDraft, accountID: String, now: Date) throws {
+        let matches: Bool
+        switch failAt {
+        case .taskPreparation: matches = draft.workflowOwnerships?.contains { $0.phase == .taskOutcomeUnknown && $0.taskAdmission != nil } == true
+        case .canonicalAssociation: matches = draft.workflowOwnerships?.contains { $0.phase == .canonicalTask } == true
+        case .terminalCleanup: matches = draft.workflowOwnerships?.isEmpty != false && draft.items.count == 1
+        }
+        if !didFail && matches {
+            try FileManager.default.moveItem(at: directory, to: held)
+            try Data("owned physical failure seam".utf8).write(to: directory)
+            didFail = true
+        }
+        try backing.save(draft, accountID: accountID, now: now)
+    }
+    func repairPhysicalFault() throws {
+        guard FileManager.default.fileExists(atPath: held.path) else { return }
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.moveItem(at: held, to: directory)
+    }
+}
+
+@MainActor
+private final class TaskLifecycleTestObservation {
+    var preparedCount = 0
+}

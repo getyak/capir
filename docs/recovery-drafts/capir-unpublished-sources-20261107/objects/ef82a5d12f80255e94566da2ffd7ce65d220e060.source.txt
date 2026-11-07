@@ -1,0 +1,192 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { CapirTestProvisioningClient, requestDeadline, scheduleDeadline } from '@talent-signal/contracts';
+import { parseArgs, validateRequestShape } from '../dist/args.js';
+import { CapirBackendClient } from '../dist/http.js';
+import { runAuthLogin } from '../dist/login.js';
+import { runSandboxStart, runSandboxStatus, runSandboxStop } from '../dist/sandbox.js';
+import { OperationJournal } from '../dist/journal.js';
+import { capabilitiesResponse, sandboxResponse, token43, uuid } from './helpers.mjs';
+
+const environment = { name: 'fixture', backendOrigin: 'http://127.0.0.1:4317', webOrigin: 'http://127.0.0.1:3999' };
+const longSeconds = 2_147_484;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function clock() {
+  let now = 0, next = 0;
+  const timers = new Map(), delays = [];
+  return { timers, delays, now: () => now,
+    set(fn, ms) { delays.push(ms); timers.set(++next, fn); return next; },
+    clear(id) { timers.delete(id); },
+    advance(ms) { now += ms; const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(fn => fn()); },
+  };
+}
+function args(argv) { const value = parseArgs(argv); validateRequestShape(value); return value; }
+async function timerProbe(run) {
+  const original = globalThis.setTimeout, delays = [];
+  globalThis.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return original(fn, ms, ...rest); };
+  try { return { result: await run(), delays }; } finally { globalThis.setTimeout = original; }
+}
+async function listen(t, respond) {
+  const server = createServer(respond);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+test('ordinary flags accept long representable durations and reject invalid values before dispatch', () => {
+  const maximum = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
+  for (const seconds of [901, longSeconds, maximum]) {
+    assert.equal(args(['auth', 'login', '--timeout', String(seconds)]).timeoutSeconds, seconds);
+    assert.equal(args(['test', 'create', '--timeout', String(seconds)]).timeoutSeconds, seconds);
+    assert.equal(args(['sandbox', 'start', '--timeout', String(seconds)]).timeoutSeconds, seconds);
+    assert.equal(args(['sandbox', 'status', uuid(), '--timeout', String(seconds)]).timeoutSeconds, seconds);
+  }
+  for (const seconds of [0, 601, longSeconds, maximum]) assert.equal(args(['sandbox', 'stop', uuid(), '--wait', String(seconds)]).waitSeconds, seconds);
+  for (const seconds of ['-1', '0.5', 'NaN', 'Infinity', String(maximum + 1)]) {
+    assert.throws(() => args(['auth', 'login', '--timeout', seconds]), /representable/);
+    assert.throws(() => args(['sandbox', 'stop', uuid(), '--wait', seconds]), /representable/);
+  }
+  assert.throws(() => args(['auth', 'login', '--timeout', '0']), /positive integer/);
+  assert.equal(args(['auth', 'login']).timeoutSeconds, 300);
+  assert.equal(args(['sandbox', 'stop', uuid()]).waitSeconds, 90);
+});
+
+test('shared timer spans multiple chunks, fires once and ignores retired queued callbacks', () => {
+  const c = clock(); let expired = 0;
+  const cancel = scheduleDeadline(() => expired++, 2_147_483_647 + 5000, c);
+  assert.deepEqual(c.delays, [2_147_483_647]); c.advance(2_147_483_647);
+  assert.equal(expired, 0); assert.equal(c.delays.at(-1), 5000);
+  c.advance(5000); assert.equal(expired, 1); c.advance(5000); assert.equal(expired, 1); cancel();
+  const next = clock(), retired = scheduleDeadline(() => expired++, 100, next);
+  const queued = [...next.timers.values()][0]; retired(); queued(); assert.equal(expired, 1);
+  assert.equal(next.timers.size, 0);
+});
+
+test('request deadline forwards original abort, disposes timers/listeners and preserves absent model semantics', () => {
+  const c = clock(), parent = new AbortController(), reason = new Error('owned cancel');
+  const d = requestDeadline(Number.MAX_SAFE_INTEGER, parent.signal, c);
+  assert.equal(c.delays[0], 2_147_483_647); parent.abort(reason); assert.equal(d.signal.reason, reason);
+  d.dispose(); assert.equal(c.timers.size, 0);
+  const lateParent = new AbortController(), next = clock(), done = requestDeadline(50, lateParent.signal, next);
+  done.dispose(); lateParent.abort(reason); next.advance(100); assert.equal(done.signal.aborted, false);
+  const already = requestDeadline(50, parent.signal, next); assert.equal(already.signal.reason, reason); assert.equal(next.timers.size, 0); already.dispose();
+  const expired = requestDeadline(50, undefined, next); next.advance(50); assert.equal(expired.signal.reason.name, 'TimeoutError'); expired.dispose();
+  assert.equal(scheduleDeadline(() => assert.fail('unexpected deadline'), undefined, next), undefined);
+  for (const n of [-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) assert.throws(() => requestDeadline(n), /DEADLINE_INVALID/);
+  const zero = requestDeadline(0, undefined, next); assert.equal(zero.signal.aborted, false); next.advance(0); assert.equal(zero.signal.reason.name, 'TimeoutError'); zero.dispose();
+  const cancelledZero = requestDeadline(0, undefined, next); const queued = [...next.timers.values()][0]; cancelledZero.dispose(); queued(); assert.equal(cancelledZero.signal.aborted, false);
+});
+
+for (const kind of ['backend', 'provisioning']) {
+  test(`${kind} real HTTP long deadline survives Node timer boundary and complete body`, async t => {
+    const origin = await listen(t, (_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' }); res.flushHeaders();
+      const timer = setTimeout(() => res.end(JSON.stringify(kind === 'backend' ? capabilitiesResponse(origin, environment.webOrigin) : { enabled: true })), 80);
+      res.on('close', () => clearTimeout(timer));
+    });
+    // Public production methods, without injecting a fake deadline or SDK.
+    const response = kind === 'backend'
+      ? await new CapirBackendClient(origin, fetch, undefined, longSeconds * 1000).capabilities()
+      : await new CapirTestProvisioningClient(origin, { timeoutMs: longSeconds * 1000 }).capabilities();
+    assert.equal(response.enabled, true);
+  });
+  test(`${kind} deadline remains armed through actual stalled HTTP body`, async t => {
+    let headers = false;
+    const origin = await listen(t, (_req, res) => { headers = true; res.writeHead(200, { 'content-type': 'application/json' }); res.flushHeaders(); res.write('{'); });
+    const pending = kind === 'backend'
+      ? new CapirBackendClient(origin, fetch, undefined, 150).capabilities()
+      : new CapirTestProvisioningClient(origin, { timeoutMs: 150 }).capabilities();
+    await assert.rejects(pending, e => e.code === (kind === 'backend' ? 'CAPIR_TRANSPORT' : 'CAPIR_TEST_TRANSPORT_FAILED'));
+    assert.equal(headers, true);
+  });
+}
+
+test('completed backend request disposes its short deadline instead of aborting its settled signal', async () => {
+  let signal;
+  const client = new CapirBackendClient(environment.backendOrigin, async (_url, init) => { signal = init.signal; return new Response(JSON.stringify(capabilitiesResponse(environment.backendOrigin, environment.webOrigin))); }, undefined, 25);
+  await client.capabilities(); await sleep(45); assert.equal(signal.aborted, false);
+});
+
+test('long real loopback login retains callback validation and stores exactly one original grant', async () => {
+  let stored = null, exchanged = 0;
+  const store = { kind: 'keyring', get: async () => stored };
+  const grant = { id: uuid(), client_label: 'fixture', expires_at: '2099-01-01T00:00:00.000Z', scopes: ['sandbox:create'], refresh_supported: false };
+  const proof = await timerProbe(() => runAuthLogin({ environment, clientLabel: 'fixture', timeoutSeconds: longSeconds, noninteractive: false }, {
+    interactive: true, store, txn: { commitIfAbsent: async token => { stored = token; return 'committed'; } },
+    fetchImpl: async (_url, init) => { exchanged++; assert.equal(init.signal.aborted, false); return new Response(JSON.stringify({ schema_version: 'capir.v1', access_token: token43('a'), grant })); },
+    openBrowser: async value => { const url = new URL(value); await sleep(60); const response = await fetch(`${url.searchParams.get('redirect_uri')}?code=${token43('c')}&state=${url.searchParams.get('state')}`); assert.equal(response.status, 200); },
+  }));
+  assert.equal(proof.result.grant.id, grant.id); assert.equal(stored, token43('a')); assert.equal(exchanged, 1);
+  assert.equal(proof.delays.filter(ms => ms === 2_147_483_647).length, 2, 'callback and exchange honor the same long policy');
+});
+
+for (const command of ['start', 'status']) test(`sandbox ${command} applies explicit request timeout and keeps omitted30s policy`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'capir-deadline-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const supplied of [false, true]) {
+    const id = uuid(), calls = [];
+    const parsed = args(['sandbox', command, ...(command === 'status' ? [id] : []), ...(supplied ? ['--timeout', String(longSeconds)] : [])]);
+    const deps = { token: token43(), journal: new OperationJournal(directory), sleep,
+      fetchImpl: async url => { calls.push(String(url)); return new Response(JSON.stringify(String(url).endsWith('/capabilities') ? capabilitiesResponse(environment.backendOrigin, environment.webOrigin) : sandboxResponse({ id }))); },
+    };
+    const proof = await timerProbe(() => (command === 'start' ? runSandboxStart : runSandboxStatus)(parsed, environment, deps));
+    assert.equal(proof.result.sandbox.id, id); assert.equal(calls.length, command === 'start' ? 2 : 1);
+    assert.deepEqual(proof.delays, Array(calls.length).fill(supplied ? 2_147_483_647 : 30_000));
+  }
+});
+
+test('long cleanup waits preserve mandatory independent readback and never renew original sandbox expiry', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'capir-deadline-stop-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const id = uuid(), expiry = '2099-01-01T00:00:00.000Z'; let gets = 0, sleeps = 0;
+  const parsed = args(['sandbox', 'stop', id, '--wait', String(Math.floor(Number.MAX_SAFE_INTEGER / 1000))]);
+  const result = await runSandboxStop(parsed, environment, { token: token43(), journal: new OperationJournal(directory),
+    fetchImpl: async (_url, init) => new Response(JSON.stringify(sandboxResponse({ id, expires_at: expiry, state: init.method === 'POST' ? 'deleting' : (++gets === 1 ? 'deleting' : 'deleted') }))),
+    sleep: async ms => { sleeps++; assert.ok(ms > 0 && ms <= 2000); },
+  });
+  assert.equal(result.sandbox.state, 'deleted'); assert.equal(result.sandbox.expires_at, expiry); assert.equal(gets, 2); assert.equal(sleeps, 1);
+});
+
+test('wall-clock jump during cleanup readback cannot exhaust the selected monotonic wait', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'capir-clock-stop-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const id = uuid(), originalNow = Date.now; let gets = 0;
+  try {
+    const result = await runSandboxStop(args(['sandbox', 'stop', id, '--wait', '601']), environment, {
+      token: token43(), journal: new OperationJournal(directory), sleep: async () => {},
+      fetchImpl: async (_url, init) => {
+        if (init.method === 'GET' && ++gets === 1) Date.now = () => originalNow() + 1_000_000;
+        return new Response(JSON.stringify(sandboxResponse({ id, state: init.method === 'POST' || gets === 1 ? 'deleting' : 'deleted' })));
+      },
+    });
+    assert.equal(result.sandbox.state, 'deleted'); assert.equal(gets, 2);
+  } finally { Date.now = originalNow; }
+});
+
+test('a transport timer alone does not keep an otherwise settled Node process alive', async () => {
+  const result = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', "import {requestDeadline} from '@talent-signal/contracts'; requestDeadline(Number.MAX_SAFE_INTEGER); console.log('done');"], {
+    cwd: new URL('../', import.meta.url), timeout: 5000,
+  });
+  assert.equal(result.stdout.trim(), 'done'); assert.equal(result.stderr, '');
+});
+
+test('wall-clock jump during real loopback login cannot expire the local consent deadline', async () => {
+  const originalNow = Date.now; let stored = null;
+  try {
+    const result = await runAuthLogin({ environment, clientLabel: 'fixture', timeoutSeconds: 901, noninteractive: false }, {
+      interactive: true, store: { kind: 'keyring', get: async () => stored },
+      txn: { commitIfAbsent: async token => { stored = token; return 'committed'; } },
+      fetchImpl: async () => {
+        Date.now = () => originalNow() + 1_000_000;
+        return new Response(JSON.stringify({ schema_version: 'capir.v1', access_token: token43('a'), grant: {
+          id: uuid(), client_label: 'fixture', expires_at: '2099-01-01T00:00:00.000Z', scopes: ['sandbox:create'], refresh_supported: false,
+        } }));
+      },
+      openBrowser: async value => { const url = new URL(value); await fetch(`${url.searchParams.get('redirect_uri')}?code=${token43('c')}&state=${url.searchParams.get('state')}`); },
+    });
+    assert.equal(stored, token43('a')); assert.equal(result.grant.expires_at, '2099-01-01T00:00:00.000Z');
+  } finally { Date.now = originalNow; }
+});

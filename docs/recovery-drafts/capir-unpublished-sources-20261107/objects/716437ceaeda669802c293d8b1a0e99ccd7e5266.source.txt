@@ -1,0 +1,19 @@
+import { describe,it,expect,vi } from "vitest";
+vi.mock("server-only",()=>({}));
+vi.mock("./backendAuth",()=>({authSecret:()=>"test-secret",readBackendSessionClaims:vi.fn(),backendAuthBaseUrl:()=>"http://localhost:4317"}));
+import {browserCaptureInput,browserReceipt,browserSessionVersion} from "./browser-capture";
+import type {BackendSessionClaims} from "./backendAuth";
+const claims={backendAccountId:"account-a",backendUserId:"user-a",backendExpiresAt:"2026-10-01T00:00:00.000Z"} as BackendSessionClaims;
+function packet(){const version=browserSessionVersion(claims);return {schema_version:"browser-capture-handoff.v1",request_id:"12345678-abcd",idempotency_key:"review-key",retention_mode:"evidence_crop",purpose:"candidate_conversation_evidence_review",handoff_target:"http://localhost:3000",session:{version,credential_transport:"browser_managed"},source:{capture_kind:"selected_text",title:"Profile",url:"https://example.com/profile",captured_at:"2026-09-10T00:00:00.000Z"},review:{type:"reviewed_text",text:"Exact reviewed text",edited_from_selection:true},authorization:{decision:"submit_reviewed_capture",approved_at:"2026-09-10T00:01:00.000Z",statement:"Process and file this source"}};}
+const headers=()=>new Headers({"idempotency-key":"review-key","x-talent-signal-session-version":browserSessionVersion(claims)});
+describe("real browser handoff",()=>{
+ it("preserves edited text and provenance with a stable backend key",()=>{const result=browserCaptureInput(packet(),headers(),claims,"http://localhost:3000");expect(result).toMatchObject({text:"Exact reviewed text",idempotency_key:"browser-capture:12345678-abcd",allow_public_research:false,source:{title:"Profile",url:"https://example.com/profile"}});});
+ it("preserves a long reviewed selection and its final source record",()=>{const input=packet();const text="x".repeat(60_000)+" final reviewed record";input.review.text=text;expect(browserCaptureInput(input,headers(),claims,"http://localhost:3000")).toMatchObject({text,source:{title:"Profile",url:"https://example.com/profile"},allow_public_research:false});});
+ it("rejects another account, target, unsupported retention and mismatched source",()=>{
+  expect(()=>browserCaptureInput(packet(),headers(),{...claims,backendAccountId:"other"},"http://localhost:3000")).toThrow();
+  expect(()=>browserCaptureInput(packet(),headers(),claims,"http://localhost:3001")).toThrow();
+  expect(()=>browserCaptureInput({...packet(),retention_mode:"ephemeral"},headers(),claims,"http://localhost:3000")).toThrow();
+  expect(()=>browserCaptureInput({...packet(),source:{...packet().source,capture_kind:"visible_tab"}},headers(),claims,"http://localhost:3000")).toThrow();
+ });
+ it("does not call an arbitrary 2xx body a receipt",()=>{expect(()=>browserReceipt({status:"completed"})).toThrow();});
+});

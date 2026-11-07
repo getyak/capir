@@ -1,0 +1,49 @@
+import type { Pool, PoolClient } from "pg";
+import { ApiError } from "../lib/apiError.js";
+export async function isCapirReplayAccount(
+  pool: Pick<Pool, "query"> | PoolClient,
+  accountId: string,
+): Promise<boolean> {
+  return Boolean(
+    (
+      await pool.query(
+        `SELECT 1 FROM capir_sandboxes c JOIN lab_test_workspaces w ON w.id=c.id WHERE w.target_account_id=$1`,
+        [accountId],
+      )
+    ).rowCount,
+  );
+}
+export async function assertCapirLiveModelAllowed(
+  pool: Pick<Pool, "query"> | PoolClient,
+  accountId: string,
+): Promise<void> {
+  if (await isCapirReplayAccount(pool, accountId))
+    throw new ApiError(
+      409,
+      "REPLAY_MISS",
+      "No approved capir recording exists for this model task.",
+    );
+}
+// Admission allowlist: every unknown mutation is unavailable until its model
+// and effect behavior is audited. Deterministic product reads stay available.
+export function capirDeterministicRoute(method: string, path: string): boolean {
+  // This GET resumes model-backed screenshot work; it is not a pure read.
+  if (/^\/v1\/contact-agent\/tasks\/[^/]+$/.test(path)) return false;
+  if (method === "GET" || method === "HEAD") return true;
+  if (path === "/v1/auth/logout") return true;
+  if (path === "/v1/people/search") return true;
+  if (/^\/v1\/agent-sessions\/[^/]+$/.test(path)) return true;
+  if (/^\/v1\/pursuits\/[^/]+\/revisions$/.test(path)) return true;
+  if (path === "/v1/resource-captures") return true;
+  if (/^\/v1\/resource-captures\/[^/]+\/review-preparations$/.test(path))
+    return true;
+  if (/^\/v1\/evidence-fragments\/[^/]+\/reviews$/.test(path)) return true;
+  if (/^\/v1\/pursuits(\/[^/]+)?$/.test(path)) return true;
+  if (
+    /^\/v1\/pursuits\/[^/]+\/(actions|gaps)(\/[^/]+(\/completions)?)?$/.test(
+      path,
+    )
+  )
+    return true;
+  return false;
+}

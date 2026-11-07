@@ -1,0 +1,1248 @@
+import { randomBytes, randomUUID } from "node:crypto";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import Fastify, { type FastifyInstance } from "fastify";
+import { Pool, type PoolClient } from "pg";
+
+import type { BackendConfig } from "../config.js";
+import { ApiError } from "../lib/apiError.js";
+import { sha256 } from "../lib/hash.js";
+import { encodePasswordCredential } from "./passwordCredential.js";
+import {
+  createRealIdentity,
+  newAccountSlug,
+  providerSubjectHash,
+} from "./accountIdentity.js";
+import {
+  insertSession,
+  type AppleIdentityToken,
+  type AppleTokenVerifying,
+} from "./auth.js";
+import type { GoogleVerifier } from "./googleAuth.js";
+import { createGoogleChallenge } from "./googleAuth.js";
+import { createAppleLoginChallenge } from "./auth.js";
+import {
+  desktopCodeChallenge,
+  deriveDesktopCredentialSecret,
+  registerDesktopAuth,
+} from "./desktopAuth.js";
+import type { CredentialChangeDeps } from "./accountLoginMethods.js";
+
+/**
+ * Real PostgreSQL integration for the macOS system authentication handoff
+ * (ADR 0019) and credential proof rounds (ADR 0020), driven through the ACTUAL
+ * public endpoints. Provider proofs are injected verifier fixtures decoded
+ * from opaque strings; they exercise the challenge/nonce/state/PKCE plumbing
+ * and are never described as live Apple or Google OAuth evidence.
+ */
+
+const database = process.env.DESKTOP_AUTH_TEST_DATABASE_URL;
+const pool = database ? new Pool({ connectionString: database }) : null;
+const RUN = randomUUID().slice(0, 8);
+const ORIGIN = "https://web.test";
+
+const config: BackendConfig = {
+  allowedOrigins: [ORIGIN],
+  appleSignInAudiences: ["com.talentsignal.app", "com.talentsignal.web"],
+  appleSignInEnabled: true,
+  googleSignInAudiences: ["ios-client", "web-client"],
+  databaseUrl: database ?? "postgresql://synthetic-only",
+  host: "127.0.0.1",
+  passwordAuthEnabled: true,
+  passwordRegistrationEnabled: true,
+  port: 4317,
+  retentionSweepIntervalMs: 60_000,
+  sessionTtlSeconds: 28_800,
+  simulatedAuthEnabled: true,
+};
+
+function fakeAppleVerifier(): AppleTokenVerifying {
+  return {
+    async verify(identityToken: string): Promise<AppleIdentityToken> {
+      const [subject, email, verified, nonceHash] = identityToken.split("|");
+      if (!subject) throw new Error("fixture token missing subject");
+      return {
+        audience: "com.talentsignal.app",
+        email: email && email !== "-" ? email : null,
+        emailVerified: verified === "true",
+        expiresAt: new Date(Date.now() + 3_600_000),
+        issuer: "https://appleid.apple.com",
+        nonce: nonceHash ?? "",
+        subject,
+      };
+    },
+  };
+}
+
+const fakeGoogleVerifier: GoogleVerifier = async (identityToken) => {
+  const [subject, email, nonce] = identityToken.split("|");
+  if (!subject || !email) throw new Error("fixture token missing claims");
+  return {
+    subject,
+    email,
+    name: "Fixture User",
+    nonce: nonce ?? "",
+    expiresAt: new Date(Date.now() + 3_600_000),
+  };
+};
+
+const deps: CredentialChangeDeps = {
+  appleVerifier: fakeAppleVerifier(),
+  googleVerify: fakeGoogleVerifier,
+};
+
+function googleToken(subject: string, email: string, nonce: string) {
+  return `${subject}|${email}|${nonce}`;
+}
+
+function appleToken(subject: string, nonce: string, email = "-", verified = "false") {
+  return `${subject}|${email}|${verified}|${nonce}`;
+}
+
+const newVerifier = () => randomBytes(32).toString("base64url");
+const newState = () => randomBytes(32).toString("base64url");
+
+type Attempt = { attempt_id: string; pairing_secret: string; pending_path: string; expires_at: string };
+
+let app: FastifyInstance;
+
+beforeAll(async () => {
+  if (!pool) return;
+  app = Fastify();
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ApiError) {
+      void reply.status(error.statusCode).send({
+        error: { code: error.code, message: error.message, details: error.details ?? null },
+      });
+      return;
+    }
+    void reply.status(500).send({ error: { code: "INTERNAL", message: (error as Error).message } });
+  });
+  registerDesktopAuth(app, pool, config, deps);
+  await app.ready();
+});
+
+afterAll(async () => {
+  await app?.close();
+  await pool?.end();
+});
+
+function inject(
+  method: "GET" | "POST",
+  url: string,
+  options: {
+    payload?: Record<string, unknown> | undefined;
+    token?: string | undefined;
+    origin?: string | null | undefined;
+    destination?: string | null | undefined;
+  } = {},
+) {
+  return app.inject({
+    method,
+    url,
+    headers: {
+      ...(options.origin === null ? {} : { origin: options.origin ?? ORIGIN }),
+      ...(options.destination === null ? {} : { "sec-fetch-dest": options.destination ?? "document" }),
+      ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+    },
+    ...(options.payload ? { payload: options.payload } : {}),
+  });
+}
+
+async function prepare(input: Record<string, unknown> & { verifier: string; state: string; token?: string | undefined }) {
+  const { verifier, state, token, ...fields } = input;
+  const response = await inject("POST", "/v1/desktop-auth/prepare", {
+    token,
+    payload: {
+      client_label: "talent-signal-macos-test",
+      web_origin: ORIGIN,
+      code_challenge: desktopCodeChallenge(verifier),
+      state,
+      ...fields,
+    },
+  });
+  expect(response.statusCode, response.body).toBe(200);
+  return response.json() as Attempt;
+}
+
+async function authorize(attempt: Attempt, state: string, token?: string | undefined) {
+  const response = await inject("POST", "/v1/desktop-auth/authorize", {
+    token,
+    payload: { attempt_id: attempt.attempt_id, state },
+  });
+  expect(response.statusCode, response.body).toBe(200);
+  return response.json() as {
+    provider_challenge: { challenge_id: string; nonce: string; expires_at: string };
+    oidc_nonce: string;
+    role: string;
+    purpose: string;
+  };
+}
+
+async function approve(input: {
+  attempt: Attempt;
+  state: string;
+  challengeId: string;
+  identityToken: string;
+  token?: string | undefined;
+}) {
+  return inject("POST", "/v1/desktop-auth/approve", {
+    token: input.token,
+    payload: {
+      attempt_id: input.attempt.attempt_id,
+      state: input.state,
+      challenge_id: input.challengeId,
+      identity_token: input.identityToken,
+    },
+  });
+}
+
+/** Full system-browser half of a fixture provider round. */
+async function providerRound(input: {
+  attempt: Attempt;
+  state: string;
+  provider?: "google" | "apple" | undefined;
+  subject: string;
+  email: string;
+  emailVerified?: boolean | undefined;
+  token?: string | undefined;
+}) {
+  const provider = input.provider ?? "google";
+  const round = await authorize(input.attempt, input.state, input.token);
+  const identityToken =
+    provider === "google"
+      ? googleToken(input.subject, input.email, round.oidc_nonce)
+      : appleToken(input.subject, round.oidc_nonce, input.email, String(input.emailVerified ?? true));
+  const response = await approve({
+    attempt: input.attempt,
+    state: input.state,
+    challengeId: round.provider_challenge.challenge_id,
+    identityToken,
+    token: input.token,
+  });
+  expect(response.statusCode, response.body).toBe(200);
+  return round;
+}
+
+async function codeFor(attempt: Attempt, state: string, token?: string | undefined) {
+  const response = await inject("POST", "/v1/desktop-auth/complete", {
+    token,
+    payload: { attempt_id: attempt.attempt_id, state },
+  });
+  expect(response.statusCode, response.body).toBe(200);
+  return (response.json() as { code: string }).code;
+}
+
+async function consume(input: {
+  attempt: Attempt;
+  verifier: string;
+  code: string;
+  pairingSecret?: string | undefined;
+  token?: string | undefined;
+  attemptSecret?: string | undefined;
+}) {
+  return inject("POST", "/v1/desktop-auth/consume", {
+    token: input.token,
+    payload: {
+      attempt_id: input.attempt.attempt_id,
+      code: input.code,
+      verifier: input.verifier,
+      pairing_secret: input.pairingSecret ?? input.attempt.pairing_secret,
+      ...(input.attemptSecret ? { attempt_secret: input.attemptSecret } : {}),
+    },
+  });
+}
+
+/** Run a complete relayed round and return its consume response. */
+async function runRound(input: {
+  provider?: "google" | "apple";
+  subject: string;
+  email: string;
+  emailVerified?: boolean;
+  prepare: Record<string, unknown>;
+  verifier?: string;
+  state?: string;
+  token?: string | undefined;
+  attemptSecret?: string | undefined;
+}) {
+  const verifier = input.verifier ?? newVerifier();
+  const state = input.state ?? newState();
+  const attempt = await prepare({ ...input.prepare, verifier, state, token: input.token });
+  await providerRound({
+    attempt,
+    state,
+    provider: input.provider ?? "google",
+    subject: input.subject,
+    email: input.email,
+    emailVerified: input.emailVerified,
+    token: input.token,
+  });
+  const code = await codeFor(attempt, state, input.token);
+  const response = await consume({
+    attempt,
+    verifier,
+    code,
+    token: input.token,
+    attemptSecret: input.attemptSecret,
+  });
+  return { attempt, verifier, state, response, code };
+}
+
+async function createAccount(options: {
+  email: string;
+  displayName?: string;
+  kind?: "password_human" | "google_human" | "apple_human";
+  password?: string;
+}) {
+  const client = await pool!.connect();
+  const accountId = randomUUID();
+  const userId = randomUUID();
+  try {
+    await client.query("BEGIN");
+    await createRealIdentity(client, {
+      accountId,
+      userId,
+      accountName: `${options.displayName ?? "Fixture"}'s workspace`,
+      accountSlug: newAccountSlug(),
+      email: options.email,
+      displayName: options.displayName ?? "Fixture",
+      kind: options.kind ?? "password_human",
+      emailVerifiedAt: new Date(),
+    });
+    if (options.password) {
+      await client.query(
+        `INSERT INTO password_credentials(account_id, user_id, password_scrypt) VALUES ($1, $2, $3)`,
+        [accountId, userId, await encodePasswordCredential(options.password)],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { accountId, userId };
+}
+
+async function linkIdentity(accountId: string, userId: string, provider: "google" | "apple", subject: string, email: string) {
+  await pool!.query(
+    `INSERT INTO auth_identities(id, account_id, user_id, provider, subject_hash, email_hint)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      randomUUID(),
+      accountId,
+      userId,
+      provider,
+      providerSubjectHash(provider, provider === "google" ? "https://accounts.google.com" : "https://appleid.apple.com", subject),
+      email,
+    ],
+  );
+}
+
+async function sessionTokenFor(
+  accountId: string,
+  userId: string,
+  clientLabel: string,
+): Promise<{ token: string; sessionId: string }> {
+  const client = await pool!.connect();
+  try {
+    await client.query("BEGIN");
+    const row = (
+      await pool!.query<{
+        display_name: string;
+        email: string;
+        kind: string;
+        username: string | null;
+        account_name: string;
+        account_slug: string;
+        account_role: "admin" | "member";
+      }>(
+        `SELECT users.display_name, users.email, users.kind, users.username,
+                accounts.name AS account_name, accounts.slug AS account_slug,
+                users.account_role
+         FROM users JOIN accounts ON accounts.id = users.account_id
+         WHERE accounts.id = $1 AND users.id = $2`,
+        [accountId, userId],
+      )
+    ).rows[0]!;
+    const session = await insertSession(
+      client,
+      config,
+      {
+        accountId,
+        accountName: row.account_name,
+        accountSlug: row.account_slug,
+        displayName: row.display_name,
+        role: row.account_role,
+        userEmail: row.email,
+        userId,
+        userKind: row.kind as "password_human",
+        username: row.username,
+      },
+      clientLabel,
+    );
+    await client.query("COMMIT");
+    const sessionId = (
+      await pool!.query<{ id: string }>(
+        `SELECT id FROM sessions WHERE account_id = $1 AND user_id = $2
+         ORDER BY created_at DESC LIMIT 1`,
+        [accountId, userId],
+      )
+    ).rows[0]!.id;
+    return { token: session.access_token, sessionId };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** The phase-one Server Action side: a fresh reauth challenge for the frozen operation. */
+async function reauthChallenge(provider: "google" | "apple"): Promise<string> {
+  const client = await pool!.connect();
+  try {
+    const created =
+      provider === "google"
+        ? await createGoogleChallenge(client, config, "talent-signal-web")
+        : await createAppleLoginChallenge(client, config, { client_label: "talent-signal-web" });
+    return created.challenge_id;
+  } finally {
+    client.release();
+  }
+}
+
+async function currentScope(accountId: string, userId: string) {
+  const rows = await pool!.query<{ settings_revision: number; profile_revision: number }>(
+    `SELECT accounts.settings_revision, users.profile_revision
+     FROM accounts JOIN users ON users.account_id = accounts.id
+     WHERE accounts.id = $1 AND users.id = $2`,
+    [accountId, userId],
+  );
+  return {
+    expected_account_id: accountId,
+    expected_user_id: userId,
+    expected_account_revision: Number(rows.rows[0]!.settings_revision),
+    expected_user_revision: Number(rows.rows[0]!.profile_revision),
+  };
+}
+
+function roundPrepare(input: {
+  scope: Record<string, unknown>;
+  intent: "link_provider" | "unlink_provider" | "set_password" | "change_password";
+  targetProvider?: "apple" | "google" | "password";
+  challengeId?: string;
+  credentialAttemptId?: string;
+  role?: "current" | "target";
+  provider?: "google" | "apple";
+  flowRef?: string;
+  roundRef?: string;
+  flowDeadlineAt?: string;
+  originalProofAt?: string;
+}) {
+  const now = Date.now();
+  return {
+    provider: input.provider ?? "google",
+    purpose: "credential_round",
+    role: input.role ?? "current",
+    intent: input.intent,
+    ...(input.targetProvider ? { target_provider: input.targetProvider } : {}),
+    flow_ref: input.flowRef ?? `flow-${randomUUID()}`,
+    round_ref: input.roundRef ?? `round-${randomUUID()}`,
+    flow_deadline_at: input.flowDeadlineAt ?? new Date(now + 590_000).toISOString(),
+    original_proof_at: input.originalProofAt ?? new Date(now - 10_000).toISOString(),
+    ...(input.challengeId ? { provider_challenge_id: input.challengeId } : {}),
+    ...(input.credentialAttemptId ? { credential_attempt_id: input.credentialAttemptId } : {}),
+    ...input.scope,
+  };
+}
+
+const describeDB = database ? describe : describe.skip;
+
+describeDB("desktop login handoff endpoints (real PostgreSQL)", () => {
+  it("logs in an existing provider identity with an independent device session", async () => {
+    const subject = `google-sub-existing-${RUN}`;
+    const account = await createAccount({ email: `existing-${RUN}@example.test`, kind: "google_human" });
+    await linkIdentity(account.accountId, account.userId, "google", subject, `existing-${RUN}@example.test`);
+    await sessionTokenFor(account.accountId, account.userId, "pre-existing");
+    const verifier = newVerifier();
+    const state = newState();
+    const attempt = await prepare({
+      provider: "google",
+      purpose: "login",
+      role: "login",
+      verifier,
+      state,
+    });
+    await providerRound({
+      attempt,
+      state,
+      provider: "google",
+      subject,
+      email: `existing-${RUN}@example.test`,
+    });
+    const code = await codeFor(attempt, state);
+    const consumed = await consume({ attempt, verifier, code });
+    expect(consumed.statusCode, consumed.body).toBe(200);
+    const result = consumed.json() as {
+      status: string;
+      session: { account: { id: string }; user: { id: string } };
+    };
+    expect(result.status).toBe("logged_in");
+    expect(result.session.account.id).toBe(account.accountId);
+    expect(result.session.user.id).toBe(account.userId);
+    const sessions = await pool!.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM sessions WHERE account_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+      [account.accountId, account.userId],
+    );
+    expect(Number(sessions.rows[0]!.count)).toBeGreaterThanOrEqual(2);
+  });
+
+  it("never promotes an unverified provider hint into verified ownership (P1-2)", async () => {
+    const subject = `apple-sub-unverified-${RUN}`;
+    const account = await createAccount({ email: `unverified-owner-${RUN}@example.test`, kind: "apple_human" });
+    await linkIdentity(account.accountId, account.userId, "apple", subject, `unverified-owner-${RUN}@example.test`);
+    const verifier = newVerifier();
+    const state = newState();
+    const attempt = await prepare({ provider: "apple", purpose: "login", role: "login", verifier, state });
+    await providerRound({
+      attempt,
+      state,
+      provider: "apple",
+      subject,
+      email: `unverified-alias-${RUN}@example.test`,
+      emailVerified: false,
+    });
+    const code = await codeFor(attempt, state);
+    const consumed = await consume({ attempt, verifier, code });
+    expect(consumed.statusCode, consumed.body).toBe(200);
+    const result = consumed.json() as { status: string; session: { account: { id: string } } };
+    // Ordinary known-subject login still works without a verified email.
+    expect(result.status).toBe("logged_in");
+    expect(result.session.account.id).toBe(account.accountId);
+    // The unverified hint is a label: no reservation, no verified provenance.
+    const reservation = await pool!.query(
+      `SELECT normalized_email, verification_source, verified_at FROM account_email_reservations
+       WHERE normalized_email = $1`,
+      [`unverified-alias-${RUN}@example.test`],
+    );
+    expect(reservation.rows).toHaveLength(0);
+    // The canonical primary email is unchanged.
+    const user = await pool!.query<{ email: string }>(`SELECT email FROM users WHERE account_id = $1`, [account.accountId]);
+    expect(user.rows[0]!.email).toBe(`unverified-owner-${RUN}@example.test`);
+  });
+
+  it("rejects cross-origin, iframe and foreign-identity entries", async () => {
+    const verifier = newVerifier();
+    const state = newState();
+    const payload = {
+      provider: "google",
+      purpose: "login",
+      role: "login",
+      code_challenge: desktopCodeChallenge(verifier),
+      state,
+      client_label: "talent-signal-macos-test",
+      web_origin: ORIGIN,
+    };
+    for (const options of [
+      { origin: "https://evil.test" },
+      { origin: null },
+      { destination: "iframe" },
+    ]) {
+      const response = await inject("POST", "/v1/desktop-auth/prepare", { ...options, payload });
+      expect(response.statusCode).toBe(403);
+    }
+  });
+});
+
+describeDB("credential proof rounds (real PostgreSQL)", () => {
+  it("provider-only first password: current round mints one attempt and the sealed continuation replays as the same attempt", async () => {
+    const subject = `google-sub-first-password-${RUN}`;
+    const account = await createAccount({ email: `first-password-${RUN}@example.test`, kind: "google_human" });
+    await linkIdentity(account.accountId, account.userId, "google", subject, `first-password-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "round-test");
+    const challengeId = await reauthChallenge("google");
+    const scope = await currentScope(account.accountId, account.userId);
+    const flowRef = `flow-${randomUUID()}`;
+
+    const run = await runRound({
+      subject,
+      email: `first-password-${RUN}@example.test`,
+      token,
+      prepare: roundPrepare({
+        scope,
+        intent: "set_password",
+        targetProvider: "password",
+        challengeId,
+        flowRef,
+      }),
+    });
+    expect(run.response.statusCode, run.response.body).toBe(200);
+    const body = run.response.json() as {
+      status: string;
+      continuation: {
+        credential_attempt_id: string;
+        attempt_secret: string;
+        intent: string;
+        provider_challenge: unknown;
+      };
+    };
+    expect(body.status).toBe("awaiting_password");
+    expect(body.continuation.intent).toBe("set_password");
+    expect(body.continuation.provider_challenge).toBeNull();
+
+    // Exactly one credential attempt exists and no login cookie was created.
+    const attempts = await pool!.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM credential_change_attempts WHERE account_id = $1`,
+      [account.accountId],
+    );
+    expect(Number(attempts.rows[0]!.count)).toBe(1);
+
+    // Durable paired recovery: the SAME secret is re-derived and no second
+    // attempt is minted when the consume response is lost.
+    const result = await inject("POST", "/v1/desktop-auth/result", {
+      token,
+      payload: {
+        attempt_id: run.attempt.attempt_id,
+        pairing_secret: run.attempt.pairing_secret,
+        verifier: run.verifier,
+      },
+    });
+    expect(result.statusCode, result.body).toBe(200);
+    const recovery = result.json() as {
+      status: string;
+      continuation: { credential_attempt_id: string; attempt_secret: string } | null;
+    };
+    expect(recovery.status).toBe("pending_continuation");
+    expect(recovery.continuation!.credential_attempt_id).toBe(body.continuation.credential_attempt_id);
+    expect(recovery.continuation!.attempt_secret).toBe(body.continuation.attempt_secret);
+    // HKDF derivation matches the stored hash exactly.
+    expect(
+      deriveDesktopCredentialSecret(
+        run.attempt.pairing_secret,
+        flowRef,
+        run.attempt.attempt_id,
+        body.continuation.credential_attempt_id,
+      ),
+    ).toBe(body.continuation.attempt_secret);
+    const attemptsAfter = await pool!.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM credential_change_attempts WHERE account_id = $1`,
+      [account.accountId],
+    );
+    expect(Number(attemptsAfter.rows[0]!.count)).toBe(1);
+
+    // The paired acknowledgment confirms the WK continuation.
+    const ack = await inject("POST", "/v1/desktop-auth/ack", {
+      token,
+      payload: {
+        attempt_id: run.attempt.attempt_id,
+        pairing_secret: run.attempt.pairing_secret,
+        verifier: run.verifier,
+        credential_attempt_id: body.continuation.credential_attempt_id,
+      },
+    });
+    expect(ack.statusCode, ack.body).toBe(200);
+    expect(ack.json()).toMatchObject({ acknowledged: true });
+  });
+
+  it("linking: current round mints the grant, target round completes it, canonical account/user unchanged", async () => {
+    const subject = `apple-sub-link-round-${RUN}`;
+    const account = await createAccount({ email: `link-round-${RUN}@example.test`, kind: "apple_human" });
+    await linkIdentity(account.accountId, account.userId, "apple", subject, `link-round-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "link-round-test");
+    const challengeId = await reauthChallenge("apple");
+    const scope = await currentScope(account.accountId, account.userId);
+    const flowRef = `flow-${randomUUID()}`;
+
+    const current = await runRound({
+      provider: "apple",
+      subject,
+      email: `link-round-${RUN}@example.test`,
+      token,
+      prepare: roundPrepare({
+        scope,
+        intent: "link_provider",
+        targetProvider: "google",
+        provider: "apple",
+        challengeId,
+        flowRef,
+      }),
+    });
+    const currentBody = current.response.json() as {
+      status: string;
+      continuation: {
+        credential_attempt_id: string;
+        attempt_secret: string;
+        provider_challenge: { challenge_id: string; oidc_nonce: string };
+      };
+    };
+    expect(currentBody.status).toBe("awaiting_target");
+    const targetChallenge = currentBody.continuation.provider_challenge;
+    expect(targetChallenge.challenge_id).toBeTruthy();
+
+    // The target round completes the SAME credential attempt's challenge.
+    const target = await runRound({
+      provider: "google",
+      subject: `google-sub-target-${RUN}`,
+      email: `target-secondary-${RUN}@example.test`,
+      token,
+      attemptSecret: currentBody.continuation.attempt_secret,
+      prepare: roundPrepare({
+        scope,
+        intent: "link_provider",
+        targetProvider: "google",
+        role: "target",
+        provider: "google",
+        challengeId: targetChallenge.challenge_id,
+        credentialAttemptId: currentBody.continuation.credential_attempt_id,
+        flowRef,
+        roundRef: `round-target-${randomUUID()}`,
+      }),
+    });
+    expect(target.response.statusCode, target.response.body).toBe(200);
+    const done = target.response.json() as {
+      status: string;
+      result: { status: string };
+      settings: {
+        user: { id: string; login_methods: string[] };
+        workspace: { id: string };
+        sign_in_methods: Array<{ provider: string; state: string; hint: string | null }>;
+      };
+    };
+    expect(done.status).toBe("completed");
+    expect(done.result.status).toBe("linked");
+    // Unchanged canonical account and user through linking.
+    expect(done.settings.workspace.id).toBe(account.accountId);
+    expect(done.settings.user.id).toBe(account.userId);
+    expect(done.settings.user.login_methods).toContain("google");
+    expect(done.settings.user.login_methods).toContain("apple");
+    const google = done.settings.sign_in_methods.find((m) => m.provider === "google");
+    expect(google?.state).toBe("connected");
+    expect(google?.hint).toBe(`target-secondary-${RUN}@example.test`);
+    // The credential attempt is single-use.
+    const credential = await pool!.query<{ consumed_at: Date | null }>(
+      `SELECT consumed_at FROM credential_change_attempts WHERE id = $1`,
+      [currentBody.continuation.credential_attempt_id],
+    );
+    expect(credential.rows[0]!.consumed_at).not.toBeNull();
+  });
+
+  it("unlink completes only the frozen removal with the last-method guard", async () => {
+    const appleSubject = `apple-sub-unlink-${RUN}`;
+    const googleSubject = `google-sub-unlink-current-${RUN}`;
+    const account = await createAccount({ email: `unlink-${RUN}@example.test`, kind: "apple_human", password: "quiet-unlink-1" });
+    await linkIdentity(account.accountId, account.userId, "apple", appleSubject, `unlink-${RUN}@example.test`);
+    await linkIdentity(account.accountId, account.userId, "google", googleSubject, `unlink-google-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "unlink-test");
+    const challengeId = await reauthChallenge("google");
+    const scope = await currentScope(account.accountId, account.userId);
+
+    const run = await runRound({
+      // The CURRENT round proves a subject already linked to this account.
+      subject: googleSubject,
+      email: `unlink-google-${RUN}@example.test`,
+      token,
+      prepare: roundPrepare({
+        scope,
+        intent: "unlink_provider",
+        targetProvider: "apple",
+        provider: "google",
+        challengeId,
+      }),
+    });
+    const body = run.response.json() as {
+      status: string;
+      result: { intent: string; status: string };
+      settings: { user: { login_methods: string[] } };
+    };
+    // The current round's provider proof proves the CURRENT identity; the
+    // frozen removal (Apple) completes in the same transaction.
+    expect(run.response.statusCode, run.response.body).toBe(200);
+    expect(body.status).toBe("completed");
+    expect(body.result.status).toBe("unlinked");
+    expect(body.settings.user.login_methods).not.toContain("apple");
+    expect(body.settings.user.login_methods).toContain("password");
+  });
+
+  it("last-method removal fails and leaves the account unchanged", async () => {
+    const subject = `google-sub-last-method-${RUN}`;
+    const account = await createAccount({ email: `last-method-${RUN}@example.test`, kind: "google_human" });
+    await linkIdentity(account.accountId, account.userId, "google", subject, `last-method-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "last-method-test");
+    const challengeId = await reauthChallenge("google");
+    const scope = await currentScope(account.accountId, account.userId);
+    const run = await runRound({
+      subject,
+      email: `last-method-${RUN}@example.test`,
+      token,
+      prepare: roundPrepare({
+        scope,
+        intent: "unlink_provider",
+        targetProvider: "google",
+        challengeId,
+      }),
+    });
+    expect(run.response.statusCode).toBe(409);
+    expect(run.response.json()).toMatchObject({ error: { code: "LAST_LOGIN_METHOD" } });
+    // The failed removal rolls back the whole transaction, including the
+    // attempt consumption.
+    const rows = await pool!.query<{ status: string }>(
+      `SELECT status FROM desktop_auth_attempts WHERE id = $1`,
+      [run.attempt.attempt_id],
+    );
+    expect(rows.rows[0]!.status).toBe("approved");
+  });
+
+  it("a current round proves the linked subject; a matching email or wrong subject never does", async () => {
+    const subject = `google-sub-wrong-current-${RUN}`;
+    const account = await createAccount({ email: `wrong-current-${RUN}@example.test`, kind: "google_human" });
+    await linkIdentity(account.accountId, account.userId, "google", subject, `wrong-current-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "wrong-current-test");
+    const challengeId = await reauthChallenge("google");
+    const scope = await currentScope(account.accountId, account.userId);
+    const verifier = newVerifier();
+    const state = newState();
+    const attempt = await prepare({
+      ...roundPrepare({
+        scope,
+        intent: "set_password",
+        targetProvider: "password",
+        challengeId,
+        provider: "google",
+      }),
+      verifier,
+      state,
+      token,
+    });
+    const round = await authorize(attempt, state, token);
+    // Same verified email, different provider subject: not the current method.
+    const response = await approve({
+      attempt,
+      state,
+      challengeId: round.provider_challenge.challenge_id,
+      identityToken: googleToken(`google-sub-foreign-${RUN}`, `wrong-current-${RUN}@example.test`, round.oidc_nonce),
+      token,
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ error: { code: "DESKTOP_AUTH_CURRENT_SUBJECT_MISMATCH" } });
+  });
+
+  it("rejects stale rendered scope, role/challenge swaps and absolute deadline expiry", async () => {
+    const subject = `google-sub-stale-scope-${RUN}`;
+    const account = await createAccount({ email: `stale-scope-${RUN}@example.test`, kind: "google_human" });
+    await linkIdentity(account.accountId, account.userId, "google", subject, `stale-scope-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "stale-scope-test");
+    const challengeId = await reauthChallenge("google");
+    const scope = await currentScope(account.accountId, account.userId);
+
+    // Old rendered actor (different account) with the current cookie: refused.
+    const stale = await inject("POST", "/v1/desktop-auth/prepare", {
+      token,
+      payload: {
+        client_label: "talent-signal-macos-test",
+        web_origin: ORIGIN,
+        code_challenge: desktopCodeChallenge(newVerifier()),
+        state: newState(),
+        ...roundPrepare({
+          scope: { ...scope, expected_account_id: randomUUID() },
+          intent: "set_password",
+          targetProvider: "password",
+          challengeId,
+        }),
+      },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: { code: "DESKTOP_AUTH_STALE_SCOPE" } });
+
+    // Missing frozen flow scope entirely: refused (must refresh).
+    const missing = await inject("POST", "/v1/desktop-auth/prepare", {
+      token,
+      payload: {
+        provider: "google",
+        purpose: "credential_round",
+        role: "current",
+        client_label: "talent-signal-macos-test",
+        web_origin: ORIGIN,
+        code_challenge: desktopCodeChallenge(newVerifier()),
+        state: newState(),
+        intent: "set_password",
+      },
+    });
+    expect(missing.statusCode).toBe(409);
+
+    // Absolute flow deadline: an expired flow cannot be prepared.
+    const expired = await inject("POST", "/v1/desktop-auth/prepare", {
+      token,
+      payload: {
+        client_label: "talent-signal-macos-test",
+        web_origin: ORIGIN,
+        code_challenge: desktopCodeChallenge(newVerifier()),
+        state: newState(),
+        ...roundPrepare({
+          scope,
+          intent: "set_password",
+          targetProvider: "password",
+          challengeId,
+          flowDeadlineAt: new Date(Date.now() - 1_000).toISOString(),
+          originalProofAt: new Date(Date.now() - 600_000).toISOString(),
+        }),
+      },
+    });
+    expect(expired.statusCode).toBe(409);
+    expect(expired.json()).toMatchObject({ error: { code: "DESKTOP_AUTH_FLOW_EXPIRED" } });
+
+    // Role swap: a target round without its credential attempt is refused.
+    const roleSwap = await inject("POST", "/v1/desktop-auth/prepare", {
+      token,
+      payload: {
+        client_label: "talent-signal-macos-test",
+        web_origin: ORIGIN,
+        code_challenge: desktopCodeChallenge(newVerifier()),
+        state: newState(),
+        ...roundPrepare({
+          scope,
+          intent: "link_provider",
+          targetProvider: "google",
+          role: "target",
+          challengeId,
+        }),
+      },
+    });
+    expect(roleSwap.statusCode).toBe(400);
+  });
+
+  it("cancels with discriminated authorities and reports consumed truthfully", async () => {
+    const subject = `google-sub-cancel-${RUN}`;
+    const account = await createAccount({ email: `cancel-${RUN}@example.test`, kind: "google_human" });
+    await linkIdentity(account.accountId, account.userId, "google", subject, `cancel-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "cancel-test");
+    const challengeId = await reauthChallenge("google");
+    const scope = await currentScope(account.accountId, account.userId);
+
+    const firstVerifier = newVerifier();
+    const firstState = newState();
+    const first = await prepare({
+      ...roundPrepare({ scope, intent: "set_password", targetProvider: "password", challengeId }),
+      verifier: firstVerifier,
+      state: firstState,
+      token,
+    });
+
+    // The system browser holds only its raw state: no pairing secret export.
+    const systemCancelWrongState = await inject("POST", "/v1/desktop-auth/cancel", {
+      token,
+      payload: { attempt_id: first.attempt_id, mode: "system", state: newState() },
+    });
+    expect(systemCancelWrongState.statusCode).toBe(409);
+    const systemCancel = await inject("POST", "/v1/desktop-auth/cancel", {
+      token,
+      payload: { attempt_id: first.attempt_id, mode: "system", state: firstState },
+    });
+    expect(systemCancel.statusCode).toBe(200);
+    expect(systemCancel.json()).toMatchObject({ status: "cancelled", purpose: "credential_round" });
+
+    // A WK pairing authority cannot act for a foreign attempt.
+    const secondVerifier = newVerifier();
+    const secondState = newState();
+    const second = await prepare({
+      ...roundPrepare({ scope, intent: "set_password", targetProvider: "password", challengeId }),
+      verifier: secondVerifier,
+      state: secondState,
+      token,
+    });
+    const foreignPairing = await inject("POST", "/v1/desktop-auth/cancel", {
+      token,
+      payload: { attempt_id: second.attempt_id, mode: "wk", pairing_secret: first.pairing_secret },
+    });
+    expect(foreignPairing.statusCode).toBe(409);
+    const wkCancel = await inject("POST", "/v1/desktop-auth/cancel", {
+      token,
+      payload: { attempt_id: second.attempt_id, mode: "wk", pairing_secret: second.pairing_secret },
+    });
+    expect(wkCancel.statusCode).toBe(200);
+    expect(wkCancel.json()).toMatchObject({ status: "cancelled" });
+
+    // A consumed attempt reports `consumed`, never a success cancellation.
+    const third = await runRound({
+      subject,
+      email: `cancel-${RUN}@example.test`,
+      token,
+      prepare: roundPrepare({ scope, intent: "set_password", targetProvider: "password", challengeId }),
+    });
+    const consumed = await inject("POST", "/v1/desktop-auth/cancel", {
+      token,
+      payload: { attempt_id: third.attempt.attempt_id, mode: "system", state: third.state },
+    });
+    expect(consumed.json()).toMatchObject({ status: "consumed" });
+  });
+
+  it("is single-use and rejects replay, verifier and state tampering", async () => {
+    const subject = `google-sub-replay-${RUN}`;
+    const account = await createAccount({ email: `replay-${RUN}@example.test`, kind: "google_human" });
+    await linkIdentity(account.accountId, account.userId, "google", subject, `replay-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "replay-test");
+    const challengeId = await reauthChallenge("google");
+    const scope = await currentScope(account.accountId, account.userId);
+    const verifier = newVerifier();
+    const state = newState();
+    const attempt = await prepare({
+      ...roundPrepare({ scope, intent: "set_password", targetProvider: "password", challengeId }),
+      verifier,
+      state,
+      token,
+    });
+    const wrongState = await inject("POST", "/v1/desktop-auth/authorize", {
+      token,
+      payload: { attempt_id: attempt.attempt_id, state: newState() },
+    });
+    expect(wrongState.statusCode).toBe(409);
+    await providerRound({
+      attempt,
+      state,
+      subject,
+      email: `replay-${RUN}@example.test`,
+      token,
+    });
+    const code = await codeFor(attempt, state, token);
+    const wrongVerifier = await consume({ attempt, verifier: newVerifier(), code, token });
+    expect(wrongVerifier.statusCode).toBe(409);
+    const ok = await consume({ attempt, verifier, code, token });
+    expect(ok.statusCode, ok.body).toBe(200);
+    const replay = await consume({ attempt, verifier, code, token });
+    expect(replay.statusCode).toBe(409);
+    // A stale second complete cannot mint for a superseded code state either.
+    const lateCode = await inject("POST", "/v1/desktop-auth/complete", {
+      token,
+      payload: { attempt_id: attempt.attempt_id, state },
+    });
+    expect(lateCode.statusCode).toBe(409);
+  });
+});
+
+describeDB("desktop credential concurrency (real PostgreSQL)", () => {
+  it("serializes a concurrent credential mutation behind the shared locks (paused consume, writer blocked)", async () => {
+    const subject = `apple-sub-lock-${RUN}`;
+    const aliasEmail = `lock-alias-${RUN}@example.test`;
+    const account = await createAccount({ email: `lock-order-${RUN}@example.test`, kind: "apple_human" });
+    await linkIdentity(account.accountId, account.userId, "apple", subject, `lock-order-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "lock-order-test");
+    const challengeId = await reauthChallenge("apple");
+    const scope = await currentScope(account.accountId, account.userId);
+    const flowRef = `flow-${randomUUID()}`;
+
+    const current = await runRound({
+      provider: "apple",
+      subject,
+      email: `lock-order-${RUN}@example.test`,
+      token,
+      prepare: roundPrepare({
+        scope,
+        intent: "link_provider",
+        targetProvider: "google",
+        provider: "apple",
+        challengeId,
+        flowRef,
+      }),
+    });
+    const currentBody = current.response.json() as {
+      status: string;
+      continuation: {
+        credential_attempt_id: string;
+        attempt_secret: string;
+        provider_challenge: { challenge_id: string };
+      };
+    };
+    expect(currentBody.status).toBe("awaiting_target");
+
+    // Prepare the target round whose commit will claim a NEW verified alias.
+    const verifier = newVerifier();
+    const state = newState();
+    const targetAttempt = await prepare({
+      ...roundPrepare({
+        scope,
+        intent: "link_provider",
+        targetProvider: "google",
+        role: "target",
+        provider: "google",
+        challengeId: currentBody.continuation.provider_challenge.challenge_id,
+        credentialAttemptId: currentBody.continuation.credential_attempt_id,
+        flowRef,
+        roundRef: `round-target-${randomUUID()}`,
+      }),
+      verifier,
+      state,
+      token,
+    });
+    await providerRound({
+      attempt: targetAttempt,
+      state,
+      provider: "google",
+      subject: `google-sub-lock-target-${RUN}`,
+      email: aliasEmail,
+      token,
+    });
+    const code = await codeFor(targetAttempt, state, token);
+
+    // Pause the target consume inside its transaction at the verified-alias
+    // advisory lock (its account/user/session locks are already held).
+    const blocker = await pool!.connect();
+    await blocker.query("BEGIN");
+    await blocker.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+      `account-email:${aliasEmail}`,
+    ]);
+    const consumePromise = consume({
+      attempt: targetAttempt,
+      verifier,
+      code,
+      token,
+      attemptSecret: currentBody.continuation.attempt_secret,
+    });
+    // Give consume time to acquire its locks and block on the alias lock.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // A concurrent governed mutation cannot slip between consume's check and
+    // its write: it must wait for the shared credential locks.
+    const writer = await pool!.connect();
+    let writerDone = false;
+    const writerPromise = writer
+      .query(`UPDATE users SET profile_revision = profile_revision + 1 WHERE account_id = $1`, [account.accountId])
+      .then(() => {
+        writerDone = true;
+      });
+    const raced = await Promise.race([
+      writerPromise.then(() => "writer"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("blocked"), 500)),
+    ]);
+    expect(raced).toBe("blocked");
+    expect(writerDone).toBe(false);
+
+    // Release the alias lock: the paused consume resolves FIRST (consume-first
+    // commit order), then the writer's revision bump applies on top.
+    await blocker.query("ROLLBACK");
+    blocker.release();
+    const response = await consumePromise;
+    expect(response.statusCode, response.body).toBe(200);
+    await writerPromise;
+    writer.release();
+
+    const rows = await pool!.query<{ status: string; result_committed_at: Date | null }>(
+      `SELECT status, result_committed_at FROM desktop_auth_attempts WHERE id = $1`,
+      [targetAttempt.attempt_id],
+    );
+    expect(rows.rows[0]!.status).toBe("consumed");
+    expect(rows.rows[0]!.result_committed_at).not.toBeNull();
+    const credential = await pool!.query<{ consumed_at: Date | null }>(
+      `SELECT consumed_at FROM credential_change_attempts WHERE id = $1`,
+      [currentBody.continuation.credential_attempt_id],
+    );
+    expect(credential.rows[0]!.consumed_at).not.toBeNull();
+  });
+
+  it("refuses a cached-context consume after its session was revoked (P1-3 admission race)", async () => {
+    const subject = `google-sub-revoked-${RUN}`;
+    const account = await createAccount({ email: `revoked-${RUN}@example.test`, kind: "google_human" });
+    await linkIdentity(account.accountId, account.userId, "google", subject, `revoked-${RUN}@example.test`);
+    const { token, sessionId } = await sessionTokenFor(account.accountId, account.userId, "revoked-test");
+    const challengeId = await reauthChallenge("google");
+    const scope = await currentScope(account.accountId, account.userId);
+    const verifier = newVerifier();
+    const state = newState();
+    const attempt = await prepare({
+      ...roundPrepare({ scope, intent: "set_password", targetProvider: "password", challengeId }),
+      verifier,
+      state,
+      token,
+    });
+    await providerRound({ attempt, state, subject, email: `revoked-${RUN}@example.test`, token });
+    const code = await codeFor(attempt, state, token);
+    // The HTTP guard resolved this caller BEFORE the revocation (an admitted
+    // request with cached context).
+    const { resolveDesktopCaller, consumeDesktopAuthAttempt } = await import("./desktopAuth.js");
+    const fakeRequest = {
+      headers: { authorization: `Bearer ${token}`, origin: ORIGIN },
+    } as unknown as Parameters<typeof resolveDesktopCaller>[2];
+    const admitted = await resolveDesktopCaller(pool!, config, fakeRequest, ORIGIN);
+    expect(admitted.auth?.sessionId).toBe(sessionId);
+    // Revoke AFTER admission: the in-transaction session revalidation must
+    // reject this consume even with its cached pre-revocation context.
+    await pool!.query(`UPDATE sessions SET revoked_at = now() WHERE id = $1`, [sessionId]);
+    await expect(
+      consumeDesktopAuthAttempt(
+        pool!,
+        config,
+        {
+          attempt_id: attempt.attempt_id,
+          code,
+          verifier,
+          pairing_secret: attempt.pairing_secret,
+        },
+        admitted,
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "SESSION_INVALID" });
+    // The ordinary HTTP path also refuses (the caller no longer resolves).
+    const stale = await consume({ attempt, verifier, code, token });
+    expect(stale.statusCode).toBe(409);
+    // Nothing was written.
+    const rows = await pool!.query<{ status: string; credential_attempt_id: string | null }>(
+      `SELECT status, credential_attempt_id FROM desktop_auth_attempts WHERE id = $1`,
+      [attempt.attempt_id],
+    );
+    expect(rows.rows[0]!.status).toBe("approved");
+    expect(rows.rows[0]!.credential_attempt_id).toBeNull();
+    const attempts = await pool!.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM credential_change_attempts WHERE account_id = $1`,
+      [account.accountId],
+    );
+    expect(Number(attempts.rows[0]!.count)).toBe(0);
+  });
+
+  it("rejects a link consume when the credential set changed mid-flight (writer-first order)", async () => {
+    const subject = `google-sub-midchange-${RUN}`;
+    const account = await createAccount({ email: `midchange-${RUN}@example.test`, kind: "apple_human" });
+    await linkIdentity(account.accountId, account.userId, "apple", subject, `midchange-${RUN}@example.test`);
+    const { token } = await sessionTokenFor(account.accountId, account.userId, "midchange-test");
+    const challengeId = await reauthChallenge("apple");
+    const scope = await currentScope(account.accountId, account.userId);
+    const verifier = newVerifier();
+    const state = newState();
+    const attempt = await prepare({
+      ...roundPrepare({
+        scope,
+        intent: "link_provider",
+        targetProvider: "google",
+        provider: "apple",
+        challengeId,
+      }),
+      verifier,
+      state,
+      token,
+    });
+    await providerRound({
+      attempt,
+      state,
+      provider: "apple",
+      subject,
+      email: `midchange-${RUN}@example.test`,
+      token,
+    });
+    const code = await codeFor(attempt, state, token);
+    // A rival credential change commits FIRST: the frozen scope is stale and
+    // the relayed round must refuse without minting anything.
+    await pool!.query(`UPDATE accounts SET settings_revision = settings_revision + 1 WHERE id = $1`, [
+      account.accountId,
+    ]);
+    const stale = await consume({ attempt, verifier, code, token });
+    expect(stale.statusCode).toBe(409);
+    const rows = await pool!.query<{ status: string }>(`SELECT status FROM desktop_auth_attempts WHERE id = $1`, [
+      attempt.attempt_id,
+    ]);
+    expect(rows.rows[0]!.status).toBe("approved");
+    const attempts = await pool!.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM credential_change_attempts WHERE account_id = $1`,
+      [account.accountId],
+    );
+    expect(Number(attempts.rows[0]!.count)).toBe(0);
+  });
+});

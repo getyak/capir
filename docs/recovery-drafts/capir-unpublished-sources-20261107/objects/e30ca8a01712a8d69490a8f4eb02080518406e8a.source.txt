@@ -1,0 +1,262 @@
+/**
+ * Pure display helpers for the Web Agent Session workbench.
+ *
+ * These functions hold the decisions that must stay truthful regardless of
+ * transport: what state a restored record is in, how a stale draft is handled,
+ * and how a conflict is presented. They have no DOM, network, or backend
+ * dependency so they can be tested directly.
+ */
+
+export type SessionState = "active" | "deleted" | "expired" | "unavailable";
+
+export type SessionDraftStatus =
+  | "idle"
+  | "pending"
+  | "saving"
+  | "saved"
+  | "error"
+  | "conflict";
+
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+
+export function isSessionId(value: unknown): value is string {
+  return typeof value === "string" && UUID.test(value);
+}
+
+export function boundedDraft(value: string): string {
+  return value;
+}
+
+export function sessionStateLabel(state: SessionState): string {
+  switch (state) {
+    case "active":
+      return "可以继续";
+    case "deleted":
+      return "已删除";
+    case "expired":
+      return "已过期";
+    case "unavailable":
+      return "内容不可用";
+  }
+}
+
+export function sessionStateNotice(state: SessionState): string | null {
+  switch (state) {
+    case "active":
+      return null;
+    case "deleted":
+      return "这段对话已被删除，历史内容不再提供，也不会因为重新打开而恢复。";
+    case "expired":
+      return "这段对话已超过保存期限（30 天），历史内容不再提供。";
+    case "unavailable":
+      return "这段对话暂时无法读取内容；系统不会用其他账号或缓存数据代替。";
+  }
+}
+
+/**
+ * A partially synchronized canonical history is visibly incomplete until its
+ * transfer verifies the whole declared intent. The notice states what is
+ * missing and why sending is disabled; the prefix is never presented as a
+ * complete record and no pending work runs early.
+ */
+export function sessionSyncIncompleteNotice(): string {
+  return "这条对话仍在从其他设备补齐历史，目前只显示已确认的部分。同步完成前无法发送新消息；已保存的本地内容不受影响。";
+}
+
+export function draftStatusLabel(status: SessionDraftStatus): string {
+  switch (status) {
+    case "idle":
+      return "";
+    case "pending":
+      return "有未保存的修改";
+    case "saving":
+      return "正在保存…";
+    case "saved":
+      return "已保存";
+    case "error":
+      return "保存失败，草稿仍在本机";
+    case "conflict":
+      return "另一端已更新，本次未覆盖";
+  }
+}
+
+/**
+ * The local draft is always authoritative for the editor. A save only clears
+ * the dirty flag when the value still matches what was sent, so a keystroke
+ * during an in-flight save is not silently discarded.
+ */
+export function draftStatusAfterSave(current: string, sent: string): SessionDraftStatus {
+  return current === sent ? "saved" : "pending";
+}
+
+/**
+ * Debounce decision: persist when the text differs from the last saved value
+ * and enough quiet time has passed. This is deliberately pure so the composer
+ * cannot depend on render timing for correctness.
+ */
+export function shouldPersistDraft(input: {
+  next: string;
+  lastSaved: string;
+  status: SessionDraftStatus;
+  elapsedMs: number;
+  debounceMs: number;
+}): boolean {
+  if (input.next === input.lastSaved) return false;
+  if (input.status === "saving" || input.status === "conflict") return false;
+  if (input.status === "error") return true;
+  return input.elapsedMs >= input.debounceMs;
+}
+
+export type SessionConflictView = {
+  kind: "conflict";
+  message: string;
+  reloadLabel: string;
+  keepDraftLabel: string;
+};
+
+/**
+ * A 409 revision conflict never overwrites the other device's work. The local
+ * draft is preserved and the only path forward is an explicit reload.
+ */
+export function conflictView(): SessionConflictView {
+  return {
+    kind: "conflict",
+    message:
+      "这段对话已在另一处更新。为避免覆盖对方的修改，本次保存没有生效。你的草稿仍保留在这里，可以先复制，再重新载入最新版本。",
+    reloadLabel: "重新载入最新版本",
+    keepDraftLabel: "保留我的草稿",
+  };
+}
+
+export function sessionDisplayTitle(
+  title: string,
+  fallback = "未命名对话",
+): string {
+  const normalized = title
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return normalized || fallback;
+}
+
+export function formatSessionTime(
+  value: string,
+  now = new Date(),
+): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  const elapsedMs = now.getTime() - date.getTime();
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (elapsedMs >= 0 && elapsedMs < minute) return "刚刚";
+  if (elapsedMs >= 0 && elapsedMs < hour) {
+    return `${Math.floor(elapsedMs / minute)} 分钟前`;
+  }
+  if (elapsedMs >= 0 && elapsedMs < day) {
+    return `${Math.floor(elapsedMs / hour)} 小时前`;
+  }
+  if (elapsedMs >= 0 && elapsedMs < 3 * day) {
+    return `${Math.floor(elapsedMs / day)} 天前`;
+  }
+  const includeYear = date.getUTCFullYear() !== now.getUTCFullYear();
+  return new Intl.DateTimeFormat("zh-CN", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+    ...(includeYear ? { year: "numeric" } : {}),
+  }).format(date);
+}
+
+/** Remaining lifetime is shown only when it is decision-relevant (<= 3 days). */
+export function sessionExpiryNotice(
+  expiresAt: string,
+  now = new Date(),
+): string | null {
+  const expiration = Date.parse(expiresAt);
+  if (!Number.isFinite(expiration)) return null;
+  const remaining = expiration - now.getTime();
+  const day = 86_400_000;
+  if (remaining <= 0) return "这段对话已过期。";
+  if (remaining > 3 * day) return null;
+  return `这段对话将在 ${Math.max(1, Math.ceil(remaining / day))} 天后过期。`;
+}
+
+export type SessionScopeView = {
+  label: string;
+  returnLabel: string;
+  returnHref: string;
+  note: string;
+  claimsScopeChange: boolean;
+};
+
+export type SessionScopeInput = {
+  sessionId: string;
+  scopeKind: "unresolved_intent" | "relationship" | "identity_review";
+  personId?: string | null;
+  relationshipContextId?: string | null;
+  personLabel: string;
+  contextLabel: string;
+};
+
+/**
+ * Relationship Sessions return to the governed relationship surface with a
+ * session return parameter. Unscoped Sessions send the recruiter to the People
+ * directory for an explicit identity choice, and the copy states plainly that
+ * scope did not change.
+ */
+export function sessionScopeView(input: SessionScopeInput): SessionScopeView {
+  if (
+    input.scopeKind === "relationship" &&
+    input.personId &&
+    input.relationshipContextId
+  ) {
+    const parameters = new URLSearchParams({
+      context: input.relationshipContextId,
+      person: input.personId,
+      session: input.sessionId,
+    });
+    return {
+      label: `${input.personLabel || "联系人"} · ${input.contextLabel || "关系情境"}`,
+      returnLabel: `回到 ${input.personLabel || "这位联系人"} 的关系工作台`,
+      returnHref: `/workspace?${parameters.toString()}`,
+      note: "这条对话已绑定关系情境，可在关系工作台中继续。",
+      claimsScopeChange: false,
+    };
+  }
+  if (input.scopeKind === "identity_review") {
+    return {
+      label: "身份核对",
+      returnLabel: "继续处理身份核对",
+      returnHref: `/workspace/people?session=${encodeURIComponent(input.sessionId)}`,
+      note: "这条对话属于身份核对，未绑定联系人或关系情境。请在联系人目录中处理。",
+      claimsScopeChange: false,
+    };
+  }
+  return {
+    label: "未绑定范围",
+    returnLabel: "在联系人目录中选择身份",
+    returnHref: `/workspace/people?session=${encodeURIComponent(input.sessionId)}`,
+    note: "这条对话还没有绑定联系人或关系情境。请到联系人目录中显式选择，选择本身不会自动改变这条对话的范围。",
+    claimsScopeChange: false,
+  };
+}
+
+/** The directory only lists sessions that can actually be resumed. */
+export function directoryStateNotice(input: {
+  total: number;
+  complete: boolean;
+}): string | null {
+  if (input.total === 0 && input.complete) {
+    return "当前账号还没有可继续的对话。新建一条对话只会记录你的输入，不会产生模型结果或外部操作。";
+  }
+  if (input.total === 0 && !input.complete) {
+    return "这一页没有可继续的对话，但列表中仍有未载入的记录。可以继续加载下一页。";
+  }
+  if (!input.complete) {
+    return "列表尚未载入完整；可以继续加载下一页。";
+  }
+  return null;
+}

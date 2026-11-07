@@ -1,0 +1,85 @@
+/**
+ * `help`: usage plus ACTUAL discovery.
+ *
+ * With an explicit --env, help queries capability discovery and reports the
+ * real supported scenarios (ids, versions, digests), the actual quota, and the
+ * deferred/unsupported stages. Without --env it renders the static Stage A
+ * surface and states that discovery needs a named test environment.
+ */
+import { CapirBackendClient, type FetchLike } from "./http.js";
+import type { CapirEnvironment } from "./config.js";
+
+export const USAGE = {
+  summary:
+    "capir Stage A: scoped test-sandbox authorization and entry for the Talent Signal Lab.",
+  invocation: "node apps/cli/dist/cli.js <command> [flags]  (or: pnpm -s capir -- <command> [flags])",
+  commands: {
+    "auth login": "Open the configured Web consent page and store a scoped grant in the OS keyring.",
+    "auth status": "Read the current scoped grant (never renews it).",
+    "auth logout": "Revoke the scoped grant and remove its keyring entry.",
+    "sandbox start": "Create a strict-replay sandbox (defaults: --scenario daily --role member --model-policy replay --duration-hours 4).",
+    "sandbox status": "Read one sandbox (read-only unless --open web).",
+    "sandbox stop": "Stop a sandbox and poll real cleanup (reports deleting/failed distinctly).",
+    help: "This discovery surface.",
+  },
+  flags: [
+    "--env <name>        explicit named test environment (required for operations)",
+    "--human             render text instead of the JSON envelope",
+    "--open web          open an isolated browser session into the sandbox",
+    "--request-id <uuid> resume the SAME recorded operation",
+    "--wait <seconds>    cleanup polling budget for sandbox stop (default 90)",
+    "--timeout <seconds> browser/network deadline; an in-flight keyring write settles before exit (default 300)",
+    "--noninteractive    fail login promptly instead of waiting for consent",
+    "--receipt-dir <dir> write sanitized browser receipts (proof/diagnostic)",
+  ],
+  stage_a: {
+    scenarios: ["daily", "empty"],
+    roles: ["member"],
+    model_policy: "strict_replay",
+    durations_hours: [1, 4, 24],
+    surfaces: ["web"],
+    operations: ["auth login", "auth status", "auth logout", "sandbox start", "sandbox status", "sandbox stop"],
+  },
+  deferred: {
+    scenarios: ["other proposed scenarios"],
+    model_policies: ["live", "record"],
+    clients: ["native", "mcp", "test", "eval"],
+    grants: ["refresh", "machine-identity federation"],
+    note: "Deferred capabilities are rejected before any allocation; they are never silently emulated.",
+  },
+} as const;
+
+export async function helpPayload(
+  environment: CapirEnvironment | null,
+  fetchImpl: FetchLike,
+): Promise<Record<string, unknown>> {
+  const base: Record<string, unknown> = { usage: USAGE };
+  if (!environment) {
+    return {
+      ...base,
+      discovery: {
+        available: false,
+        reason: "Select --env <name> to discover the actual scenarios, quota and unsupported stages of a test backend.",
+      },
+    };
+  }
+  const client = new CapirBackendClient(environment.backendOrigin, fetchImpl);
+  const capabilities = await client.capabilities();
+  return {
+    ...base,
+    discovery: {
+      available: true,
+      environment: environment.name,
+      enabled: capabilities.enabled,
+      max_active_sandboxes: capabilities.max_active_sandboxes,
+      web_handoff_available: capabilities.web_handoff_available,
+      scenarios: capabilities.scenarios,
+      model_policy: capabilities.model_policy,
+      approved_recordings: capabilities.approved_recordings,
+      supported_tasks: capabilities.supported_tasks,
+      unsupported: capabilities.unsupported,
+      registered_backend_origins: capabilities.backend_origins,
+      registered_web_origins: capabilities.web_origins,
+    },
+  };
+}

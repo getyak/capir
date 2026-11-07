@@ -1,0 +1,65 @@
+import { bundledPrompt } from "./promptRegistry.js";
+import { describe, expect, it, vi } from "vitest";
+import { BigModelAgentProvider } from "./bigModelProvider.js";
+import { OpenRouterAgentProvider } from "./openRouterProvider.js";
+import { ZhipuChatAnswerProvider } from "./chatAnswerProvider.js";
+import { providerCompletionFailure } from "./providerCompletion.js";
+import type { AgentProviderRequest } from "./types.js";
+
+const request: AgentProviderRequest = {
+  runID: "10000000-0000-4000-8000-000000000099", objective: "Inspect synthetic evidence.",
+  systemPrompt: "No external effects.", toolManifest: ["read_pursuit"], budget: {},
+  scopeSummary: { kind: "pursuit", workspaceID: "10000000-0000-4000-8000-000000000001",
+    pursuitID: "10000000-0000-4000-8000-000000000002", pursuitRevision: 1, evidenceRefs: [] },
+};
+const cases = [
+  { name: "BigModel", model: "glm-5.3", create: (fetcher: typeof fetch) => new BigModelAgentProvider({
+    apiKey: "synthetic-only", model: "glm-5.3", inputCnyPerMillion: 8, outputCnyPerMillion: 28, cnyPerUsd: 7, fetcher }) },
+  { name: "OpenRouter", model: "z-ai/glm-5.3", create: (fetcher: typeof fetch) => new OpenRouterAgentProvider({
+    apiKey: "synthetic-only", model: "z-ai/glm-5.3", fetcher }) },
+  { name: "ZhipuChat", model: "glm-5.3", create: (fetcher: typeof fetch) => new ZhipuChatAnswerProvider({
+    apiKey: "synthetic-only", model: "glm-5.3", observer: null, fetcher }) },
+];
+
+describe.each(cases)("$name incomplete completion admission", ({ name, model, create }) => {
+  describe.each([true, false])("assistant message present: %s", messagePresent => {
+  it.each(["length", "content_filter", "error", "sensitive", "network_error", "unexpected_terminal"])(
+    "does not publish valid-looking JSON or dispatch tools after %s, preserving reported usage", async finishReason => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ model, id: "synthetic-response",
+        choices: [{ finish_reason: finishReason, ...(messagePresent ? { message: {
+          content: JSON.stringify({ outcome: "no_action", reason: "Valid-looking but incomplete.",
+            reason_code: "NO_MATERIAL_CHANGE", missing_evidence_refs: [] }),
+          tool_calls: [{ id: "synthetic-call", type: "function", function: { name: "read_pursuit", arguments: "{}" } }],
+        } } : {}) }], usage: { prompt_tokens: 39_509, completion_tokens: 3_001, cost: 0.2 } }));
+      const invokeTool = vi.fn();
+      const result = await create(fetcher).run(name === "ZhipuChat" ? { ...request, scopeSummary: { kind: "workspace_conversation", workspaceID: "synthetic-workspace", sessionID: null, currentPersonID: null, currentRelationshipContextID: null } } : request, invokeTool, new AbortController().signal);
+      expect(result.terminalReason).toBe(finishReason === "length" ? "provider_output_incomplete" : "provider_response_rejected");
+      expect(result.structuredOutput).toBeNull();
+      expect(result).toMatchObject({ inputTokens: 39_509, outputTokens: 3_001, turns: 1, sessionID: "synthetic-response" });
+      expect(invokeTool).not.toHaveBeenCalled();
+      expect(fetcher).toHaveBeenCalledOnce();
+    });
+  });
+});
+
+it.each(cases.slice(0, 2))("$name does not map an explicit whole-task allowance to model output capacity", async ({ model, create }) => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ model, choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 100, completion_tokens: 100 } }));
+  await create(fetcher).run({ ...request, budget: { maxTaskTokens: 12_000 } }, vi.fn(), new AbortController().signal);
+  const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+  expect(body).not.toHaveProperty("max_tokens");
+});
+
+it("keeps explicit normal termination and legacy absent-metadata compatibility", () => {
+  for (const value of [undefined, null, "", "stop", "tool_calls", "function_call"]) expect(providerCompletionFailure(value)).toBeUndefined();
+});
+
+it.each(["length", "content_filter"])("direct Chat answer rejects %s even if its JSON parses", async finishReason => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ model: "glm-5.3", choices: [{ finish_reason: finishReason,
+    message: { content: JSON.stringify({ kind: "answer", title: "Reply", body: "Partial reply", citation_ids: [] }) } }],
+    usage: { prompt_tokens: 39_509, completion_tokens: 3_001 } }));
+  const provider = new ZhipuChatAnswerProvider({ apiKey: "synthetic-only", model: "glm-5.3", observer: null, fetcher });
+  await expect(provider.answer({ objective: "Summarize", mode: "unscoped_conversation",
+    prompt_snapshot: bundledPrompt("assistant/conversation"), context_blocks: [], allowed_citation_ids: [] }))
+    .rejects.toThrow(finishReason === "length" ? "PROVIDER_OUTPUT_INCOMPLETE" : "PROVIDER_RESPONSE_REJECTED");
+  expect(fetcher).toHaveBeenCalledOnce();
+});

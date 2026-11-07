@@ -1,0 +1,203 @@
+import CryptoKit
+import Foundation
+import Security
+
+struct CapsuleRecoveryResult: Sendable {
+    let draft: ContextCapsuleDraft
+    let expiredItemCount: Int
+}
+
+struct LocalCapsuleDeletionReceipt: Sendable {
+    let deletedFile: Bool
+    let deletedKey: Bool
+}
+
+protocol LocalCapsulePersisting: Sendable {
+    func load(accountID: String, now: Date) throws -> CapsuleRecoveryResult
+    func save(_ draft: ContextCapsuleDraft, accountID: String, now: Date) throws
+    func clear(accountID: String, deleteKey: Bool) throws -> LocalCapsuleDeletionReceipt
+}
+
+struct NullLocalCapsuleStore: LocalCapsulePersisting {
+    func load(accountID: String, now: Date) throws -> CapsuleRecoveryResult {
+        .init(draft: ContextCapsuleDraft(), expiredItemCount: 0)
+    }
+
+    func save(_ draft: ContextCapsuleDraft, accountID: String, now: Date) throws { }
+
+    func clear(accountID: String, deleteKey: Bool) throws -> LocalCapsuleDeletionReceipt {
+        .init(deletedFile: false, deletedKey: false)
+    }
+}
+
+final class SecureLocalCapsuleStore: LocalCapsulePersisting, @unchecked Sendable {
+    static let shared = SecureLocalCapsuleStore()
+
+    private let directory: URL
+    private let keyProvider: CapsuleKeyProviding
+    private let fileManager: FileManager
+
+    init(
+        directory: URL? = nil,
+        keyProvider: CapsuleKeyProviding = KeychainCapsuleKeyProvider(),
+        fileManager: FileManager = .default
+    ) {
+        self.fileManager = fileManager
+        self.keyProvider = keyProvider
+        self.directory = directory ?? fileManager
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "TalentSignal/Capsules", directoryHint: .isDirectory)
+    }
+
+    func load(accountID: String, now: Date = Date()) throws -> CapsuleRecoveryResult {
+        let file = fileURL(accountID: accountID)
+        guard fileManager.fileExists(atPath: file.path) else {
+            return .init(draft: ContextCapsuleDraft(), expiredItemCount: 0)
+        }
+        let encrypted = try Data(contentsOf: file)
+        let box = try AES.GCM.SealedBox(combined: encrypted)
+        let clear = try AES.GCM.open(box, using: SymmetricKey(data: try keyProvider.key(accountID: accountID)))
+        var envelope = try JSONDecoder().decode(Envelope.self, from: clear)
+        let before = envelope.draft.items.count
+        envelope.draft.items.removeAll { item in
+            item.capturedAt.addingTimeInterval(item.retention.localRecoveryLifetime) <= now
+        }
+        let hadPreparedDraft = envelope.draft.localPreparedDraft != nil
+        if let prepared = envelope.draft.localPreparedDraft,
+           prepared.expiresAt <= now || !envelope.draft.items.contains(where: { $0.id == prepared.sourceItemID }) {
+            envelope.draft.localPreparedDraft = nil
+        }
+        let ownershipCountBefore = envelope.draft.workflowOwnerships?.count ?? 0
+        envelope.draft.pruneWorkflowOwnerships(now: now)
+        let expired = before - envelope.draft.items.count
+        if expired > 0 {
+            envelope.draft.version += 1
+        }
+        if expired > 0
+            || (hadPreparedDraft && envelope.draft.localPreparedDraft == nil)
+            || ownershipCountBefore != (envelope.draft.workflowOwnerships?.count ?? 0) {
+            try save(envelope.draft, accountID: accountID, now: now)
+        }
+        return .init(draft: envelope.draft, expiredItemCount: expired)
+    }
+
+    func save(_ draft: ContextCapsuleDraft, accountID: String, now: Date = Date()) throws {
+        var retained = draft
+        retained.items.removeAll { item in
+            item.capturedAt.addingTimeInterval(item.retention.localRecoveryLifetime) <= now
+        }
+        if let prepared = retained.localPreparedDraft,
+           prepared.expiresAt <= now || !retained.items.contains(where: { $0.id == prepared.sourceItemID }) {
+            retained.localPreparedDraft = nil
+        }
+        // Workflow ownership rides the original item lifetime and may only
+        // shorten it: expired bindings and bindings whose source copy is gone
+        // are pruned here, never extended and never guessed for legacy items.
+        retained.pruneWorkflowOwnerships(now: now)
+        let file = fileURL(accountID: accountID)
+        guard !retained.items.isEmpty else {
+            if fileManager.fileExists(atPath: file.path) { try fileManager.removeItem(at: file) }
+            return
+        }
+        try prepareDirectory()
+        let clear = try JSONEncoder().encode(Envelope(savedAt: now, draft: retained))
+        let sealed = try AES.GCM.seal(clear, using: SymmetricKey(data: try keyProvider.key(accountID: accountID)))
+        guard let combined = sealed.combined else { throw LocalCapsuleStoreError.encryptionFailed }
+        try combined.write(to: file, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableFile = file
+        try mutableFile.setResourceValues(values)
+    }
+
+    func clear(accountID: String, deleteKey: Bool) throws -> LocalCapsuleDeletionReceipt {
+        let file = fileURL(accountID: accountID)
+        let deletedFile = fileManager.fileExists(atPath: file.path)
+        if deletedFile { try fileManager.removeItem(at: file) }
+        let deletedKey = deleteKey ? try keyProvider.deleteKey(accountID: accountID) : false
+        return .init(deletedFile: deletedFile, deletedKey: deletedKey)
+    }
+
+    private func prepareDirectory() throws {
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableDirectory = directory
+        try mutableDirectory.setResourceValues(values)
+    }
+
+    private func fileURL(accountID: String) -> URL {
+        let digest = SHA256.hash(data: Data(accountID.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appending(path: "\(digest).capsule")
+    }
+
+    private struct Envelope: Codable {
+        let savedAt: Date
+        var draft: ContextCapsuleDraft
+    }
+}
+
+protocol CapsuleKeyProviding: Sendable {
+    func key(accountID: String) throws -> Data
+    func deleteKey(accountID: String) throws -> Bool
+}
+
+struct KeychainCapsuleKeyProvider: CapsuleKeyProviding {
+    private let service = "com.talentsignal.macos.context-capsule"
+
+    func key(accountID: String) throws -> Data {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: accountID,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess, let data = result as? Data { return data }
+        guard status == errSecItemNotFound else { throw LocalCapsuleStoreError.keychain(status) }
+
+        var bytes = Data(count: 32)
+        let randomStatus = bytes.withUnsafeMutableBytes { buffer in
+            SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
+        }
+        guard randomStatus == errSecSuccess else { throw LocalCapsuleStoreError.keychain(randomStatus) }
+        let add: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: accountID,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecValueData as String: bytes
+        ]
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        guard addStatus == errSecSuccess else { throw LocalCapsuleStoreError.keychain(addStatus) }
+        return bytes
+    }
+
+    func deleteKey(accountID: String) throws -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: accountID
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        if status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else { throw LocalCapsuleStoreError.keychain(status) }
+        return true
+    }
+}
+
+enum LocalCapsuleStoreError: LocalizedError {
+    case encryptionFailed
+    case keychain(OSStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .encryptionFailed: "The local Capsule could not be encrypted."
+        case .keychain(let status): "The local Capsule keychain operation failed (\(status))."
+        }
+    }
+}

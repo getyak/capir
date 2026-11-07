@@ -1,0 +1,576 @@
+import XCTest
+@testable import TalentSignalMac
+
+@MainActor
+final class LiveBackendRelationshipServiceTests: XCTestCase {
+    func testReviewedCapsuleReachesCanonicalSettledTaskWithNoExternalEffects() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        #if !TS_MACOS_LIVE_E2E
+        guard environment["TS_MACOS_LIVE_E2E"] == "1" else {
+            throw XCTSkip("Set TS_MACOS_LIVE_E2E=1 with a seeded loopback backend to run the native contract E2E.")
+        }
+        #endif
+
+        let baseURL = try liveBackendURL(environment)
+        let service = try URLMacRelationshipService(
+            configuration: .init(
+                baseURL: baseURL,
+                accountSlug: environment["TS_MACOS_ACCOUNT_SLUG"] ?? "fixture-alpha",
+                userEmail: environment["TS_MACOS_USER_EMAIL"] ?? "recruiter@alpha.local"
+            )
+        )
+
+        let connected = try await service.loadWorkspace()
+        let scope: ConnectedRelationshipScope
+        switch connected {
+        case .connected(let value):
+            scope = value
+        case .canonical, .syntheticFixture:
+            XCTFail("Live load must establish a connected canonical scope before capture.")
+            return
+        }
+        let option = try seededScopeOption(in: scope)
+        let consequencePreflight = try XCTUnwrap(option.consequencePreflight)
+        XCTAssertEqual(consequencePreflight.milestone, "shortlist_review")
+        XCTAssertEqual(consequencePreflight.targetDate, "2026-10-30")
+        XCTAssertEqual(
+            consequencePreflight.openActions.first?.title,
+            "Prepare the exact client policy question"
+        )
+        XCTAssertFalse(scope.todayAttention.items.isEmpty)
+        XCTAssertGreaterThanOrEqual(scope.todayAttention.totalPursuitCount, 1)
+        var draft = ContextCapsuleDraft()
+        draft.purpose = "Identify the decision dependency and propose the smallest safe recruiter-owned next step."
+        draft.addSelectedText(
+            "The candidate said: I need the exact remote-work policy before Wednesday because another process moved earlier."
+        )
+        confirmCandidateAttribution(in: &draft)
+        let manifest = try draft.freeze(
+            accountID: scope.accountID,
+            pursuitID: option.pursuitID,
+            personID: option.personID
+        )
+
+        do {
+            _ = try await service.submit(manifest: manifest, taskLifecycle: TaskAdmissionTestHome(manifest: manifest, originalDraft: draft).observer)
+            XCTFail("Live submission must be denied until the recruiter explicitly confirms the exact relationship scope.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("explicitly confirm"))
+        }
+        try await service.confirmScope(.init(
+            pursuitID: option.pursuitID,
+            personID: option.personID,
+            relationshipContextID: option.relationshipContextID
+        ))
+
+        let submitted = try await service.submit(manifest: manifest, taskLifecycle: TaskAdmissionTestHome(manifest: manifest, originalDraft: draft).observer)
+        switch submitted {
+        case .canonical(let readback):
+            XCTAssertTrue(readback.provesCanonicalSafeReadback)
+            XCTAssertEqual(readback.workspaceID, scope.workspaceID)
+            XCTAssertEqual(readback.accountID, scope.accountID)
+            XCTAssertEqual(readback.pursuitID, option.pursuitID)
+            XCTAssertEqual(readback.personID, option.personID)
+            XCTAssertEqual(readback.relationshipContextID, option.relationshipContextID)
+            XCTAssertFalse(readback.captureID.isEmpty)
+            XCTAssertFalse(readback.evidenceFragmentIDs.isEmpty)
+            XCTAssertFalse(readback.taskID.isEmpty)
+            XCTAssertTrue(readback.externalEffects.isEmpty)
+            XCTAssertNotEqual(readback.displayMode, .working)
+            let run = try XCTUnwrap(readback.runAudit)
+            XCTAssertFalse(run.evidenceFragmentIDs.isEmpty)
+            XCTAssertEqual(run.externalEffects, [])
+            XCTAssertEqual(run.sourceAuthorizationState, "authorized")
+            XCTAssertNotNil(run.sourceAuthorizationExpiresAt)
+            let ownedAction = try XCTUnwrap(readback.presentation.actionProjections.first)
+            XCTAssertTrue(ownedAction.authority.contains("Existing owned action"))
+            XCTAssertTrue(ownedAction.authority.contains("no duplicate created"))
+            XCTAssertEqual(ownedAction.objectName, "Prepare the exact client policy question")
+            XCTAssertTrue(readback.presentation.dependency.contains("existing recruiter-owned action"))
+            XCTAssertTrue(readback.presentation.dependency.contains("does not justify a duplicate"))
+            XCTAssertFalse(readback.presentation.dependency.contains("No unresolved dependency"))
+        case .connected, .syntheticFixture:
+            XCTFail("A submitted live Capsule must not downgrade to connected-only or synthetic state.")
+        }
+    }
+
+    func testRelativeMeetingTimeReturnsExactClarificationAndNoEffect() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        #if !TS_MACOS_LIVE_E2E
+        guard environment["TS_MACOS_LIVE_E2E"] == "1" else {
+            throw XCTSkip("Set TS_MACOS_LIVE_E2E=1 with a seeded loopback backend to run the native contract E2E.")
+        }
+        #endif
+
+        let baseURL = try liveBackendURL(environment)
+        let service = try URLMacRelationshipService(configuration: .init(
+            baseURL: baseURL,
+            accountSlug: environment["TS_MACOS_ACCOUNT_SLUG"] ?? "fixture-alpha",
+            userEmail: environment["TS_MACOS_USER_EMAIL"] ?? "recruiter@alpha.local"
+        ))
+        guard case .connected(let scope) = try await service.loadWorkspace() else {
+            return XCTFail("Live load must establish a canonical scope.")
+        }
+        let option = try seededScopeOption(in: scope)
+        try await service.confirmScope(option.selection)
+
+        var draft = ContextCapsuleDraft()
+        draft.purpose = "Clarify Thursday afternoon with no timezone, duration, or meeting consent without inferring scheduling authority."
+        draft.addSelectedText("The candidate said Thursday afternoon, with no timezone, duration, or meeting consent stated.")
+        confirmCandidateAttribution(in: &draft)
+        let manifest = try draft.freeze(
+            accountID: scope.accountID,
+            pursuitID: option.pursuitID,
+            personID: option.personID
+        )
+
+        guard case .canonical(let readback) = try await service.submit(manifest: manifest, taskLifecycle: TaskAdmissionTestHome(manifest: manifest, originalDraft: draft).observer) else {
+            return XCTFail("An ambiguous time must return canonical clarification readback.")
+        }
+        XCTAssertTrue(readback.provesCanonicalSafeReadback)
+        let diagnostic = "objective=\(readback.runAudit?.objective ?? "missing") · summary=\(readback.presentation.changedSummary) · proposal=\(readback.presentation.proposal)"
+        XCTAssertEqual(readback.taskStatus, "waiting_for_clarification", diagnostic)
+        XCTAssertEqual(readback.displayMode, .clarification, diagnostic)
+        XCTAssertNil(readback.pendingDecision)
+        XCTAssertNil(readback.receipt)
+        XCTAssertTrue(readback.externalEffects.isEmpty)
+        let clarification = try XCTUnwrap(readback.clarification, diagnostic)
+        XCTAssertTrue(clarification.question.contains("calendar date"))
+        XCTAssertTrue(clarification.question.contains("timezone"))
+        XCTAssertTrue(clarification.question.contains("duration"))
+        XCTAssertTrue(clarification.question.contains("meeting consent"))
+        XCTAssertEqual(readback.presentation.proposal, clarification.question)
+        XCTAssertTrue(readback.presentation.dependency.contains("timezone"))
+    }
+
+    func testCanonicalProposalRequiresExplicitDecisionAndReturnsReceipt() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        #if !TS_MACOS_LIVE_E2E
+        guard environment["TS_MACOS_LIVE_E2E"] == "1" else {
+            throw XCTSkip("Set TS_MACOS_LIVE_E2E=1 with the gated deterministic proposal provider.")
+        }
+        #endif
+
+        let baseURL = try liveProxyURL(environment)
+        let recoveryDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "talent-signal-live-relaunch-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer {
+            if FileManager.default.fileExists(atPath: recoveryDirectory.path) {
+                try? FileManager.default.removeItem(at: recoveryDirectory)
+            }
+        }
+        let recoveryStore = SecureUnknownResolutionStore(
+            directory: recoveryDirectory,
+            keyProvider: LiveE2EUnknownResolutionKeyProvider()
+        )
+        let configuration = URLMacRelationshipService.Configuration(
+            baseURL: baseURL,
+            accountSlug: environment["TS_MACOS_ACCOUNT_SLUG"] ?? "fixture-alpha",
+            userEmail: environment["TS_MACOS_USER_EMAIL"] ?? "recruiter@alpha.local"
+        )
+        let service = try URLMacRelationshipService(
+            configuration: configuration,
+            unknownResolutionStore: recoveryStore
+        )
+        let connected = try await service.loadWorkspace()
+        guard case .connected(let scope) = connected else {
+            return XCTFail("Live load must establish a canonical scope.")
+        }
+        let option = try seededScopeOption(in: scope)
+        try await service.confirmScope(option.selection)
+
+        var draft = ContextCapsuleDraft()
+        draft.purpose = "[synthetic-macos-proposal-e2e] Form one reviewable relationship dependency and perform no external effect."
+        draft.addSelectedText(
+            "The candidate asked for the exact remote-work policy before Wednesday."
+        )
+        confirmCandidateAttribution(in: &draft)
+        let manifest = try draft.freeze(
+            accountID: scope.accountID,
+            pursuitID: option.pursuitID,
+            personID: option.personID
+        )
+        let submitted = try await service.submit(manifest: manifest, taskLifecycle: TaskAdmissionTestHome(manifest: manifest, originalDraft: draft).observer)
+        guard case .canonical(let awaiting) = submitted else {
+            return XCTFail("The governed proposal must return canonical readback.")
+        }
+        guard let initialReview = awaiting.pendingDecision else {
+            return XCTFail(
+                "The governed proposal must return a canonical Decision Bundle; task status was \(awaiting.taskStatus), mode was \(awaiting.displayMode.rawValue), proposal copy was \(awaiting.presentation.proposal)."
+            )
+        }
+        XCTAssertTrue(awaiting.provesCanonicalSafeReadback)
+        XCTAssertEqual(awaiting.displayMode, .needsDecision)
+        XCTAssertNil(awaiting.receipt)
+        XCTAssertFalse(initialReview.items.isEmpty)
+        XCTAssertTrue(initialReview.items.allSatisfy { !$0.evidenceRefs.isEmpty })
+        let run = try XCTUnwrap(awaiting.runAudit)
+        XCTAssertFalse(run.eligibleCapabilities.isEmpty)
+        if let value = run.maxTurns { XCTAssertGreaterThan(value, 0) }
+        if let value = run.maxToolCalls { XCTAssertGreaterThan(value, 0) }
+        if let value = run.maxTaskTokens { XCTAssertGreaterThan(value, 0) }
+        XCTAssertEqual(run.externalEffects, [])
+
+        let todayOpened = try await service.openTodayProposalReview(
+            pursuitID: option.pursuitID,
+            proposalID: initialReview.proposalID
+        )
+        guard case .canonical(let todayReview) = todayOpened,
+              let todayDecision = todayReview.pendingDecision else {
+            return XCTFail("A proposal-led Today item must open its exact active Decision Bundle.")
+        }
+        XCTAssertEqual(todayReview.taskID, awaiting.taskID)
+        XCTAssertEqual(todayDecision.bundleID, initialReview.bundleID)
+        XCTAssertEqual(todayDecision.proposalID, initialReview.proposalID)
+        XCTAssertEqual(todayReview.displayMode, .needsDecision)
+        XCTAssertTrue(todayReview.externalEffects.isEmpty)
+
+        let action = try XCTUnwrap(awaiting.presentation.actionProjections.first)
+        let reopened = try await service.openProjection(.init(objectID: action.id, route: action.route))
+        guard case .canonical(let refreshed) = reopened,
+              let review = refreshed.pendingDecision else {
+            return XCTFail("Action Center must re-read the exact canonical Task and Decision Bundle.")
+        }
+        XCTAssertEqual(review.bundleID, initialReview.bundleID)
+        XCTAssertEqual(refreshed.taskID, awaiting.taskID)
+
+        let firstResolution = try await service.resolveDecision(.init(
+            bundleID: review.bundleID,
+            taskID: review.taskID,
+            taskRevision: review.taskRevision,
+            bundleRevision: review.bundleRevision,
+            proposalID: review.proposalID,
+            baseRevision: review.baseRevision,
+            reason: "The synthetic recruiter reviewed exact evidence, the before/proposed diff, and the no-external-effect boundary.",
+            decisions: review.items.map { .init(itemID: $0.id, choice: .accept) }
+        ))
+
+        #if TS_MACOS_LIVE_E2E
+        guard case .canonical(let unknown) = firstResolution else {
+            return XCTFail("The dropped response must produce a canonical outcome-unknown readback.")
+        }
+        XCTAssertEqual(unknown.displayMode, .outcomeUnknown)
+        XCTAssertNil(unknown.receipt)
+        let originalOperationID = try XCTUnwrap(
+            unknown.presentation.actionProjections.first?.id
+        )
+
+        // A new service instance is the process-relaunch boundary. It must
+        // restore the same operation from encrypted local correlation state
+        // without issuing another decision POST.
+        let relaunchedService = try URLMacRelationshipService(
+            configuration: configuration,
+            unknownResolutionStore: recoveryStore
+        )
+        guard case .canonical(let restored) = try await relaunchedService.loadWorkspace() else {
+            return XCTFail("Relaunch must restore the durable outcome-unknown operation.")
+        }
+        XCTAssertEqual(restored.displayMode, .outcomeUnknown)
+        XCTAssertEqual(restored.presentation.actionProjections.first?.id, originalOperationID)
+        XCTAssertTrue(restored.presentation.dependency.contains("No new decision request was sent"))
+        let finalService = relaunchedService
+        let finalResolution = try await relaunchedService.reconcileDecisionOutcome()
+        #else
+        let finalService = service
+        let finalResolution = firstResolution
+        #endif
+
+        guard case .canonical(let applied) = finalResolution,
+              let receipt = applied.receipt else {
+            return XCTFail("An accepted Decision Bundle must return a canonical receipt.")
+        }
+        XCTAssertTrue(applied.provesCanonicalSafeReadback)
+        XCTAssertEqual(applied.displayMode, .receipt)
+        XCTAssertEqual(applied.taskStatus, "completed")
+        XCTAssertNil(applied.pendingDecision)
+        XCTAssertEqual(receipt.proposalID, review.proposalID)
+        XCTAssertEqual(receipt.pursuitID, option.pursuitID)
+        XCTAssertGreaterThanOrEqual(receipt.afterRevision, receipt.beforeRevision)
+        XCTAssertTrue(receipt.externalEffects.isEmpty)
+        XCTAssertTrue(applied.externalEffects.isEmpty)
+
+        let receiptAction = try XCTUnwrap(applied.presentation.actionProjections.first)
+        let receiptReadback = try await finalService.openProjection(.init(
+            objectID: receiptAction.id,
+            route: receiptAction.route
+        ))
+        guard case .canonical(let verifiedAgain) = receiptReadback else {
+            return XCTFail("Receipt route must re-read canonical Task and operation authority.")
+        }
+        XCTAssertEqual(verifiedAgain.receipt?.id, receipt.id)
+
+        #if TS_MACOS_LIVE_E2E
+        let proxy = try await jsonRequest(baseURL.appending(path: "__response_loss_proxy/state"))
+        XCTAssertEqual(proxy["review_post_count"] as? Int, 1)
+        XCTAssertEqual(proxy["dropped_response_count"] as? Int, 1)
+        XCTAssertEqual(proxy["blocked_operation_lookup_count"] as? Int, 4)
+        XCTAssertGreaterThanOrEqual(proxy["operation_lookup_count"] as? Int ?? 0, 5)
+        XCTAssertNil(try recoveryStore.load(
+            scopeKey: [
+                configuration.baseURL.absoluteString,
+                configuration.accountSlug,
+                configuration.userEmail.lowercased()
+            ].joined(separator: "|")
+        ))
+        #endif
+    }
+
+    func testRevokedEvidenceAfterPreviewBlocksDecisionBeforeAnyReviewWrite() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        #if !TS_MACOS_LIVE_E2E
+        guard environment["TS_MACOS_LIVE_E2E"] == "1" else {
+            throw XCTSkip("Set TS_MACOS_LIVE_E2E=1 with the seeded loopback backend.")
+        }
+        #endif
+
+        let backendURL = try liveBackendURL(environment)
+        let proxyURL = try liveProxyURL(environment)
+        let service = try URLMacRelationshipService(configuration: .init(
+            baseURL: proxyURL,
+            accountSlug: environment["TS_MACOS_ACCOUNT_SLUG"] ?? "fixture-alpha",
+            userEmail: environment["TS_MACOS_USER_EMAIL"] ?? "recruiter@alpha.local"
+        ))
+        guard case .connected(let scope) = try await service.loadWorkspace() else {
+            return XCTFail("Live load must establish a canonical scope.")
+        }
+        let option = try seededScopeOption(in: scope)
+        try await service.confirmScope(option.selection)
+
+        var draft = ContextCapsuleDraft()
+        draft.purpose = "[synthetic-macos-proposal-e2e] Preview one proposal, revoke its source, and prove zero decision writes."
+        draft.addSelectedText("The candidate asked for written remote-work policy before Wednesday.")
+        confirmCandidateAttribution(in: &draft)
+        let manifest = try draft.freeze(
+            accountID: scope.accountID,
+            pursuitID: option.pursuitID,
+            personID: option.personID
+        )
+        guard case .canonical(let awaiting) = try await service.submit(manifest: manifest, taskLifecycle: TaskAdmissionTestHome(manifest: manifest, originalDraft: draft).observer),
+              let review = awaiting.pendingDecision else {
+            return XCTFail("The synthetic scenario must reach a reviewable Decision Bundle.")
+        }
+
+        let token = try await loginToken(baseURL: backendURL)
+        let capture = try await jsonRequest(
+            backendURL.appending(path: "v1/captures/\(awaiting.captureID)"),
+            token: token
+        )
+        let captureVersion = try XCTUnwrap(capture["version"] as? Int)
+        let revoked = try await jsonRequest(
+            backendURL.appending(path: "v1/captures/\(awaiting.captureID)/source-authorization-decisions"),
+            method: "POST",
+            token: token,
+            body: [
+                "idempotency_key": "macos-revoke-\(UUID().uuidString.lowercased())",
+                "expected_capture_version": captureVersion,
+                "decision": "revoke",
+                "reason": "Synthetic test: revoke after preview and before decision confirmation."
+            ]
+        )
+        XCTAssertEqual(revoked["authorization_state"] as? String, "revoked")
+        let before = try await proxyState(proxyURL)
+
+        do {
+            _ = try await service.resolveDecision(.init(
+                bundleID: review.bundleID,
+                taskID: review.taskID,
+                taskRevision: review.taskRevision,
+                bundleRevision: review.bundleRevision,
+                proposalID: review.proposalID,
+                baseRevision: review.baseRevision,
+                reason: "This must never reach the decision endpoint after revocation.",
+                decisions: review.items.map { .init(itemID: $0.id, choice: .accept) }
+            ))
+            XCTFail("Revoked evidence must fail closed before any decision write.")
+        } catch {
+            guard case .staleAuthority = error as? RelationshipServiceError else {
+                return XCTFail("Revoked evidence must return the typed stale-authority path, not a generic failure: \(error)")
+            }
+            XCTAssertTrue(error.localizedDescription.contains("revoked, expired, deleted, purged, changed"))
+        }
+
+        let after = try await proxyState(proxyURL)
+        XCTAssertEqual(after, before, "Evidence revalidation must fail before a decision POST reaches the proxy.")
+
+        let staleTask = try await jsonRequest(
+            backendURL.appending(path: "v1/agent-tasks/\(awaiting.taskID)"),
+            token: token
+        )
+        let task = try XCTUnwrap(staleTask["task"] as? [String: Any])
+        let artifact = try XCTUnwrap(task["artifact"] as? [String: Any])
+        XCTAssertEqual(task["status"] as? String, "needs_rebase")
+        XCTAssertEqual(artifact["status"] as? String, "stale")
+        XCTAssertEqual(task["external_effects"] as? [String], [])
+    }
+
+    func testSubmittedCapsuleVersionCannotGainEvidenceAddedToALaterVersion() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        #if !TS_MACOS_LIVE_E2E
+        guard environment["TS_MACOS_LIVE_E2E"] == "1" else {
+            throw XCTSkip("Set TS_MACOS_LIVE_E2E=1 with the seeded loopback backend.")
+        }
+        #endif
+
+        let backendURL = try liveBackendURL(environment)
+        let service = try URLMacRelationshipService(configuration: .init(
+            baseURL: backendURL,
+            accountSlug: environment["TS_MACOS_ACCOUNT_SLUG"] ?? "fixture-alpha",
+            userEmail: environment["TS_MACOS_USER_EMAIL"] ?? "recruiter@alpha.local"
+        ))
+        guard case .connected(let scope) = try await service.loadWorkspace() else {
+            return XCTFail("Live load must establish a canonical scope.")
+        }
+        let option = try seededScopeOption(in: scope)
+        try await service.confirmScope(option.selection)
+
+        var draft = ContextCapsuleDraft()
+        draft.purpose = "Prove that an existing Run remains bound to its original immutable Capsule manifest."
+        draft.addSelectedText("Version one evidence: the candidate requested the written policy.")
+        confirmCandidateAttribution(in: &draft)
+        let firstManifest = try draft.freeze(
+            accountID: scope.accountID,
+            pursuitID: option.pursuitID,
+            personID: option.personID
+        )
+        guard case .canonical(let first) = try await service.submit(manifest: firstManifest, taskLifecycle: TaskAdmissionTestHome(manifest: firstManifest, originalDraft: draft).observer),
+              let firstRun = first.runAudit else {
+            return XCTFail("The first immutable Capsule version must produce canonical Run readback.")
+        }
+
+        let firstItemID = try XCTUnwrap(draft.items.first?.id)
+        draft.remove(id: firstItemID)
+        draft.addSelectedText("Version two evidence: this sentence was captured only after the first Run settled.")
+        confirmCandidateAttribution(in: &draft)
+        let secondManifest = try draft.freeze(
+            accountID: scope.accountID,
+            pursuitID: option.pursuitID,
+            personID: option.personID
+        )
+        XCTAssertGreaterThan(secondManifest.version, firstManifest.version)
+        guard case .canonical(let second) = try await service.submit(manifest: secondManifest, taskLifecycle: TaskAdmissionTestHome(manifest: secondManifest, originalDraft: draft).observer),
+              let secondRun = second.runAudit else {
+            return XCTFail("The edited Capsule must create a separate canonical Run.")
+        }
+
+        XCTAssertNotEqual(first.taskID, second.taskID)
+        XCTAssertNotEqual(first.captureID, second.captureID)
+        XCTAssertNotEqual(firstRun.runID, secondRun.runID)
+        XCTAssertTrue(Set(firstRun.evidenceFragmentIDs).isDisjoint(with: Set(secondRun.evidenceFragmentIDs)))
+
+        let token = try await loginToken(baseURL: backendURL)
+        let oldTaskEnvelope = try await jsonRequest(
+            backendURL.appending(path: "v1/agent-tasks/\(first.taskID)"),
+            token: token
+        )
+        let oldTask = try XCTUnwrap(oldTaskEnvelope["task"] as? [String: Any])
+        let oldRunEnvelope = try await jsonRequest(
+            backendURL.appending(path: "v1/agent-runs/\(firstRun.runID)"),
+            token: token
+        )
+        let oldRun = try XCTUnwrap(oldRunEnvelope["run"] as? [String: Any])
+        let oldManifest = try XCTUnwrap(oldRun["context_manifest"] as? [String: Any])
+        let oldEvidence = try XCTUnwrap(oldManifest["evidence"] as? [[String: Any]])
+        let oldEvidenceIDs = Set(oldEvidence.compactMap { $0["fragment_id"] as? String })
+
+        XCTAssertEqual(oldTask["id"] as? String, first.taskID)
+        XCTAssertEqual(oldEvidenceIDs, Set(firstRun.evidenceFragmentIDs))
+        XCTAssertTrue(oldEvidenceIDs.isDisjoint(with: Set(secondRun.evidenceFragmentIDs)))
+        XCTAssertEqual(oldTask["external_effects"] as? [String], [])
+    }
+
+    private func confirmCandidateAttribution(in draft: inout ContextCapsuleDraft) {
+        guard let itemID = draft.items.last?.id else { return }
+        draft.setActorKind(id: itemID, value: .candidate)
+        draft.confirmAttribution(id: itemID)
+    }
+
+    private func seededScopeOption(
+        in scope: ConnectedRelationshipScope
+    ) throws -> RelationshipScopeOption {
+        try XCTUnwrap(scope.options.first {
+            $0.pursuitTitle == "Synthetic macOS Relationship Workbench E2E"
+        })
+    }
+
+    private func liveProxyURL(_ environment: [String: String]) throws -> URL {
+        if let explicit = environment["TS_MACOS_RESPONSE_LOSS_PROXY_URL"] {
+            return try XCTUnwrap(URL(string: explicit))
+        }
+        if let configured = try liveE2EEndpoints()["response_loss_proxy_url"] {
+            return try XCTUnwrap(URL(string: configured))
+        }
+        let backend = try liveBackendURL(environment)
+        var components = try XCTUnwrap(URLComponents(url: backend, resolvingAgainstBaseURL: false))
+        components.port = (components.port ?? 44317) + 1
+        return try XCTUnwrap(components.url)
+    }
+
+    private func liveBackendURL(_ environment: [String: String]) throws -> URL {
+        if let explicit = environment["TS_MACOS_BACKEND_URL"] {
+            return try XCTUnwrap(URL(string: explicit))
+        }
+        let configured = try liveE2EEndpoints()["backend_url"] ?? "http://127.0.0.1:44317"
+        return try XCTUnwrap(URL(string: configured))
+    }
+
+    private func liveE2EEndpoints() throws -> [String: String] {
+        #if TS_MACOS_LIVE_E2E
+        let url = URL(filePath: "/tmp/talent-signal-macos-live-e2e-endpoints.json")
+        let data = try Data(contentsOf: url)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+        #else
+        return [:]
+        #endif
+    }
+
+    private func loginToken(baseURL: URL) async throws -> String {
+        let response = try await jsonRequest(
+            baseURL.appending(path: "v1/auth/simulated-login"),
+            method: "POST",
+            body: [
+                "account_slug": "fixture-alpha",
+                "user_email": "recruiter@alpha.local",
+                "client_label": "macos-revoked-evidence-e2e"
+            ]
+        )
+        return try XCTUnwrap(response["access_token"] as? String)
+    }
+
+    private func proxyState(_ baseURL: URL) async throws -> Int {
+        let state = try await jsonRequest(baseURL.appending(path: "__response_loss_proxy/state"))
+        return try XCTUnwrap(state["review_post_count"] as? Int)
+    }
+
+    private func jsonRequest(
+        _ url: URL,
+        method: String = "GET",
+        token: String? = nil,
+        body: [String: Any]? = nil
+    ) async throws -> [String: Any] {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization") }
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = try XCTUnwrap((response as? HTTPURLResponse)?.statusCode)
+        guard (200...299).contains(status) else {
+            let text = String(data: data, encoding: .utf8) ?? "unreadable body"
+            throw NSError(
+                domain: "LiveBackendRelationshipServiceTests",
+                code: status,
+                userInfo: [NSLocalizedDescriptionKey: "Synthetic request \(method) \(url.path) returned \(status): \(text)"]
+            )
+        }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+private struct LiveE2EUnknownResolutionKeyProvider: UnknownResolutionKeyProviding {
+    func key(scopeKey: String) throws -> Data {
+        Data(repeating: 0x3c, count: 32)
+    }
+}

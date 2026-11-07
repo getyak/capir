@@ -1,0 +1,77 @@
+import SwiftUI
+
+/// Presentation only: owners supply observed notices and explicit actions.
+/// No browser, capture, account, or persistence runtime starts from this view.
+struct WorkspaceRecoveryNotices: View {
+    let downloadStatus: String?
+    let workbenchNotice: String?
+    let browserLaunchFailure: String?
+    let dismissDownload: () -> Void
+    let dismissWorkbenchNotice: () -> Void
+    let retryBrowser: () -> Void
+    let dismissBrowserFailure: () -> Void
+
+    var body: some View {
+        if downloadStatus != nil || workbenchNotice != nil || browserLaunchFailure != nil {
+            ViewThatFits(in: .vertical) {
+                notices.fixedSize(horizontal: false, vertical: true)
+                ScrollView(.vertical) {
+                    notices
+                }
+                .frame(maxWidth: 560, maxHeight: .infinity, alignment: .topLeading)
+                .accessibilityLabel("工作区恢复提示")
+                .accessibilityIdentifier("workspace.recoveryNoticeScroll")
+            }
+        }
+    }
+
+    private var notices: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let status = downloadStatus {
+                HStack {
+                    Text(status).font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+                    Button("关闭", action: dismissDownload)
+                        .accessibilityLabel("关闭日历文件提示")
+                }
+                .padding(12)
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .accessibilityElement(children: .contain)
+            }
+            if let notice = workbenchNotice {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text(notice).font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+                    Button("关闭", action: dismissWorkbenchNotice)
+                        .accessibilityLabel("关闭账号设置恢复提示")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: 560, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityIdentifier("workspace.settingsRecoveryNotice")
+            }
+            if let notice = browserLaunchFailure {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "safari")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text(notice).font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+                    Button("重试", action: retryBrowser)
+                        .accessibilityLabel("重新打开账号与偏好")
+                    Button("关闭", action: dismissBrowserFailure)
+                        .accessibilityLabel("关闭浏览器打开失败提示")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: 560, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityIdentifier("workspace.browserLaunchFailure")
+            }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
+        .padding(12)
+    }
+}

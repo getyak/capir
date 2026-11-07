@@ -1,0 +1,71 @@
+import type { Pool } from "pg";
+
+import type { ConversationQueueExecutionResult } from "./conversationQueueCompletion.js";
+import { savedMemoryDependenciesAdmissible } from "./savedMemoryLineage.js";
+
+/**
+ * One stored queue result as the runner may act on it.
+ *
+ * A stored result is the replay body of a completed run: it must never be
+ * re-persisted after its sources withdraw. When saved-Memory lineage (or the
+ * shared source retraction machinery) withdraws the answer's sources, the
+ * stored body is scrubbed to a marker that carries only task identity, and
+ * only {@link readStoredConversationQueueResult} interprets it.
+ */
+export type StoredConversationQueueResult =
+  | { state: "none" }
+  | { state: "withdrawn"; taskID: string | null }
+  | { state: "stored"; result: ConversationQueueExecutionResult };
+
+export function isWithdrawnConversationQueueResult(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { source_context_unavailable?: unknown }).source_context_unavailable ===
+      true
+  );
+}
+
+/**
+ * Read the stored replay body defensively: a scrubbed, unrecognizable, foreign
+ * or no-longer-current body is withdrawn truth, never an invitation to replay
+ * unknown derived text. An absent marker proves nothing (legacy writers never
+ * stamped one), so durable dependency availability and owner scope decide.
+ */
+export async function readStoredConversationQueueResult(
+  pool: Pool,
+  accountId: string,
+  entryId: string,
+): Promise<StoredConversationQueueResult> {
+  const row = (
+    await pool.query<{ result: unknown; created_by_user_id: string }>(
+      "SELECT result, created_by_user_id FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+      [accountId, entryId],
+    )
+  ).rows[0];
+  const raw = row?.result ?? null;
+  if (raw === null || raw === undefined) return { state: "none" };
+  if (isWithdrawnConversationQueueResult(raw)) {
+    return {
+      state: "withdrawn",
+      taskID: (raw as { task_id?: string }).task_id ?? null,
+    };
+  }
+  const body = (raw as { body?: { task_id?: unknown } }).body;
+  if (
+    typeof raw !== "object" ||
+    typeof body !== "object" ||
+    body === null ||
+    typeof body.task_id !== "string"
+  ) {
+    return { state: "withdrawn", taskID: null };
+  }
+  const admissible = await savedMemoryDependenciesAdmissible(
+    pool,
+    accountId,
+    row!.created_by_user_id,
+    body.task_id,
+  );
+  if (!admissible) return { state: "withdrawn", taskID: body.task_id };
+  return { state: "stored", result: raw as ConversationQueueExecutionResult };
+}

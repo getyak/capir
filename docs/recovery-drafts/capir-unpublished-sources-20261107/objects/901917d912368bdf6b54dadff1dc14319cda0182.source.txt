@@ -1,0 +1,247 @@
+import { events } from './sse.js';
+import { boundedBody, providerHeaders, type RequestOptions } from './provider.js';
+import { fail, LIMIT, numeric, object, type CompactionBlock, type Message, type ModelProfile, type Usage, type WireMessage } from './types.js';
+import type { ModelCapacity } from './capacity.js';
+
+export const COMPACTION_BETA = 'compact-2026-09-04';
+const unknownUsage = (): Usage => ({ input_tokens: null, output_tokens: null, total_tokens: null });
+function parse(text: string): Record<string, unknown> {
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { fail('CAPIR_MODEL_PROTOCOL', 'Context endpoint returned malformed JSON.', 3); }
+  if (!object(value)) fail('CAPIR_MODEL_PROTOCOL', 'Context endpoint returned an invalid object.', 3);
+  return value;
+}
+function positive(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (numeric(value) === null || value === 0) fail('CAPIR_MODEL_PROTOCOL', 'Context metadata contains an invalid capacity.', 3);
+  return value as number;
+}
+function sum(values: (number | null)[]): number | null {
+  if (!values.length || values.some(value => value === null)) return null;
+  const total = (values as number[]).reduce((a, b) => a + b, 0);
+  return Number.isSafeInteger(total) ? total : null;
+}
+/** Latest provider snapshots, never counted estimates or repeated SSE additions. */
+function observeUsage(previous: Usage, value: unknown): Usage {
+  if (!object(value)) return previous;
+  if (Object.hasOwn(value, 'iterations')) {
+    if (!Array.isArray(value.iterations) || !value.iterations.length) return unknownUsage();
+    const iterations = value.iterations.map(item => object(item) ? item : {});
+    const input = sum(iterations.map(item => numeric(item.input_tokens)));
+    const output = sum(iterations.map(item => numeric(item.output_tokens)));
+    return { input_tokens: input, output_tokens: output, total_tokens: sum([input, output]) };
+  }
+  // A control call's top-level zero means no answer, not zero compaction cost.
+  // Without iterations the control accounting remains unknown.
+  return previous;
+}
+function signedBlock(value: unknown): CompactionBlock {
+  if (!object(value) || value.type !== 'compaction' || typeof value.content !== 'string' || !value.content.trim() || typeof value.signature !== 'string' || !value.signature.trim())
+    fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Compaction did not return one complete signed block; no checkpoint was installed.', 3);
+  return value as CompactionBlock;
+}
+async function http(response: Response, signal: AbortSignal): Promise<void> {
+  if (response.ok) return;
+  await response.body?.cancel();
+  signal.throwIfAborted();
+  fail('CAPIR_MODEL_HTTP', `Context endpoint HTTP ${response.status}; no automatic retry was made.`, response.status === 401 || response.status === 403 ? 4 : response.status === 429 ? 5 : 3);
+}
+
+/** One lifetime per selected endpoint/key/model. No credential-bearing cache keys. */
+export class NativeContext {
+  private checkpoint: { block: CompactionBlock; covered: number } | undefined;
+  private unsupportedCount = new Set<string>();
+  private capability: { input: number | null; output: number | null; support: 'supported' | 'unsupported' | 'unknown' | 'capability_probe_rejected' } | undefined;
+  reset(): void { this.checkpoint = undefined; }
+  private view(history: readonly Message[], end = history.length, checkpoint = this.checkpoint): WireMessage[] {
+    return [...(checkpoint ? [{ role: 'assistant' as const, content: [checkpoint.block] as [CompactionBlock] }] : []), ...history.slice(checkpoint?.covered ?? 0, end)];
+  }
+  private headers(profile: ModelProfile, key: string, beta: boolean): Record<string, string> {
+    return { ...providerHeaders(profile, key), ...(beta ? { 'anthropic-beta': COMPACTION_BETA } : {}) };
+  }
+  private async count(profile: ModelProfile, key: string, options: RequestOptions, messages: WireMessage[], beta: boolean, signal: AbortSignal, check: () => void): Promise<number | null> {
+    const namespace = beta ? COMPACTION_BETA : 'ordinary';
+    if (this.unsupportedCount.has(namespace)) return null;
+    check();
+    const response = await fetch(profile.base_url + '/messages/count_tokens', {
+      method: 'POST', headers: this.headers(profile, key, beta), redirect: 'error', signal,
+      body: JSON.stringify({ model: options.model, messages, ...(options.system ? { system: options.system } : {}) }),
+    });
+    if ([404, 405, 501].includes(response.status)) {
+      await response.body?.cancel(); check(); this.unsupportedCount.add(namespace); return null;
+    }
+    await http(response, signal);
+    const data = parse(await boundedBody(response, signal, LIMIT.discovery)); check();
+    const count = numeric(data.input_tokens);
+    if (count === null) fail('CAPIR_MODEL_PROTOCOL', 'Token counting returned no valid input estimate.', 3);
+    return count;
+  }
+  private async probe(profile: ModelProfile, key: string, options: RequestOptions, signal: AbortSignal, check: () => void) {
+    if (this.capability) return this.capability;
+    check();
+    const response = await fetch(profile.base_url + '/models/' + encodeURIComponent(options.pinnedModel!), {
+      headers: this.headers(profile, key, true), redirect: 'error', signal,
+    });
+    if ([400, 404, 405, 501].includes(response.status)) {
+      await response.body?.cancel(); check();
+      return this.capability = { input: null, output: null, support: response.status === 400 ? 'capability_probe_rejected' : 'unsupported' };
+    }
+    await http(response, signal);
+    const data = parse(await boundedBody(response, signal, LIMIT.discovery)); check();
+    if (data.type !== 'model' || data.id !== options.pinnedModel)
+      fail('CAPIR_MODEL_IDENTITY', 'Compaction capability does not match the pinned model.', 3);
+    const input = positive(data.max_input_tokens), output = positive(data.max_tokens);
+    const capabilities = object(data.capabilities) ? data.capabilities : {};
+    const compact = object(capabilities.compaction) ? capabilities.compaction : {};
+    const summarize = object(compact.summarize) ? compact.summarize : {};
+    const support = compact.supported === true && summarize.supported === true ? 'supported' : compact.supported === false || summarize.supported === false ? 'unsupported' : 'unknown';
+    return this.capability = { input, output, support };
+  }
+  private async compact(profile: ModelProfile, key: string, options: RequestOptions, messages: WireMessage[], signal: AbortSignal, controls: Usage[]): Promise<CompactionBlock> {
+    let usage = unknownUsage();
+    try {
+      signal.throwIfAborted();
+      const response = await fetch(profile.base_url + '/messages', {
+        method: 'POST', headers: this.headers(profile, key, true), redirect: 'error', signal,
+        body: JSON.stringify({ model: options.model, max_tokens: options.maxTokens, stream: options.stream, messages, ...(options.system ? { system: options.system } : {}), compaction: { type: 'summarize' } }),
+      });
+      await http(response, signal);
+      let block: CompactionBlock | undefined;
+      let started = false, closed = false, stopped = false;
+      let reason: string | null = null;
+      const validate = (message: Record<string, unknown>) => {
+        usage = observeUsage(usage, message.usage);
+        if (message.model !== options.pinnedModel) fail('CAPIR_MODEL_IDENTITY', 'Compaction response does not match the pinned model.', 3);
+      };
+      const terminal = (value: unknown) => {
+        if (typeof value !== 'string' || reason !== null)
+          fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Compaction terminal reason is missing or duplicated.', 3);
+        reason = value;
+      };
+      if (options.stream) {
+        if (!response.headers.get('content-type')?.toLowerCase().includes('text/event-stream') || !response.body) {
+          await response.body?.cancel();
+          signal.throwIfAborted();
+          fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Expected a compaction SSE response.', 3);
+        }
+        for await (const event of events(response.body, signal)) {
+          if (event.event === 'ping') continue;
+          const data = parse(event.data);
+          usage = observeUsage(usage, data.usage);
+          if (data.error) fail('CAPIR_MODEL_PROVIDER_ERROR', 'Compaction reported a provider error; no checkpoint was installed.', 3);
+          if (data.type !== event.event || stopped) fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Invalid or late compaction event.', 3);
+          if (event.event === 'error') {
+            usage = observeUsage(usage, data.usage);
+            fail('CAPIR_MODEL_PROVIDER_ERROR', 'Compaction reported an in-band error; no checkpoint was installed.', 3);
+          }
+          if (event.event === 'message_start') {
+            if (started || !object(data.message)) fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Compaction message start is invalid.', 3);
+            validate(data.message); started = true;
+          } else if (event.event === 'content_block_start') {
+            if (!started || block || reason !== null || data.index !== 0) fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Compaction block order is invalid.', 3);
+            block = signedBlock(data.content_block);
+          } else if (event.event === 'content_block_stop') {
+            if (!block || closed || data.index !== 0 || reason !== null) fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Compaction block stop is invalid.', 3);
+            closed = true;
+          } else if (event.event === 'message_delta') {
+            usage = observeUsage(usage, data.usage);
+            // Failed controls may legitimately contain no block.
+            if (!started || block && !closed || !object(data.delta)) fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Compaction message delta is invalid.', 3);
+            terminal(data.delta.stop_reason);
+          } else if (event.event === 'message_stop') {
+            if (!started || reason === null || block && !closed) fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Compaction message stop is invalid.', 3);
+            stopped = true;
+            break; // Terminal is authoritative; do not wait for socket EOF.
+          } else fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Compaction contains unsupported content or deltas.', 3);
+        }
+      } else {
+        const data = parse(await boundedBody(response, signal, LIMIT.body));
+        usage = observeUsage(usage, data.usage);
+        if (data.error) fail('CAPIR_MODEL_PROVIDER_ERROR', 'Compaction reported a provider error; no checkpoint was installed.', 3);
+        validate(data);
+        terminal(data.stop_reason);
+        if (Array.isArray(data.content) && data.content.length === 1) block = signedBlock(data.content[0]);
+        else if (!Array.isArray(data.content) || data.content.length !== 0)
+          fail('CAPIR_MODEL_COMPACTION_PROTOCOL', 'Compaction contains extra or invalid blocks.', 3);
+        stopped = true;
+      }
+      signal.throwIfAborted();
+      if (!stopped || reason !== 'compaction' || !block)
+        fail('CAPIR_MODEL_COMPACTION_FAILED', 'Compaction did not complete; no retry or answer was dispatched.', 3);
+      return block;
+    } finally {
+      // Preserve even failed/retired calls' observed consumption, once per call.
+      controls.push(usage);
+    }
+  }
+
+  async prepare(profile: ModelProfile, key: string, options: RequestOptions, facts: ModelCapacity, history: readonly Message[], current: string | undefined, manual: boolean, signal: AbortSignal, check: () => void, controls: Usage[], notice: () => Promise<void>): Promise<{ messages: WireMessage[]; beta?: string; input_tokens: number | null; compacted: boolean }> {
+    check();
+    const boundary = history.length;
+    let wireBeta = !!this.checkpoint;
+    const active = () => [...this.view(history), ...(current === undefined ? [] : [{ role: 'user' as const, content: current }])];
+    const result = (count: number | null, compacted = false) => ({ messages: active(), ...(wireBeta || this.checkpoint ? { beta: COMPACTION_BETA } : {}), input_tokens: count, compacted });
+    if (manual && boundary === 0) return result(null);
+    if (profile.provider !== 'anthropic' || options.pinnedModel === undefined) {
+      if (manual) fail('CAPIR_MODEL_COMPACTION_UNAVAILABLE', 'Native compaction capacity is unknown for this selected profile.', 3);
+      return result(null);
+    }
+    if (!manual && !this.checkpoint && facts.max_input_tokens === null) return result(null);
+    if (manual && !this.checkpoint) {
+      const capability = await this.probe(profile, key, options, signal, check); check();
+      if (capability.support !== 'supported' || capability.input === null)
+        fail('CAPIR_MODEL_COMPACTION_UNAVAILABLE', `Native compaction ${capability.support}; no compaction was dispatched.`, 3);
+      if (capability.output !== null && options.maxTokens! > capability.output)
+        fail('CAPIR_MODEL_TOKEN_LIMIT', 'Selected output allowance exceeds beta-advertised output capacity; no compaction was dispatched.', 5);
+      wireBeta = true;
+    }
+    let bound = wireBeta ? this.capability!.input! : facts.max_input_tokens!;
+    let count = await this.count(profile, key, options, active(), wireBeta, signal, check); check();
+    if (!manual && (count === null || count <= bound)) return result(count);
+    if (count === null) fail('CAPIR_MODEL_COMPACTION_UNAVAILABLE', 'Token counting is unavailable; no compaction was dispatched.', 3);
+    if (current !== undefined) {
+      const alone = await this.count(profile, key, options, [{ role: 'user', content: current }], !!this.checkpoint, signal, check); check();
+      if (alone === null) fail('CAPIR_MODEL_COMPACTION_UNAVAILABLE', 'Token counting became unavailable; no compaction was dispatched.', 3);
+      if (alone > bound) fail('CAPIR_MODEL_INPUT_CAPACITY', 'The complete current input and system exceed the advertised input capacity; draft retained.', 5);
+    }
+    if (boundary <= (this.checkpoint?.covered ?? 0)) fail('CAPIR_MODEL_INPUT_CAPACITY', 'No additional completed history can be compacted; draft retained.', 5);
+    const capability = await this.probe(profile, key, options, signal, check); check();
+    if (capability.support !== 'supported' || capability.input === null)
+      fail('CAPIR_MODEL_COMPACTION_UNAVAILABLE', `Native compaction ${capability.support}; no compaction or answer was dispatched.`, 3);
+    if (capability.output !== null && options.maxTokens! > capability.output)
+      fail('CAPIR_MODEL_TOKEN_LIMIT', 'Selected output allowance exceeds beta-advertised output capacity; no compaction was dispatched.', 5);
+    bound = capability.input;
+    if (!wireBeta) {
+      wireBeta = true;
+      count = await this.count(profile, key, options, active(), true, signal, check); check();
+    }
+    if (count === null) fail('CAPIR_MODEL_COMPACTION_UNAVAILABLE', 'Beta token counting is unavailable; no compaction was dispatched.', 3);
+    if (!manual && count <= bound) return result(count);
+    if (current !== undefined) {
+      const alone = await this.count(profile, key, options, [{ role: 'user', content: current }], true, signal, check); check();
+      if (alone === null || alone > bound) fail('CAPIR_MODEL_INPUT_CAPACITY', 'Complete current input cannot be verified to fit beta input capacity; draft retained.', 5);
+    }
+    let compacted = false;
+    do {
+      const old = this.checkpoint;
+      let end = boundary;
+      for (; end > (old?.covered ?? 0); end -= 2) {
+        const estimate = await this.count(profile, key, options, this.view(history, end), true, signal, check); check();
+        if (estimate === null) fail('CAPIR_MODEL_COMPACTION_UNAVAILABLE', 'Compaction preflight count is unavailable; existing checkpoint retained.', 3);
+        if (estimate <= bound) break;
+      }
+      if (end <= (old?.covered ?? 0)) fail('CAPIR_MODEL_INPUT_CAPACITY', 'No whole completed prefix fits for compaction; original history retained.', 5);
+      await notice(); check();
+      const block = await this.compact(profile, key, options, this.view(history, end), signal, controls); check();
+      const candidate = { block, covered: end };
+      const proposed = [...this.view(history, boundary, candidate), ...(current === undefined ? [] : [{ role: 'user' as const, content: current }])];
+      const after = await this.count(profile, key, options, proposed, true, signal, check); check();
+      if (after === null) fail('CAPIR_MODEL_COMPACTION_UNAVAILABLE', 'Compaction recount is unavailable; previous checkpoint retained.', 3);
+      if (this.checkpoint !== old || history.length !== boundary || after >= count)
+        fail('CAPIR_MODEL_COMPACTION_NO_PROGRESS', 'Compaction did not reduce the complete active input; previous checkpoint retained.', 3);
+      this.checkpoint = candidate; count = after; compacted = true;
+      if (manual || count <= bound) return result(count, compacted);
+    } while ((this.checkpoint?.covered ?? 0) < boundary);
+    fail('CAPIR_MODEL_INPUT_CAPACITY', 'Compacted input still exceeds model capacity; checkpoint and original history retained.', 5);
+  }
+}

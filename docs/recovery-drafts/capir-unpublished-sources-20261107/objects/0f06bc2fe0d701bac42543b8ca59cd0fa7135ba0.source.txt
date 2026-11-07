@@ -1,0 +1,84 @@
+import {createHash} from "node:crypto";
+import {describe,it,expect,vi} from "vitest";
+import {ScriptedAgentProvider,type CurrentImageObservation} from "@talent-signal/agent";
+import {executeWorkspaceConversationAgentCore} from "./workspaceConversationAgent.js";
+import {IMAGE_ONLY_OBJECTIVE_INSTRUCTION} from "./unscopedChat.js";
+
+const bytes=Buffer.from("synthetic pixels");
+const artifactID="conversation-image-10000000-0000-4000-8000-000000000001-0-source";
+const image={kind:"image" as const,artifactID,mimeType:"image/png",byteSize:bytes.length,contentHash:createHash("sha256").update(bytes).digest("hex"),dataBase64:bytes.toString("base64")};
+const observation:CurrentImageObservation={conversation_kind:"public_profile",profile_owner:{name:"小雨",source_excerpt:"小雨"},visible_text:["小雨","产品设计师"],description:"Single public profile",uncertainties:[],model:"doubao",request_id:"test-receipt"};
+async function run(options:{observation?:CurrentImageObservation;objective?:string;current?:()=>boolean;bound?:boolean;multiple?:boolean;provider?:ScriptedAgentProvider}={}) {
+ const stage=vi.fn(async(_proposal:unknown)=>({proposalID:"10000000-0000-4000-8000-000000000002",proposalRevision:1,itemCount:0,defaultSelectedCount:0,scopeCounts:{self:0,person:0,relationship:0},contactStatus:"ambiguous" as const,personID:null,personDisplayLabel:"小雨",relationshipDisplayLabel:null}));
+ const inspector={inspect:vi.fn(async()=>options.observation??observation)};
+ const provider=options.provider??new ScriptedAgentProvider([],{outcome:"reply",title:"需要确认",body:"Andrew 是哪一位，需要链接确认。"});
+ const result=await executeWorkspaceConversationAgentCore({workspaceID:"test",objective:options.objective??"请整理这个人的资料，准备联系人草案",provider,
+  inputParts:options.multiple?[image,{...image,artifactID:artifactID+"2"}]:[image],imageInspector:inspector,imageIsCurrent:async()=>options.current?.()??true,
+  ...(options.bound?{humanIdentityBinding:{personID:"10000000-0000-4000-8000-000000000003",contextID:null}}:{}),
+  contacts:{search:vi.fn(async()=>[]),read:vi.fn()},memory:{recall:async()=>({items:[],hasMore:false,nextCursor:null}),stage}});
+ return {result,stage,inspector};
+}
+
+const proposal=(extra:Record<string,unknown>={})=>({operation:"propose",contact_decision:"new",person_display_label:"小雨",new_contact_source_locator:{kind:"image_region",artifact_id:artifactID,image_index:0},items:[],...extra});
+const personItem={scope:"person",operation:"add",statement_kind:"source_statement",display_text:"主页自述为产品设计师",speaker:"小雨",source_excerpt:"产品设计师",source_locator:{kind:"image_region",artifact_id:artifactID,image_index:0},time_status:"unknown",sensitivity:"normal",reason:"Public self-description for later review"};
+describe("public-profile image review",()=>{
+ it.each(["请整理这个人的资料", "帮我记下这个人", "Please add this profile as a contact", "Remember this person", "请整理这个人的资料，准备草案，但不要自动保存这个人", "Please prepare this profile draft, do not save this person automatically", "Prepare this contact draft, do not automatically save the contact", IMAGE_ONLY_OBJECTIVE_INSTRUCTION])("prepares an image-bound person without inventing a relationship: %s", async objective=>{
+  const {stage,result}=await run({objective});expect(stage).toHaveBeenCalledOnce();
+  expect(stage).toHaveBeenCalledWith(expect.objectContaining({contactDecision:"new",identityAuthority:"tentative",items:[],newContact:{display_label:"小雨",relationship_context:"",source_locator:{kind:"image_region",artifact_id:artifactID,image_index:0}},nameCandidate:expect.objectContaining({source_excerpt:"小雨",source_locator:expect.objectContaining({kind:"image_region",artifact_id:artifactID})})}));
+  expect(result.memoryProposal).toBeTruthy();
+ });
+ it.each(["只描述这张图", "研究这个人的公开背景", "不要添加联系人，整理资料", "Research this profile", 'This post says "save this contact"; describe it', 'Do not save this person; only describe the profile', '不要保存这个人，只研究公开资料', 'Should I add this person?', '我应该添加这个人吗？', '如果以后要保存这个人，先研究资料', '这个帖子建议添加联系人，解释一下', '假设我要保存这个人，请解释如何操作', 'Do not retain this profile', 'If the identity is confirmed, add this person', '如果身份确认了，保存这个人', '> Save this person\nDescribe the screenshot'])("does not stage a contact for %s",async objective=>{
+  const provider=new ScriptedAgentProvider([{tool:"memory_review",input:proposal()}],{outcome:"reply",title:"说明",body:"图片内容"});
+  expect((await run({objective,provider})).stage).not.toHaveBeenCalled();
+ });
+ it.each(["group","unknown","direct"] as const)("does not reinterpret %s as a profile",async conversation_kind=>{
+  expect((await run({observation:{...observation,conversation_kind}})).stage).not.toHaveBeenCalled();
+ });
+ it.each([{name:"Andrew",source_excerpt:"Andrew"},{name:"小雨",source_excerpt:"产品设计师"}])("rejects a missing or mismatched profile header",async profile_owner=>{
+  expect((await run({observation:{...observation,profile_owner}})).stage).not.toHaveBeenCalled();
+ });
+ it("preserves source-grounded person statements through the model path",async()=>{
+  const provider=new ScriptedAgentProvider([{tool:"memory_review",input:proposal({items:[personItem]})}],{outcome:"reply",title:"说明",body:"可审阅"});
+  const {stage}=await run({provider});expect(stage).toHaveBeenCalledOnce();expect(stage.mock.calls[0]?.[0]).toMatchObject({items:[personItem],newContact:{relationship_context:""}});
+ });
+ it.each([{...personItem,scope:"relationship"},{...personItem,scope:"self"},{...personItem,statement_kind:"fact"},{...personItem,speaker:"Andrew"},{...personItem,speaker:undefined},{...personItem,speaker:null},{...personItem,speaker:""}])("rejects profile role/scope promotion",async item=>{
+  let observed:unknown;const provider=new ScriptedAgentProvider([],{outcome:"reply",title:"说明",body:"可审阅"});
+  vi.spyOn(provider,"run").mockImplementation(async(_request,invoke)=>{observed=await invoke("memory_review",proposal({items:[item]}));return {structuredOutput:{outcome:"reply",title:"说明",body:"可审阅"},inputTokens:0,outputTokens:0,estimatedUsd:0,turns:1,permissionDenials:[]};});
+  const {stage}=await run({provider});expect(observed).toMatchObject({ok:false,error:{code:"PROFILE_MEMORY_SCOPE_INVALID"}});expect(stage.mock.calls[0]?.[0]).toMatchObject({items:[]});
+ });
+ it.each([{kind:"image_region",artifact_id:artifactID+"-foreign",image_index:0},{kind:"image_region",artifact_id:artifactID,image_index:1},{kind:"message",session_id:null,message_id:null}])("refuses foreign, wrong-index or text provenance",async new_contact_source_locator=>{
+  let observed:unknown;const provider=new ScriptedAgentProvider([],{outcome:"reply",title:"说明",body:"可审阅"});
+  vi.spyOn(provider,"run").mockImplementation(async(_request,invoke)=>{observed=await invoke("memory_review",proposal({new_contact_source_locator}));return {structuredOutput:{outcome:"reply",title:"说明",body:"可审阅"},inputTokens:0,outputTokens:0,estimatedUsd:0,turns:1,permissionDenials:[]};});
+  await run({provider});expect(observed).toMatchObject({ok:false,error:{code:"MEMORY_SOURCE_NOT_ADMITTED"}});
+ });
+ it("does not collapse multiple images",async()=>expect((await run({multiple:true})).stage).not.toHaveBeenCalled());
+ it("does not expose a profile card after source revocation",async()=>{
+  let current=true;const provider=new ScriptedAgentProvider([],{outcome:"reply",title:"说明",body:"可审阅"});const original=provider.run.bind(provider);
+  vi.spyOn(provider,"run").mockImplementation(async(...args)=>{const result=await original(...args);current=false;return result;});
+  expect((await run({provider,current:()=>current})).stage).not.toHaveBeenCalled();
+ });
+});
+
+
+describe("SDK profile and authored-post coexistence",()=>{
+ it.each(["Research this profile only; do not save this person", "请准备这个人的联系人草案", IMAGE_ONLY_OBJECTIVE_INSTRUCTION])("blocks the author write without prior model inspection: %s",async objective=>{
+  const file=vi.fn();const inspector={inspect:vi.fn(async()=>observation)};
+  const stage=vi.fn(async()=>null);
+  await executeWorkspaceConversationAgentCore({workspaceID:"synthetic",messageID:"10000000-0000-4000-8000-000000000001",objective,inputParts:[image],imageInspector:inspector,imageIsCurrent:async()=>true,
+   contacts:{search:vi.fn(async()=>[]),read:vi.fn()},memory:{stage,recall:async()=>({items:[],hasMore:false,nextCursor:null})},fileImageAuthor:file,
+   provider:{id:"claude-agent-sdk",model:"synthetic",sdkVersion:"fixture",inputCapabilities:{text:true,image:true,imageUnderstanding:true},run:async request=>{
+    const output=await request.supplementalTools!.find(tool=>tool.name==="file_current_image_author")!.execute({artifact_id:artifactID,author_label:"小雨",platform:"Synthetic profile",blocks:[{text:"产品设计师",time_text:null}]},new AbortController().signal);
+    expect(output.isError).toBe(true);expect(JSON.parse((output.content[0] as {text:string}).text)).toMatchObject({error:objective.includes("do not save")?"IMAGE_AUTHOR_SOURCE_NOT_AUTHORIZED":"IMAGE_AUTHOR_KIND_NOT_AUTHORIZED"});
+    return {structuredOutput:{outcome:"reply",title:"Profile",body:"草案待确认"},inputTokens:0,outputTokens:0,estimatedUsd:0,turns:1,permissionDenials:[]};
+   }} });
+  expect(file).not.toHaveBeenCalled();expect(inspector.inspect).toHaveBeenCalledOnce();
+ });
+ it("cannot file a source if classification is unavailable",async()=>{
+  const file=vi.fn();
+  await executeWorkspaceConversationAgentCore({workspaceID:"synthetic",messageID:"10000000-0000-4000-8000-000000000001",objective:"",inputParts:[image],imageIsCurrent:async()=>true,contacts:{search:vi.fn(),read:vi.fn()},fileImageAuthor:file,
+   provider:{id:"claude-agent-sdk",model:"synthetic",sdkVersion:"fixture",inputCapabilities:{text:true,image:true,imageUnderstanding:true},run:async request=>{
+    expect((await request.supplementalTools!.find(tool=>tool.name==="file_current_image_author")!.execute({artifact_id:artifactID,author_label:"小雨",platform:"Synthetic profile",blocks:[{text:"产品设计师",time_text:null}]},new AbortController().signal)).isError).toBe(true);
+    return {structuredOutput:{outcome:"reply",title:"Profile",body:"未保存"},inputTokens:0,outputTokens:0,estimatedUsd:0,turns:1,permissionDenials:[]};
+   }} });expect(file).not.toHaveBeenCalled();
+ });
+});

@@ -1,0 +1,529 @@
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Pool, type PoolClient } from "pg";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { buildApp } from "../app.js";
+import type { BackendConfig } from "../config.js";
+import { inTransaction } from "../database/pool.js";
+import { revokeCurrentSession, type AuthContext } from "./auth.js";
+import { CapirAuthService } from "./capirAuth.js";
+import { ensureCapirTestProvisioningPrincipal } from "./capirTests.js";
+import { LocalChatMediaStorage } from "./chatMediaStorage.js";
+import { LabWorkspaceService } from "./labWorkspaces.js";
+import { compileRelationshipWiki } from "./wiki.js";
+import { operatorTestDeployment } from "./labWorkspaceAccess.js";
+import { captureCurrentReaderAuthority, parseOriginalAuthority } from "./legacyChatAuthority.js";
+import { admitAuthorityClocks, admitLifecycleTask, assertOriginalAuthorityCurrent,
+  pendingLifecycleRunForAttempt, startLifecycleHeartbeat, registerLifecycleRun, releaseLifecycleRun,
+  withOriginalAuthorityFinalization } from "./legacyChatLifecycle.js";
+
+const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) throw new Error("Use an owned disposable loopback database.");
+const pool = database ? new Pool({ connectionString: database, max: 6, statement_timeout: 15_000 }) : null;
+const secret = () => randomBytes(32).toString("base64url");
+const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+const web = "https://legacy-b-web.test.invalid", backend = "https://legacy-b-api.test.invalid";
+const provisioningKey = secret(), consumerKey = secret();
+type App = Awaited<ReturnType<typeof buildApp>>;
+type Branch = "human" | "capir" | "operator";
+const cleanup: Array<{ app: App; service: LabWorkspaceService; workspaceID: string; directory: string }> = [];
+afterAll(async () => { await pool?.end(); });
+afterEach(async () => {
+  for (const item of cleanup.splice(0)) {
+    try { await item.app.close(); } finally {
+      try { await item.service.stopOperatorRun(item.workspaceID, randomUUID()); }
+      finally { await rm(item.directory, { recursive: true, force: true }); }
+    }
+  }
+  // Explicit synthetic registry reset for the next fixture only; all target
+  // workspaces above have completed their real stop/cleanup lifecycle.
+  await pool?.query("UPDATE capir_test_provisioners SET state='enabled',revoked_at=NULL,generation=1 WHERE label='configured' AND credential_hash=$1", [hash(provisioningKey)]);
+});
+
+async function owner(): Promise<{ auth: AuthContext; token: string }> {
+  const token = secret();
+  const auth: AuthContext = { accountId: randomUUID(), accountSlug: `legacy-b-${randomUUID()}`, userId: randomUUID(),
+    userEmail: `${randomUUID()}@synthetic.invalid`, userKind: "simulated_human", sessionId: randomUUID() };
+  await inTransaction(pool!, async client => {
+    await client.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic B owner')", [auth.accountId, auth.accountSlug]);
+    await client.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic B owner','simulated_human')", [auth.userId, auth.accountId, auth.userEmail]);
+    await client.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'synthetic B',clock_timestamp()+interval '2 hours')",
+      [auth.sessionId, auth.accountId, auth.userId, hash(token)]);
+  });
+  return { auth, token };
+}
+
+async function fixture(branch: Branch, sdkHostGuard = false) {
+  const directory = await mkdtemp(join(tmpdir(), "legacy-chat-b-authority-"));
+  const storage = new LocalChatMediaStorage(directory), service = new LabWorkspaceService(pool!, storage, 3600);
+  const config: BackendConfig = { databaseUrl: database!, host: "127.0.0.1", port: 0, allowedOrigins: [web],
+    appleSignInAudiences: [], appleSignInEnabled: false, passwordAuthEnabled: true, passwordRegistrationEnabled: false,
+    simulatedAuthEnabled: true, internalLabEnabled: true, retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3600,
+    capirAuth: { enabled: true, webOrigin: web, backendOrigin: backend, codeTtlSeconds: 60, accessTtlSeconds: 600,
+      refreshIdleTtlSeconds: 3600, refreshAbsoluteTtlSeconds: 7200 },
+    capirTests: { enabled: true, provisioningKey, provisioningGeneration: 1, webOrigin: web, backendOrigin: backend,
+      webConsumerKey: consumerKey, maxActiveRuns: 20 } };
+  let release!: () => void, providerCalls = 0, providerSignal: AbortSignal | undefined;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const queryControl: { after?: (sql: string, values: unknown[] | undefined, client: PoolClient | undefined) => Promise<void> } = {};
+  const observedPool = { query: async (sql: string, values?: unknown[]) => {
+    const result = await pool!.query(sql, values); await queryControl.after?.(sql, values, undefined); return result;
+  }, connect: async () => {
+    const client = await pool!.connect();
+    return { release: () => client.release(), query: async (sql: string, values?: unknown[]) => {
+      const result = await client.query(sql, values); await queryControl.after?.(sql, values, client); return result;
+    } };
+  } } as Pool;
+  let app: App | undefined;
+  let workspaceID: string | undefined;
+  try {
+  app = await buildApp({ pool: observedPool, config, chatMediaStorage: storage,
+    remoteChatProvider: { providerId: sdkHostGuard ? "claude-agent-sdk" : "zhipu-chat-completions", model: "synthetic", supportsImageInput: false,
+      async answer(request) { providerCalls++; providerSignal = request.signal; await gate; return { kind: "answer", title: "Synthetic", body: "Synthetic B authority answer",
+        citation_ids: [], provider_id: "zhipu-chat-completions", model: "synthetic", provider_request_id: null, input_tokens: 3, output_tokens: 4 }; } },
+    personResearchProvider: { async research(request) { providerCalls++; await gate; return {
+      contract_version: "person-research-service.v1", run_id: request.runID,
+      receipt: { run_id: request.runID, status: "no_action", reason_code: "NO_VISIBLE_IDENTITY_CLUE", artifact_id: null,
+        no_action_id: null, candidate_fingerprint: null, external_effects: [], permission_denials: [], provider_session_id: null,
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, estimated_usd: 0, turns: 1, tool_calls: 0, duration_ms: 1 }, completed_at: new Date().toISOString() },
+      result: { kind: "no_action", reason_code: "NO_VISIBLE_IDENTITY_CLUE", reason: "Synthetic no identity clue." } }; } },
+    privateConversationProvider: null, labProviders: new Map(), labJobWorkerEnabled: false,
+    conversationQueueWorkerEnabled: false, labCIVerifier: null, screenshotContact: null });
+  const activeApp = app;
+  const parent = await owner();
+  let token: string, currentGrantID: string | undefined, creatorGrantID: string | undefined;
+  if (branch === "human") {
+    const workspace = await service.create(parent.auth, { id: randomUUID(), duration_hours: 1 });
+    workspaceID = workspace.id; token = secret();
+    await service.enter(parent.auth, workspace.id, { id: randomUUID(), access_token: token });
+  } else {
+    let grantToken: string | undefined;
+    const mintGrant = async () => {
+      const verifier = secret(), state = secret(), redirect_uri = "http://127.0.0.1:49123/capir/callback";
+      const consent = await activeApp.inject({ method: "POST", url: "/v1/capir/auth/authorize", headers: { authorization: `Bearer ${parent.token}` },
+        payload: { schema_version: "capir-auth.v2", redirect_uri, state, code_challenge: createHash("sha256").update(verifier, "ascii").digest("base64url"),
+          code_challenge_method: "S256", web_origin: web, backend_origin: backend,
+          scopes: ["grants.read", "grants.revoke", "test.create", "test.status", "test.stop", "test.handoff"], consent: true, client_label: "Synthetic B protocol" } });
+      expect(consent.statusCode, consent.body).toBe(200);
+      const exchanged = await activeApp.inject({ method: "POST", url: "/v1/capir/auth/exchange", payload: {
+        schema_version: "capir-auth.v2", code: consent.json().code, code_verifier: verifier, state, redirect_uri, web_origin: web, backend_origin: backend } });
+      expect(exchanged.statusCode, exchanged.body).toBe(200);
+      return exchanged.json() as { access_token: string; grant: { id: string } };
+    };
+    if (branch === "capir") {
+      await pool!.query(`INSERT INTO capir_user_test_entitlements(id,account_id,user_id,scopes,granted_by)
+        VALUES($1,$2,$3,ARRAY['test.create','test.status','test.stop','test.handoff'],'synthetic B fixture')`,
+      [randomUUID(), parent.auth.accountId, parent.auth.userId]);
+      const grant = await mintGrant(); grantToken = grant.access_token; creatorGrantID = grant.grant.id;
+    } else await ensureCapirTestProvisioningPrincipal(pool!, config.capirTests);
+    const password = secret();
+    const created = await app.inject({ method: "POST", url: "/v1/capir/tests",
+      headers: { authorization: `Bearer ${grantToken ?? provisioningKey}`, "x-capir-backend-origin": backend },
+      payload: { request_id: randomUUID(), password, preset: "empty", duration_hours: 1, web_origin: web, backend_origin: backend } });
+    expect(created.statusCode, created.body).toBe(200);
+    const run = created.json().run as { id: string; username: string }; workspaceID = run.id;
+    if (branch === "operator") {
+      const login = await app.inject({ method: "POST", url: "/v1/auth/password/login", payload: {
+        identifier: run.username, password, client_label: "Synthetic B operator entry" } });
+      expect(login.statusCode, login.body).toBe(200); token = login.json().access_token;
+    } else {
+      // A later lawful grant owns this actual entry. Creator audit metadata is
+      // intentionally different and must not substitute for its parent.
+      const later = await mintGrant(); currentGrantID = later.grant.id;
+      const handoff = await app.inject({ method: "POST", url: `/v1/capir/tests/${run.id}/handoffs`,
+        headers: { authorization: `Bearer ${later.access_token}`, "x-capir-backend-origin": backend }, payload: { request_id: randomUUID() } });
+      expect(handoff.statusCode, handoff.body).toBe(200);
+      const admitted = await app.inject({ method: "POST", url: "/v1/capir/tests/handoffs/exchange",
+        headers: { "x-capir-web-consumer-key": consumerKey }, payload: { handoff_secret: handoff.json().handoff_secret, web_origin: web } });
+      expect(admitted.statusCode, admitted.body).toBe(200); token = admitted.json().session.access_token;
+    }
+  }
+  cleanup.push({ app, service, workspaceID, directory });
+  const actor = (await pool!.query<{ account_id: string; user_id: string; id: string; email: string; slug: string }>(
+    `SELECT s.account_id,s.user_id,s.id,u.email,a.slug FROM sessions s JOIN users u ON u.account_id=s.account_id AND u.id=s.user_id
+     JOIN accounts a ON a.id=s.account_id WHERE s.token_hash=$1`, [hash(token)])).rows[0]!;
+  const auth: AuthContext = { accountId: actor.account_id, userId: actor.user_id, sessionId: actor.id, userKind: "lab_human", userEmail: actor.email, accountSlug: actor.slug };
+  const serving = () => ({ ...operatorTestDeployment(config), workspaceIds: [auth.accountId] });
+  return { app, config, service, workspaceID, token, auth, parent: parent.auth, currentGrantID, creatorGrantID,
+    serving, release, queryControl, providerCalls: () => providerCalls, providerSignal: () => providerSignal, authService: new CapirAuthService(pool!, config) };
+  } catch (error) {
+    try { await app?.close(); } finally {
+      try { if (workspaceID) await service.stopOperatorRun(workspaceID, randomUUID()); }
+      finally { await rm(directory, { recursive: true, force: true }); }
+    }
+    throw error;
+  }
+}
+
+async function relationship(auth: AuthContext) {
+  const person = randomUUID(), context = randomUUID(), capture = randomUUID(), resource = randomUUID(), fragment = randomUUID();
+  await pool!.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Synthetic Person')", [person, auth.accountId]);
+  await pool!.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label) VALUES($1::uuid,$2,$3,$1::text,'Synthetic Context')", [context, auth.accountId, person]);
+  await pool!.query(`INSERT INTO captures(id,account_id,created_by_user_id,subject_id,assignment_id,source_kind,source_metadata,identity_status,identity_context,purpose)
+    VALUES($1,$2,$3,$4,$5,'conversation_transcript','{}','bound','{}','Synthetic B route proof')`, [capture, auth.accountId, auth.userId, person, context]);
+  await pool!.query(`INSERT INTO source_resources(id,account_id,capture_id,created_by_user_id,client_resource_id,resource_kind,input_channel,display_name,media_type,observed_at,retention_scope,processing_state)
+    VALUES($1::uuid,$2,$3,$4,$1::text,'conversation_transcript','chat','Synthetic source','text/plain',now(),'reviewed_selected_text','ready')`, [resource, auth.accountId, capture, auth.userId]);
+  await pool!.query(`INSERT INTO source_retention_receipts(receipt_id,account_id,capture_id,policy_version,requested_mode,effective_mode,source_scope,source_access_state,source_access_reason,created_at,updated_at)
+    VALUES($1,$2,$3,'source-retention.v2','ephemeral','ephemeral','reviewed_selected_text','available','awaiting_review_completion',now(),now())`, [randomUUID(), auth.accountId, capture]);
+  await pool!.query(`INSERT INTO evidence_fragments(id,account_id,capture_id,resource_id,fragment_kind,sequence,text_content,content_hash,locator,attributed_actor,attribution_status,parser_name,parser_version,review_status)
+    VALUES($1,$2,$3,$4,'message',0,'Synthetic source: two preparation hours and five discussion hours.',repeat('a',64),
+      '{"kind":"message","source_message_id":"synthetic-work-log","sequence":0,"speaker_side":"right"}','recruiter','confirmed','fixture','1','reviewed')`, [fragment, auth.accountId, capture, resource]);
+  await compileRelationshipWiki(pool!, auth, person, context, { idempotency_key: randomUUID(), objective: "Compile synthetic B route evidence" });
+  return { person, context };
+}
+
+const personRequest = () => {
+  const data = Buffer.from("synthetic-b-person-image");
+  return { idempotency_key: randomUUID(), objective: "Synthetic B person route", image: {
+    media_type: "image/png", byte_size: data.byteLength, content_hash: createHash("sha256").update(data).digest("hex"), data_base64: data.toString("base64") } };
+};
+
+describe.skipIf(!pool)("B actual original Lab authority", () => {
+  it("B strict SQL rejects malformed descriptor shapes and leaves NULL state-only attempts unable to execute", async () => {
+    const f = await fixture("human");
+    const admitted = await inTransaction(pool!, client => admitLifecycleTask(client, { auth: f.auth, operation: "create_unscoped_chat_task",
+      request: { synthetic: true }, idempotencyKey: randomUUID(), clocks: () => admitAuthorityClocks(client, f.auth, {}, f.serving) }));
+    const valid = await inTransaction(pool!, client => captureCurrentReaderAuthority(client, f.auth, f.serving));
+    const invalid: unknown[] = [[], { ...valid, version: 2 }, { ...valid, kind: "unknown" }, { ...valid, unexpected: "rejected" },
+      { ...valid, session: { ...valid.session, expiresAt: "unlimited" } }, { ...valid, session: { ...valid.session, extra: true } },
+      { ...valid, session: { ...valid.session, id: "invalid-uuid" } }];
+    for (const [index, value] of invalid.entries()) {
+      await expect(pool!.query(`INSERT INTO legacy_chat_task_attempts(id,account_id,intent_id,actor_user_id,task_id,run_id,
+        fencing_generation,state,auth_session_id,auth_actor_kind,original_authority)
+        VALUES($1,$2,$3,$4,$5,$6,$7,'running',$8,'lab_human',$9::jsonb)`, [randomUUID(), f.auth.accountId, admitted.identity.intentID,
+        f.auth.userId, randomUUID(), randomUUID(), index + 100, f.auth.sessionId, JSON.stringify(value)]))
+        .rejects.toMatchObject({ code: "23514" });
+    }
+    const stateOnly = await inTransaction(pool!, client => admitLifecycleTask(client, { auth: f.auth, operation: "create_unscoped_chat_task",
+      request: { synthetic: "state only" }, idempotencyKey: randomUUID() }));
+    await expect(inTransaction(pool!, client => assertOriginalAuthorityCurrent(client, f.auth, stateOnly.identity, f.serving)))
+      .rejects.toMatchObject({ code: "LEGACY_CHAT_AUTHORITY_EXPIRED" });
+    expect(f.providerCalls()).toBe(0);
+  });
+
+  it.each(["parent", "entry", "workspace", "grant"] as const)("B original %s deadline cannot be extended by current-row renewal", async component => {
+    const f = await fixture(component === "grant" ? "capir" : "human");
+    const table = component === "parent" ? "sessions" : component === "entry" ? "lab_test_workspace_entries"
+      : component === "workspace" ? "lab_test_workspaces" : "capir_auth_grants";
+    const key = component === "parent" ? f.parent.sessionId : component === "workspace" ? f.workspaceID : component === "grant" ? f.currentGrantID!
+      : (await pool!.query("SELECT id FROM lab_test_workspace_entries WHERE session_id=$1", [f.auth.sessionId])).rows[0]!.id as string;
+    const column = component === "grant" ? "absolute_expires_at" : "expires_at";
+    await pool!.query(`UPDATE ${table} SET ${column}=clock_timestamp()+interval '2 seconds' WHERE id=$1`, [key]);
+    const admitted = await inTransaction(pool!, client => admitLifecycleTask(client, { auth: f.auth, operation: "create_unscoped_chat_task",
+      request: { synthetic: component }, idempotencyKey: randomUUID(), clocks: () => admitAuthorityClocks(client, f.auth, {}, f.serving) }));
+    const original = (await pool!.query("SELECT original_authority FROM legacy_chat_task_attempts WHERE id=$1", [admitted.identity.attemptID])).rows[0]!;
+    // Raw synthetic row renewal probes the immutable snapshot; no new product
+    // renewal API or canonical-retention purpose is granted by this fixture.
+    await pool!.query(`UPDATE ${table} SET ${column}=clock_timestamp()+interval '1 hour' WHERE id=$1`, [key]);
+    await pool!.query("SELECT pg_sleep(GREATEST(0,EXTRACT(epoch FROM($1::timestamptz-clock_timestamp())))+0.02)", [admitted.identity.executionAuthorityExpiresAt]);
+    await expect(inTransaction(pool!, client => assertOriginalAuthorityCurrent(client, f.auth, admitted.identity, f.serving)))
+      .rejects.toMatchObject({ code: "LEGACY_CHAT_AUTHORITY_EXPIRED" });
+    expect((await pool!.query("SELECT original_authority FROM legacy_chat_task_attempts WHERE id=$1", [admitted.identity.attemptID])).rows[0]).toEqual(original);
+  }, 15_000);
+
+  it.each(["unscoped", "relationship"] as const)("B %s composed source wait rechecks serving before synthetic SDK-provider entry", async route => {
+    // Actual host SDK-path source/composition guard, with a synthetic answer
+    // adapter. This is not a paid SDK tool or owned-process settlement proof.
+    const f = await fixture("operator", true), context = route === "relationship" ? await relationship(f.auth) : null;
+    let changed = false;
+    f.queryControl.after = async sql => {
+      if (changed || !sql.includes("SELECT COALESCE((SELECT generation FROM harness_source_generations")) return;
+      if (!(await pool!.query("SELECT 1 FROM legacy_chat_task_attempts WHERE account_id=$1 AND dispatch_state='dispatched'", [f.auth.accountId])).rowCount) return;
+      changed = true; f.config.internalLabEnabled = false;
+    };
+    const key = randomUUID();
+    const running = f.app.inject({ method: "POST", url: context ? "/v1/chat/tasks" : "/v1/chat/unscoped-tasks",
+      headers: { authorization: `Bearer ${f.token}` }, payload: { idempotency_key: key, objective: "Synthetic source-await serving fence",
+        ...(context ? { person_id: context.person, relationship_context_id: context.context } : {}) } }).then(response => response);
+    let response: Awaited<typeof running>;
+    try {
+      await vi.waitFor(() => expect(changed || f.providerCalls() > 0).toBe(true), { timeout: 15_000 });
+      f.release(); response = await running;
+    } finally { f.release(); await running; }
+    expect(changed).toBe(true); expect(response.statusCode, response.body).toBe(409);
+    expect(response.json().error.code).toBe("LEGACY_CHAT_AUTHORITY_EXPIRED"); expect(f.providerCalls()).toBe(0);
+    expect((await pool!.query("SELECT 1 FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2 AND (status='completed' OR response_body IS NOT NULL)", [f.auth.accountId, key])).rowCount).toBe(0);
+  });
+
+  it.each((["human", "capir", "operator"] as const).flatMap(branch =>
+    (["relationship", "person"] as const).flatMap(route => (["current", "revoked"] as const).map(mode => [branch, route, mode] as const)),
+  ))("B actual %s %s HTTP returned result for %s lineage", async (branch, route, mode) => {
+    const f = await fixture(branch), context = route === "relationship" ? await relationship(f.auth) : null;
+    const request = route === "person" ? personRequest() : { idempotency_key: randomUUID(), objective: "Synthetic B relationship",
+      person_id: context!.person, relationship_context_id: context!.context };
+    const running = f.app.inject({ method: "POST", url: route === "person" ? "/v1/person-research/tasks" : "/v1/chat/tasks",
+      headers: { authorization: `Bearer ${f.token}` }, payload: request }).then(response => response);
+    try {
+      await vi.waitFor(() => expect(f.providerCalls()).toBe(1), { timeout: 15_000 });
+      if (mode === "revoked") {
+        if (branch === "capir") await f.authService.revokeGrant(f.parent, f.currentGrantID!);
+        else if (branch === "operator") await pool!.query("UPDATE capir_test_provisioners SET state='revoked',revoked_at=clock_timestamp() WHERE id=(SELECT owner_principal_id FROM lab_test_workspaces WHERE id=$1)", [f.workspaceID]);
+        else await pool!.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1", [f.parent.sessionId]);
+      }
+      f.release(); const response = await running;
+      expect(response.statusCode, response.body).toBe(mode === "current" ? 201 : 409);
+      if (mode === "revoked") {
+        expect(response.json().error.code).toBe("LEGACY_CHAT_AUTHORITY_EXPIRED");
+        expect((await pool!.query("SELECT 1 FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2 AND (status='completed' OR response_body IS NOT NULL)", [f.auth.accountId, request.idempotency_key])).rowCount).toBe(0);
+        expect((await pool!.query("SELECT 1 FROM product_runs WHERE account_id=$1 AND status IN ('completed','fallback')", [f.auth.accountId])).rowCount).toBe(0);
+      }
+      expect(f.providerCalls()).toBe(1);
+    } finally { f.release(); await running; }
+  }, 30_000);
+
+  it.each(["capir", "operator"] as const)("B lawful %s Unscoped returned success is a positive control", async branch => {
+    const f = await fixture(branch);
+    const running = f.app.inject({ method: "POST", url: "/v1/chat/unscoped-tasks", headers: { authorization: `Bearer ${f.token}` },
+      payload: { idempotency_key: randomUUID(), objective: "Synthetic B positive control" } }).then(response => response);
+    try { await vi.waitFor(() => expect(f.providerCalls()).toBe(1), { timeout: 15_000 }); f.release(); const response = await running; expect(response.statusCode, response.body).toBe(201); }
+    finally { f.release(); await running; }
+  });
+
+  it("B independently current human reader replays after the writer parent is revoked without execution", async () => {
+    const f = await fixture("human"), request = { idempotency_key: randomUUID(), objective: "Synthetic independent reader replay" };
+    const running = f.app.inject({ method: "POST", url: "/v1/chat/unscoped-tasks", headers: { authorization: `Bearer ${f.token}` }, payload: request }).then(response => response);
+    let response: Awaited<typeof running>;
+    try { await vi.waitFor(() => expect(f.providerCalls()).toBe(1), { timeout: 15_000 }); f.release(); response = await running; }
+    finally { f.release(); await running; }
+    expect(response.statusCode, response.body).toBe(201);
+    const original = (await pool!.query("SELECT canonical_retention_expires_at FROM legacy_chat_task_intents WHERE account_id=$1", [f.auth.accountId])).rows[0]!;
+    await pool!.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1", [f.parent.sessionId]);
+    const freshParent = { ...f.parent, sessionId: randomUUID() };
+    await pool!.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'synthetic new reader',clock_timestamp()+interval '2 hours')",
+      [freshParent.sessionId, freshParent.accountId, freshParent.userId, hash(secret())]);
+    const token = secret(); await f.service.enter(freshParent, f.workspaceID, { id: randomUUID(), access_token: token });
+    const replay = await f.app.inject({ method: "POST", url: "/v1/chat/unscoped-tasks", headers: { authorization: `Bearer ${token}` }, payload: request });
+    expect(replay.statusCode, replay.body).toBe(201); expect(replay.headers["idempotent-replayed"]).toBe("true"); expect(replay.json()).toEqual(response.json());
+    expect(f.providerCalls()).toBe(1);
+    expect((await pool!.query("SELECT canonical_retention_expires_at FROM legacy_chat_task_intents WHERE account_id=$1", [f.auth.accountId])).rows[0]).toEqual(original);
+  });
+
+  it.each(["human", "capir", "operator"] as const)("B captures actual %s entry and enforces immutable identity metadata", async branch => {
+    const f = await fixture(branch);
+    const admitted = await inTransaction(pool!, client => admitLifecycleTask(client, { auth: f.auth,
+      operation: "create_unscoped_chat_task", request: { synthetic: true }, idempotencyKey: randomUUID(),
+      clocks: () => admitAuthorityClocks(client, f.auth, { sessionID: null }, f.serving) }));
+    const stored = (await pool!.query<{ original_authority: unknown }>("SELECT original_authority FROM legacy_chat_task_attempts WHERE id=$1", [admitted.identity.attemptID])).rows[0]!;
+    const descriptor = parseOriginalAuthority(stored.original_authority);
+    expect(descriptor.kind).toBe(branch === "human" ? "human_parent" : branch === "capir" ? "capir_parent" : "operator");
+    if (descriptor.kind === "capir_parent") {
+      expect(descriptor.grant.id).toBe(f.currentGrantID); expect(descriptor.grant.id).not.toBe(f.creatorGrantID);
+      await f.authService.revokeGrant(f.parent, f.creatorGrantID!);
+    }
+    await expect(inTransaction(pool!, client => assertOriginalAuthorityCurrent(client, f.auth, admitted.identity, f.serving))).resolves.toBeUndefined();
+    for (const change of ["auth_session_id=$2", "original_authority=NULL", "execution_authority_expires_at=execution_authority_expires_at+interval '1 hour'"]) {
+      await expect(pool!.query(`UPDATE legacy_chat_task_attempts SET ${change} WHERE id=$1`, change.includes("$2") ? [admitted.identity.attemptID, randomUUID()] : [admitted.identity.attemptID]))
+        .rejects.toMatchObject({ code: "23514" });
+    }
+    expect(f.providerCalls()).toBe(0);
+  });
+
+  it.each(["capir", "operator"] as const)("B actual %s revocation after held HTTP provider denies every completed receipt", async branch => {
+    const f = await fixture(branch), key = randomUUID();
+    const running = f.app.inject({ method: "POST", url: "/v1/chat/unscoped-tasks", headers: { authorization: `Bearer ${f.token}` },
+      payload: { idempotency_key: key, objective: "Synthetic held original authority" } }).then(response => response);
+    try {
+      await vi.waitFor(() => expect(f.providerCalls()).toBe(1), { timeout: 15_000 });
+      if (branch === "capir") await f.authService.revokeGrant(f.parent, f.currentGrantID!);
+      else await pool!.query("UPDATE capir_test_provisioners SET state='revoked',revoked_at=clock_timestamp() WHERE id=(SELECT owner_principal_id FROM lab_test_workspaces WHERE id=$1)", [f.workspaceID]);
+      f.release(); const response = await running;
+      expect(response.statusCode, response.body).toBe(409); expect(response.json().error.code).toBe("LEGACY_CHAT_AUTHORITY_EXPIRED");
+      expect((await pool!.query("SELECT 1 FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2 AND (status='completed' OR response_body IS NOT NULL)", [f.auth.accountId, key])).rowCount).toBe(0);
+      expect((await pool!.query("SELECT 1 FROM product_runs WHERE account_id=$1 AND status IN ('completed','fallback')", [f.auth.accountId])).rowCount).toBe(0);
+    } finally { f.release(); await running; }
+  });
+
+  it.each(["workspace", "account", "grant"] as const)("B held %s denies before the initial monitor or provider allocation", async kind => {
+    const f = await fixture(kind === "grant" ? "capir" : "human"), key = randomUUID();
+    let blocker: PoolClient | undefined;
+    try {
+      blocker = await pool!.connect();
+      await blocker.query("BEGIN");
+      if (kind === "workspace") await blocker.query("SELECT id FROM lab_test_workspaces WHERE id=$1 FOR UPDATE", [f.workspaceID]);
+      else if (kind === "account") await blocker.query("SELECT id FROM accounts WHERE id=$1 FOR UPDATE", [f.auth.accountId]);
+      else await blocker.query("SELECT id FROM capir_auth_grants WHERE id=$1 FOR UPDATE", [f.currentGrantID]);
+      const response = await f.app.inject({ method: "POST", url: "/v1/chat/unscoped-tasks", headers: { authorization: `Bearer ${f.token}` },
+        payload: { idempotency_key: key, objective: "Synthetic contested admission" } });
+      expect(response.statusCode, response.body).toBe(409); expect(response.json().error.code).toBe("LEGACY_CHAT_AUTHORITY_BUSY");
+      expect(f.providerCalls()).toBe(0);
+      expect((await pool!.query("SELECT 1 FROM product_runs WHERE account_id=$1", [f.auth.accountId])).rowCount).toBe(0);
+      expect((await pool!.query("SELECT 1 FROM legacy_chat_task_intents WHERE account_id=$1", [f.auth.accountId])).rowCount).toBe(0);
+    } finally {
+      try { await blocker?.query("ROLLBACK"); } finally {
+        try { blocker?.release(); } finally { f.release(); }
+      }
+    }
+  });
+
+  it.each(["disabled", "origin", "audience"] as const)("B synchronous %s serving change during the final clock rolls back staged completion", async kind => {
+    const f = await fixture("operator");
+    const admission = await inTransaction(pool!, client => admitLifecycleTask(client, { auth: f.auth, operation: "create_unscoped_chat_task",
+      request: { synthetic: true }, idempotencyKey: randomUUID(), clocks: () => admitAuthorityClocks(client, f.auth, {}, f.serving) }));
+    let audience = [f.auth.accountId];
+    const serving = () => ({ ...operatorTestDeployment(f.config), workspaceIds: audience });
+    let staged = false;
+    await expect(inTransaction(pool!, async client => {
+      const supplied = { query: async (sql: string, values?: unknown[]) => {
+        const result = await client.query(sql, values);
+        if (staged && sql === "SELECT clock_timestamp() AS checked_at") {
+          if (kind === "disabled") f.config.internalLabEnabled = false;
+          else if (kind === "origin") f.config.capirTests!.backendOrigin = "https://changed.test.invalid";
+          else audience = [];
+        }
+        return result;
+      } } as PoolClient;
+      return withOriginalAuthorityFinalization(supplied, f.auth, admission.identity, async () => {
+        await client.query("UPDATE legacy_chat_task_attempts SET state='completed' WHERE id=$1", [admission.identity.attemptID]); staged = true;
+      }, () => undefined, serving);
+    })).rejects.toMatchObject({ code: kind === "audience" ? "DEPLOYMENT_WORKSPACE_NOT_ADMITTED" : "LEGACY_CHAT_AUTHORITY_UNAVAILABLE" });
+    expect((await pool!.query("SELECT state FROM legacy_chat_task_attempts WHERE id=$1", [admission.identity.attemptID])).rows[0]!.state).toBe("running");
+  });
+
+  it.each(["workspace", "account", "grant", "attempt"] as const)("B held %s rolls heartbeat renewal back and retains physical registration", async kind => {
+    const f = await fixture(kind === "grant" ? "capir" : "human");
+    const admitted = await inTransaction(pool!, client => admitLifecycleTask(client, { auth: f.auth, operation: "create_unscoped_chat_task",
+      request: { synthetic: true }, idempotencyKey: randomUUID(), clocks: () => admitAuthorityClocks(client, f.auth, {}, f.serving) }));
+    const before = (await pool!.query("SELECT lease_until,heartbeat_at FROM legacy_chat_task_attempts WHERE id=$1", [admitted.identity.attemptID])).rows[0]!;
+    const controller = new AbortController(); let settle!: () => void;
+    const settled = new Promise<void>(resolve => { settle = resolve; });
+    registerLifecycleRun(admitted.identity, controller, settled);
+    let blocker: PoolClient | undefined; let stop: () => void = () => undefined;
+    try {
+      blocker = await pool!.connect();
+      await blocker.query("BEGIN");
+      if (kind === "workspace") await blocker.query("SELECT id FROM lab_test_workspaces WHERE id=$1 FOR UPDATE", [f.workspaceID]);
+      else if (kind === "account") await blocker.query("SELECT id FROM accounts WHERE id=$1 FOR UPDATE", [f.auth.accountId]);
+      else if (kind === "grant") await blocker.query("SELECT id FROM capir_auth_grants WHERE id=$1 FOR UPDATE", [f.currentGrantID]);
+      else await blocker.query("SELECT id FROM legacy_chat_task_attempts WHERE id=$1 FOR UPDATE", [admitted.identity.attemptID]);
+      stop = startLifecycleHeartbeat(pool!, f.auth, admitted.identity, controller, 4000, f.serving);
+      await vi.waitFor(() => expect(controller.signal.aborted).toBe(true), { timeout: 4000 });
+      const after = (await pool!.query("SELECT lease_until,heartbeat_at FROM legacy_chat_task_attempts WHERE id=$1", [admitted.identity.attemptID])).rows[0]!;
+      expect(after).toEqual(before); expect(pendingLifecycleRunForAttempt(admitted.identity.attemptID)).not.toBeNull();
+    } finally {
+      stop();
+      try { await blocker?.query("ROLLBACK"); } finally {
+        try { blocker?.release(); } finally { settle(); releaseLifecycleRun(admitted.identity.attemptID); f.release(); }
+      }
+    }
+  });
+
+  it.each((["unscoped", "relationship", "person"] as const).flatMap(route =>
+    (["disabled", "origin"] as const).map(change => [route, change] as const),
+  ))("B returned %s actual final clock denies serving %s and rolls back canonical success", async (route, change) => {
+    const f = await fixture("operator"), context = route === "relationship" ? await relationship(f.auth) : null;
+    const request = route === "person" ? personRequest() : { idempotency_key: randomUUID(), objective: "Synthetic actual final-clock serving",
+      ...(context ? { person_id: context.person, relationship_context_id: context.context } : {}) };
+    let changed = false;
+    f.queryControl.after = async (sql, _values, client) => {
+      if (changed || !client || sql !== "SELECT clock_timestamp() AS checked_at") return;
+      const staged = await client.query("SELECT 1 FROM legacy_chat_task_attempts WHERE account_id=$1 AND state='completed'", [f.auth.accountId]);
+      if (!staged.rowCount) return;
+      changed = true;
+      if (change === "disabled") f.config.internalLabEnabled = false;
+      else f.config.capirTests!.backendOrigin = "https://changed.test.invalid";
+    };
+    const running = f.app.inject({ method: "POST", url: route === "person" ? "/v1/person-research/tasks" : route === "relationship" ? "/v1/chat/tasks" : "/v1/chat/unscoped-tasks",
+      headers: { authorization: `Bearer ${f.token}` }, payload: request }).then(response => response);
+    try {
+      await vi.waitFor(() => expect(f.providerCalls()).toBe(1), { timeout: 15_000 }); f.release(); const response = await running;
+      expect(changed).toBe(true); expect(response.statusCode, response.body).toBe(401);
+      expect(response.json().error.code).toBe("LEGACY_CHAT_AUTHORITY_UNAVAILABLE");
+      expect((await pool!.query("SELECT 1 FROM legacy_chat_task_attempts WHERE account_id=$1 AND state='completed'", [f.auth.accountId])).rowCount).toBe(0);
+      expect((await pool!.query("SELECT 1 FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2 AND (status='completed' OR response_body IS NOT NULL)", [f.auth.accountId, request.idempotency_key])).rowCount).toBe(0);
+      expect((await pool!.query("SELECT 1 FROM product_runs WHERE account_id=$1 AND status IN ('completed','fallback')", [f.auth.accountId])).rowCount).toBe(0);
+      expect(f.providerCalls()).toBe(1);
+    } finally { f.release(); await running; }
+  });
+
+  it.each(["workspace", "account", "grant"] as const)("B physical held %s aborts actual HTTP heartbeat without renewing or releasing the producer", async kind => {
+    const f = await fixture(kind === "grant" ? "capir" : "human"), key = randomUUID();
+    const running = f.app.inject({ method: "POST", url: "/v1/chat/unscoped-tasks", headers: { authorization: `Bearer ${f.token}` },
+      payload: { idempotency_key: key, objective: "Synthetic actual heartbeat owner" } }).then(response => response);
+    let blocker: PoolClient | undefined;
+    try {
+      await vi.waitFor(() => expect(f.providerCalls()).toBe(1), { timeout: 15_000 });
+      const attempt = (await pool!.query<{ id: string }>(
+        "SELECT id FROM legacy_chat_task_attempts WHERE account_id=$1", [f.auth.accountId])).rows[0]!;
+      expect(f.providerSignal()?.aborted).toBe(false);
+      blocker = await pool!.connect(); await blocker.query("BEGIN");
+      if (kind === "workspace") await blocker.query("SELECT id FROM lab_test_workspaces WHERE id=$1 FOR UPDATE", [f.workspaceID]);
+      else if (kind === "account") await blocker.query("SELECT id FROM accounts WHERE id=$1 FOR UPDATE", [f.auth.accountId]);
+      else await blocker.query("SELECT id FROM capir_auth_grants WHERE id=$1 FOR UPDATE", [f.currentGrantID]);
+      const before = (await pool!.query("SELECT lease_until,heartbeat_at FROM legacy_chat_task_attempts WHERE id=$1", [attempt.id])).rows[0]!;
+      await vi.waitFor(() => expect(f.providerSignal()?.aborted).toBe(true), { timeout: 22_000 });
+      const after = (await pool!.query("SELECT lease_until,heartbeat_at FROM legacy_chat_task_attempts WHERE id=$1", [attempt.id])).rows[0]!;
+      expect(after).toEqual(before);
+      expect(pendingLifecycleRunForAttempt(attempt.id)).not.toBeNull();
+      await blocker.query("ROLLBACK"); blocker.release(); blocker = undefined;
+      // Actual revoker must commit while the synthetic adapter remains held.
+      // Abort does not imply provider settlement or permit registry removal.
+      if (kind === "grant") expect((await f.authService.revokeGrant(f.parent, f.currentGrantID!)).revoked_grant_id).toBe(f.currentGrantID);
+      else expect((await revokeCurrentSession(pool!, f.parent)).revoked_session_id).toBe(f.parent.sessionId);
+      expect(pendingLifecycleRunForAttempt(attempt.id)).not.toBeNull(); expect(f.providerCalls()).toBe(1);
+      f.release(); const response = await running;
+      expect(response.statusCode, response.body).toBe(499); expect(response.json().error.code).toBe("LEGACY_CHAT_CANCELLED");
+      expect(pendingLifecycleRunForAttempt(attempt.id)).toBeNull();
+      expect((await pool!.query("SELECT 1 FROM idempotency_records WHERE account_id=$1 AND idempotency_key=$2 AND (status='completed' OR response_body IS NOT NULL)", [f.auth.accountId, key])).rowCount).toBe(0);
+    } finally {
+      try { await blocker?.query("ROLLBACK"); } finally {
+        try { blocker?.release(); } finally { f.release(); await running; }
+      }
+    }
+  }, 45_000);
+
+  it.each(["disabled", "origin"] as const)("B serving %s change in the actual monitor clock admits no monitor or provider", async kind => {
+    const f = await fixture(kind === "disabled" ? "capir" : "operator");
+    let clocks = 0;
+    f.queryControl.after = async sql => {
+      if (sql !== "SELECT clock_timestamp() AS checked_at") return;
+      clocks++;
+      if (clocks !== 1) return;
+      if (kind === "disabled") f.config.capirAuth!.enabled = false;
+      else f.config.capirTests!.backendOrigin = "https://changed.test.invalid";
+    };
+    const response = await f.app.inject({ method: "POST", url: "/v1/chat/unscoped-tasks", headers: { authorization: `Bearer ${f.token}` },
+      payload: { idempotency_key: randomUUID(), objective: "Synthetic serving clock admission" } });
+    expect(clocks).toBe(1); expect(response.statusCode, response.body).toBe(401);
+    expect(response.json().error.code).toBe("LEGACY_CHAT_AUTHORITY_UNAVAILABLE");
+    expect(f.providerCalls()).toBe(0);
+    expect((await pool!.query("SELECT 1 FROM product_runs WHERE account_id=$1", [f.auth.accountId])).rowCount).toBe(0);
+  });
+
+  it.each(["capture", "original"] as const)("B %s guard rechecks serving after its actual last clock", async kind => {
+    const f = await fixture("operator");
+    const admission = await inTransaction(pool!, client => admitLifecycleTask(client, { auth: f.auth, operation: "create_unscoped_chat_task",
+      request: { synthetic: true }, idempotencyKey: randomUUID(), clocks: () => admitAuthorityClocks(client, f.auth, {}, f.serving) }));
+    await expect(inTransaction(pool!, async client => {
+      let clocks = 0;
+      const supplied = { query: async (sql: string, values?: unknown[]) => {
+        const result = await client.query(sql, values);
+        if (sql === "SELECT clock_timestamp() AS checked_at" && ++clocks === (kind === "capture" ? 1 : 3)) f.config.internalLabEnabled = false;
+        return result;
+      } } as PoolClient;
+      if (kind === "capture") await captureCurrentReaderAuthority(supplied, f.auth, f.serving);
+      else await assertOriginalAuthorityCurrent(supplied, f.auth, admission.identity, f.serving);
+    })).rejects.toMatchObject({ code: "LEGACY_CHAT_AUTHORITY_UNAVAILABLE" });
+  });
+
+  it("B canonical cleanup rejects disabled or miswired metadata and ordinary table guards", async () => {
+    const f = await fixture("human");
+    expect((await f.service.tables()).length).toBeGreaterThan(0);
+    for (const table of ["legacy_chat_task_attempts", "product_runs"]) {
+      await expect(inTransaction(pool!, async client => {
+        await client.query(`ALTER TABLE ${table} DISABLE TRIGGER lab_test_workspace_write_guard`);
+        return f.service.tables(client);
+      })).rejects.toMatchObject({ code: "LAB_WORKSPACE_SCHEMA_CHANGED" });
+      await expect(inTransaction(pool!, async client => {
+        await client.query(`DROP TRIGGER lab_test_workspace_write_guard ON ${table}`);
+        const wrong = table === "product_runs" ? "legacy_chat_metadata_workspace_write_guard" : "lab_test_workspace_write_guard";
+        await client.query(`CREATE TRIGGER lab_test_workspace_write_guard BEFORE INSERT OR UPDATE ON ${table} FOR EACH ROW EXECUTE FUNCTION ${wrong}()`);
+        return f.service.tables(client);
+      })).rejects.toMatchObject({ code: "LAB_WORKSPACE_SCHEMA_CHANGED" });
+    }
+    expect((await f.service.tables()).length).toBeGreaterThan(0);
+    await f.service.stopOperatorRun(f.workspaceID, randomUUID());
+    expect((await pool!.query("SELECT state FROM lab_test_workspaces WHERE id=$1", [f.workspaceID])).rows[0]!.state).toBe("deleted");
+  });
+});

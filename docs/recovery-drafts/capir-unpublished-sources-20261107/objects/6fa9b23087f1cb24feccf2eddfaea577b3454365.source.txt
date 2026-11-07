@@ -1,0 +1,91 @@
+-- Incremental Session synchronization: durable partial status and exact
+-- per-frame identity. The active transfer identity and target digest live in
+-- raw-free canonical columns; every frame is committed through the full
+-- canonical Session validation, never through a raw staging store.
+--
+-- Replay storage keeps source-free metadata only (key, revision, transfer,
+-- request hash). The exact uncertain frame intent stays on the client's own
+-- durable transfer store, governed by the same account/endpoint/retention
+-- fences; no frame body or user content is persisted here.
+ALTER TABLE agent_sessions
+  ADD COLUMN sync_state text NOT NULL DEFAULT 'complete',
+  ADD COLUMN sync_transfer_id uuid,
+  ADD COLUMN sync_target_payload_digest text,
+  ADD COLUMN sync_started_at timestamptz,
+  ADD COLUMN sync_frame_count integer NOT NULL DEFAULT 0;
+ALTER TABLE agent_sessions
+  ADD CONSTRAINT agent_sessions_sync_state_check
+    CHECK (sync_state IN ('complete','incomplete')),
+  ADD CONSTRAINT agent_sessions_sync_transfer_check
+    CHECK ((sync_transfer_id IS NULL) = (sync_target_payload_digest IS NULL)),
+  ADD CONSTRAINT agent_sessions_sync_digest_check
+    CHECK (sync_target_payload_digest IS NULL
+      OR sync_target_payload_digest ~ '^[0-9a-f]{64}$'),
+  ADD CONSTRAINT agent_sessions_sync_frame_count_check
+    CHECK (sync_frame_count >= 0);
+
+-- Exact per-frame identity retained so a lost response can replay after a
+-- process restart without duplicating or losing a frame. Rows carry the same
+-- retention as their Session: the retention sweep removes them with the
+-- deleted or expired Session, and a deleted or expired Session can never be
+-- resurrected through a replay.
+CREATE TABLE agent_session_delta_frames (
+  account_id uuid NOT NULL,
+  session_id uuid NOT NULL,
+  actor_user_id uuid NOT NULL,
+  idempotency_key uuid NOT NULL,
+  transfer_id uuid NOT NULL,
+  frame_index integer NOT NULL CHECK (frame_index > 0),
+  request_hash text NOT NULL,
+  resulting_revision integer NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, actor_user_id, idempotency_key),
+  FOREIGN KEY (account_id, session_id) REFERENCES agent_sessions(account_id, id),
+  FOREIGN KEY (account_id, actor_user_id) REFERENCES users(account_id, id)
+);
+CREATE INDEX agent_session_delta_frames_session_idx
+  ON agent_session_delta_frames(account_id, session_id, frame_index);
+
+-- The incomplete-sync queue fence also lives in the write transaction itself:
+-- admitting or moving work into queued/running state for a visibly incomplete
+-- Session is refused at the row write, so no check-then-act window remains.
+-- Stop, withdrawal, deletion and terminal transitions stay usable.
+CREATE FUNCTION agent_session_delta_queue_fence() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE sync text;
+BEGIN
+  IF TG_TABLE_NAME = 'conversation_queue_entries' THEN
+    IF TG_OP = 'INSERT'
+      OR (NEW.status IS DISTINCT FROM OLD.status AND NEW.status IN ('queued','running')) THEN
+      SELECT s.sync_state INTO sync FROM agent_sessions s
+        WHERE s.account_id = NEW.account_id AND s.id = NEW.session_id;
+      IF sync = 'incomplete' THEN
+        RAISE EXCEPTION 'CONVERSATION_QUEUE_SYNC_INCOMPLETE'
+          USING ERRCODE = 'P0001';
+      END IF;
+    END IF;
+  ELSIF TG_OP = 'UPDATE' AND OLD.paused AND NOT NEW.paused THEN
+    SELECT s.sync_state INTO sync FROM agent_sessions s
+      WHERE s.account_id = NEW.account_id AND s.id = NEW.session_id;
+    IF sync = 'incomplete' THEN
+      RAISE EXCEPTION 'CONVERSATION_QUEUE_SYNC_INCOMPLETE'
+        USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER conversation_queue_entries_sync_fence
+  BEFORE INSERT OR UPDATE ON conversation_queue_entries
+  FOR EACH ROW EXECUTE FUNCTION agent_session_delta_queue_fence();
+CREATE TRIGGER conversation_queue_state_sync_fence
+  BEFORE UPDATE ON conversation_queue_state
+  FOR EACH ROW EXECUTE FUNCTION agent_session_delta_queue_fence();
+
+-- New account-owned replay metadata participates in real Lab coverage, purge
+-- ordering and the same stopped/expired workspace write fence as its Session.
+INSERT INTO lab_test_workspace_table_manifest(table_name, scope) VALUES
+  ('agent_session_delta_frames', 'account');
+CREATE TRIGGER lab_test_workspace_write_guard
+  BEFORE INSERT OR UPDATE ON agent_session_delta_frames
+  FOR EACH ROW EXECUTE FUNCTION lab_test_workspace_write_guard();

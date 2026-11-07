@@ -1,0 +1,209 @@
+import CryptoKit
+import Foundation
+
+/// Deterministic whole-intent framing for incremental Session synchronization.
+///
+/// Byte-for-byte compatible with `agentSessionDeltaFraming.ts`: the transfer's
+/// target digest is SHA-256 over a domain-separated deterministic JSON framing
+/// (type tags, big-endian IEEE-754 float64 numbers with -0 normalized to zero,
+/// UTF-16 code-unit strings with an explicit length and no lone surrogates,
+/// ordered arrays, objects sorted by UTF-16 code units). The shared fixture
+/// vectors in `AgentSessionDeltaFramingFixtures` prove TypeScript and Swift
+/// frame identical bytes. A digest never grants authority by itself: the
+/// server always rebuilds and fully validates the canonical record.
+enum AgentSessionDeltaFramingError: Error, Equatable {
+    case loneSurrogate
+    case nonFiniteNumber
+    case unsupportedValue
+    case deepNesting
+}
+
+enum AgentSessionDeltaFraming {
+    static let domain = "talent-signal.session-intent.v1"
+
+    static func frame(_ value: Any) throws -> Data {
+        var writer = Data()
+        writer.appendUInt32BE(UInt32(domain.utf8.count))
+        writer.append(Data(domain.utf8))
+        try frameValue(value, into: &writer, depth: 0)
+        return writer
+    }
+
+    static func sessionIntentDigest(_ value: Any) throws -> String {
+        SHA256.hex(try frame(value))
+    }
+
+    private static func frameValue(_ value: Any, into writer: inout Data, depth: Int) throws {
+        guard depth <= 64 else { throw AgentSessionDeltaFramingError.deepNesting }
+        switch value {
+        case is NSNull:
+            writer.append(0x6e)
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                writer.append(0x62)
+                writer.append(number.boolValue ? 0x01 : 0x00)
+            } else {
+                writer.append(0x64)
+                var raw = number.doubleValue
+                if !raw.isFinite { throw AgentSessionDeltaFramingError.nonFiniteNumber }
+                if raw == 0 { raw = 0 }  // -0 frames exactly like 0
+                writer.appendDoubleBE(raw)
+            }
+        case let string as String:
+            let units = string.utf16
+            try Self.rejectLoneSurrogate(string)
+            writer.append(0x73)
+            writer.appendUInt32BE(UInt32(units.count))
+            for unit in units { writer.appendUInt16BE(unit) }
+        case let array as [Any]:
+            writer.append(0x61)
+            writer.appendUInt32BE(UInt32(array.count))
+            for item in array { try frameValue(item, into: &writer, depth: depth + 1) }
+        case let object as [String: Any]:
+            writer.append(0x6f)
+            let keys = object.keys.sorted { lhs, rhs in
+                // Lexicographic by UTF-16 code units.
+                Array(lhs.utf16).lexicographicallyPrecedes(Array(rhs.utf16))
+            }
+            writer.appendUInt32BE(UInt32(keys.count))
+            for key in keys {
+                try frameValue(key, into: &writer, depth: depth + 1)
+                try frameValue(object[key] as Any, into: &writer, depth: depth + 1)
+            }
+        default:
+            throw AgentSessionDeltaFramingError.unsupportedValue
+        }
+    }
+
+    private static func rejectLoneSurrogate(_ value: String) throws {
+        let units = Array(value.utf16)
+        var index = 0
+        while index < units.count {
+            let unit = units[index]
+            if unit >= 0xD800 && unit <= 0xDBFF {
+                guard index + 1 < units.count, units[index + 1] >= 0xDC00 && units[index + 1] <= 0xDFFF else {
+                    throw AgentSessionDeltaFramingError.loneSurrogate
+                }
+                index += 2
+            } else if unit >= 0xDC00 && unit <= 0xDFFF {
+                throw AgentSessionDeltaFramingError.loneSurrogate
+            } else {
+                index += 1
+            }
+        }
+    }
+}
+
+extension Data {
+    mutating func appendUInt16BE(_ value: UInt16) {
+        append(UInt8((value >> 8) & 0xFF))
+        append(UInt8(value & 0xFF))
+    }
+
+    mutating func appendUInt32BE(_ value: UInt32) {
+        append(UInt8((value >> 24) & 0xFF))
+        append(UInt8((value >> 16) & 0xFF))
+        append(UInt8((value >> 8) & 0xFF))
+        append(UInt8(value & 0xFF))
+    }
+
+    mutating func appendDoubleBE(_ value: Double) {
+        var bits = value.bitPattern.bigEndian
+        Swift.withUnsafeBytes(of: &bits) { append(contentsOf: $0) }
+    }
+}
+
+extension SHA256 {
+    static func hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Identifier-canonical declared intent: UUID fields are lowercased exactly
+/// like the server's stored canonical form before framing, so both sides
+/// compute the same digest without trusting caller-controlled checksums.
+enum AgentSessionDeltaCanonical {
+    private static let uuidFields = [
+        "id", "personID", "relationshipContextID", "identityResolutionCaseID",
+        "originSessionID", "originTurnID",
+    ]
+
+    static func sessionIntent(_ payload: [String: Any]) -> [String: Any] {
+        var result = payload
+        for field in uuidFields {
+            if let value = result[field] as? String { result[field] = canonicalID(value) }
+        }
+        for field in ["screenshotTaskIDs", "inheritedScreenshotTaskIDs"] {
+            if let list = result[field] as? [Any] {
+                result[field] = list.map { ($0 as? String).map(canonicalID) ?? $0 }
+            }
+        }
+        if var turns = result["turns"] as? [[String: Any]] {
+            for index in turns.indices {
+                if let id = turns[index]["id"] as? String { turns[index]["id"] = canonicalID(id) }
+                if var response = turns[index]["response"] as? [String: Any] {
+                    for key in ["taskID", "contextManifestID", "knowledgeSnapshotID"] {
+                        if let value = response[key] as? String { response[key] = canonicalID(value) }
+                    }
+                    if let media = response["media"] as? [[String: Any]] {
+                        response["media"] = media.map { item in
+                            var copy = item
+                            if let id = copy["id"] as? String { copy["id"] = canonicalID(id) }
+                            return copy
+                        }
+                    }
+                    turns[index]["response"] = response
+                }
+            }
+            result["turns"] = turns
+        }
+        if var receipts = result["contactReceipts"] as? [[String: Any]] {
+            for index in receipts.indices {
+                for key in [
+                    "id", "captureID", "resourceID", "duplicateOfResourceID", "personID",
+                    "relationshipContextID", "resolutionCaseID",
+                ] {
+                    if let value = receipts[index][key] as? String {
+                        receipts[index][key] = canonicalID(value)
+                    }
+                }
+            }
+            result["contactReceipts"] = receipts
+        }
+        if var proposal = result["contactProposal"] as? [String: Any] {
+            for key in ["sessionID", "sourceMessageID"] {
+                if let value = proposal[key] as? String { proposal[key] = canonicalID(value) }
+            }
+            result["contactProposal"] = proposal
+        }
+        return result
+    }
+
+    static func sessionIntentDigest(_ payload: [String: Any]) throws -> String {
+        try AgentSessionDeltaFraming.sessionIntentDigest(sessionIntent(payload))
+    }
+
+    /// Recursively canonicalizes UUID-shaped identifier strings so identity
+    /// comparisons never depend on client casing (the backend normalizes IDs
+    /// lowercase while DTO encoders produce uppercase).
+    static func canonicalizingIdentityStrings(_ value: Any) -> Any {
+        switch value {
+        case let string as String:
+            return canonicalID(string)
+        case let array as [Any]:
+            return array.map(canonicalizingIdentityStrings)
+        case let object as [String: Any]:
+            return object.mapValues(canonicalizingIdentityStrings)
+        default:
+            return value
+        }
+    }
+
+    static func canonicalID(_ value: String) -> String {
+        // Mirrors the server's canonical identifier rule exactly: only
+        // UUID-shaped values are lowercased.
+        let pattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        guard value.range(of: pattern, options: .regularExpression) != nil else { return value }
+        return value.lowercased()
+    }
+}

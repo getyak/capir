@@ -1,0 +1,133 @@
+#!/usr/bin/env node
+/**
+ * Owned login browser substitute for capir proof runs (test adapter).
+ *
+ * The real `auth login` opens the USER's system browser. In a proof run this
+ * owned headless Chromium replaces that opener (CAPIR_BROWSER_OPEN) so the
+ * actual built CLI loopback login can be observed end to end: real Web login
+ * with the disposable fixture account, real safe login return path, real
+ * scoped consent form, explicit Allow, and the real loopback callback.
+ *
+ * This does NOT verify how a human's own browser, profile, or other operating
+ * systems behave; receipts label the observation accordingly.
+ *
+ * Usage: proof-login-browser.mjs <authorize-url>
+ * Fixture credentials arrive via CAPIR_PROOF_LOGIN_IDENTIFIER / _PASSWORD
+ * (never argv). Screenshots and receipts go to CAPIR_PROOF_ARTIFACT_DIR.
+ */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const authorizeUrl = process.argv[2];
+const artifactDir = process.env.CAPIR_PROOF_ARTIFACT_DIR;
+const identifier = process.env.CAPIR_PROOF_LOGIN_IDENTIFIER;
+const password = process.env.CAPIR_PROOF_LOGIN_PASSWORD;
+
+if (!authorizeUrl || !identifier || !password) {
+  receipt({ ok: false, error: "missing authorize URL or fixture credentials" });
+  process.exit(2);
+}
+
+const observations = [];
+const startedAt = new Date().toISOString();
+
+// Receipts record only safe callback origin/path, query parameter NAMES and
+// status outcomes — never authorization code/state values or bearer secrets.
+const TOKEN_LIKE = /(?<![A-Za-z0-9._~-])(?![a-f0-9]{64}(?![A-Za-z0-9._~-]))[A-Za-z0-9._~-]{43,128}(?![A-Za-z0-9._~-])/g;
+function safeUrl(url) {
+  const parsed = new URL(url);
+  const names = [...parsed.searchParams.keys()].sort().join(",");
+  return `${parsed.origin}${parsed.pathname}${names ? ` (query: ${names})` : ""}`;
+}
+function redact(value) {
+  return JSON.stringify(value, null, 2)
+    .replace(/Bearer[ \t]+[^\r\n \t]+/gi, "Bearer [REDACTED]")
+    .replace(/([?&](?:code|state|token|secret)=)[^&\s"']+/gi, "$1[REDACTED]")
+    .replace(TOKEN_LIKE, "[REDACTED]");
+}
+function receipt(value) {
+  if (!artifactDir) return;
+  mkdirSync(artifactDir, { recursive: true });
+  writeFileSync(
+    join(artifactDir, "login-browser-receipt.json"),
+    `${redact(value)}\n`,
+  );
+}
+const { chromium } = await import("playwright");
+const browser = await chromium.launch({ headless: true,
+  ...(process.env.CAPIR_TEST_CHROME_EXECUTABLE
+    ? { executablePath: process.env.CAPIR_TEST_CHROME_EXECUTABLE } : {}),
+});
+try {
+  // Owned browser, fresh context: no saved auth state of any real user.
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  await page.goto(authorizeUrl, { waitUntil: "domcontentloaded", timeout: 120_000 });
+  await page.waitForURL(/\/login\?/, { timeout: 120_000 });
+  const loginUrl = new URL(page.url());
+  const callbackUrl = loginUrl.searchParams.get("callbackUrl") ?? "";
+  if (!callbackUrl.startsWith("/capir/authorize")) {
+    throw new Error(`unsafe login return path: ${safeUrl(loginUrl)}`);
+  }
+  observations.push(`safe login return path observed: ${safeUrl(authorizeUrl)}`);
+
+  await page.fill('input[name="identifier"]', identifier);
+  await page.fill('input[name="password"]', password);
+  await Promise.all([
+    page.waitForURL(/\/onboarding|\/capir\/authorize/, { timeout: 120_000 }),
+    page.click('form:has(input[name="identifier"]) button[type="submit"]'),
+  ]);
+  if (page.url().includes("/onboarding")) {
+    // The real login flow routes through onboarding while preserving the safe
+    // return path; follow its link back to the authorization request.
+    await Promise.all([
+      page.waitForURL(/\/capir\/authorize/, { timeout: 120_000 }),
+      page.click('a[href^="/capir/authorize"]'),
+    ]);
+  }
+  observations.push("real Web password login completed and returned to the consent page");
+
+  await page.waitForSelector('[data-capir-consent-state="pending"]', { timeout: 60_000 });
+  const scopeText = (await page.textContent("main")) ?? "";
+  if (!scopeText.includes("授权范围") || !scopeText.includes("不会授权")) {
+    throw new Error("the scoped consent summary did not render");
+  }
+  observations.push("scoped Allow/Deny consent form rendered with explicit scope and non-scope");
+  if (artifactDir) {
+    mkdirSync(artifactDir, { recursive: true });
+    await page.screenshot({ path: join(artifactDir, "authorize-consent.png"), fullPage: true });
+  }
+
+  await Promise.all([
+    page.waitForURL(/^http:\/\/127\.0\.0\.1:\d+\/capir\/callback/, { timeout: 60_000 }),
+    page.click("[data-capir-consent-allow]"),
+  ]);
+  observations.push(
+    `Allow redirected to the validated loopback callback: ${safeUrl(page.url())} [status ${page.url().includes("/capir/callback") ? "callback-reached" : "unexpected"}]`,
+  );
+  if (artifactDir) {
+    await page.screenshot({ path: join(artifactDir, "authorize-callback.png") });
+  }
+
+  receipt({
+    ok: true,
+    observation_class: "test adapter (owned headless Chromium substituted for the system opener)",
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    observations,
+  });
+  await browser.close();
+  process.exit(0);
+} catch (error) {
+  receipt({
+    ok: false,
+    observation_class: "test adapter (owned headless Chromium substituted for the system opener)",
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    observations,
+    error: error instanceof Error ? error.message : String(error),
+  });
+  await browser.close().catch(() => {});
+  process.exit(1);
+}

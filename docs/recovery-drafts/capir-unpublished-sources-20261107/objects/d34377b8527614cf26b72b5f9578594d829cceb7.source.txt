@@ -1,0 +1,250 @@
+import { randomUUID } from "node:crypto";
+import { beforeAll, afterAll, describe, it, expect, vi } from "vitest";
+import { Pool, type PoolClient } from "pg";
+import { ScriptedAgentProvider } from "@talent-signal/agent";
+import { CONTRACT_VERSION, type ResourceCaptureRequest } from "@talent-signal/contracts";
+import { buildApp } from "../app.js";
+import { sha256 } from "../lib/hash.js";
+import type { AuthContext } from "./auth.js";
+import { createPursuitAgentTask } from "./agentTasks.js";
+
+const database = process.env.AGENT_TASK_ADMISSION_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) {
+  throw new Error("Use an owned disposable loopback database.");
+}
+const pool = database ? new Pool({ connectionString: database, max: 6 }) : null;
+let app: Awaited<ReturnType<typeof buildApp>>;
+let auth: AuthContext;
+let headers: { authorization: string }, otherHeaders: { authorization: string }, foreignHeaders: { authorization: string };
+let scopeBarrier: (() => Promise<void>) | null = null;
+let lookupBarrier: (() => Promise<void>) | null = null;
+const provider = new ScriptedAgentProvider([], () => ({ outcome: "no_action", reason_code: "NO_MATERIAL_CHANGE",
+  reason: "Synthetic lookup never executes this provider.", missing_evidence_refs: [] }));
+const execution = vi.spyOn(provider, "run");
+
+function controlledPool(onQuery: (text: string) => Promise<void>): Pool {
+  return new Proxy(pool!, { get(target, property) {
+    if (property === "connect") return async () => {
+      const client = await target.connect();
+      return new Proxy(client, { get(c, p) {
+        if (p === "query") return async (text: string, values?: unknown[]) => {
+          await onQuery(text);
+          return c.query(text, values);
+        };
+        const value = Reflect.get(c, p); return typeof value === "function" ? value.bind(c) : value;
+      } }) as PoolClient;
+    };
+    const value = Reflect.get(target, property); return typeof value === "function" ? value.bind(target) : value;
+  } });
+}
+beforeAll(async () => {
+  if (!pool || !database) return;
+  vi.stubEnv("LOG_LEVEL", "silent");
+  vi.stubEnv("TALENT_SIGNAL_OPIK_RUNTIME_POLICY", undefined);
+  const account = randomUUID(), user = randomUUID(), other = randomUUID(), foreign = randomUUID(), foreignUser = randomUUID();
+  const slug = `task-lookup-${randomUUID()}`;
+  for (const [id, name] of [[account, slug], [foreign, `foreign-${slug}`]]) {
+    await pool.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic exact lookup')", [id, name]);
+  }
+  for (const [id, accountID, email] of [[user, account, "lookup@example.test"], [other, account, "other@example.test"],
+    [foreignUser, foreign, "foreign@example.test"]]) {
+    await pool.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic lookup','simulated_human')",
+      [id, accountID, email]);
+  }
+  const config = { databaseUrl: database, host: "127.0.0.1", port: 0, allowedOrigins: [], appleSignInAudiences: [],
+    appleSignInEnabled: false, passwordAuthEnabled: false, passwordRegistrationEnabled: false,
+    simulatedAuthEnabled: true, internalLabEnabled: true, retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3600 };
+  app = await buildApp({ pool: controlledPool(async (text) => {
+    if (text.includes("FROM idempotency_records records")) await lookupBarrier?.();
+    if (text.includes("SELECT captures.id")) await scopeBarrier?.();
+  }), config, remoteChatProvider: null, privateConversationProvider: null, personResearchProvider: null,
+    screenshotContact: null, labProviders: new Map(), labJobWorkerEnabled: false });
+  for (const [accountSlug, email] of [[slug, "lookup@example.test"], [slug, "other@example.test"], [`foreign-${slug}`, "foreign@example.test"]]) {
+    const login = await app.inject({ method: "POST", url: "/v1/auth/simulated-login", payload: {
+      account_slug: accountSlug, user_email: email, client_label: "isolated-exact-admission" } });
+    expect(login.statusCode, login.body).toBe(200);
+    const h = { authorization: `Bearer ${login.json().access_token}` };
+    if (email === "lookup@example.test") {
+      headers = h;
+      const session = (await pool.query("SELECT id FROM sessions WHERE token_hash=$1", [sha256(login.json().access_token)])).rows[0];
+      auth = { accountId: account, accountSlug: slug, userId: user, userEmail: email,
+        userKind: "simulated_human", sessionId: session.id };
+    } else if (email === "other@example.test") otherHeaders = h; else foreignHeaders = h;
+  }
+}, 30_000);
+afterAll(async () => { lookupBarrier = null; scopeBarrier = null; await app?.close(); await pool?.end(); vi.unstubAllEnvs(); });
+
+async function fixture(emptyEvidence = false) {
+  const key = randomUUID(), resourceKey = `synthetic-${key}`;
+  const captureBody: ResourceCaptureRequest = { contract_version: CONTRACT_VERSION, idempotency_key: `capture-${key}`,
+    channel: "ios_share", purpose: "Synthetic exact task admission", captured_at: new Date().toISOString(), source_timezone: "UTC",
+    person_scope: { status: "new_person", display_label: "Synthetic lookup subject", relationship_context: {
+      status: "proposed", label: "Synthetic lookup", purpose: "Read-only task recovery", role: "Candidate" },
+      binding_basis: "The evaluator explicitly creates a synthetic person." },
+    resource: { client_resource_id: resourceKey, kind: "conversation_transcript", display_name: "Synthetic reviewed text",
+      media_type: "text/plain", observed_at: new Date().toISOString(), source_timezone: "UTC",
+      retention: { requested_mode: "evidence_crop", source_scope: "reviewed_selected_text" } },
+    fragments: [{ client_resource_id: resourceKey, kind: "message", sequence: 0,
+      text: "A synthetic person can discuss the project next Thursday.", locator: {
+        kind: "message", source_message_id: key, sequence: 0, speaker_side: "left" },
+      attribution: { actor_kind: "candidate", status: "confirmed" }, review_status: "reviewed",
+      parser: { name: "synthetic-admission", version: "1.0.0" } }] };
+  const captured = await app.inject({ method: "POST", url: "/v1/resource-captures", headers, payload: captureBody });
+  expect(captured.statusCode, captured.body).toBe(201);
+  const capture = captured.json();
+  const detail = await app.inject({ method: "GET", url: `/v1/resources/${capture.resource.id}`, headers });
+  expect(detail.statusCode, detail.body).toBe(200);
+  const evidence = detail.json().fragments[0].id;
+  const created = await app.inject({ method: "POST", url: "/v1/pursuits", headers, payload: {
+    idempotency_key: `pursuit-${key}`, type: "recruiting", title: "Synthetic lookup pursuit", target_outcome: "mutual_final_decision",
+    target_date: "2027-01-01", status: "active", milestone: "shortlist_review", roles: [{ subject_ref: {
+      type: "person", id: capture.identity.person_id }, role_type: "candidate", status: "active", confidence: "confirmed",
+      basis_kind: "evidence_supported", evidence_refs: [evidence] }] } });
+  expect(created.statusCode, created.body).toBe(201);
+  const pursuit = created.json().pursuit;
+  const request = { contract_version: CONTRACT_VERSION, idempotency_key: `${key}:/?task`, expected_revision: pursuit.revision,
+    kind: "pre_call_briefing" as const, objective: "Original synthetic objective must never escape the admission envelope.",
+    capture_id: capture.capture_id, evidence_refs: emptyEvidence ? [] : [evidence], permission_ceiling: [
+      "read_pursuit", "read_evidence", "create_briefing_artifact", "stage_pursuit_proposal", "record_no_action"] as const };
+  const accepted = await createPursuitAgentTask(pool!, auth, pursuit.id, request, { provider, schedule: false });
+  return { pursuit, capture, evidence, request, task: accepted.body.task };
+}
+async function lookup(pursuit: string, key: string, h = headers) {
+  return app.inject({ method: "GET", url: `/v1/pursuits/${pursuit}/agent-task-admission?idempotency_key=${encodeURIComponent(key)}`, headers: h });
+}
+async function counts() {
+  return (await pool!.query(`SELECT (SELECT count(*) FROM agent_tasks)::int AS tasks,
+    (SELECT count(*) FROM agent_runs)::int AS runs, (SELECT count(*) FROM idempotency_records)::int AS records,
+    (SELECT count(*) FROM audit_events)::int AS audit`)).rows[0];
+}
+describe.skipIf(!database)("exact task admission registered HTTP and PostgreSQL", () => {
+  it("joins canonical task identity, ignores tampered replay body and performs no writes or execution", async () => {
+    const f = await fixture();
+    await pool!.query(`UPDATE idempotency_records SET response_body=$1::jsonb
+      WHERE account_id=$2 AND actor_user_id=$3 AND operation_scope=$4 AND idempotency_key=$5`,
+    [JSON.stringify({ task: { id: randomUUID(), objective: "Untrusted replay shadow" } }), auth.accountId, auth.userId,
+      `create_pursuit_agent_task:${f.pursuit.id}`, f.request.idempotency_key]);
+    const before = await counts();
+    const value = await lookup(f.pursuit.id, f.request.idempotency_key);
+    expect(value.statusCode, value.body).toBe(200);
+    expect(value.headers["cache-control"]).toBe("no-store");
+    expect(value.json()).toEqual({ contract_version: CONTRACT_VERSION, admission_state: "accepted", task_id: f.task.id,
+      task_status: "active", authority_state: "current" });
+    expect(value.body).not.toContain("objective");
+    expect(await counts()).toEqual(before); expect(execution).not.toHaveBeenCalled();
+  });
+  it("keeps absent, processing and orphan-completed associations uncertain with actual null serialization", async () => {
+    const f = await fixture();
+    const missing = await lookup(f.pursuit.id, "unobserved-original-key");
+    expect(missing.json()).toEqual({ contract_version: CONTRACT_VERSION, admission_state: "not_observed",
+      task_id: null, task_status: null, authority_state: "unknown" });
+    for (const state of ["processing", "completed"]) {
+      const key = `orphan-${randomUUID()}`;
+      await pool!.query(`INSERT INTO idempotency_records(id,account_id,actor_user_id,operation_scope,idempotency_key,
+        request_hash,status,response_status) VALUES($1,$2,$3,$4,$5,$6,$7,202)`,
+      [randomUUID(), auth.accountId, auth.userId, `create_pursuit_agent_task:${f.pursuit.id}`, key, sha256(key), state]);
+      const result = await lookup(f.pursuit.id, key);
+      expect(result.statusCode, result.body).toBe(200);
+      expect(result.json()).toEqual({ contract_version: CONTRACT_VERSION,
+        admission_state: state === "processing" ? "processing" : "unavailable", task_id: null, task_status: null,
+        authority_state: "unknown" });
+    }
+  });
+  it("does not expose another actor/account or accept malformed lookup queries", async () => {
+    const f = await fixture();
+    expect((await lookup(f.pursuit.id, f.request.idempotency_key, otherHeaders)).json().task_id).toBeNull();
+    expect((await lookup(f.pursuit.id, f.request.idempotency_key, foreignHeaders)).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: `/v1/pursuits/${f.pursuit.id}/agent-task-admission`, headers })).statusCode).toBe(400);
+    expect((await lookup(f.pursuit.id, "")).statusCode).toBe(400);
+  });
+  it("observes original creation only after its real transaction commits without retrying POST", async () => {
+    const f = await fixture();
+    await pool!.query("UPDATE agent_tasks SET status='cancelled',completed_at=clock_timestamp() WHERE id=$1", [f.task.id]);
+    let reached!: () => void, release!: () => void;
+    const entered = new Promise<void>(r => { reached = r; }), held = new Promise<void>(r => { release = r; });
+    const key = `held-${randomUUID()}`;
+    const pending = createPursuitAgentTask(controlledPool(async text => {
+      if (text === "COMMIT") { reached(); await held; }
+    }), auth, f.pursuit.id, { ...f.request, idempotency_key: key }, { provider, schedule: false });
+    try {
+      await entered;
+      expect((await lookup(f.pursuit.id, key)).json()).toMatchObject({ admission_state: "not_observed", task_id: null });
+    } finally { release(); }
+    const created = await pending;
+    expect((await lookup(f.pursuit.id, key)).json()).toMatchObject({ admission_state: "accepted", task_id: created.body.task.id });
+    expect(execution).not.toHaveBeenCalled();
+  });
+  it("separates exact identity from source expiry, even for an empty evidence manifest", async () => {
+    const f = await fixture(true);
+    expect((await lookup(f.pursuit.id, f.request.idempotency_key)).json().authority_state).toBe("current");
+    await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()-interval '1 second' WHERE capture_id=$1",
+      [f.capture.capture_id]);
+    const value = (await lookup(f.pursuit.id, f.request.idempotency_key)).json();
+    expect(value).toMatchObject({ admission_state: "accepted", task_id: f.task.id, authority_state: "not_current" });
+    expect(Object.keys(value).sort()).toEqual(["admission_state", "authority_state", "contract_version", "task_id", "task_status"]);
+  });
+  it("denies changed evidence/pursuit authority and does not fabricate input-artifact provenance", async () => {
+    const f = await fixture();
+    const original = (await pool!.query("SELECT text_content,content_hash FROM evidence_fragments WHERE id=$1", [f.evidence])).rows[0];
+    await pool!.query("UPDATE evidence_fragments SET text_content=$1,content_hash=$2 WHERE id=$3", ["Amended synthetic text", sha256("Amended synthetic text"), f.evidence]);
+    expect((await lookup(f.pursuit.id, f.request.idempotency_key)).json().authority_state).toBe("not_current");
+    await pool!.query("UPDATE agent_tasks SET input_artifact_refs=$1::jsonb WHERE id=$2", [JSON.stringify([randomUUID()]), f.task.id]);
+    expect((await lookup(f.pursuit.id, f.request.idempotency_key)).json().authority_state).toBe("unknown");
+    await pool!.query("UPDATE agent_tasks SET input_artifact_refs='[]'::jsonb WHERE id=$1", [f.task.id]);
+    await pool!.query("UPDATE evidence_fragments SET text_content=$1,content_hash=$2 WHERE id=$3", [original.text_content,original.content_hash,f.evidence]);
+    expect((await lookup(f.pursuit.id, f.request.idempotency_key)).json().authority_state).toBe("current");
+    await pool!.query("UPDATE pursuits SET revision=revision+1 WHERE id=$1", [f.pursuit.id]);
+    expect((await lookup(f.pursuit.id, f.request.idempotency_key)).json().authority_state).toBe("not_current");
+  });
+  it("uses wall-clock source expiry after a held scope read rather than transaction now()", async () => {
+    const f = await fixture();
+    const expiry = (await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()+interval '2 seconds' WHERE capture_id=$1 RETURNING authorization_expires_at", [f.capture.capture_id])).rows[0].authorization_expires_at;
+    let reached!: () => void, release!: () => void;
+    const entered = new Promise<void>(r => { reached = r; }), held = new Promise<void>(r => { release = r; });
+    scopeBarrier = async () => { reached(); await held; };
+    const pending = lookup(f.pursuit.id, f.request.idempotency_key);
+    try {
+      await entered;
+      await pool!.query("SELECT pg_sleep(GREATEST(0, EXTRACT(EPOCH FROM ($1::timestamptz-clock_timestamp()))+0.02))", [expiry]);
+    } finally { scopeBarrier = null; release(); }
+    const result = await pending;
+    expect(result.statusCode, result.body).toBe(200);
+    expect(result.json()).toMatchObject({ admission_state: "accepted", task_id: f.task.id, authority_state: "not_current" });
+    expect(execution).not.toHaveBeenCalled();
+  });
+  it("preserves existing registered task read, list, events, validation and cancellation routes", async () => {
+    const f = await fixture();
+    const schema = app.swagger();
+    expect(schema).toMatchObject({ components: { securitySchemes: { bearerSession: expect.anything() } } });
+    for (const [path, method] of [
+      ["/v1/pursuits/{id}/agent-task-admission", "get"],
+      ["/v1/pursuits/{id}/agent-tasks", "post"], ["/v1/pursuits/{id}/agent-tasks", "get"],
+      ["/v1/agent-tasks/{id}", "get"], ["/v1/agent-tasks/{id}/events", "get"],
+      ["/v1/agent-tasks/{id}/cancel", "post"],
+    ] as const) expect(schema).toMatchObject({ paths: { [path]: { [method]: { security: [{ bearerSession: [] }] } } } });
+    const read = await app.inject({ method: "GET", url: `/v1/agent-tasks/${f.task.id}`, headers });
+    expect(read.statusCode, read.body).toBe(200); expect(read.json().task.id).toBe(f.task.id);
+    const list = await app.inject({ method: "GET", url: `/v1/pursuits/${f.pursuit.id}/agent-tasks`, headers });
+    expect(list.statusCode, list.body).toBe(200); expect(list.json().tasks.map((t: {id: string}) => t.id)).toContain(f.task.id);
+    const events = await app.inject({ method: "GET", url: `/v1/agent-tasks/${f.task.id}/events`, headers });
+    expect(events.statusCode, events.body).toBe(200); expect(events.json().events.length).toBeGreaterThan(0);
+    expect((await app.inject({ method: "POST", url: `/v1/pursuits/${f.pursuit.id}/agent-tasks`, headers, payload: {} })).statusCode).toBe(400);
+    const cancelled = await app.inject({ method: "POST", url: `/v1/agent-tasks/${f.task.id}/cancel`, headers, payload: {
+      idempotency_key: `cancel-${randomUUID()}`, expected_revision: f.task.task_revision, reason: "Synthetic route regression" } });
+    expect(cancelled.statusCode, cancelled.body).toBe(200); expect(cancelled.json().task.status).toBe("cancelled");
+    expect((await lookup(f.pursuit.id, f.request.idempotency_key)).json()).toMatchObject({ task_id: f.task.id, task_status: "cancelled" });
+    expect(execution).not.toHaveBeenCalled();
+  });
+  it("freshly rechecks auth revoked during a consistent lookup before exposing even task identity", async () => {
+    const f = await fixture();
+    let reached!: () => void, release!: () => void;
+    const entered = new Promise<void>(r => { reached = r; }), held = new Promise<void>(r => { release = r; });
+    lookupBarrier = async () => { reached(); await held; };
+    const pending = lookup(f.pursuit.id, f.request.idempotency_key);
+    try { await entered; await pool!.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1", [auth.sessionId]); }
+    finally { release(); lookupBarrier = null; }
+    const result = await pending;
+    expect(result.statusCode, result.body).toBe(401); expect(result.body).not.toContain(f.task.id);
+    expect(execution).not.toHaveBeenCalled();
+  });
+});

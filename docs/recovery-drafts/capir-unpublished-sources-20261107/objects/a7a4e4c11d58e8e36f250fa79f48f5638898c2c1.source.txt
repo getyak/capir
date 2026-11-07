@@ -1,0 +1,159 @@
+import CryptoKit
+import Foundation
+import ImageIO
+import PDFKit
+import UniformTypeIdentifiers
+
+struct LocalFileTextExtraction: Equatable, Sendable {
+    enum Method: Equatable, Sendable {
+        case localImageOCR
+        case localPDFText(pageCount: Int, reviewedPageCount: Int)
+        case localPlainText
+
+        var acquisition: String {
+            switch self {
+            case .localImageOCR:
+                "Explicit file picker or drop · local Vision OCR"
+            case .localPDFText(let pageCount, let reviewedPageCount):
+                pageCount == reviewedPageCount
+                    ? "Explicit file picker or drop · local PDF text · \(pageCount) page\(pageCount == 1 ? "" : "s")"
+                    : "Explicit file picker or drop · local PDF text · first \(reviewedPageCount) of \(pageCount) pages"
+            case .localPlainText:
+                "Explicit file picker or drop · local text read"
+            }
+        }
+    }
+
+    let displayName: String
+    let recognizedText: String
+    let rawData: Data
+    let mediaType: String
+    let sourceFingerprint: String
+    let method: Method
+}
+
+protocol LocalFileTextExtracting: Sendable {
+    func extract(url: URL) async throws -> LocalFileTextExtraction
+}
+
+enum LocalFileTextExtractionError: LocalizedError, Equatable, Sendable {
+    case fileTooLarge(maximumMegabytes: Int)
+    case unsupportedType
+    case unreadableFile
+    case invalidImage
+    case invalidPDF
+    case undecodableText
+
+    var errorDescription: String? {
+        switch self {
+        case .fileTooLarge(let maximumMegabytes):
+            "This file is larger than the \(maximumMegabytes) MB local review limit. Nothing was retained."
+        case .unsupportedType:
+            "Choose an image, PDF, or plain-text document. Nothing was retained."
+        case .unreadableFile:
+            "The selected file could not be read. Nothing was retained."
+        case .invalidImage:
+            "The selected image could not be decoded. Nothing was retained."
+        case .invalidPDF:
+            "The selected PDF could not be decoded. Nothing was retained."
+        case .undecodableText:
+            "The selected text document could not be decoded. Nothing was retained."
+        }
+    }
+}
+
+/// Reads only files the recruiter explicitly chooses or drops. Extraction is
+/// local and bounded; no file path, bytes, or recognized text is logged or sent.
+struct SystemLocalFileTextExtractor: LocalFileTextExtracting {
+    private static let maximumFileBytes = 25 * 1_024 * 1_024
+
+    func extract(url: URL) async throws -> LocalFileTextExtraction {
+        let extraction = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try Self.extractSynchronously(url: url)
+        }
+        return try await withTaskCancellationHandler {
+            try await extraction.value
+        } onCancel: {
+            extraction.cancel()
+        }
+    }
+
+    private static func extractSynchronously(url: URL) throws -> LocalFileTextExtraction {
+        let values = try? url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
+        if let size = values?.fileSize, size > maximumFileBytes {
+            throw LocalFileTextExtractionError.fileTooLarge(maximumMegabytes: maximumFileBytes / 1_024 / 1_024)
+        }
+        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else {
+            throw LocalFileTextExtractionError.unreadableFile
+        }
+        guard data.count <= maximumFileBytes else {
+            throw LocalFileTextExtractionError.fileTooLarge(maximumMegabytes: maximumFileBytes / 1_024 / 1_024)
+        }
+
+        let contentType = values?.contentType ?? (
+            url.pathExtension.isEmpty ? nil : UTType(filenameExtension: url.pathExtension)
+        )
+        let result: (text: String, mediaType: String, method: LocalFileTextExtraction.Method)
+
+        if contentType?.conforms(to: .image) == true {
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                throw LocalFileTextExtractionError.invalidImage
+            }
+            result = (
+                try LocalWindowTextRecognizer.recognizeText(in: image),
+                contentType?.preferredMIMEType ?? "image/*",
+                .localImageOCR
+            )
+        } else if contentType?.conforms(to: .pdf) == true {
+            guard let document = PDFDocument(data: data) else {
+                throw LocalFileTextExtractionError.invalidPDF
+            }
+            let reviewedPageCount = document.pageCount
+            let pageText = try (0..<reviewedPageCount)
+                .compactMap { index -> String? in
+                    try Task.checkCancellation()
+                    return document.page(at: index)?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            result = (
+                pageText,
+                contentType?.preferredMIMEType ?? "application/pdf",
+                .localPDFText(pageCount: document.pageCount, reviewedPageCount: reviewedPageCount)
+            )
+        } else if contentType?.conforms(to: .plainText) == true {
+            guard let text = decodeText(data) else {
+                throw LocalFileTextExtractionError.undecodableText
+            }
+            result = (
+                text,
+                contentType?.preferredMIMEType ?? "text/plain",
+                .localPlainText
+            )
+        } else {
+            throw LocalFileTextExtractionError.unsupportedType
+        }
+
+        try Task.checkCancellation()
+        return LocalFileTextExtraction(
+            displayName: url.lastPathComponent,
+            recognizedText: result.text
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            rawData: data,
+            mediaType: result.mediaType,
+            sourceFingerprint: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            method: result.method
+        )
+    }
+
+    private static func decodeText(_ data: Data) -> String? {
+        for encoding in [String.Encoding.utf8, .utf16, .utf16LittleEndian, .utf16BigEndian] {
+            if let value = String(data: data, encoding: encoding) {
+                return value
+            }
+        }
+        return nil
+    }
+}

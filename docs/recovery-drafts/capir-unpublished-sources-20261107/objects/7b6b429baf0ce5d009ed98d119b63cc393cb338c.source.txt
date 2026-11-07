@@ -1,0 +1,104 @@
+import { createHash } from "node:crypto";
+import type { MemoryRecallItem } from "@talent-signal/contracts";
+import type { DatabaseClient } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import type { AuthContext } from "./auth.js";
+import { serializeRecallItem, type EvidenceRow, type MemoryItemRow } from "./memoryReviewStore.js";
+
+/** A read path for the acting user's accepted memories, without identity-binding authority. */
+export interface SavedMemorySearch {
+  terms: readonly string[];
+  cursor?: string | undefined;
+  limit?: number | undefined;
+}
+export interface SavedMemorySearchPage {
+  items: Array<MemoryRecallItem & { person_display_label: string | null }>;
+  has_more: boolean;
+  next_cursor: string | null;
+  matching: "literal_terms_any";
+  authority: "saved_source_statements_not_identity_or_execution_authority";
+}
+
+// One home for discovery and its final-use source fence. Explicit deletion and
+// revocation withdraw accepted Memory; natural raw-source TTL does not. The
+// durable `saved_memory_item_current` function owns this fence so lineage
+// validation before a canonical write or replay can never drift from it.
+const readableMemory = `m.account_id = $1 AND m.owner_user_id = $2
+  AND saved_memory_item_current(m.account_id, m.owner_user_id, m.id, m.version)`;
+
+function normalizedTerms(terms: readonly string[]): string[] {
+  if (!Array.isArray(terms) || terms.some(term => typeof term !== "string" || !term.trim())) {
+    throw new ApiError(400, "MEMORY_SEARCH_INVALID", "Use literal topic, profession, project or name clues.");
+  }
+  return [...new Set(terms.map(term => term.normalize("NFKC").trim().toLowerCase()))].sort();
+}
+
+/** Literal matching is explicit: the Agent can issue synonym/topic searches and paginate. */
+export async function searchSavedMemories(client: DatabaseClient, auth: AuthContext, request: SavedMemorySearch): Promise<SavedMemorySearchPage> {
+  const terms = normalizedTerms(request.terms);
+  const queryHash = createHash("sha256").update(JSON.stringify([auth.accountId, auth.userId, terms])).digest("hex");
+  const parameters: unknown[] = [auth.accountId, auth.userId];
+  let pageClause = "";
+  if (request.cursor) {
+    try {
+      if (request.cursor.length > 600) throw new Error();
+      const cursor = JSON.parse(Buffer.from(request.cursor, "base64url").toString("utf8")) as { query: string; time: string; id: string };
+      if (cursor.query !== queryHash || !/^\d{4}-\d{2}-\d{2}T/.test(cursor.time) || !Number.isFinite(Date.parse(cursor.time))
+        || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu.test(cursor.id)) throw new Error();
+      parameters.push(cursor.time, cursor.id);
+      pageClause = ` AND (m.created_at < $3::timestamptz OR (m.created_at = $3::timestamptz AND m.id > $4::uuid))`;
+    } catch {
+      throw new ApiError(400, "MEMORY_SEARCH_CURSOR_INVALID", "Continue the same search with its returned cursor.");
+    }
+  }
+  let matchClause = "";
+  if (terms.length) {
+    parameters.push(terms.map(term => `%${term.replace(/[\\%_]/gu, "\\$&")}%`));
+    matchClause = ` AND (m.display_text ILIKE ANY($${parameters.length}::text[])
+      OR m.original_display_text ILIKE ANY($${parameters.length}::text[])
+      OR s.display_label ILIKE ANY($${parameters.length}::text[]))`;
+  }
+  const limit = Number.isFinite(request.limit) && request.limit! > 0 ? Math.max(1, Math.min(100, Math.trunc(request.limit!))) : 20;
+  parameters.push(limit + 1);
+  const result = await client.query<MemoryItemRow & { cursor_time: string; person_display_label: string | null }>(
+    `SELECT m.*, s.display_label AS person_display_label,
+      to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time
+     FROM memory_items m LEFT JOIN subjects s ON s.account_id = m.account_id AND s.id = m.subject_id
+     WHERE ${readableMemory} ${matchClause} ${pageClause}
+     ORDER BY m.created_at DESC, m.id LIMIT $${parameters.length}`, parameters,
+  );
+  const rows = result.rows.slice(0, limit);
+  const items: SavedMemorySearchPage["items"] = [];
+  if (rows.length) {
+    const evidence = await client.query<EvidenceRow>(
+      `SELECT id, memory_item_id, capture_id, source_resource_id, evidence_fragment_id,
+        source_session_id, source_message_id, source_artifact_id, locator, excerpt, status
+       FROM memory_item_evidence WHERE account_id = $1 AND memory_item_id = ANY($2::uuid[]) AND status = 'active'
+       ORDER BY memory_item_id, created_at, id`, [auth.accountId, rows.map(row => row.id)],
+    );
+    for (const row of rows) {
+      const sources = evidence.rows.filter(source => source.memory_item_id === row.id);
+      if (sources.length) items.push({ ...serializeRecallItem(row, sources, true), person_display_label: row.person_display_label });
+    }
+  }
+  const last = rows.at(-1);
+  return {
+    items,
+    has_more: result.rows.length > limit,
+    next_cursor: result.rows.length > limit && last ? Buffer.from(JSON.stringify({ query: queryHash, time: last.cursor_time, id: last.id })).toString("base64url") : null,
+    matching: "literal_terms_any",
+    authority: "saved_source_statements_not_identity_or_execution_authority",
+  };
+}
+
+/** Fail closed when any already-exposed statement changes or loses authority. */
+export async function assertSavedMemoriesCurrent(client: DatabaseClient, auth: AuthContext, versions: ReadonlyMap<string, number>): Promise<void> {
+  if (!versions.size) return;
+  const result = await client.query<{ id: string; version: number }>(
+    `SELECT m.id, m.version FROM memory_items m WHERE ${readableMemory} AND m.id = ANY($3::uuid[])`,
+    [auth.accountId, auth.userId, [...versions.keys()]],
+  );
+  if (result.rows.length !== versions.size || result.rows.some(row => versions.get(row.id) !== row.version)) {
+    throw new ApiError(409, "MEMORY_SEARCH_SOURCE_NOT_CURRENT", "Saved Memory changed or its source was withdrawn. Search again before using it.");
+  }
+}

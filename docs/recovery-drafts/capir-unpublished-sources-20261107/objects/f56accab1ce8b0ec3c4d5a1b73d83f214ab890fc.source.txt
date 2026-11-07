@@ -1,0 +1,215 @@
+import { z } from "zod";
+
+import {
+  PersonResearchNoActionReasonCodeSchema,
+} from "./schemas.js";
+
+export const PERSON_RESEARCH_SERVICE_CONTRACT_VERSION =
+  "person-research-service.v1" as const;
+
+const Hash = z.string().regex(/^[0-9a-f]{64}$/u);
+const RunID = z.uuid();
+const Platform = z.enum(["douyin", "tiktok", "weibo", "threads"]);
+
+export const PersonResearchServiceRequestSchema = z.strictObject({
+  contract_version: z.literal(PERSON_RESEARCH_SERVICE_CONTRACT_VERSION),
+  run_id: RunID,
+  objective: z.string().trim().min(1),
+  authorization: z.strictObject({
+    allowed_platforms: z.array(Platform).min(1).max(4).refine(
+      (platforms) => new Set(platforms).size === platforms.length,
+      "allowed_platforms must not contain duplicates",
+    ),
+    maximum_provider_calls: z.number().int().positive().optional(),
+    maximum_results_per_call: z.number().int().min(1).max(10),
+  }),
+  image: z.strictObject({
+    media_type: z.enum(["image/png", "image/jpeg", "image/webp"]),
+    byte_size: z.number().int().min(1).max(10_000_000),
+    content_hash: Hash,
+    data_base64: z
+      .string()
+      .min(4)
+      .max(13_400_000)
+      .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u),
+  }),
+});
+
+const PersonResearchUsageSchema = z.strictObject({
+  input_tokens: z.number().int().nonnegative().nullable(),
+  output_tokens: z.number().int().nonnegative().nullable(),
+  total_tokens: z.number().int().nonnegative().nullable(),
+  estimated_usd: z.number().nonnegative().nullable(),
+  turns: z.number().int().nonnegative().nullable(),
+  tool_calls: z.number().int().nonnegative(),
+  duration_ms: z.number().int().nonnegative(),
+});
+
+const PersonResearchReceiptSchema = z.strictObject({
+  run_id: RunID,
+  status: z.enum([
+    "artifact_created",
+    "no_action",
+    "quarantined",
+    "budget_exhausted",
+    "cancelled",
+    "failed",
+  ]),
+  reason_code: z.string().trim().min(1).max(160),
+  artifact_id: z.uuid().nullable(),
+  no_action_id: z.uuid().nullable(),
+  candidate_fingerprint: Hash.nullable(),
+  external_effects: z.array(z.never()).max(0),
+  permission_denials: z.array(z.string().trim().min(1).max(300)).max(50),
+  provider_session_id: z.string().trim().min(1).max(500).nullable(),
+  usage: PersonResearchUsageSchema,
+  completed_at: z.iso.datetime(),
+});
+
+const PublicSourceSchema = z.strictObject({
+  result_id: Hash,
+  platform: Platform,
+  profile_url: z.url({ protocol: /^https$/u }).max(2_000),
+  display_name: z.string().trim().min(1).max(500),
+  handle: z.string().trim().min(1).max(500).nullable(),
+  biography: z.string().min(1).refine((value) => value.trim().length > 0).nullable(),
+  avatar_url: z.url({ protocol: /^https$/u }).max(2_000).nullable(),
+  verified: z.boolean().nullable(),
+  content_hash: Hash,
+  retrieved_at: z.iso.datetime(),
+  provider_id: z.literal("tikhub"),
+  provider_request_id: z.string().trim().min(1).max(500).nullable(),
+});
+
+const ArtifactResultSchema = z.strictObject({
+  kind: z.literal("artifact"),
+  identity_status: z.enum(["possible_match", "ambiguous"]),
+  title: z.string().trim().min(1).max(240),
+  summary: z.string().trim().min(1).max(8_000),
+  limitations: z.string().trim().min(1).max(2_000),
+  observed_clues: z.array(
+    z.strictObject({
+      kind: z.enum(["display_name", "handle", "profile_url", "platform"]),
+      value: z.string().trim().min(1).max(300),
+      source_artifact_id: z.string().trim().min(1).max(200),
+      observation_status: z.literal("unreviewed_screenshot_observation"),
+    }),
+  ).min(1).max(10),
+  candidates: z.array(
+    z.strictObject({
+      result_id: Hash,
+      match_basis: z.string().trim().min(1).max(1_000),
+    }),
+  ).min(1).max(10),
+  claims: z.array(
+    z.strictObject({
+      statement: z.string().trim().min(1).max(1_000),
+      epistemic_status: z.enum(["provider_observation", "agent_inference"]),
+      source_refs: z.array(Hash).min(1).max(5),
+    }),
+  ).min(1).max(20),
+  sources: z.array(PublicSourceSchema).min(1).max(10),
+});
+
+const NoActionResultSchema = z.strictObject({
+  kind: z.literal("no_action"),
+  reason_code: PersonResearchNoActionReasonCodeSchema,
+  reason: z.string().trim().min(1).max(1_000),
+});
+
+const UnavailableResultSchema = z.strictObject({
+  kind: z.literal("unavailable"),
+  reason_code: z.string().trim().min(1).max(160),
+  reason: z.string().trim().min(1).max(1_000),
+});
+
+const PersonResearchServiceResponseBaseSchema = z.strictObject({
+  contract_version: z.literal(PERSON_RESEARCH_SERVICE_CONTRACT_VERSION),
+  run_id: RunID,
+  receipt: PersonResearchReceiptSchema,
+  result: z.discriminatedUnion("kind", [
+    ArtifactResultSchema,
+    NoActionResultSchema,
+    UnavailableResultSchema,
+  ]),
+});
+
+export const PersonResearchServiceResponseSchema =
+  PersonResearchServiceResponseBaseSchema.superRefine((response, context) => {
+    if (response.run_id !== response.receipt.run_id) {
+      context.addIssue({
+        code: "custom",
+        path: ["receipt", "run_id"],
+        message: "receipt.run_id must match run_id",
+      });
+    }
+    if (response.result.kind === "artifact") {
+      if (
+        response.receipt.status !== "artifact_created" ||
+        !response.receipt.artifact_id ||
+        response.receipt.no_action_id
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["receipt"],
+          message: "artifact results require one artifact_created receipt",
+        });
+      }
+      const candidateIDs = response.result.candidates.map(
+        (candidate) => candidate.result_id,
+      );
+      const sourceIDs = response.result.sources.map((source) => source.result_id);
+      const candidateSet = new Set(candidateIDs);
+      if (
+        candidateSet.size !== candidateIDs.length ||
+        new Set(sourceIDs).size !== sourceIDs.length ||
+        candidateIDs.length !== sourceIDs.length ||
+        sourceIDs.some((sourceID) => !candidateSet.has(sourceID))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["result", "sources"],
+          message: "artifact candidates and sources must have the same unique result IDs",
+        });
+      }
+      for (const [claimIndex, claim] of response.result.claims.entries()) {
+        for (const sourceRef of claim.source_refs) {
+          if (!candidateSet.has(sourceRef)) {
+            context.addIssue({
+              code: "custom",
+              path: ["result", "claims", claimIndex, "source_refs"],
+              message: "claim source_refs must name a same-result public source",
+            });
+          }
+        }
+      }
+    } else if (response.result.kind === "no_action") {
+      if (
+        response.receipt.status !== "no_action" ||
+        !response.receipt.no_action_id ||
+        response.receipt.artifact_id
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["receipt"],
+          message: "no_action results require one no_action receipt",
+        });
+      }
+    } else if (
+      response.receipt.status === "artifact_created" ||
+      response.receipt.status === "no_action"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["receipt", "status"],
+        message: "unavailable results cannot claim a successful terminal status",
+      });
+    }
+  });
+
+export type PersonResearchServiceRequest = z.infer<
+  typeof PersonResearchServiceRequestSchema
+>;
+export type PersonResearchServiceResponse = z.infer<
+  typeof PersonResearchServiceResponseSchema
+>;

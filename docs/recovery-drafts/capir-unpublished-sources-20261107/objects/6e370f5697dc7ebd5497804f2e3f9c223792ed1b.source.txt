@@ -1,0 +1,483 @@
+import XCTest
+@testable import TalentSignalMac
+
+/// Native handoff state machine, callback ownership, navigation lifecycle and
+/// request factories (ADR 0019 / ADR 0020). Provider proofs here are
+/// structural fixtures only; live Apple/Google proof and the real window round
+/// trip are separate parent checkpoints.
+final class DesktopAuthenticationSessionTests: XCTestCase {
+    private func origin() throws -> WorkspaceOrigin {
+        try XCTUnwrap(WorkspaceOrigin("https://workspace.example.com"))
+    }
+
+    private func context(
+        provider: DesktopAuthProvider = .apple,
+        purpose: DesktopAuthPurpose = .login,
+        role: DesktopAuthRole = .login,
+        intent: DesktopCredentialIntent? = nil,
+        target: String? = nil,
+        continuation: String? = nil
+    ) -> DesktopAuthRequestContext {
+        DesktopAuthRequestContext(
+            provider: provider,
+            purpose: purpose,
+            role: role,
+            intent: intent,
+            targetProvider: target,
+            continuationAttemptID: continuation
+        )
+    }
+
+    final class StubBrowserSession: DesktopAuthBrowserSession {
+        var started = false
+        var cancelled = false
+        var ephemeral: Bool?
+        var refuseStart = false
+        private(set) var retained: ((URL?, Error?) -> Void)?
+        func start(callback: @escaping (URL?, Error?) -> Void) -> Bool {
+            retained = callback
+            started = true
+            return !refuseStart
+        }
+        func cancel() { cancelled = true }
+        func deliver(_ url: URL?, error: Error? = nil) {
+            retained?(url, error)
+        }
+    }
+
+    // MARK: - Request factories and S256
+
+    func testS256ChallengeMatchesRFC7636Vector() {
+        XCTAssertEqual(
+            DesktopAuthSecrets.codeChallenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        )
+    }
+
+    func testPrepareCarriesChallengeAndStateButNeverTheVerifier() throws {
+        let requests = DesktopAuthRequests(origin: try origin())
+        var state = DesktopAuthHandoffState()
+        let attempt = state.begin(context: context(
+            purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"
+        ))
+        let request = requests.prepareRequest(attempt: attempt)
+        XCTAssertEqual(request.url?.path, "/api/desktop-auth/prepare")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Origin"), "https://workspace.example.com")
+        let body = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any]
+        )
+        XCTAssertEqual(body["provider"] as? String, "apple")
+        XCTAssertEqual(body["purpose"] as? String, "credential_round")
+        XCTAssertEqual(body["role"] as? String, "current")
+        XCTAssertEqual(body["intent"] as? String, "set_password")
+        XCTAssertEqual(body["target_provider"] as? String, "password")
+        XCTAssertEqual(body["state"] as? String, attempt.state)
+        XCTAssertEqual(body["code_challenge"] as? String, DesktopAuthSecrets.codeChallenge(for: attempt.verifier))
+        XCTAssertFalse(String(data: try XCTUnwrap(request.httpBody), encoding: .utf8)!.contains(attempt.verifier))
+    }
+
+    // MARK: - Entry boundary (source AND target main frame)
+
+    func testOnlyExactOriginMainFrameSourceAndTargetStartTheHandoff() throws {
+        let origin = try origin()
+        let source = try XCTUnwrap(URL(string: "https://workspace.example.com/login"))
+        let request = try XCTUnwrap(URL(string: "https://workspace.example.com/desktop-auth/request?provider=apple&purpose=login"))
+        XCTAssertEqual(
+            DesktopAuthRequests.interception(
+                url: request, source: source, sourceIsMainFrame: true, targetIsMainFrame: true,
+                userActivated: true, origin: origin
+            )?.provider,
+            .apple
+        )
+        // Same-origin iframe -> _top has a main-frame TARGET but an iframe
+        // SOURCE: it must never enter native auth.
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: request, source: source, sourceIsMainFrame: false, targetIsMainFrame: true,
+            userActivated: true, origin: origin
+        ))
+        // Iframe target stays out as well.
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: request, source: source, sourceIsMainFrame: true, targetIsMainFrame: false,
+            userActivated: true, origin: origin
+        ))
+        // Foreign iframe / cross-origin source or target.
+        let foreignSource = try XCTUnwrap(URL(string: "https://evil.example/"))
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: request, source: foreignSource, sourceIsMainFrame: true, targetIsMainFrame: true,
+            userActivated: true, origin: origin
+        ))
+        let foreignTarget = try XCTUnwrap(URL(string: "https://evil.example/desktop-auth/request?provider=apple&purpose=login"))
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: foreignTarget, source: source, sourceIsMainFrame: true, targetIsMainFrame: true,
+            userActivated: true, origin: origin
+        ))
+        // Redirects and synthetic loads are not user clicks.
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: request, source: source, sourceIsMainFrame: true, targetIsMainFrame: true,
+            userActivated: false, origin: origin
+        ))
+        // Ordinary external links keep their open-in-browser confirmation.
+        let blog = try XCTUnwrap(URL(string: "https://workspace.example.com/blog"))
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: blog, source: source, sourceIsMainFrame: true, targetIsMainFrame: true,
+            userActivated: true, origin: origin
+        ))
+        // Unknown parameters, providers and purposes are refused.
+        let badProvider = try XCTUnwrap(URL(string: "https://workspace.example.com/desktop-auth/request?provider=paypal&purpose=login"))
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: badProvider, source: source, sourceIsMainFrame: true, targetIsMainFrame: true,
+            userActivated: true, origin: origin
+        ))
+        let extra = try XCTUnwrap(URL(string: "https://workspace.example.com/desktop-auth/request?provider=apple&purpose=login&next=https://evil.example"))
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: extra, source: source, sourceIsMainFrame: true, targetIsMainFrame: true,
+            userActivated: true, origin: origin
+        ))
+        // Unsupported roles, including recovery roles, never enter.
+        let recoveryRole = try XCTUnwrap(URL(string: "https://workspace.example.com/desktop-auth/request?provider=apple&purpose=credential_round&role=duplicate&intent=link_provider"))
+        XCTAssertNil(DesktopAuthRequests.interception(
+            url: recoveryRole, source: source, sourceIsMainFrame: true, targetIsMainFrame: true,
+            userActivated: true, origin: origin
+        ))
+    }
+
+    // MARK: - Strict callback parsing
+
+    func testCallbackParserAcceptsBothVariantsAndRejectsTampering() throws {
+        let success = "com.talentsignal.macos.auth://complete?attempt=attempt-12345678&code=code-1&state=state-0123456789"
+        XCTAssertEqual(DesktopAuthCallback.parse(success),
+                       .success(attemptID: "attempt-12345678", code: "code-1", state: "state-0123456789"))
+        let cancelled = "com.talentsignal.macos.auth://complete?attempt=attempt-12345678&state=state-0123456789&outcome=cancelled"
+        XCTAssertEqual(DesktopAuthCallback.parse(cancelled),
+                       .cancelled(attemptID: "attempt-12345678", state: "state-0123456789"))
+        XCTAssertNil(DesktopAuthCallback.parse(success + "#frag"))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete/" + String(success.dropFirst("com.talentsignal.macos.auth://complete".count))))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete?attempt=attempt-12345678&attempt=attempt-12345678&code=code-1&state=state-0123456789"))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete?attempt=attempt-12345678&code=&state=state-0123456789"))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete?attempt=attempt-12345678&code=code-1&state=state-0123456789&next=https://evil.example"))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete?attempt=attempt-12345678&code=code-1&state=state-0123456789&outcome=cancelled"))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete?attempt=attempt-12345678&state=state-0123456789&outcome=success"))
+        XCTAssertNil(DesktopAuthCallback.parse("https://evil.example/complete?attempt=attempt-12345678&code=code-1&state=state-0123456789"))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://other?attempt=attempt-12345678&code=code-1&state=state-0123456789"))
+        XCTAssertNil(DesktopAuthCallback.parse("com.talentsignal.macos.auth://complete@evil.example?attempt=attempt-12345678&code=code-1&state=state-0123456789"))
+    }
+
+    // MARK: - Pending acceptance per generation
+
+    func testPendingNavigationIsAcceptedOnlyForTheActiveGenerationAndState() throws {
+        let requests = DesktopAuthRequests(origin: try origin())
+        var state = DesktopAuthHandoffState()
+        let first = state.begin(context: context())
+        let pending = requests.pendingAttempt(
+            try XCTUnwrap(URL(string: "https://workspace.example.com/desktop-auth/pending?attempt=attempt-1&state=\(first.state)"))
+        )
+        XCTAssertEqual(pending?.attemptID, "attempt-1")
+        XCTAssertNil(state.acceptPending(attemptID: "attempt-1", state: "state-from-elsewhere-0000"))
+        XCTAssertEqual(state.acceptPending(attemptID: "attempt-1", state: first.state)?.attemptID, "attempt-1")
+        XCTAssertNil(state.acceptPending(attemptID: "attempt-1", state: first.state))
+        _ = state.begin(context: context(provider: .google, purpose: .credentialRound, role: .current))
+        XCTAssertNil(state.acceptPending(attemptID: "attempt-1", state: first.state))
+    }
+
+    // MARK: - Callback ownership (P1-1)
+
+    @MainActor
+    func testLateBrowserCancellationNeverCancelsTheNewerAttempt() throws {
+        var loads: [URLRequest] = []
+        var stubs: [StubBrowserSession] = []
+        let session = DesktopAuthenticationSession(
+            origin: try origin(),
+            loadRequest: { loads.append($0); return nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, _ in
+                let stub = StubBrowserSession()
+                stubs.append(stub)
+                return stub
+            }
+        )
+        session.start(context: context())
+        let firstBody = try body(of: loads[0])
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        let browserA = stubs[0]
+
+        // Start B while A's browser is still alive.
+        session.start(context: context(provider: .google))
+        let secondBody = try body(of: loads[1])
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-2", state: secondBody["state"] as! String))
+        XCTAssertTrue(session.hasActiveAttempt)
+
+        // A's delayed nil/error completion must not cancel B or dispatch B's
+        // cancellation.
+        browserA.deliver(nil, error: NSError(domain: "test", code: 1))
+        XCTAssertTrue(session.hasActiveAttempt)
+        XCTAssertNotEqual(loads.last?.url?.path, "/api/desktop-auth/cancel")
+
+        // A's stale success callback is inert too.
+        XCTAssertFalse(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(firstBody["state"] as! String)"
+        ))))
+        XCTAssertTrue(session.hasActiveAttempt)
+
+        // B continues through consume.
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-2&code=code-2&state=\(secondBody["state"] as! String)"
+        ))))
+        XCTAssertEqual(loads.last?.url?.path, "/api/desktop-auth/consume")
+    }
+
+    @MainActor
+    func testSynchronousCancellationAndStartRefusalRecoverImmediately() async throws {
+        var loads: [URLRequest] = []
+        var stubs: [StubBrowserSession] = []
+        let session = DesktopAuthenticationSession(
+            origin: try origin(),
+            loadRequest: { loads.append($0); return nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, _ in
+                let stub = StubBrowserSession()
+                stubs.append(stub)
+                return stub
+            }
+        )
+        session.start(context: context())
+        let firstBody = try body(of: loads[0])
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        // A synchronous provider cancellation cancels THIS attempt and restores
+        // usable controls with the fixed return.
+        stubs[0].deliver(nil, error: nil)
+        await Task.yield()
+        XCTAssertFalse(session.hasActiveAttempt)
+        XCTAssertEqual(loads.last?.url?.path, "/api/desktop-auth/cancel")
+        XCTAssertNotNil(session.recovery)
+
+        // A refused browser start is immediately recoverable (no phantom wait).
+        stubs = []
+        session.start(context: context(provider: .google))
+        let secondBody = try body(of: loads.last!)
+        stubs.append(StubBrowserSession())
+        var stubs2: [StubBrowserSession] = []
+        let refusing = DesktopAuthenticationSession(
+            origin: try origin(),
+            loadRequest: { loads.append($0); return nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, _ in
+                let stub = StubBrowserSession()
+                stub.refuseStart = true
+                stubs2.append(stub)
+                return stub
+            }
+        )
+        refusing.start(context: context())
+        let thirdBody = try body(of: loads.last!)
+        XCTAssertFalse(refusing.acceptPending(attemptID: "attempt-3", state: thirdBody["state"] as! String))
+        XCTAssertFalse(refusing.hasActiveAttempt)
+        XCTAssertNotNil(refusing.recovery)
+        _ = secondBody
+    }
+
+    // MARK: - Terminal cancel callback variant
+
+    @MainActor
+    func testTerminalCancelCallbackRetiresWithoutSuccessClaim() throws {
+        var loads: [URLRequest] = []
+        let session = DesktopAuthenticationSession(
+            origin: try origin(),
+            loadRequest: { loads.append($0); return nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, _ in StubBrowserSession() }
+        )
+        session.start(context: context())
+        let firstBody = try body(of: loads[0])
+        let stateValue = firstBody["state"] as! String
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: stateValue))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&state=\(stateValue)&outcome=cancelled"
+        ))))
+        XCTAssertFalse(session.hasActiveAttempt)
+        // The recovery never claims success or dispatches a consume.
+        XCTAssertEqual(session.recovery?.ambiguous, false)
+        XCTAssertNotEqual(loads.last?.url?.path, "/api/desktop-auth/consume")
+    }
+
+    // MARK: - Deadline and ambiguous consume (P1-2)
+
+    @MainActor
+    func testDeadlineRetainsThroughConsumeAndAmbiguousOutcomesStayTruthful() async throws {
+        var loads: [URLRequest] = []
+        var clock = Date(timeIntervalSince1970: 1_000)
+        let session = DesktopAuthenticationSession(
+            origin: try origin(),
+            now: { clock },
+            loadRequest: { loads.append($0); return nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, _ in StubBrowserSession() }
+        )
+        session.start(context: context())
+        let firstBody = try body(of: loads[0])
+        let stateValue = firstBody["state"] as! String
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: stateValue))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(stateValue)"
+        ))))
+        XCTAssertEqual(loads.last?.url?.path, "/api/desktop-auth/consume")
+
+        // A failed consume navigation is UNKNOWN, not cancelled: recovery keeps
+        // a truthful status and the fixed safe return instead of replaying the
+        // one-use mutation.
+        session.consumeNavigationFailed()
+        XCTAssertEqual(session.recovery?.ambiguous, true)
+        XCTAssertEqual(session.recovery?.returnURL.path, "/workspace/settings")
+        let countAfterRecovery = loads.count
+        session.requestResultRead()
+        // Result reads are allowed; the consume POST is never replayed.
+        XCTAssertEqual(loads.count, countAfterRecovery + 1)
+        XCTAssertEqual(loads.last?.url?.path, "/api/desktop-auth/result")
+    }
+
+    @MainActor
+    func testHostLifetimeChangesRetireTheOperationAndLateEventsAreInert() throws {
+        var loads: [URLRequest] = []
+        let session = DesktopAuthenticationSession(
+            origin: try origin(),
+            loadRequest: { loads.append($0); return nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, _ in StubBrowserSession() }
+        )
+        session.start(context: context())
+        let firstBody = try body(of: loads[0])
+        let stateValue = firstBody["state"] as! String
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: stateValue))
+        // Navigating away (Back, page replacement, account change) retires the
+        // outstanding browser callback.
+        session.hostLifetimeChanged(reason: "已离开登录页面，操作未完成。")
+        XCTAssertFalse(session.hasActiveAttempt)
+        let before = loads.count
+        XCTAssertFalse(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(stateValue)"
+        ))))
+        XCTAssertEqual(loads.count, before, "a stale callback must not dispatch a consume request")
+    }
+
+    @MainActor
+    func testConfirmedTerminalClearsSecretsAndWindowDestructionCancels() throws {
+        var loads: [URLRequest] = []
+        let session = DesktopAuthenticationSession(
+            origin: try origin(),
+            loadRequest: { loads.append($0); return nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, _ in StubBrowserSession() }
+        )
+        session.start(context: context())
+        let firstBody = try body(of: loads[0])
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: firstBody["state"] as! String))
+        session.terminalReached()
+        XCTAssertFalse(session.hasActiveAttempt)
+        XCTAssertNil(session.recovery)
+        XCTAssertNil(session.status)
+
+        session.start(context: context(provider: .google))
+        let secondBody = try body(of: loads.last!)
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-2", state: secondBody["state"] as! String))
+        session.windowWillClose()
+        XCTAssertEqual(loads.last?.url?.path, "/api/desktop-auth/cancel")
+        XCTAssertFalse(session.hasActiveAttempt)
+    }
+
+    // MARK: - Per-process ephemeral override
+
+    func testEphemeralLaunchOverrideIsPerProcessAndNotDefault() {
+        XCTAssertFalse(DesktopAuthLaunchOptions.standard.prefersEphemeralBrowserSession)
+        XCTAssertTrue(DesktopAuthLaunchOptions.from(arguments: ["--desktop-auth-ephemeral"]).prefersEphemeralBrowserSession)
+        XCTAssertFalse(DesktopAuthLaunchOptions.from(arguments: ["--web-workspace-testing"]).prefersEphemeralBrowserSession)
+        let suite = UserDefaults(suiteName: "test-desktop-auth-ephemeral-\(UUID().uuidString)")!
+        XCTAssertFalse(DesktopAuthLaunchOptions.from(defaults: suite).prefersEphemeralBrowserSession)
+        suite.set(true, forKey: DesktopAuthLaunchOptions.ephemeralArgument)
+        XCTAssertTrue(DesktopAuthLaunchOptions.from(defaults: suite).prefersEphemeralBrowserSession)
+    }
+
+    @MainActor
+    func testEphemeralPreferenceReachesTheSystemBrowserSession() throws {
+        var stubs: [StubBrowserSession] = []
+        let session = DesktopAuthenticationSession(
+            origin: try origin(),
+            launchOptions: DesktopAuthLaunchOptions(prefersEphemeralBrowserSession: true),
+            loadRequest: { _ in nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, ephemeral in
+                let stub = StubBrowserSession()
+                stub.ephemeral = ephemeral
+                stubs.append(stub)
+                return stub
+            }
+        )
+        _ = session
+        XCTAssertTrue(stubs.isEmpty)
+        // The factory receives the flag when a round starts.
+        var loads: [URLRequest] = []
+        let session2 = DesktopAuthenticationSession(
+            origin: try origin(),
+            launchOptions: DesktopAuthLaunchOptions(prefersEphemeralBrowserSession: true),
+            loadRequest: { loads.append($0); return nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, ephemeral in
+                let stub = StubBrowserSession()
+                stub.ephemeral = ephemeral
+                stubs.append(stub)
+                return stub
+            }
+        )
+        session2.start(context: context())
+        let body = try self.body(of: loads[0])
+        XCTAssertTrue(session2.acceptPending(attemptID: "attempt-1", state: body["state"] as! String))
+        XCTAssertEqual(stubs.last?.ephemeral, true)
+    }
+
+    // MARK: - Helpers
+
+    private func body(of request: URLRequest) throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any] ?? [:]
+    }
+}
+
+extension DesktopAuthenticationSessionTests {
+    /// A successful WK consume navigation is NOT an acknowledgment: the round's
+    /// verifier survives until the server acknowledgment actually returns.
+    @MainActor
+    func testConsumeTerminalRetainsVerifierUntilServerAcknowledgment() throws {
+        var loads: [URLRequest] = []
+        let session = DesktopAuthenticationSession(
+            origin: try origin(),
+            loadRequest: { loads.append($0); return nil },
+            presentationAnchor: { nil },
+            makeBrowserSession: { _, _, _ in StubBrowserSession() }
+        )
+        session.start(context: context(purpose: .credentialRound, role: .current, intent: .setPassword, target: "password"))
+        let firstBody = try body(of: loads[0])
+        let stateValue = firstBody["state"] as! String
+        XCTAssertTrue(session.acceptPending(attemptID: "attempt-1", state: stateValue))
+        XCTAssertTrue(session.handleCallback(try XCTUnwrap(URL(
+            string: "com.talentsignal.macos.auth://complete?attempt=attempt-1&code=code-1&state=\(stateValue)"
+        ))))
+        XCTAssertEqual(loads.last?.url?.path, "/api/desktop-auth/consume")
+
+        // The consume response lands on the fixed settings route: the host
+        // dispatches the paired ack but the round is NOT done and the verifier
+        // is retained for the real acknowledgment.
+        XCTAssertTrue(session.consumeTerminalReached(url: try XCTUnwrap(URL(
+            string: "https://workspace.example.com/workspace/settings?desktop-auth=password&attempt=attempt-1"
+        ))))
+        XCTAssertEqual(loads.last?.url?.path, "/api/desktop-auth/ack")
+        XCTAssertNotNil(session.recovery == nil ? "active" : nil)
+        let ackBody = try body(of: loads.last!)
+        XCTAssertEqual(ackBody["attempt_id"] as? String, "attempt-1")
+        XCTAssertFalse((ackBody["verifier"] as? String ?? "").isEmpty)
+
+        // Only the server acknowledgment confirms the round.
+        XCTAssertTrue(session.acknowledgmentConfirmed(url: try XCTUnwrap(URL(
+            string: "https://workspace.example.com/workspace/settings?desktop-auth=acknowledged&attempt=attempt-1"
+        ))))
+        XCTAssertFalse(session.hasActiveAttempt)
+        XCTAssertNil(session.status)
+    }
+}

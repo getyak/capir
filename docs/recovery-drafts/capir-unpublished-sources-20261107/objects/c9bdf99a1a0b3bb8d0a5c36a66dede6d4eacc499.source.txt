@@ -1,0 +1,692 @@
+import XCTest
+@testable import TalentSignal
+
+/// Incremental client proof for the production entry-to-wire chain: skeleton
+/// in the actual first creation frame, active-transfer continuation with
+/// zero-op final, raw overlay of server-owned fields, per-frame lease fencing,
+/// and retention-bound durable uncertain replay. All assertions exercise the
+/// real dispatched request bodies and the real apply path, not plan-only
+/// helpers.
+final class AgentSessionDeltaClientTests: XCTestCase {
+    final class FakeTransport: AgentSessionDeltaTransport {
+        var serverPayload: [String: Any]?
+        var serverRevision = 0
+        var deleted = false
+        var commitThenLoseNextFrame = false
+        var markFinalIncomplete = false
+        var remoteSyncState: String = "complete"
+        var remoteTransferID: UUID? = nil
+        var remoteTargetDigest: String? = nil
+        var remoteFrameCount: Int = 0
+        /// Frames parked at a test barrier (already dispatched).
+        var gateFirstDispatch = false
+        private var gate: CheckedContinuation<Void, Never>? = nil
+        private(set) var gated = false
+        private(set) var receivedBodies: [Data] = []
+        private(set) var processedKeys: Set<String> = []
+        private(set) var serverDigestAtFinal: String?
+
+        func rawSession(id: UUID) async throws -> AgentSessionDeltaRawRecord? {
+            if serverPayload == nil && !deleted { return nil }
+            var raw: [String: Any] = [
+                "session_id": id.uuidString.lowercased(),
+                "revision": serverRevision,
+                "updated_at": "2026-10-08T03:07:24.000Z",
+                "expires_at": "2099-01-01T00:00:00.000Z",
+                "deleted_at": deleted ? "2026-10-08T03:07:24.000Z" : NSNull(),
+            ]
+            if let payload = serverPayload { raw["payload"] = payload }
+            let record = AgentSessionRemoteRecord(
+                sessionID: id,
+                revision: serverRevision,
+                updatedAt: Date(),
+                expiresAt: Date(timeIntervalSinceNow: 30 * 24 * 60 * 60),
+                deletedAt: deleted ? Date() : nil,
+                payload: nil,
+                sync: AgentSessionRemoteSyncState(
+                    state: remoteSyncState,
+                    transferID: remoteTransferID,
+                    targetPayloadDigest: remoteTargetDigest,
+                    startedAt: Date(),
+                    frameCount: remoteFrameCount
+                )
+            )
+            return AgentSessionDeltaRawRecord(record: record, raw: raw)
+        }
+
+        private func wireResponse(
+            id: UUID, isFinal: Bool, replayed: Bool
+        ) -> AgentSessionDeltaWireResponse {
+            let record = AgentSessionRemoteRecord(
+                sessionID: id,
+                revision: serverRevision,
+                updatedAt: Date(),
+                expiresAt: Date(timeIntervalSinceNow: 30 * 24 * 60 * 60),
+                deletedAt: nil,
+                payload: nil,
+                sync: AgentSessionRemoteSyncState(
+                    state: isFinal && !markFinalIncomplete ? "complete" : "incomplete",
+                    transferID: remoteTransferID ?? UUID(),
+                    targetPayloadDigest: remoteTargetDigest ?? String(repeating: "0", count: 64),
+                    startedAt: Date(),
+                    frameCount: remoteFrameCount + receivedBodies.count
+                )
+            )
+            return AgentSessionDeltaWireResponse(
+                contractVersion: TalentSignalAPIContract.version,
+                session: record,
+                transfer: AgentSessionDeltaWireTransfer(
+                    transferID: remoteTransferID ?? UUID(),
+                    frameIndex: remoteFrameCount + receivedBodies.count,
+                    replayed: replayed,
+                    complete: isFinal && !markFinalIncomplete
+                )
+            )
+        }
+
+        func sendDeltaFrame(id: UUID, requestBody: Data) async throws -> AgentSessionDeltaWireResponse {
+            receivedBodies.append(requestBody)
+            if gateFirstDispatch, !gated {
+                gated = true
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    gate = continuation
+                }
+            }
+            let request = try XCTUnwrap(
+                try JSONSerialization.jsonObject(with: requestBody) as? [String: Any]
+            )
+            let isFinal = request["final"] as? Bool ?? false
+            let key = try XCTUnwrap(request["idempotency_key"] as? String)
+            if processedKeys.contains(key) {
+                // The server replays a repeated key against the CURRENT record
+                // and never applies the same frame twice.
+                return wireResponse(id: id, isFinal: isFinal, replayed: true)
+            }
+            let operations = try XCTUnwrap(request["operations"] as? [[String: Any]])
+            if serverPayload == nil, let skeleton = request["skeleton"] as? [String: Any] {
+                serverPayload = skeleton
+            }
+            serverPayload = try AgentSessionDeltaOperations.apply(
+                base: serverPayload ?? [:], operations: operations
+            )
+            processedKeys.insert(key)
+            serverRevision += 1
+            if isFinal {
+                serverDigestAtFinal = try AgentSessionDeltaCanonical.sessionIntentDigest(serverPayload!)
+            }
+            if commitThenLoseNextFrame {
+                commitThenLoseNextFrame = false
+                throw URLError(.networkConnectionLost)
+            }
+            return wireResponse(id: id, isFinal: isFinal, replayed: false)
+        }
+
+        func abandonDelta(id: UUID, requestBody: Data) async throws -> AgentSessionDeltaWireResponse {
+            try await sendDeltaFrame(id: id, requestBody: requestBody)
+        }
+
+        func openGate() {
+            gate?.resume()
+            gate = nil
+        }
+    }
+
+    private final class Lease {
+        var current = true
+    }
+
+    private func makeClient(
+        transport: FakeTransport,
+        store: AgentSessionDeltaTransferStoring = EphemeralAgentSessionDeltaTransferStore()
+    ) -> AgentSessionDeltaClient {
+        AgentSessionDeltaClient(
+            transport: transport, store: store,
+            accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a"
+        )
+    }
+
+    private func desiredPayload(sessionID: UUID, turns: Int, bodyBytes: Int) -> [String: Any] {
+        var desired: [String: Any] = [
+            "id": sessionID.uuidString.lowercased(),
+            "scopeKind": "unresolved_intent",
+            "personDisplayLabel": "New session",
+            "contextDisplayLabel": "Conversation",
+            "title": "Synthetic delta conversation",
+            "updatedAt": "2026-10-08T03:07:24.000Z",
+            "isUnread": false,
+            "turns": [[String: Any]](),
+        ]
+        var list = [[String: Any]]()
+        for index in 0..<turns {
+            list.append([
+                "id": UUID().uuidString.lowercased(),
+                "objective": "message \(index)",
+                "createdAt": "2026-10-08T03:07:24.123Z",
+                "response": [
+                    "contractVersion": TalentSignalAPIContract.version,
+                    "taskID": UUID().uuidString.lowercased(),
+                    "contextManifestID": "none-unbound-conversation",
+                    "knowledgeSnapshotID": "none-unbound-conversation",
+                    "disposition": "answered",
+                    "createdAt": "2026-10-08T03:07:24.200Z",
+                    "savedBlocks": [[
+                        "id": UUID().uuidString.lowercased(),
+                        "kind": "answer",
+                        "title": "Answer",
+                        "body": String(repeating: "x", count: bodyBytes),
+                        "status": "informational",
+                        "citation_dependency_ids": [Any](),
+                        "requires_user_decision": false,
+                    ] as [String: Any]],
+                ] as [String: Any],
+            ])
+        }
+        desired["turns"] = list
+        return desired
+    }
+
+    func testFirstCreationFrameCarriesSkeletonAndAppliesRetainedMetadata() async throws {
+        let transport = FakeTransport()
+        let sessionID = UUID()
+        var desired = desiredPayload(sessionID: sessionID, turns: 6, bodyBytes: 50_000)
+        // Long first offline history with retained screenshot references and
+        // contact receipts: their parents are created by the legal append
+        // semantics exactly like TypeScript, never by arbitrary path creation.
+        desired["screenshotTaskIDs"] = (0..<25).map { _ in UUID().uuidString.lowercased() }
+        desired["contactReceipts"] = (0..<25).map { index in
+            [
+                "id": UUID().uuidString.lowercased(),
+                "operationKey": "receipt-\(index)",
+                "outcome": "created_person",
+                "captureID": UUID().uuidString.lowercased(),
+                "resourceID": UUID().uuidString.lowercased(),
+                "personDisplayLabel": "Person \(index)",
+                "createdAt": "2026-10-08T03:07:24.123Z",
+            ] as [String: Any]
+        }
+        let skeleton = AgentSessionDeltaClient.emptySkeleton(from: desired)
+        let progress = try await makeClient(transport: transport).synchronize(
+            sessionID: sessionID, desired: desired, skeleton: skeleton
+        )
+        XCTAssertTrue(progress.synchronized)
+        XCTAssertGreaterThan(transport.receivedBodies.count, 1)
+        // The ACTUAL first request body carries the skeleton; later frames do not.
+        let firstRequest = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: transport.receivedBodies[0]) as? [String: Any]
+        )
+        XCTAssertNotNil(firstRequest["skeleton"])
+        for body in transport.receivedBodies.dropFirst() {
+            let request = try XCTUnwrap(
+                try JSONSerialization.jsonObject(with: body) as? [String: Any]
+            )
+            XCTAssertNil(request["skeleton"])
+            XCTAssertLessThanOrEqual(body.count, 250 * 1024)
+        }
+        // The real apply path accepted the retained metadata appends.
+        let applied = transport.serverPayload ?? [:]
+        XCTAssertEqual((applied["screenshotTaskIDs"] as? [Any])?.count, 25)
+        XCTAssertEqual((applied["contactReceipts"] as? [Any])?.count, 25)
+        XCTAssertEqual((applied["turns"] as? [Any])?.count, 6)
+        XCTAssertEqual(
+            transport.serverDigestAtFinal,
+            try AgentSessionDeltaCanonical.sessionIntentDigest(desired)
+        )
+    }
+
+    func testFramesCarryPendingExecutionMetadataLastAndFinishWholeIntent() async throws {
+        let transport = FakeTransport()
+        let sessionID = UUID()
+        var desired = desiredPayload(sessionID: sessionID, turns: 8, bodyBytes: 40_000)
+        desired["pendingObjective"] = "resume the ask"
+        desired["pendingScreenshotIdempotencyKey"] = "screenshot-key"
+        desired["pendingScreenshotRequestIdentity"] = String(repeating: "a", count: 64)
+        desired["pendingScreenshotCapturedAt"] = "2026-10-08T03:07:24.000Z"
+        let client = makeClient(transport: transport)
+        let progress = try await client.synchronize(
+            sessionID: sessionID, desired: desired,
+            skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired)
+        )
+        XCTAssertTrue(progress.synchronized)
+        XCTAssertFalse(progress.remoteIncomplete)
+        XCTAssertGreaterThan(transport.receivedBodies.count, 1)
+        for body in transport.receivedBodies.dropLast() {
+            let request = try XCTUnwrap(
+                try JSONSerialization.jsonObject(with: body) as? [String: Any]
+            )
+            for operation in try XCTUnwrap(request["operations"] as? [[String: Any]]) {
+                XCTAssertFalse((operation["path"] as? String ?? "").hasPrefix("/pending"))
+            }
+        }
+    }
+
+    func testACKedPrefixRestartContinuesActiveTransferWithZeroOpFinal() async throws {
+        // All declared content is already acknowledged but the final frame was
+        // lost: no uncertain file exists, so continuation must follow the
+        // ACTIVE remote transfer identity and finalize with a zero-op final.
+        let transport = FakeTransport()
+        let sessionID = UUID()
+        let desired = desiredPayload(sessionID: sessionID, turns: 3, bodyBytes: 200)
+        let applied = try AgentSessionDeltaOperations.apply(
+            base: AgentSessionDeltaClient.emptySkeleton(from: desired),
+            operations: try AgentSessionDeltaOperations.plan(before: AgentSessionDeltaClient.emptySkeleton(from: desired), after: desired)
+        )
+        transport.serverPayload = applied
+        transport.serverRevision = 4
+        transport.remoteSyncState = "incomplete"
+        transport.remoteTransferID = UUID()
+        transport.remoteTargetDigest = try AgentSessionDeltaCanonical.sessionIntentDigest(desired)
+        transport.remoteFrameCount = 7
+        let progress = try await makeClient(transport: transport).synchronize(
+            sessionID: sessionID, desired: desired,
+            skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired)
+        )
+        XCTAssertTrue(progress.synchronized)
+        XCTAssertEqual(transport.receivedBodies.count, 1)
+        let request = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: transport.receivedBodies[0]) as? [String: Any]
+        )
+        // Continuation uses the immutable active transfer identity.
+        XCTAssertEqual(
+            request["transfer_id"] as? String,
+            transport.remoteTransferID?.uuidString.lowercased()
+        )
+        XCTAssertEqual(request["target_payload_digest"] as? String, transport.remoteTargetDigest)
+        XCTAssertEqual((request["operations"] as? [Any])?.count, 0)
+        XCTAssertEqual(request["final"] as? Bool, true)
+        XCTAssertNil(request["skeleton"])
+    }
+
+    func testChangedIntentAgainstActiveTransferFailsExplicitly() async throws {
+        let transport = FakeTransport()
+        let sessionID = UUID()
+        let desired = desiredPayload(sessionID: sessionID, turns: 2, bodyBytes: 100)
+        transport.serverPayload = try AgentSessionDeltaOperations.apply(
+            base: AgentSessionDeltaClient.emptySkeleton(from: desired),
+            operations: try AgentSessionDeltaOperations.plan(
+                before: AgentSessionDeltaClient.emptySkeleton(from: desired), after: desired
+            )
+        )
+        transport.serverRevision = 2
+        transport.remoteSyncState = "incomplete"
+        transport.remoteTransferID = UUID()
+        transport.remoteTargetDigest = String(repeating: "c", count: 64)
+        var changed = desired
+        changed["title"] = "Drifted intent"
+        do {
+            _ = try await makeClient(transport: transport).synchronize(
+                sessionID: sessionID, desired: changed,
+                skeleton: AgentSessionDeltaClient.emptySkeleton(from: changed)
+            )
+            XCTFail("a changed intent against an active transfer must conflict")
+        } catch let error as AgentSessionDeltaClientError {
+            XCTAssertEqual(error, .transferMismatch)
+        }
+        XCTAssertTrue(transport.receivedBodies.isEmpty)
+    }
+
+    func testNoWriteOnlyWithRealCompleteStateAndExactTargetDigest() async throws {
+        let transport = FakeTransport()
+        let sessionID = UUID()
+        let desired = desiredPayload(sessionID: sessionID, turns: 2, bodyBytes: 100)
+        transport.serverPayload = try AgentSessionDeltaOperations.apply(
+            base: AgentSessionDeltaClient.emptySkeleton(from: desired),
+            operations: try AgentSessionDeltaOperations.plan(
+                before: AgentSessionDeltaClient.emptySkeleton(from: desired), after: desired
+            )
+        )
+        transport.serverRevision = 3
+        transport.remoteSyncState = "complete"
+        transport.remoteTargetDigest = try AgentSessionDeltaCanonical.sessionIntentDigest(desired)
+        let progress = try await makeClient(transport: transport).synchronize(
+            sessionID: sessionID, desired: desired,
+            skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired)
+        )
+        XCTAssertTrue(progress.synchronized)
+        XCTAssertTrue(transport.receivedBodies.isEmpty, "an exact complete state writes nothing")
+        // A remotely incomplete record with the same content is NEVER silently
+        // treated as done: it finalizes through a real frame instead.
+        transport.remoteSyncState = "incomplete"
+        transport.remoteTransferID = UUID()
+        transport.markFinalIncomplete = false
+        let finalized = try await makeClient(transport: transport).synchronize(
+            sessionID: sessionID, desired: desired,
+            skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired)
+        )
+        XCTAssertTrue(finalized.synchronized)
+        XCTAssertEqual(transport.receivedBodies.count, 1)
+        XCTAssertFalse(
+            transport.receivedBodies.first.map {
+                ((try? JSONSerialization.jsonObject(with: $0) as? [String: Any])?["operations"] as? [Any])?.isEmpty == false
+            } ?? true
+        )
+    }
+
+    func testLostFinalReplyReplaysExactBytesAfterRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "delta-client-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentSessionDeltaTransferStore(directory: directory)
+        let transport = FakeTransport()
+        let sessionID = UUID()
+        let desired = desiredPayload(sessionID: sessionID, turns: 2, bodyBytes: 5_000)
+        transport.commitThenLoseNextFrame = true
+        do {
+            _ = try await makeClient(transport: transport, store: store).synchronize(
+                sessionID: sessionID, desired: desired,
+                skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired)
+            )
+            XCTFail("the lost response must surface as uncertainty")
+        } catch {}
+        let pending = try XCTUnwrap(
+            try store.inFlightFrame(
+                accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a",
+                sessionID: sessionID
+            )
+        )
+        // Restart: the retained bytes replay exactly and the transfer finishes.
+        let resumed = try await makeClient(transport: transport, store: store).synchronize(
+            sessionID: sessionID, desired: desired,
+            skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired)
+        )
+        XCTAssertTrue(resumed.synchronized)
+        XCTAssertEqual(transport.receivedBodies.last, pending.requestBody)
+        XCTAssertNil(
+            try store.inFlightFrame(
+                accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a",
+                sessionID: sessionID
+            )
+        )
+        let turns = transport.serverPayload?["turns"] as? [[String: Any]] ?? []
+        XCTAssertEqual(turns.count, 2)
+        XCTAssertEqual(Set(turns.compactMap { $0["id"] as? String }).count, 2)
+    }
+
+    @MainActor
+    func testActualStoreRoundTripPreservesQueueProducedNullBlockShapeInFinalDigest() async throws {
+        let sessionID = UUID(), turnID = UUID()
+        let block: [String: Any] = [
+            "id": "queue-block", "kind": "answer", "title": "Synthetic answer",
+            "body": "Complete canonical queue response", "status": "confirmed",
+            "citation_dependency_ids": [String](), "requires_user_decision": false,
+            "allows_static_share": false, "target_ref": NSNull(),
+        ]
+        // Exact displayBlocks/queueTurn producer shape: explicit target_ref:null,
+        // unboundConversationBlocks only, empty context/snapshot IDs.
+        var raw = desiredPayload(sessionID: sessionID, turns: 0, bodyBytes: 0)
+        raw["turns"] = [[
+            "id": turnID.uuidString.lowercased(), "objective": "Original message",
+            "createdAt": "2026-10-08T03:07:24.123Z",
+            "response": ["contractVersion": TalentSignalAPIContract.version,
+                "taskID": UUID().uuidString.lowercased(), "contextManifestID": "",
+                "knowledgeSnapshotID": "", "disposition": "answer",
+                "createdAt": "2026-10-08T03:07:24.200Z", "unboundConversationBlocks": [block]],
+        ]] as [[String: Any]]
+        let persisted = try JSONDecoder.agentSession.decode(PersistedAgentSession.self, from: JSONSerialization.data(withJSONObject: raw))
+        let root = FileManager.default.temporaryDirectory.appending(path: "delta-store-overlay-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = FileAgentSessionPersistence(accountID: "synthetic-overlay", rootURL: root)
+        try persistence.save(JSONEncoder.agentSession.encode(PersistedAgentSessionEnvelope(version: 8,
+            sessions: [persisted], drafts: [], globalDraft: nil, evidenceReviews: nil, contactProposal: nil)))
+        let store = AgentSessionStore(persistence: persistence)
+        XCTAssertNil(store.persistenceNotice)
+        XCTAssertTrue(store.toggleFeedback(sessionID: sessionID, turnID: turnID, feedback: .helpful))
+        let restored = try XCTUnwrap(store.session(id: sessionID))
+        let desired = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder.agentSession.encode(PersistedAgentSession(restored))) as? [String: Any])
+        let dtoTurn = try XCTUnwrap((desired["turns"] as? [[String: Any]])?.first)
+        let dtoResponse = try XCTUnwrap(dtoTurn["response"] as? [String: Any])
+        XCTAssertNotNil(dtoResponse["savedBlocks"], "Real DTO synthesis must be exercised, not a same-shape dictionary mock")
+        let transport = FakeTransport(); transport.serverPayload = raw; transport.serverRevision = 1
+        let result = try await makeClient(transport: transport).synchronize(sessionID: sessionID, desired: desired, skeleton: nil)
+        XCTAssertTrue(result.synchronized)
+        let appliedTurn = try XCTUnwrap((transport.serverPayload?["turns"] as? [[String: Any]])?.first)
+        let response = try XCTUnwrap(appliedTurn["response"] as? [String: Any])
+        XCTAssertNil(response["savedBlocks"])
+        let appliedBlock = try XCTUnwrap((response["unboundConversationBlocks"] as? [[String: Any]])?.first)
+        XCTAssertTrue(appliedBlock["target_ref"] is NSNull)
+        XCTAssertEqual(appliedTurn["feedback"] as? String, "helpful")
+        let final = try XCTUnwrap(transport.receivedBodies.last)
+        let finalBody = try XCTUnwrap(JSONSerialization.jsonObject(with: final) as? [String: Any])
+        XCTAssertEqual(transport.serverDigestAtFinal, finalBody["target_payload_digest"] as? String)
+    }
+
+    func testRawOverlayKeepsServerOwnedFieldsInDeclaredIntentAndFrames() async throws {
+        let transport = FakeTransport()
+        let sessionID = UUID()
+        let turnID = UUID().uuidString.lowercased()
+        // The raw canonical base carries server-owned fields the DTO cannot
+        // model: execution provenance, folded steering and image manifests.
+        let rawTurn: [String: Any] = [
+            "id": turnID,
+            "objective": "original message",
+            "createdAt": "2026-10-08T03:07:24.123Z",
+            "steeredMessages": [["id": UUID().uuidString.lowercased(), "objective": "steered"]] as [Any],
+            "images": [["id": UUID().uuidString.lowercased(), "file_name": "shot.png"]] as [Any],
+            "response": [
+                "contractVersion": TalentSignalAPIContract.version,
+                "taskID": UUID().uuidString.lowercased(),
+                "contextManifestID": "none-unbound-conversation",
+                "knowledgeSnapshotID": "none-unbound-conversation",
+                "disposition": "answered",
+                "createdAt": "2026-10-08T03:07:24.200Z",
+                "execution": ["tools": [["name": "search", "completed_at": "2026-10-08T03:07:25.000Z"]]] as [String: Any],
+                "probe_unknown_field": ["kept": true],
+            ] as [String: Any],
+        ]
+        let rawPayload: [String: Any] = [
+            "id": sessionID.uuidString.lowercased(),
+            "scopeKind": "unresolved_intent",
+            "personDisplayLabel": "New session",
+            "contextDisplayLabel": "Conversation",
+            "title": "Old title",
+            "updatedAt": "2026-10-08T03:07:24.000Z",
+            "isUnread": false,
+            "turns": [rawTurn],
+        ]
+        transport.serverPayload = rawPayload
+        transport.serverRevision = 2
+        // The DTO-shaped desired value has NO execution/steered/images fields:
+        // exactly what the archive store's encoded payload loses.
+        var desired: [String: Any] = rawPayload
+        desired["title"] = "New title"
+        var turns = desired["turns"] as! [[String: Any]]
+        turns[0] = [
+            "id": turnID,
+            "objective": "original message",
+            "createdAt": "2026-10-08T03:07:24.123Z",
+            "feedback": "helpful",
+            "response": [
+                "contractVersion": TalentSignalAPIContract.version,
+                "taskID": (rawTurn["response"] as! [String: Any])["taskID"]!,
+                "contextManifestID": "none-unbound-conversation",
+                "knowledgeSnapshotID": "none-unbound-conversation",
+                "disposition": "answered",
+                "createdAt": "2026-10-08T03:07:24.200Z",
+            ] as [String: Any],
+        ]
+        turns.append([
+            "id": UUID().uuidString.lowercased(),
+            "objective": "second message",
+            "createdAt": "2026-10-08T03:07:26.000Z",
+            "response": [
+                "contractVersion": TalentSignalAPIContract.version,
+                "taskID": UUID().uuidString.lowercased(),
+                "contextManifestID": "none-unbound-conversation",
+                "knowledgeSnapshotID": "none-unbound-conversation",
+                "disposition": "answered",
+                "createdAt": "2026-10-08T03:07:26.100Z",
+            ] as [String: Any],
+        ])
+        desired["turns"] = turns
+
+        let merged = AgentSessionDeltaClient.mergeDesiredOverRaw(
+            rawPayload: rawPayload, desired: desired
+        )
+        let mergedTurn = (merged["turns"] as? [[String: Any]])?.first
+        XCTAssertNotNil(mergedTurn?["steeredMessages"])
+        XCTAssertNotNil(mergedTurn?["images"])
+        XCTAssertNotNil((mergedTurn?["response"] as? [String: Any])?["execution"])
+        XCTAssertNotNil((mergedTurn?["response"] as? [String: Any])?["probe_unknown_field"])
+        XCTAssertEqual(mergedTurn?["feedback"] as? String, "helpful")
+
+        let progress = try await makeClient(transport: transport).synchronize(
+            sessionID: sessionID, desired: desired, skeleton: nil
+        )
+        XCTAssertTrue(progress.synchronized)
+        // The declared target and the applied payload both keep the raw
+        // server-owned fields the DTO lost.
+        let appliedTurn = (transport.serverPayload?["turns"] as? [[String: Any]])?.first
+        XCTAssertNotNil(appliedTurn?["steeredMessages"])
+        XCTAssertNotNil(appliedTurn?["images"])
+        XCTAssertNotNil((appliedTurn?["response"] as? [String: Any])?["execution"])
+        XCTAssertEqual(
+            transport.serverDigestAtFinal,
+            try AgentSessionDeltaCanonical.sessionIntentDigest(merged)
+        )
+    }
+
+    func testLeaseReleaseStopsFurtherRetainDispatchAndPublication() async throws {
+        let transport = FakeTransport()
+        transport.gateFirstDispatch = true
+        let lease = Lease()
+        let sessionID = UUID()
+        let desired = desiredPayload(sessionID: sessionID, turns: 4, bodyBytes: 20_000)
+        let client = makeClient(transport: transport)
+        let task = Task {
+            try await client.synchronize(
+                sessionID: sessionID, desired: desired,
+                skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired),
+                isCurrent: { lease.current }
+            )
+        }
+        // Wait until the first frame is dispatched and parked at the barrier.
+        for _ in 0..<200 where !transport.gated {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(transport.gated)
+        // Release the scope while the wire is parked: old-account writes stop.
+        lease.current = false
+        transport.openGate()
+        do {
+            _ = try await task.value
+            XCTFail("a released scope must not report synchronized success")
+        } catch let error as AgentSessionDeltaClientError {
+            XCTAssertEqual(error, .staleLease)
+        }
+        // No second retain/dispatch and no local publication beyond the one
+        // already-dispatched frame, whose result stays truthful unknown.
+        XCTAssertEqual(transport.receivedBodies.count, 1)
+    }
+
+    func testScopeInvalidationCannotRecreateRetainedPrivateFrame() async throws {
+        let store = EphemeralAgentSessionDeltaTransferStore()
+        let transport = FakeTransport()
+        transport.gateFirstDispatch = true
+        let lease = Lease()
+        let sessionID = UUID()
+        let desired = desiredPayload(sessionID: sessionID, turns: 3, bodyBytes: 20_000)
+        let client = makeClient(transport: transport, store: store)
+        let task = Task {
+            try await client.synchronize(
+                sessionID: sessionID, desired: desired,
+                skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired),
+                isCurrent: { lease.current }
+            )
+        }
+        for _ in 0..<200 where !transport.gated {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(transport.gated)
+        lease.current = false
+        // Scope retirement releases the partition: retained private bytes go
+        // with the retiring scope.
+        try client.releaseDeltaTransferPartition()
+        transport.openGate()
+        _ = try? await task.value
+        XCTAssertEqual(transport.receivedBodies.count, 1)
+        XCTAssertNil(
+            try store.inFlightFrame(
+                accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a",
+                sessionID: sessionID
+            )
+        )
+        // A later attempt under the stale lease creates nothing.
+        do {
+            _ = try await client.synchronize(
+                sessionID: sessionID, desired: desired,
+                skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired),
+                isCurrent: { lease.current }
+            )
+            XCTFail("a stale lease must not write")
+        } catch let error as AgentSessionDeltaClientError {
+            XCTAssertEqual(error, .staleLease)
+        }
+        XCTAssertNil(
+            try store.inFlightFrame(
+                accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a",
+                sessionID: sessionID
+            )
+        )
+    }
+
+    func testDeletedRemoteRecordCannotBeResurrectedByReplay() async throws {
+        let store = EphemeralAgentSessionDeltaTransferStore()
+        let transport = FakeTransport()
+        transport.deleted = true
+        transport.serverPayload = ["id": "kept"]
+        let sessionID = UUID()
+        try store.retain(
+            AgentSessionDeltaInFlightFrame(
+                sessionID: sessionID, transferID: UUID(), frameIndex: 1,
+                idempotencyKey: UUID(), expectedRevision: 0,
+                targetPayloadDigest: String(repeating: "a", count: 64),
+                requestBody: Data("{}".utf8), isFinal: true, createdAt: Date(),
+                sessionExpiresAt: Date(timeIntervalSinceNow: 60)
+            ),
+            accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a"
+        )
+        do {
+            _ = try await makeClient(transport: transport, store: store).synchronize(
+                sessionID: sessionID, desired: [:], skeleton: nil
+            )
+            XCTFail("a deleted remote record must never be restored")
+        } catch let error as AgentSessionDeltaClientError {
+            XCTAssertEqual(error, .recordGone)
+        }
+        XCTAssertTrue(transport.receivedBodies.isEmpty, "the retained frame is never replayed")
+        XCTAssertNil(
+            try store.inFlightFrame(
+                accountID: "account-a", userID: "user-a", endpointScope: "endpoint-a",
+                sessionID: sessionID
+            )
+        )
+    }
+
+    func testOversizedSingleTurnFailsExplicitlyAndKeepsLocalHistory() async throws {
+        let transport = FakeTransport()
+        let sessionID = UUID()
+        let desired = desiredPayload(sessionID: sessionID, turns: 1, bodyBytes: 300_000)
+        do {
+            _ = try await makeClient(transport: transport).synchronize(
+                sessionID: sessionID, desired: desired,
+                skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired)
+            )
+            XCTFail("an individually oversized turn must fail explicitly")
+        } catch let error as AgentSessionDeltaClientError {
+            XCTAssertEqual(error, .locallyOversized)
+        }
+        XCTAssertTrue(transport.receivedBodies.isEmpty)
+    }
+
+    func testIncompleteFinalResponseNeverReportsWholeSync() async throws {
+        let transport = FakeTransport()
+        transport.markFinalIncomplete = true
+        let sessionID = UUID()
+        let desired = desiredPayload(sessionID: sessionID, turns: 1, bodyBytes: 100)
+        let progress = try await makeClient(transport: transport).synchronize(
+            sessionID: sessionID, desired: desired,
+            skeleton: AgentSessionDeltaClient.emptySkeleton(from: desired)
+        )
+        XCTAssertFalse(progress.synchronized)
+        XCTAssertTrue(progress.remoteIncomplete)
+    }
+}

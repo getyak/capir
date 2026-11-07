@@ -1,0 +1,10 @@
+import { Type } from "@sinclair/typebox";
+
+const TextOrNull = Type.Union([Type.String(), Type.Null()]);
+/** Server-owned configuration evidence, not a public prompt override request. */
+export const PromptSnapshotSchema = Type.Object({
+  name: Type.String(), text: Type.String({ minLength: 1 }),
+  revision: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  source: Type.Union([Type.Literal("opik"), Type.Literal("cache"), Type.Literal("bundled")]),
+  versionId: TextOrNull, commit: TextOrNull, environment: TextOrNull,
+}, { additionalProperties: false });

@@ -1,0 +1,728 @@
+import { executionDeadline, claudeHarnessConfiguration, type ClaudeHarnessConfiguration } from "@talent-signal/agent";
+import type {
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+  preHandlerHookHandler,
+} from "fastify";
+
+import { ApiError } from "../lib/apiError.js";
+
+/**
+ * Real, ephemeral, private conversation transport.
+ *
+ * This module owns only the server-side wire protocol. It deliberately avoids
+ * the SDK harness, subprocesses, session files, tools, memory, directory
+ * retrieval, prompt tracking, product-run capture, runtime observation,
+ * Lab and Opik hooks. A request is only the supplied transient text plus a
+ * fixed boundary system message; nothing account-scoped leaves the process.
+ */
+
+export const PRIVATE_CONVERSATION_PATH = "/v1/private-conversation";
+
+export const PRIVATE_CONVERSATION_RATE_LIMIT_MAX = 12;
+export const PRIVATE_CONVERSATION_RATE_LIMIT_WINDOW_MS = 60_000;
+export const PRIVATE_CONVERSATION_MAX_CONCURRENCY = 2;
+/** Bounds raw JSON bytes before parsing, including JSON escaping overhead. */
+export const PRIVATE_CONVERSATION_MAX_BODY_BYTES = 256 * 1024;
+
+export const PRIVATE_CONVERSATION_SYSTEM_GUIDANCE = [
+  "You are a conversational assistant in a private, ephemeral chat.",
+  "You can think and write using only the text supplied in this conversation.",
+  "You cannot access the user's account, contacts, memory, files, tools, or any stored record, and you cannot perform actions or writes.",
+  "Never claim or imply that you saved, stored, remembered, reviewed, or trained on this conversation, and make no guarantees about retention or training.",
+  "If the user asks for account data or an action you cannot perform, say so briefly and continue helping from the supplied text.",
+].join(" ");
+
+export type PrivateConversationRole = "user" | "assistant";
+
+export interface PrivateConversationMessage {
+  role: PrivateConversationRole;
+  content: string;
+}
+
+export interface PrivateConversationProviderRequest {
+  readonly messages: readonly PrivateConversationMessage[];
+}
+
+export interface PrivateConversationProvider {
+  readonly providerId: "claude" | "zhipu";
+  readonly model: string;
+  /**
+   * Yields incremental answer text. Implementations MUST throw (never return
+   * normally) when the upstream terminal marker was not observed, and MUST
+   * honor `signal` by cancelling the upstream request.
+   */
+  stream(
+    request: PrivateConversationProviderRequest,
+    signal: AbortSignal,
+  ): AsyncIterable<string>;
+}
+
+export class PrivateConversationProviderError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.name = "PrivateConversationProviderError";
+    this.code = code;
+  }
+}
+
+const PROVIDER_ERROR_CODES = new Set([
+  "PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE",
+  "PRIVATE_CONVERSATION_PROVIDER_MALFORMED",
+  "PRIVATE_CONVERSATION_PROVIDER_TRUNCATED",
+  "PRIVATE_CONVERSATION_PROXY_UNSUPPORTED",
+]);
+
+const INVALID = { ok: false as const, code: "PRIVATE_CONVERSATION_INVALID" };
+
+export type PrivateConversationValidation =
+  | { ok: true; messages: PrivateConversationMessage[] }
+  | { ok: false; code: string };
+
+/** Strict shape validation; unknown fields and role overrides never pass. */
+export function validatePrivateConversationBody(
+  value: unknown,
+): PrivateConversationValidation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return INVALID;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== "messages")) return INVALID;
+  const raw = record.messages;
+  if (!Array.isArray(raw) || raw.length < 1) {
+    return INVALID;
+  }
+  const messages: PrivateConversationMessage[] = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const item = raw[index];
+    if (!item || typeof item !== "object" || Array.isArray(item)) return INVALID;
+    const entry = item as Record<string, unknown>;
+    const keys = Object.keys(entry);
+    if (keys.length !== 2 || !keys.includes("role") || !keys.includes("content")) {
+      return INVALID;
+    }
+    const expectedRole: PrivateConversationRole = index % 2 === 0 ? "user" : "assistant";
+    if (entry.role !== expectedRole) return INVALID;
+    if (typeof entry.content !== "string") return INVALID;
+    const content = entry.content;
+    if (!content.trim()) {
+      return INVALID;
+    }
+    messages.push({ role: expectedRole, content });
+  }
+  const objective = messages[messages.length - 1];
+  // Strict alternation that ends with user is required for an objective.
+  if (!objective || objective.role !== "user") return INVALID;
+  return { ok: true, messages };
+}
+
+/** Parses an SSE character stream. Handles split frames and CRLF. */
+export async function* parseServerSentEvents(
+  chunks: AsyncIterable<string>,
+): AsyncIterable<{ event: string | null; data: string }> {
+  let buffer = "";
+  let event: string | null = null;
+  let dataLines: string[] = [];
+  let frameChars = 0;
+  for await (const chunk of chunks) {
+    buffer += chunk;
+    for (;;) {
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) break;
+      const rawLine = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+      frameChars += rawLine.length + 1;
+      if (frameChars > 128 * 1024) throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_MALFORMED");
+      if (line === "") {
+        if (dataLines.length) {
+          yield { event, data: dataLines.join("\n") };
+          dataLines = [];
+        }
+        event = null;
+        frameChars = 0;
+        continue;
+      }
+      if (line.startsWith(":")) continue;
+      const colon = line.indexOf(":");
+      const field = colon < 0 ? line : line.slice(0, colon);
+      let fieldValue = colon < 0 ? "" : line.slice(colon + 1);
+      if (fieldValue.startsWith(" ")) fieldValue = fieldValue.slice(1);
+      if (field === "event") event = fieldValue;
+      else if (field === "data") dataLines.push(fieldValue);
+    }
+    if (buffer.length + frameChars > 128 * 1024) throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_MALFORMED");
+  }
+  if (dataLines.length) yield { event, data: dataLines.join("\n") };
+}
+
+async function* decodeEventStream(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+): AsyncIterable<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  const cancel = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    for (;;) {
+      if (signal.aborted) throw signal.reason;
+      const { done, value } = await reader.read();
+      if (signal.aborted) throw signal.reason;
+      if (done) break;
+      if (value) {
+        bytes += value.byteLength;
+        if (bytes > 2 * 1024 * 1024) throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_MALFORMED");
+        yield decoder.decode(value, { stream: true });
+      }
+    }
+    const tail = decoder.decode();
+    if (tail) yield tail;
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    try {
+      await reader.cancel();
+    } catch {
+      // Cancellation is best-effort; the request signal already fences upstream.
+    }
+    reader.releaseLock();
+  }
+}
+
+function parseFrame(data: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(data) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_MALFORMED");
+  }
+}
+
+/** Anthropic `/v1/messages` SSE frames to incremental text deltas. */
+export async function* anthropicTextDeltas(
+  events: AsyncIterable<{ event: string | null; data: string }>,
+): AsyncIterable<string> {
+  for await (const frame of events) {
+    if (!frame.data) continue;
+    if (frame.event === "error") {
+      throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+    }
+    const payload = parseFrame(frame.data);
+    const type = payload.type;
+    if (type === "content_block_delta") {
+      const delta = payload.delta;
+      if (delta && typeof delta === "object" && !Array.isArray(delta)) {
+        const text = (delta as Record<string, unknown>).text;
+        if ((delta as Record<string, unknown>).type === "text_delta" && typeof text === "string") {
+          yield text;
+        }
+      }
+    } else if (type === "message_delta") {
+      const delta = payload.delta as Record<string, unknown> | undefined;
+      if (delta?.stop_reason === "max_tokens") throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_TRUNCATED");
+    } else if (type === "message_stop") {
+      return;
+    } else if (type === "error") {
+      throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+    }
+  }
+  throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_TRUNCATED");
+}
+
+/** OpenAI-compatible `/chat/completions` SSE frames to incremental text deltas. */
+export async function* openAiCompatibleTextDeltas(
+  events: AsyncIterable<{ event: string | null; data: string }>,
+): AsyncIterable<string> {
+  for await (const frame of events) {
+    if (!frame.data) continue;
+    if (frame.data === "[DONE]") {
+      return;
+    }
+    const payload = parseFrame(frame.data);
+    if (payload.error) {
+      throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+    }
+    const choices = payload.choices;
+    if (!Array.isArray(choices) || choices.length === 0) continue;
+    const choice = choices[0];
+    if (!choice || typeof choice !== "object" || Array.isArray(choice)) continue;
+    if ((choice as Record<string, unknown>).finish_reason === "length") throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_TRUNCATED");
+    const delta = (choice as Record<string, unknown>).delta;
+    if (!delta || typeof delta !== "object" || Array.isArray(delta)) continue;
+    const content = (delta as Record<string, unknown>).content;
+    if (typeof content === "string" && content) yield content;
+  }
+  throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_TRUNCATED");
+}
+
+export class ClaudeMessagesPrivateConversationProvider
+  implements PrivateConversationProvider
+{
+  readonly providerId = "claude" as const;
+  readonly model: string;
+
+  constructor(
+    private readonly configuration: ClaudeHarnessConfiguration,
+    private readonly fetcher: typeof fetch = fetch,
+    private readonly maxTokens?: number,
+  ) {
+    // A per-request CONNECT tunnel is not available without a new dependency.
+    // Never send private text through an unconfigured route: fail closed.
+    if (configuration.httpsProxy) {
+      throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROXY_UNSUPPORTED");
+    }
+    this.model = configuration.model;
+  }
+
+  async *stream(
+    request: PrivateConversationProviderRequest,
+    signal: AbortSignal,
+  ): AsyncIterable<string> {
+    const headers: Record<string, string> = {
+      accept: "text/event-stream",
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    };
+    if (this.configuration.credential.name === "ANTHROPIC_API_KEY") {
+      headers["x-api-key"] = this.configuration.credential.value;
+    } else {
+      headers.authorization = `Bearer ${this.configuration.credential.value}`;
+    }
+    let response: Response;
+    try {
+      let maxTokens = this.maxTokens;
+      if (maxTokens === undefined) {
+        // Metadata contains no conversation content. Use the actual route's
+        // advertised model capacity instead of an application output quota.
+        const metadata = await this.fetcher(`${this.configuration.baseUrl}/v1/models/${encodeURIComponent(this.configuration.model)}`, {
+          headers: { ...headers, accept: "application/json" }, redirect: "error",
+          signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+        });
+        if (!metadata.ok) { await metadata.body?.cancel(); throw new Error("MODEL_CAPACITY_UNAVAILABLE"); }
+        const capacity = await metadata.json() as { max_tokens?: unknown };
+        if (typeof capacity.max_tokens !== "number" || !Number.isSafeInteger(capacity.max_tokens) || capacity.max_tokens <= 0) throw new Error("MODEL_CAPACITY_UNAVAILABLE");
+        maxTokens = capacity.max_tokens;
+      }
+      response = await this.fetcher(`${this.configuration.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: this.configuration.model,
+          max_tokens: maxTokens,
+          system: PRIVATE_CONVERSATION_SYSTEM_GUIDANCE,
+          messages: request.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+          stream: true,
+        }),
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+    }
+    if (!response.ok || !response.body) {
+      throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+    }
+    yield* anthropicTextDeltas(
+      parseServerSentEvents(decodeEventStream(response.body, signal)),
+    );
+  }
+}
+
+interface ZhipuPrivateConversationOptions {
+  apiKey: string;
+  model: string;
+  baseUrl?: string;
+  fetcher?: typeof fetch;
+  maxTokens?: number;
+}
+
+function admittedZhipuBaseUrl(value: string | undefined): string {
+  const raw = value?.trim() || "https://open.bigmodel.cn/api/paas/v4";
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname !== "open.bigmodel.cn" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.pathname.replace(/\/+$/u, "") !== "/api/paas/v4"
+  ) {
+    throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+  }
+  return `${parsed.origin}${parsed.pathname.replace(/\/+$/u, "")}`;
+}
+
+export class ZhipuPrivateConversationProvider implements PrivateConversationProvider {
+  readonly providerId = "zhipu" as const;
+  readonly model: string;
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+  private readonly fetcher: typeof fetch;
+  private readonly maxTokens: number | undefined;
+
+  constructor(options: ZhipuPrivateConversationOptions) {
+    const apiKey = options.apiKey.trim();
+    const model = options.model.trim();
+    if (!apiKey || !/^glm-[a-z0-9.-]+$/u.test(model) || /(?:latest|auto)/u.test(model)) {
+      throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+    }
+    this.apiKey = apiKey;
+    this.model = model;
+    this.baseUrl = admittedZhipuBaseUrl(options.baseUrl);
+    this.fetcher = options.fetcher ?? fetch;
+    this.maxTokens = options.maxTokens;
+  }
+
+  async *stream(
+    request: PrivateConversationProviderRequest,
+    signal: AbortSignal,
+  ): AsyncIterable<string> {
+    let response: Response;
+    try {
+      response = await this.fetcher(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          accept: "text/event-stream",
+          authorization: `Bearer ${this.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: this.model,
+          stream: true,
+          temperature: 0,
+          ...(this.maxTokens === undefined ? {} : { max_tokens: this.maxTokens }),
+          messages: [
+            { role: "system", content: PRIVATE_CONVERSATION_SYSTEM_GUIDANCE },
+            ...request.messages.map((message) => ({
+              role: message.role,
+              content: message.content,
+            })),
+          ],
+        }),
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+    }
+    if (!response.ok || !response.body) {
+      throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_UNAVAILABLE");
+    }
+    yield* openAiCompatibleTextDeltas(
+      parseServerSentEvents(decodeEventStream(response.body, signal)),
+    );
+  }
+}
+
+export interface PrivateConversationProviderEnvironmentOptions {
+  fetcher?: typeof fetch;
+}
+
+/**
+ * Builds the production provider once. Any disabled or invalid configuration
+ * resolves to `null` so unrelated app startup is never affected; the route then
+ * reports 503 truthfully.
+ */
+export function createEnvironmentPrivateConversationProvider(
+  environment: NodeJS.ProcessEnv = process.env,
+  options: PrivateConversationProviderEnvironmentOptions = {},
+): PrivateConversationProvider | null {
+  const admission = environment.TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING?.trim().toLowerCase();
+  if (admission !== "true") return null;
+  try {
+    const fetcher = options.fetcher ?? fetch;
+    const selected = environment.TALENT_SIGNAL_CHAT_PROVIDER?.trim();
+    if (selected === "claude") {
+      return new ClaudeMessagesPrivateConversationProvider(
+        claudeHarnessConfiguration(environment),
+        fetcher,
+      );
+    }
+    if (selected === "zhipu") {
+      const apiKey = environment.ZHIPU_API_KEY?.trim();
+      const model = environment.TALENT_SIGNAL_CHAT_MODEL?.trim();
+      if (!apiKey || !model) return null;
+      return new ZhipuPrivateConversationProvider({
+        apiKey,
+        model,
+        ...(environment.ZHIPU_BASE_URL?.trim()
+          ? { baseUrl: environment.ZHIPU_BASE_URL.trim() }
+          : {}),
+        fetcher,
+      });
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+interface RateBucket {
+  start: number;
+  count: number;
+}
+
+/** Fence even a provider that ignores cancellation; never wait for its cleanup. */
+async function* abortableDeltas(source: AsyncIterable<string>, signal: AbortSignal): AsyncIterable<string> {
+  const iterator = source[Symbol.asyncIterator]();
+  let rejectAbort!: (reason: unknown) => void;
+  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+  const onAbort = () => rejectAbort(signal.reason);
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    while (!signal.aborted) {
+      const next = await Promise.race([iterator.next(), aborted]);
+      if (signal.aborted) throw signal.reason;
+      if (next.done) return;
+      yield next.value;
+    }
+    throw signal.reason;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    void iterator.return?.().catch(() => undefined);
+  }
+}
+
+function createAccountRateLimiter(max: number, windowMs: number) {
+  const buckets = new Map<string, RateBucket>();
+  return function allow(key: string, now = Date.now()): boolean {
+    const bucket = buckets.get(key);
+    if (!bucket || now - bucket.start >= windowMs) {
+      buckets.set(key, { start: now, count: 1 });
+      return true;
+    }
+    bucket.count += 1;
+    return bucket.count <= max;
+  };
+}
+
+function requestRouteUrl(request: FastifyRequest): string | null {
+  return request.routeOptions?.url ?? null;
+}
+
+/** Skips unrelated runtime-observation sweeps for the private transport. */
+export function isPrivateConversationRequest(request: FastifyRequest): boolean {
+  return requestRouteUrl(request) === PRIVATE_CONVERSATION_PATH;
+}
+
+const NDJSON_DONE = '{"type":"done"}\n';
+
+function frame(value: unknown): string {
+  return `${JSON.stringify(value)}\n`;
+}
+
+function sendError(
+  reply: FastifyReply,
+  requestId: string,
+  status: number,
+  code: string,
+  message: string,
+): FastifyReply {
+  return reply
+    .header("cache-control", "no-store")
+    .header("x-content-type-options", "nosniff")
+    .status(status)
+    .send({ error: { code, message, request_id: requestId } });
+}
+
+export interface PrivateConversationRouteOptions {
+  /** Optional caller-selected deadline; ordinary streaming has none. */
+  timeoutMs?: number;
+  /** Injectable clock for the account rate-limit window. */
+  now?: () => number;
+}
+
+export function registerPrivateConversationRoutes(
+  app: FastifyInstance,
+  authenticate: preHandlerHookHandler,
+  provider: PrivateConversationProvider | null,
+  options: PrivateConversationRouteOptions = {},
+): void {
+  const now = options.now ?? (() => Date.now());
+  const timeoutMs = options.timeoutMs;
+  const allowRequest = createAccountRateLimiter(
+    PRIVATE_CONVERSATION_RATE_LIMIT_MAX,
+    PRIVATE_CONVERSATION_RATE_LIMIT_WINDOW_MS,
+  );
+  const activeByAccount = new Map<string, number>();
+
+  const acquire = (accountId: string): boolean => {
+    const active = activeByAccount.get(accountId) ?? 0;
+    if (active >= PRIVATE_CONVERSATION_MAX_CONCURRENCY) return false;
+    activeByAccount.set(accountId, active + 1);
+    return true;
+  };
+  const release = (accountId: string): void => {
+    const active = activeByAccount.get(accountId) ?? 0;
+    if (active <= 1) activeByAccount.delete(accountId);
+    else activeByAccount.set(accountId, active - 1);
+  };
+
+  const rateLimit: preHandlerHookHandler = async function (request, reply) {
+    if (!allowRequest(request.auth.accountId, now())) {
+      await sendError(
+        reply,
+        request.id,
+        429,
+        "PRIVATE_CONVERSATION_RATE_LIMITED",
+        "Too many private conversations; retry after the current window.",
+      );
+    }
+  };
+
+  app.register(async (instance) => {
+    instance.setErrorHandler((error, request, reply) => {
+      if (error instanceof ApiError) {
+        void sendError(reply, request.id, error.statusCode, error.code, error.message);
+        return;
+      }
+      const status = typeof (error as { statusCode?: number }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+      if (status === 413) {
+        void sendError(reply, request.id, 413, "PRIVATE_CONVERSATION_TOO_LARGE", "The private conversation request is too large.");
+        return;
+      }
+      if (status >= 400 && status < 500) {
+        void sendError(reply, request.id, status, "PRIVATE_CONVERSATION_INVALID", "The private conversation request is invalid.");
+        return;
+      }
+      // Never serialize the error: it can carry provider or body detail.
+      request.log.error({ code: "PRIVATE_CONVERSATION_UNHANDLED" }, "Private conversation request failed before streaming.");
+      void sendError(reply, request.id, 500, "PRIVATE_CONVERSATION_UNAVAILABLE", "Private conversation is unavailable.");
+    });
+
+    instance.post(
+      PRIVATE_CONVERSATION_PATH,
+      {
+        preHandler: [authenticate, rateLimit],
+        bodyLimit: PRIVATE_CONVERSATION_MAX_BODY_BYTES,
+        schema: {
+          security: [{ bearerSession: [] }],
+          tags: ["private-conversation"],
+        },
+      },
+      async (request, reply) => {
+        if (!provider) {
+          return sendError(
+            reply,
+            request.id,
+            503,
+            "PRIVATE_CONVERSATION_UNAVAILABLE",
+            "Private conversation is not available.",
+          );
+        }
+        const validation = validatePrivateConversationBody(request.body);
+        if (!validation.ok) {
+          return sendError(
+            reply,
+            request.id,
+            400,
+            validation.code,
+            "The private conversation request is invalid.",
+          );
+        }
+        const accountId = request.auth.accountId;
+        if (!acquire(accountId)) {
+          return sendError(
+            reply,
+            request.id,
+            429,
+            "PRIVATE_CONVERSATION_BUSY",
+            "Too many private conversations in progress; retry shortly.",
+          );
+        }
+        let released = false;
+        const releaseSlot = () => {
+          if (released) return;
+          released = true;
+          release(accountId);
+        };
+
+        const abort = new AbortController();
+        let timedOut = false;
+        const timeout = executionDeadline(() => {
+          timedOut = true;
+          abort.abort(new Error("private-conversation-timeout"));
+        }, timeoutMs);
+        const onClientAbort = () => abort.abort(new Error("private-conversation-client-abort"));
+        if (request.signal.aborted) onClientAbort();
+        else request.signal.addEventListener("abort", onClientAbort, { once: true });
+        // A hijacked stream must also observe the underlying socket: Node emits
+        // `aborted`/`close` directly even when Fastify's request signal is idle.
+        request.raw.on("aborted", onClientAbort);
+        reply.raw.on("close", onClientAbort);
+
+        reply.hijack();
+        const raw = reply.raw;
+
+        let outputChars = 0;
+        const write = (chunk: string) => {
+          try {
+            raw.write(chunk);
+          } catch {
+            // A disconnected client is already fenced by request.signal.
+          }
+        };
+        const writeErrorFrame = (code: string) => write(frame({ type: "error", code }));
+
+        try {
+          raw.writeHead(200, {
+            "cache-control": "no-store, no-transform",
+            "content-type": "application/x-ndjson; charset=utf-8",
+            "x-accel-buffering": "no",
+            "x-content-type-options": "nosniff",
+            connection: "keep-alive",
+          });
+          for await (const delta of abortableDeltas(provider.stream(
+            { messages: validation.messages }, abort.signal,
+          ), abort.signal)) {
+            if (typeof delta !== "string" || delta.length === 0) continue;
+            outputChars += delta.length;
+            write(frame({ type: "text", text: delta }));
+          }
+          if (abort.signal.aborted) throw abort.signal.reason;
+          if (!outputChars) throw new PrivateConversationProviderError("PRIVATE_CONVERSATION_PROVIDER_MALFORMED");
+          write(NDJSON_DONE);
+        } catch (error) {
+          const providerCode =
+            error instanceof PrivateConversationProviderError && PROVIDER_ERROR_CODES.has(error.code)
+              ? error.code
+              : null;
+          const code = providerCode
+            ?? (timedOut
+              ? "PRIVATE_CONVERSATION_TIMEOUT"
+              : abort.signal.aborted
+                ? "PRIVATE_CONVERSATION_ABORTED"
+                : "PRIVATE_CONVERSATION_UNAVAILABLE");
+          // Log only the sanitized code; never content, credentials or provider errors.
+          request.log.warn({ code }, "Private conversation stream ended without completion.");
+          writeErrorFrame(code);
+        } finally {
+          timeout?.();
+          request.signal.removeEventListener("abort", onClientAbort);
+          request.raw.removeListener("aborted", onClientAbort);
+          reply.raw.removeListener("close", onClientAbort);
+          releaseSlot();
+          try {
+            raw.end();
+          } catch {
+            // The socket may already be gone.
+          }
+        }
+      },
+    );
+  });
+}

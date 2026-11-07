@@ -1,0 +1,68 @@
+import { describe, expect, it, vi } from "vitest";
+import type { Pool } from "pg";
+import type { DatabaseClient } from "../database/pool.js";
+import { runAgentSessionRetentionSweep, sweepAgentSessions } from "./agentSessions.js";
+
+const accountId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+function transaction(statements: string[], failure?: Error) {
+  return {
+    release: vi.fn(),
+    query: vi.fn(async (text: string) => {
+      statements.push(text);
+      if (text.includes("SELECT retract_agent_session_chat_sources") && failure) throw failure;
+      return { command: "UPDATE", fields: [], oid: 0, rowCount: 0,
+        rows: text.includes("pg_try_advisory_xact_lock") ? [{ locked: true }] : [] };
+    }),
+  };
+}
+
+describe("Agent Session retention sweep", () => {
+  it("keeps snapshot cleanup outside sensitive scrubbing and preserves supplied client ownership", async () => {
+    const statements: string[] = [];
+    const client = transaction(statements);
+    await expect(sweepAgentSessions(client as unknown as DatabaseClient, accountId)).resolves.toBeUndefined();
+    const receipt = statements.findIndex(text => text.includes("FOR SHARE NOWAIT"));
+    const lineage = statements.findIndex(text => text.includes("pg_try_advisory_xact_lock"));
+    const expiry = statements.findIndex(text => text.includes("UPDATE agent_sessions SET payload=NULL"));
+    const redaction = statements.findIndex(text => text.includes("payload=redact_agent_session_payload"));
+    expect(receipt).toBeGreaterThanOrEqual(0);
+    expect(lineage).toBeGreaterThan(receipt);
+    expect(expiry).toBeGreaterThan(lineage);
+    expect(redaction).toBeGreaterThan(expiry);
+    expect(statements.some(text => /BEGIN|COMMIT|ROLLBACK|SET LOCAL|agent_session_list_snapshots/u.test(text))).toBe(false);
+    expect(client.release).not.toHaveBeenCalled();
+  });
+
+  it("surfaces recurring snapshot cleanup failures after committed sensitive scrubbing", async () => {
+    const statements: string[] = [];
+    const tx = transaction(statements);
+    const cleanupFailure = new Error("snapshot lock timeout");
+    const client = {
+      connect: vi.fn(async () => tx),
+      query: vi.fn(async (text: string) => {
+        statements.push(text);
+        if (text.includes("DELETE FROM agent_session_list_snapshots")) throw cleanupFailure;
+        return { rows: [{ id: accountId }] };
+      }),
+    } as unknown as Pool;
+    await expect(runAgentSessionRetentionSweep(client)).rejects.toBe(cleanupFailure);
+    const redaction = statements.findIndex(text => text.includes("payload=redact_agent_session_payload"));
+    const commit = statements.indexOf("COMMIT");
+    const cleanup = statements.findIndex(text => text.includes("DELETE FROM agent_session_list_snapshots"));
+    expect(commit).toBeGreaterThan(redaction);
+    expect(cleanup).toBeGreaterThan(commit);
+    expect(tx.release).toHaveBeenCalledOnce();
+  });
+
+  it("rolls back and releases the Pool-owned transaction when sensitive scrubbing fails", async () => {
+    const statements: string[] = [];
+    const failure = new Error("scrubbing failed");
+    const tx = transaction(statements, failure);
+    const pool = { query: vi.fn(async () => ({ rows: [{ id: accountId }] })), connect: vi.fn(async () => tx) };
+    await expect(sweepAgentSessions(pool as unknown as Pool, accountId)).rejects.toBe(failure);
+    expect(statements).toContain("BEGIN");
+    expect(statements).toContain("ROLLBACK");
+    expect(statements).not.toContain("COMMIT");
+    expect(tx.release).toHaveBeenCalledOnce();
+  });
+});

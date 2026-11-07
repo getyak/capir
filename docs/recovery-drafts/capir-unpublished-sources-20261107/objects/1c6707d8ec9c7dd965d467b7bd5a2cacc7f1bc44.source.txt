@@ -1,0 +1,143 @@
+import { fingerprint } from "@talent-signal/agent";
+import {
+  CONTRACT_VERSION, AgentTaskAdmissionQuerySchema, AgentTaskAdmissionResponseSchema,
+  ErrorResponseSchema, type AgentTaskAdmissionResponse, type AgentTaskProjection,
+} from "@talent-signal/contracts";
+import { Type } from "@sinclair/typebox";
+import type { FastifyInstance, preHandlerHookHandler } from "fastify";
+import type { Pool } from "pg";
+import type { BackendConfig } from "../config.js";
+import type { DatabaseClient } from "../database/pool.js";
+import { ApiError } from "../lib/apiError.js";
+import type { AuthContext } from "./auth.js";
+import { compileAgentScope } from "./agentGateway.js";
+import {
+  labWorkspaceSessionActiveSQL, operatorLabDeploymentActiveSQL, operatorTestDeployment,
+} from "./labWorkspaceAccess.js";
+
+interface AdmissionRow {
+  status: "processing" | "completed";
+  response_status: number | null;
+  task_id: string | null;
+  task_status: AgentTaskProjection["status"] | null;
+  capture_id: string | null;
+  objective: string | null;
+  evidence_refs: string[] | null;
+  input_artifact_refs: string[] | null;
+  semantic_snapshot: AgentTaskProjection["semantic_snapshot"] | null;
+}
+
+async function assertCurrentSession(db: DatabaseClient, auth: AuthContext, config: BackendConfig): Promise<void> {
+  const deployment = operatorTestDeployment(config);
+  const row = (await db.query(
+    `SELECT sessions.id FROM sessions
+     JOIN users ON users.account_id=sessions.account_id AND users.id=sessions.user_id
+     JOIN accounts ON accounts.id=sessions.account_id
+     WHERE sessions.id=$1 AND sessions.account_id=$6 AND sessions.user_id=$7
+       AND sessions.revoked_at IS NULL AND sessions.expires_at>clock_timestamp()
+       AND users.status='active' AND accounts.retired_at IS NULL
+       AND ${labWorkspaceSessionActiveSQL} AND ${operatorLabDeploymentActiveSQL}`,
+    [auth.sessionId, deployment.enabled, deployment.webOrigin, deployment.backendOrigin,
+      deployment.userAuthEnabled === true, auth.accountId, auth.userId],
+  )).rows[0];
+  if (!row) throw new ApiError(401, "SESSION_INVALID", "The session is no longer active.");
+}
+
+async function captureAuthorizationCurrent(db: DatabaseClient, auth: AuthContext, pursuitID: string, captureID: string): Promise<boolean> {
+  return Boolean((await db.query(
+    `SELECT 1 FROM source_retention_receipts receipts
+     JOIN pursuits ON pursuits.account_id=receipts.account_id AND pursuits.id=$3
+     WHERE receipts.account_id=$1 AND receipts.capture_id=$2
+       AND pursuits.status IN ('draft','active','paused')
+       AND receipts.source_access_state<>'deleted' AND receipts.authorization_state='authorized'
+       AND (receipts.authorization_expires_at IS NULL OR receipts.authorization_expires_at>clock_timestamp())`,
+    [auth.accountId, captureID, pursuitID],
+  )).rows[0]);
+}
+
+async function currentAuthority(db: DatabaseClient, auth: AuthContext, pursuitID: string,
+  row: AdmissionRow): Promise<AgentTaskAdmissionResponse["authority_state"]> {
+  if (!row.capture_id || !row.semantic_snapshot || row.objective === null || !row.evidence_refs) return "unknown";
+  // Admission does not freeze input-artifact hashes. Do not manufacture that
+  // provenance from today's content, or construct a provider just to inspect it.
+  if (row.input_artifact_refs?.length) return "unknown";
+  if (!await captureAuthorizationCurrent(db, auth, pursuitID, row.capture_id)) return "not_current";
+  try {
+    const scope = await compileAgentScope(db, auth, {
+      runID: row.task_id!, pursuitID, pursuitRevision: row.semantic_snapshot.pursuit_revision,
+      captureID: row.capture_id, objective: row.objective, evidenceRefs: row.evidence_refs,
+    });
+    if (fingerprint(scope.evidenceManifest) !== row.semantic_snapshot.evidence_manifest_digest) return "not_current";
+    // PostgreSQL now() remains at transaction start. Expiry must use wall time
+    // after every potentially delayed scope read as well.
+    return await captureAuthorizationCurrent(db, auth, pursuitID, row.capture_id) ? "current" : "not_current";
+  } catch (error) {
+    if (error instanceof ApiError && [404, 409, 410, 422].includes(error.statusCode)) return "not_current";
+    throw error;
+  }
+}
+
+/** SELECT-only exact association. Missing never proves that POST was not entered. */
+export async function readAgentTaskAdmission(pool: Pool, auth: AuthContext, pursuitID: string,
+  originalKey: string, config: BackendConfig): Promise<AgentTaskAdmissionResponse> {
+  const client = await pool.connect();
+  let result: AgentTaskAdmissionResponse;
+  let acceptedRow: AdmissionRow | undefined;
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    await assertCurrentSession(client, auth, config);
+    const pursuit = (await client.query(
+      "SELECT id FROM pursuits WHERE account_id=$1 AND id=$2",
+      [auth.accountId, pursuitID],
+    )).rows[0];
+    if (!pursuit) throw new ApiError(404, "PURSUIT_NOT_FOUND", "The Pursuit is unavailable.");
+    const row = (await client.query<AdmissionRow>(
+      `SELECT records.status, records.response_status, tasks.id AS task_id,
+         tasks.status AS task_status, tasks.capture_id, tasks.objective,
+         tasks.evidence_refs, tasks.input_artifact_refs, tasks.semantic_snapshot
+       FROM idempotency_records records
+       LEFT JOIN agent_tasks tasks ON tasks.account_id=records.account_id
+         AND tasks.idempotency_record_id=records.id
+         AND tasks.requested_by_user_id=records.actor_user_id AND tasks.pursuit_id=$3
+       WHERE records.account_id=$1 AND records.actor_user_id=$2
+         AND records.operation_scope=$4 AND records.idempotency_key=$5`,
+      [auth.accountId, auth.userId, pursuitID, `create_pursuit_agent_task:${pursuitID}`, originalKey],
+    )).rows[0];
+    result = { contract_version: CONTRACT_VERSION, admission_state: "not_observed",
+      task_id: null, task_status: null, authority_state: "unknown" };
+    if (row?.status === "processing") result.admission_state = "processing";
+    else if (row) {
+      if (row.response_status !== 202 || !row.task_id || !row.task_status) result.admission_state = "unavailable";
+      else { acceptedRow = row; result = { contract_version: CONTRACT_VERSION, admission_state: "accepted",
+        task_id: row.task_id, task_status: row.task_status,
+        authority_state: await currentAuthority(client, auth, pursuitID, row) }; }
+    }
+    await assertCurrentSession(client, auth, config);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally { client.release(); }
+  // A fresh snapshot observes revocation while the consistent read was running.
+  if (acceptedRow && result.authority_state === "current") {
+    result.authority_state = await currentAuthority(pool, auth, pursuitID, acceptedRow);
+  }
+  await assertCurrentSession(pool, auth, config);
+  return result;
+}
+
+export function registerAgentTaskAdmissionRoute(app: FastifyInstance, pool: Pool,
+  authenticate: preHandlerHookHandler, config: BackendConfig): void {
+  app.get<{ Params: { id: string }; Querystring: { idempotency_key: string } }>(
+    "/v1/pursuits/:id/agent-task-admission", {
+      preHandler: authenticate,
+      schema: { tags: ["agent-tasks"], security: [{ bearerSession: [] }],
+        params: Type.Object({ id: Type.String({ format: "uuid" }) }, { additionalProperties: false }),
+        querystring: AgentTaskAdmissionQuerySchema,
+        response: { 200: AgentTaskAdmissionResponseSchema, "4xx": ErrorResponseSchema, "5xx": ErrorResponseSchema } },
+    }, async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      return readAgentTaskAdmission(pool, request.auth, request.params.id, request.query.idempotency_key, config);
+    },
+  );
+}

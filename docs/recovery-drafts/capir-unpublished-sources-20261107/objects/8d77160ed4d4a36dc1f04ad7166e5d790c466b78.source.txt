@@ -1,0 +1,230 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fixture, provider, cli, binary, anthropic } from './model-helpers.mjs';
+const beta='compact-2026-09-04';
+const block={type:'compaction',content:'s',signature:'opaque-synthetic-signature',extra:{unchanged:'🙂'}};
+const metadata=(extra={})=>({type:'model',id:'pin',max_input_tokens:100,max_tokens:80,...extra});
+const capability=(extra={})=>metadata({capabilities:{compaction:{supported:true,summarize:{supported:true}}},...extra});
+const json=(res,data,status=200)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(data));};
+const event=(name,data)=>`event: ${name}\ndata: ${JSON.stringify({type:name,...data})}\n\n`;
+function control(res,b,{content=block,reason='compaction',iterations=[{type:'compaction',input_tokens:10,output_tokens:3}],mutation=x=>x,keepOpen=false,error=false}={}) {
+  const usage={input_tokens:0,output_tokens:0,iterations};
+  if(!b.stream){json(res,{type:'message',role:'assistant',model:'pin',content:content?[content]:[],stop_reason:reason,usage,...(error?{error:{message:'do not expose'}}:{})});return;}
+  res.writeHead(200,{'content-type':'text/event-stream'});
+  let text=event('message_start',{message:{model:'pin',usage:{input_tokens:0,output_tokens:0}}});
+  if(content)text+=event('content_block_start',{index:0,content_block:content})+event('content_block_stop',{index:0});
+  text+=event('message_delta',{delta:{stop_reason:reason},usage,...(error?{error:{message:'do not expose'}}:{})})+event('message_stop',{});
+  if(keepOpen)res.write(mutation(text));else res.end(mutation(text));
+}
+function answer(res,b,text='a'.repeat(20),reason='end_turn'){
+  const data=anthropic(text,reason,b.stream).replaceAll('"model":"fixture"','"model":"pin"');
+  res.writeHead(200,{'content-type':b.stream?'text/event-stream':'application/json'});res.end(data);
+}
+function tokens(b){return (b.system??'').length+b.messages.reduce((sum,m)=>sum+(typeof m.content==='string'?m.content.length:m.content[0].content.length),0);}
+async function configured(t,handlers={}){
+  const f=await fixture(t);const p=await provider(t,async(req,res,b)=>{
+    if(req.method==='GET'){
+      if(req.headers['anthropic-beta'])return handlers.probe?handlers.probe(req,res,b):json(res,capability());
+      return json(res,handlers.metadata??metadata());
+    }
+    if(req.url.endsWith('/count_tokens'))return handlers.count?handlers.count(req,res,b):json(res,{input_tokens:tokens(b)});
+    if(b.compaction)return handlers.control?handlers.control(req,res,b):control(res,b);
+    return handlers.answer?handlers.answer(req,res,b):answer(res,b);
+  });
+  assert.equal((await cli(['models','add','work','--provider','anthropic','--base-url',p.url,'--model','alias','--auth','none','--default'],f.env)).code,0);
+  return {...f,...p};
+}
+const counts=f=>f.requests.filter(r=>r.path.endsWith('/count_tokens'));
+const controls=f=>f.requests.filter(r=>r.body?.compaction);
+const answers=f=>f.requests.filter(r=>r.method==='POST'&&!r.path.endsWith('/count_tokens')&&!r.body.compaction);
+function pty(env,actions,args=[]){return new Promise((resolve,reject)=>{const child=spawn('python3',[fileURLToPath(new URL('./model-pty.py',import.meta.url))],{env,stdio:['pipe','pipe','pipe']});let out='',err='';child.stdout.on('data',x=>out+=x);child.stderr.on('data',x=>err+=x);child.once('error',reject);child.once('close',code=>code!==0?reject(new Error(err)):resolve(JSON.parse(out)));child.stdin.end(JSON.stringify({node:process.execPath,binary,actions,args}));});}
+const step=text=>[{write:text+'\n'},{wait:'capir> '}];
+const session=(...steps)=>[{wait:'capir> '},...steps.flatMap(step),{write:'/exit\n'}];
+for(const count of [90,100])test(`actual ask count ${count}/100 fits independently of 80-output and cumulative usage`,async t=>{
+  const f=await configured(t,{count:(_,res)=>json(res,{input_tokens:count}),answer:(_,res,b)=>answer(res,b,'ok')});
+  const r=await cli(['ask','完整🙂','--system','system','--json'],f.env);assert.equal(r.code,0,r.stderr);
+  assert.equal(f.requests.length,3);assert.deepEqual(f.requests.map(x=>x.path),['/prefix/v1/models/alias','/prefix/v1/messages/count_tokens','/prefix/v1/messages']);
+  assert.deepEqual(counts(f)[0].body,{model:'pin',system:'system',messages:[{role:'user',content:'完整🙂'}]});
+  assert.equal(answers(f)[0].body.max_tokens,80);assert.equal(controls(f).length,0);assert.equal(answers(f)[0].headers['anthropic-beta'],undefined);
+});
+for(const bad of [null,-1,1.5,'99',Number.MAX_SAFE_INTEGER+1])test(`malformed count ${JSON.stringify(bad)} fails without generation or fallback`,async t=>{
+  const f=await configured(t,{count:(_,res)=>json(res,{input_tokens:bad})});const r=await cli(['ask','current','--json'],f.env);
+  assert.equal(r.code,3);assert.equal(JSON.parse(r.stdout).error.code,'CAPIR_MODEL_PROTOCOL');assert.equal(answers(f).length,0);assert.equal(controls(f).length,0);
+});
+for(const status of [404,405,501])test(`actual PTY unsupported count ${status} is cached only within the selected ordinary namespace`,async t=>{
+  const f=await configured(t,{count:(_,res)=>json(res,{},status)});const r=await pty(f.env,session('first','second'));
+  assert.equal(r.code,0);assert.equal(counts(f).length,1);assert.equal(answers(f).length,2);assert.deepEqual(answers(f)[1].body.messages.map(x=>x.content),['first','a'.repeat(20),'second']);
+});
+for(const status of [400,401,403,429,500,302])test(`count HTTP${status} is a real error, never unsupported fallback`,async t=>{
+  const f=await configured(t,{count:(_,res)=>{res.writeHead(status,{location:'http://127.0.0.1:1/steal'});res.end('untrusted error');}});
+  const r=await cli(['ask','current','--json'],f.env);assert.equal(r.code,status===401||status===403?4:status===429?5:3);assert.equal(answers(f).length,0);assert.equal(controls(f).length,0);assert.equal((r.stdout+r.stderr).includes('untrusted error'),false);
+});
+test('complete current alone overflow does not pay for compaction or query beta',async t=>{
+  const f=await configured(t);const r=await cli(['ask','x'.repeat(101),'--json'],f.env);
+  assert.equal(r.code,5);assert.equal(JSON.parse(r.stdout).error.code,'CAPIR_MODEL_INPUT_CAPACITY');assert.equal(counts(f).length,2);assert.equal(f.requests.filter(r=>r.method==='GET').length,1);assert.equal(controls(f).length,0);assert.equal(answers(f).length,0);
+});
+for(const stream of [true,false])test(`real PTY ${stream?'SSE':'buffered'} overflow compacts completed prefix, preserves opaque keys and original history`,async t=>{
+  const f=await configured(t);const h='h'.repeat(60),next='n'.repeat(60);const r=await pty(f.env,session(h,next,'/history'),stream?[]:['--no-stream']);
+  assert.equal(r.code,0,r.stderr);assert.equal(controls(f).length,1);assert.deepEqual(controls(f)[0].body.messages,[{role:'user',content:h},{role:'assistant',content:'a'.repeat(20)}]);
+  assert.equal(controls(f)[0].body.model,'pin');assert.equal(controls(f)[0].body.max_tokens,80);assert.equal(controls(f)[0].headers['anthropic-beta'],beta);
+  assert.deepEqual(answers(f)[1].body.messages,[{role:'assistant',content:[block]},{role:'user',content:next}]);assert.equal(answers(f)[1].headers['anthropic-beta'],beta);
+  assert.deepEqual(counts(f).at(-1).body.messages,answers(f)[1].body.messages);assert.equal(counts(f).at(-1).headers['anthropic-beta'],beta);
+  assert.deepEqual(f.requests.filter(r=>r.method==='GET').map(r=>[r.path,r.headers['anthropic-beta']]),[['/prefix/v1/models/alias',undefined],['/prefix/v1/models/pin',beta]]);
+  assert.ok(r.stdout.includes('user:\n'+h));assert.ok(r.stdout.includes('user:\n'+next));assert.equal((r.stdout+r.stderr).includes(block.signature),false);assert.equal((r.stdout+r.stderr).includes('"input_tokens":10,"output_tokens":3,"total_tokens":13'),true);
+});
+test('control terminal on an open HTTP connection releases reader and completes actual PTY without EOF',async t=>{
+  let closed;const gone=new Promise(resolve=>closed=resolve);
+  const f=await configured(t,{control:(_,res,b)=>{res.once('close',closed);control(res,b,{keepOpen:true});}});
+  const r=await pty(f.env,session('h'.repeat(60),'n'.repeat(60)));assert.equal(r.code,0);assert.equal(answers(f).length,2);await gone;
+});
+test('optional beta400 does not affect fitting ordinary chat, then retains failed overflow draft with no paid calls',async t=>{
+  const f=await configured(t,{probe:(_,res)=>json(res,{error:'beta rejected'},400)});const r=await pty(f.env,session('h'.repeat(60),'n'.repeat(60),'/retry','/history'));
+  assert.equal(r.code,0);assert.equal(answers(f).length,1);assert.equal(controls(f).length,0);assert.equal(f.requests.filter(r=>r.headers['anthropic-beta']&&r.method==='GET').length,1);assert.ok(r.stderr.includes('capability_probe_rejected'));assert.ok(r.stdout.includes('user:\n'+'h'.repeat(60)));assert.equal(r.stdout.includes('user:\n'+'n'.repeat(60)),false);
+});
+test('manual compact works with pinned ordinary unknown input and keeps the failed draft for exact retry',async t=>{
+  let failed=true;const f=await configured(t,{metadata:metadata({max_input_tokens:null}),answer:(_,res,b)=>{if(b.messages.at(-1).content==='failed draft🙂'&&failed){failed=false;answer(res,b,'partial','max_tokens');}else answer(res,b);}});
+  const r=await pty(f.env,session('h'.repeat(60),'failed draft🙂','/compact','/retry','/history'));
+  assert.equal(r.code,0);assert.equal(controls(f).length,1);assert.equal(answers(f).length,3);assert.equal(answers(f)[2].body.messages.at(-1).content,'failed draft🙂');assert.deepEqual(answers(f)[2].body.messages[0],{role:'assistant',content:[block]});assert.ok(r.stdout.includes('user:\nfailed draft🙂'));assert.equal(answers(f).some(a=>a.body.messages.at(-1).content==='/compact'),false);
+});
+test('manual empty and non-progress outcomes leave originals and failed draft unchanged',async t=>{
+  const f=await configured(t,{control:(_,res,b)=>control(res,b,{content:{...block,content:'x'.repeat(90)}}),answer:(_,res,b)=>answer(res,b,'a'.repeat(20),b.messages.at(-1).content==='bad'?'max_tokens':'end_turn')});
+  const r=await pty(f.env,session('/compact','h'.repeat(60),'bad','/compact','/retry','/history'));
+  assert.equal(r.code,0);assert.equal(controls(f).length,1);assert.ok(r.stderr.includes('CAPIR_MODEL_COMPACTION_NO_PROGRESS'));assert.equal(answers(f).at(-1).body.messages.at(-1).content,'bad');assert.equal(typeof answers(f).at(-1).body.messages[0].content,'string');assert.ok(r.stdout.includes('user:\n'+'h'.repeat(60)));
+});
+for(const [name,mutation] of [
+ ['delta',s=>s.replace('event: content_block_stop',event('content_block_delta',{index:0,delta:{type:'text_delta',text:'bad'}})+'event: content_block_stop')],
+ ['missing-block-stop',s=>s.replace(event('content_block_stop',{index:0}),'')],
+ ['duplicate-block',s=>s.replace('event: content_block_stop',event('content_block_start',{index:0,content_block:block})+'event: content_block_stop')],
+ ['wrong-index',s=>s.replaceAll('"index":0','"index":1')],
+ ['wrong-pin',s=>s.replace('"model":"pin"','"model":"other"')],
+ ['missing-terminal',s=>s.replace(event('message_stop',{}),'')],
+ ['duplicate-reason',s=>s.replace('event: message_stop',event('message_delta',{delta:{stop_reason:'end_turn'}})+'event: message_stop')],
+ ['oversized-block',s=>s.replace('"content":"s"','"content":"'+'x'.repeat(256*1024)+'"')],
+])test(`actual control SSE ${name} cannot install or produce an answer; known received usage remains visible`,async t=>{
+  const f=await configured(t,{control:(_,res,b)=>control(res,b,{mutation})});const r=await pty(f.env,session('h'.repeat(60),'n'.repeat(60),'/history'));
+  assert.equal(r.code,0);assert.equal(controls(f).length,1);assert.equal(answers(f).length,1);assert.ok(r.stderr.includes('CAPIR_MODEL_'));assert.equal(r.stdout.includes('user:\n'+'n'.repeat(60)),false);assert.equal((r.stdout+r.stderr).includes(block.signature),false);
+  if(['missing-terminal','duplicate-reason'].includes(name))assert.ok(r.stderr.includes('"input_tokens":10,"output_tokens":3,"total_tokens":13'));
+});
+for(const stream of [true,false])test(`explicit provider error plus valid-looking ${stream?'stream':'buffered'} control is rejected`,async t=>{
+  const f=await configured(t,{control:(_,res,b)=>control(res,b,{error:true})});const r=await pty(f.env,session('h'.repeat(60),'n'.repeat(60)),stream?[]:['--no-stream']);assert.equal(r.code,0);assert.equal(answers(f).length,1);assert.equal(controls(f).length,1);assert.ok(r.stderr.includes('CAPIR_MODEL_PROVIDER_ERROR'));assert.ok(r.stderr.includes('"input_tokens":10'));assert.equal(r.stderr.includes('do not expose'),false);
+});
+for(const stream of [true,false])test(`ordinary ${stream?'SSE':'buffered'} text+compaction+end_turn is incomplete, never canonical`,async t=>{
+  const f=await configured(t,{answer:(_,res,b)=>{
+    if(!b.stream){json(res,{model:'pin',content:[{type:'text',text:'partial'},block],stop_reason:'end_turn',usage:{input_tokens:8,output_tokens:2}});return;}
+    res.writeHead(200,{'content-type':'text/event-stream'});res.end(anthropic('partial','end_turn',true).replaceAll('fixture','pin').replace('event: message_delta',event('content_block_start',{index:1,content_block:block})+'event: message_delta'));
+  }});
+  const r=await cli(['ask','current','--json',...(stream?[]:['--no-stream'])],f.env);assert.equal(r.code,3);assert.equal(JSON.parse(r.stdout).response.complete,false);assert.equal(JSON.parse(r.stdout).error.code,'CAPIR_MODEL_PROTOCOL');assert.equal(r.stdout.includes(block.signature),false);
+});
+test('eligible prefixes are inspected without a monotonic token-count assumption',async t=>{
+  const f=await configured(t,{count:(req,res,b)=>{
+    if(!req.headers['anthropic-beta'])return json(res,{input_tokens:90});
+    const n=b.messages.length;json(res,{input_tokens:typeof b.messages[0]?.content==='object'?70:n===4?150:80});
+  }});const r=await pty(f.env,session('first','second','/compact'));
+  assert.equal(r.code,0);assert.equal(controls(f).length,1);assert.equal(controls(f)[0].body.messages.length,2);assert.deepEqual(counts(f).filter(r=>r.headers['anthropic-beta']).map(r=>r.body.messages.length),[4,4,2,3]);
+});
+test('summary-overhead server failure preserves known usage and makes zero automatic retries or answers',async t=>{
+  const f=await configured(t,{control:(_,res,b)=>control(res,b,{content:null,reason:'model_context_window_exceeded'})});const r=await pty(f.env,session('h'.repeat(60),'n'.repeat(60)));
+  assert.equal(r.code,0);assert.equal(controls(f).length,1);assert.equal(answers(f).length,1);assert.ok(r.stderr.includes('"input_tokens":10,"output_tokens":3,"total_tokens":13'));
+});
+for(const stage of ['count','probe','control','recount'])test(`actual PTY reset during ${stage} retires old context work and retains observed usage`,async t=>{
+  let marker;let blocked=false;let f;let controlDone=false;
+  const stall=async res=>{res.writeHead(200,{'content-type':'application/json'});res.flushHeaders();await writeFile(marker,'entered');};
+  f=await configured(t,{
+    count:async(req,res,b)=>{
+      const current=b.messages.at(-1)?.content;
+      const should=stage==='count'?current==='trigger':stage==='recount'&&controlDone&&typeof b.messages[0]?.content==='object';
+      if(should&&!blocked){blocked=true;return stall(res);}json(res,{input_tokens:tokens(b)});
+    },
+    probe:async(_,res)=>{if(stage==='probe'&&!blocked){blocked=true;return stall(res);}json(res,capability());},
+    control:async(_,res,b)=>{controlDone=true;if(stage==='control'&&!blocked){blocked=true;res.writeHead(200,{'content-type':'text/event-stream'});res.write(event('message_start',{message:{model:'pin',usage:{iterations:[{input_tokens:10,output_tokens:3}]}}}));await writeFile(marker,'entered');return;}control(res,b);},
+  });marker=join(f.root,'admitted');
+  const old=stage==='count'?'trigger':'n'.repeat(60);
+  const r=await pty(f.env,[{wait:'capir> '},...step('h'.repeat(60)),{write:old+'\n'},{wait_file:marker},{write:'/reset\n'},{wait:'Conversation reset.'},{wait:'capir> '},...step('new'),...step('/usage'),{write:'/exit\n'}]);
+  assert.equal(r.code,0);assert.equal(answers(f).length,2);assert.deepEqual(answers(f)[1].body.messages,[{role:'user',content:'new'}]);assert.equal(answers(f)[1].headers['anthropic-beta'],undefined);
+  if(['control','recount'].includes(stage))assert.ok(r.stderr.includes('"input_tokens":10,"output_tokens":3,"total_tokens":13'));
+});
+test('two progressing checkpoints survive a third failed control and explicit retry reuses exact last block',async t=>{
+  let calls=0;const blocks=[{...block,content:'summaryA',signature:'A'},{...block,content:'summaryB',signature:'B'}];
+  const f=await configured(t,{
+    count:(req,res,b)=>{
+      const first=b.messages[0]?.content;const signed=Array.isArray(first)?first[0]:null;const triggering=b.messages.at(-1)?.content==='trigger';
+      if(!triggering&&!signed&&!req.headers['anthropic-beta'])return json(res,{input_tokens:50});
+      if(triggering&&b.messages.length===1)return json(res,{input_tokens:7});
+      if(!req.headers['anthropic-beta'])return json(res,{input_tokens:300});
+      if(triggering){json(res,{input_tokens: calls>=3?90:signed?.signature==='B'?120:signed?.signature==='A'?150:b.messages.length===1?7:300});return;}
+      const size=b.messages.length;json(res,{input_tokens:signed?(size===3?80:200):(size===2?80:200)});
+    },
+    control:(_,res,b)=>{calls++;control(res,b,calls===3?{content:null,reason:'refusal'}:{content:blocks[calls-1]});},
+  });
+  const r=await pty(f.env,session('one','two','three','trigger','/history','/retry','/usage'));
+  assert.equal(r.code,0);assert.equal(controls(f).length,3);assert.equal(answers(f).length,4);assert.equal(answers(f).at(-1).body.messages[0].content[0].signature,'B');assert.deepEqual(answers(f).at(-1).body.messages.slice(1).map(m=>m.content),['three','a'.repeat(20),'trigger']);
+  assert.deepEqual(controls(f).map(c=>c.body.messages.length),[2,3,3]);assert.equal(controls(f)[1].body.messages[0].content[0].signature,'A');assert.equal(controls(f)[2].body.messages[0].content[0].signature,'B');assert.ok(r.stderr.includes('CAPIR_MODEL_COMPACTION_FAILED'));assert.ok(r.stdout.includes('user:\none'));assert.equal(r.stderr.includes('"signature"'),false);
+  const ledger=JSON.parse(r.stderr.slice(r.stderr.lastIndexOf('Compaction usage: ')+'Compaction usage: '.length).split('\n')[0]);assert.equal(ledger.length,3);assert.deepEqual(ledger.map(u=>u.total_tokens),[13,13,13]);
+});
+test('unsupported beta recount keeps an installed checkpoint, rejects the current operation, and only explicit retry answers',async t=>{
+  let calls=0,countLost=false;const A={...block,signature:'A'},B={...block,signature:'B'};
+  const f=await configured(t,{
+    count:(req,res,b)=>{
+      const c=b.messages[0]?.content;const sig=Array.isArray(c)?c[0].signature:null;
+      if(sig==='B'){countLost=true;json(res,{},404);return;}
+      if(!req.headers['anthropic-beta'])return json(res,{input_tokens:tokens(b)});
+      const current=b.messages.at(-1)?.content;
+      json(res,{input_tokens:sig==='A'?(current==='third'?140:current==='n'.repeat(60)?61:70):tokens(b)});
+    },
+    control:(_,res,b)=>{calls++;control(res,b,{content:calls===1?A:B});},
+  });
+  const r=await pty(f.env,session('h'.repeat(60),'n'.repeat(60),'third','/retry','/history'));
+  assert.equal(r.code,0);assert.equal(countLost,true);assert.equal(controls(f).length,2);assert.equal(answers(f).length,3);assert.equal(answers(f)[2].body.messages[0].content[0].signature,'A');assert.equal(answers(f)[2].body.messages.at(-1).content,'third');assert.equal(answers(f)[2].headers['anthropic-beta'],beta);assert.ok(r.stderr.includes('CAPIR_MODEL_COMPACTION_UNAVAILABLE'));assert.ok(r.stdout.includes('user:\n'+'h'.repeat(60)));
+});
+for(const [name,iterations,expected] of [
+ ['repeated snapshot',[{input_tokens:10,output_tokens:3}],{input_tokens:10,output_tokens:3,total_tokens:13}],
+ ['missing dimension',[{input_tokens:10}],{input_tokens:10,output_tokens:null,total_tokens:null}],
+ ['unsafe dimension',[{input_tokens:Number.MAX_SAFE_INTEGER+1,output_tokens:3}],{input_tokens:null,output_tokens:3,total_tokens:null}],
+ ['sum overflow',[{input_tokens:Number.MAX_SAFE_INTEGER,output_tokens:1},{input_tokens:1,output_tokens:2}],{input_tokens:null,output_tokens:3,total_tokens:null}],
+ ['missing iterations',undefined,{input_tokens:null,output_tokens:null,total_tokens:null}],
+])test(`control ledger ${name} stays exact, nullable and once-per-call`,async t=>{
+  const f=await configured(t,{control:(_,res,b)=>{
+    const opts={iterations:iterations??null};
+    control(res,b,{...opts,mutation:s=>s.replace('"input_tokens":0,"output_tokens":0}',JSON.stringify({input_tokens:0,output_tokens:0,iterations}).slice(1))});
+  }});
+  const r=await pty(f.env,session('h'.repeat(60),'n'.repeat(60),'/usage'));assert.equal(r.code,0);
+  const ledger=JSON.parse(r.stderr.slice(r.stderr.lastIndexOf('Compaction usage: ')+'Compaction usage: '.length).split('\n')[0]);assert.deepEqual(ledger,[expected]);
+});
+test('five actual completed turns may report over32000 cumulative input while every next active request fits',async t=>{
+  const f=await configured(t,{count:(_,res)=>json(res,{input_tokens:90}),answer:(_,res,b)=>{
+    res.writeHead(200,{'content-type':'application/json'});res.end(anthropic('ok','end_turn',false).replace('"model":"fixture"','"model":"pin"').replace('"input_tokens":0','"input_tokens":10000'));
+  }});const r=await pty(f.env,session('one','two','three','four','five'),['--no-stream']);assert.equal(r.code,0);assert.equal(answers(f).length,5);assert.equal(counts(f).length,5);assert.equal(controls(f).length,0);assert.equal(answers(f)[4].body.messages.length,9);
+});
+for(const [name,probe] of [
+ ['different identity',(_,res)=>json(res,capability({id:'other'}))],
+ ['malformed capacity',(_,res)=>json(res,capability({max_input_tokens:'100'}))],
+ ['missing beta input',(_,res)=>json(res,capability({max_input_tokens:null}))],
+ ['unsupported',(_,res)=>json(res,capability({capabilities:{compaction:{supported:false}}}))],
+ ['401 denial',(_,res)=>json(res,{},401)],
+ ['redirect',(_,res)=>{res.writeHead(302,{location:'http://127.0.0.1:1/wrong'});res.end();}],
+ ['beta output conflict',(_,res)=>json(res,capability({max_tokens:40}))],
+])test(`optional probe ${name} fails before any paid control or second answer`,async t=>{
+  const f=await configured(t,{probe});const actions=name==='401 denial'?[{wait:'capir> '},...step('h'.repeat(60)),{write:'n'.repeat(60)+'\n'}]:session('h'.repeat(60),'n'.repeat(60));const r=await pty(f.env,actions);
+  assert.equal(r.code,name==='401 denial'?4:0);assert.equal(answers(f).length,1);assert.equal(controls(f).length,0);assert.ok(r.stderr.includes('CAPIR_MODEL_'));
+});
+test('actual SIGINT after observed control usage preserves source-free accounting in bounded terminal cleanup',async t=>{
+  let marker;const f=await configured(t,{control:async(_,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write(event('message_start',{message:{model:'pin',usage:{iterations:[{input_tokens:10,output_tokens:3}]}}}));await writeFile(marker,'entered');}});marker=join(f.root,'control-admitted');
+  const r=await pty(f.env,[{wait:'capir> '},...step('h'.repeat(60)),{write:'n'.repeat(60)+'\n'},{wait_file:marker},{signal:2}]);assert.equal(r.code,130);assert.equal(answers(f).length,1);assert.ok(r.stderr.includes('"input_tokens":10,"output_tokens":3,"total_tokens":13'));assert.equal(r.stderr.includes(block.signature),false);
+});
+for(const stage of ['control','answer'])test(`actual ${stage} wrong SSE content-type cancels its still-open HTTP body`,async t=>{
+  let closed;const gone=new Promise(resolve=>closed=resolve);
+  const wrong=(_,res)=>{res.once('close',closed);res.writeHead(200,{'content-type':'application/json'});res.flushHeaders();res.write('{');};
+  const f=await configured(t,stage==='control'?{control:wrong}:{answer:wrong});
+  if(stage==='control'){
+    const r=await pty(f.env,session('h'.repeat(60),'n'.repeat(60)));assert.equal(r.code,0);assert.equal(controls(f).length,1);assert.equal(answers(f).length,1);
+  }else{const r=await cli(['ask','hello','--json'],f.env);assert.equal(r.code,3);assert.equal(JSON.parse(r.stdout).error.code,'CAPIR_MODEL_PROTOCOL');}
+  await gone;
+});
+test('unsupported ordinary count does not poison explicit beta compaction namespace',async t=>{
+  const f=await configured(t,{count:(req,res,b)=>req.headers['anthropic-beta']?json(res,{input_tokens:tokens(b)}):json(res,{},404)});
+  const r=await pty(f.env,session('h'.repeat(60),'/compact','next'));assert.equal(r.code,0);assert.equal(counts(f).filter(r=>!r.headers['anthropic-beta']).length,1);assert.ok(counts(f).filter(r=>r.headers['anthropic-beta']).length>=3);assert.equal(controls(f).length,1);assert.deepEqual(answers(f)[1].body.messages[0],{role:'assistant',content:[block]});
+});

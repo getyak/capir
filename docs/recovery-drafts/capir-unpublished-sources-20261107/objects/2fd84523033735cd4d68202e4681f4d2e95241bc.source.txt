@@ -1,0 +1,54 @@
+import { describe, expect, it } from "vitest";
+import type { TimeActivity } from "@talent-signal/contracts";
+import { addDays, customTimeRange, dateInZone, monthDays, parseTimeLocation, rangeBounds, scheduleSegments, timeHref } from "./time-workspace";
+
+describe("time workspace date and navigation semantics", () => {
+  it("keeps local dates through DST and leap/month boundaries", () => {
+    expect(addDays("2024-02-28", 1)).toBe("2024-02-29");
+    expect(rangeBounds("2026-03-08", "week")).toEqual({ from: "2026-03-02", to: "2026-03-09" });
+    expect(rangeBounds("2026-12-31", "next30")).toEqual({ from: "2026-12-31", to: "2027-01-30" });
+    expect(dateInZone("2026-09-18T23:30:00Z", "Asia/Shanghai")).toBe("2026-09-19");
+  });
+  it("uses real seven-column month dates including adjacent months", () => {
+    const days = monthDays("2026-09-18");
+    expect(days).toHaveLength(42);
+    expect(days.slice(0, 7)).toEqual(["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06"]);
+  });
+  it("rejects invalid dates and zones without carrying unsafe scope", () => {
+    const value = parseTimeLocation(new URLSearchParams("day=2026-02-31&tz=bad-zone&range=custom&from=2025-02-30&to=2026-09-20&person=other&kind=bad"), "UTC", new Date("2026-09-20T12:00Z"));
+    expect(value.scope).toEqual({ from: "2026-09-20", to: "2026-09-21", time_zone: "UTC" });
+  });
+  it("preserves annual and multi-year custom bounds through navigation and form submission", () => {
+    expect(customTimeRange("2020-01-01", "2026-12-31")).toEqual({ from: "2020-01-01", to: "2027-01-01" });
+    expect(parseTimeLocation(new URLSearchParams("range=custom&from=2020-01-01&to=2027-01-01"), "UTC").scope)
+      .toMatchObject({ from: "2020-01-01", to: "2027-01-01" });
+    expect(customTimeRange("2026-02-30", "2026-03-01")).toBeNull();
+    expect(customTimeRange("2026-03-01", "2026-02-28")).toBeNull();
+  });
+  it("retains filters when switching the view or opening an inspector", () => {
+    expect(timeHref(new URLSearchParams("day=2026-09-18&person=one&kind=session_activity"), { view: "week", item: null }))
+      .toBe("/workspace/meetings?day=2026-09-18&person=one&kind=session_activity&view=week");
+  });
+});
+
+describe("week grid intervals", () => {
+  const event = (id: string, from: string, to: string) => ({ id, occurred_at: from, ends_at: to, all_day: false, status: "planned" }) as TimeActivity;
+  it("clips cross-midnight events and assigns overlapping lanes", () => {
+    const segments = scheduleSegments([
+      event("a", "2026-09-17T23:00:00Z", "2026-09-18T01:00:00Z"),
+      event("b", "2026-09-18T00:30:00Z", "2026-09-18T01:30:00Z"),
+      event("c", "2026-09-18T01:30:00Z", "2026-09-18T02:00:00Z"),
+    ], "2026-09-18", "UTC");
+    expect(segments.map(({ start, end, lane, lanes }) => ({ start, end, lane, lanes }))).toEqual([
+      { start: 0, end: 60, lane: 0, lanes: 2 }, { start: 30, end: 90, lane: 1, lanes: 2 }, { start: 90, end: 120, lane: 0, lanes: 1 },
+    ]);
+  });
+  it("does not give a point activity duration or repeat an event at its midnight end", () => {
+    expect(scheduleSegments([event("a", "2026-09-17T23:00:00Z", "2026-09-18T00:00:00Z"), { ends_at: null } as TimeActivity], "2026-09-18", "UTC")).toEqual([]);
+  });
+  it("keeps minimum-height short events in separate visible lanes", () => {
+    const result = scheduleSegments([event("a", "2026-09-18T09:00:00Z", "2026-09-18T09:05:00Z"), event("b", "2026-09-18T09:05:00Z", "2026-09-18T09:10:00Z")], "2026-09-18", "UTC");
+    expect(result.map((s) => [s.start, s.end, s.lane, s.lanes])).toEqual([[540, 545, 0, 2], [545, 550, 1, 2]]);
+  });
+
+});

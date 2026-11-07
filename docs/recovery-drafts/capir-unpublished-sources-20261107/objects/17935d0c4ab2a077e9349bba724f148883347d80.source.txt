@@ -1,0 +1,20 @@
+/**
+ * Optional environment-selected wall-clock bound for one workspace
+ * conversation Run, covering image inspection, SDK startup and tool turns.
+ * Without an explicit selection there is no default clamp: an ordinary durable
+ * conversation does not have to finish inside any host deadline, and SDK
+ * initialize/load transport timeouts stay explicit and independent of task
+ * duration. Individual network adapters may retain transport timeouts.
+ */
+export function workspaceConversationTimeoutMs(
+  providerID: string,
+  configured = process.env.TALENT_SIGNAL_CONVERSATION_TIMEOUT_MS,
+): number | undefined {
+  void providerID;
+  if (!configured?.trim()) return undefined;
+  const duration = Number(configured);
+  if (!Number.isSafeInteger(duration) || duration <= 0) {
+    throw new Error("CONVERSATION_TIMEOUT_CONFIGURATION_INVALID");
+  }
+  return duration;
+}

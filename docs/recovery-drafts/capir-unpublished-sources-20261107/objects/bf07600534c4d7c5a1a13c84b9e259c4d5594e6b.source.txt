@@ -1,0 +1,152 @@
+import { isIP } from "node:net";
+
+import type { AgentWebResearchAuthorization } from "./types.js";
+
+export class AgentPublicResearchPolicyError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AgentPublicResearchPolicyError";
+  }
+}
+
+export function normalizePublicResearchDomains(
+  domains: readonly string[],
+): string[] {
+  const normalized = domains.map((domain) => domain.trim().toLowerCase());
+  if (
+    normalized.some(
+      (domain) =>
+        !domain ||
+        domain.length > 253 ||
+        !/^[a-z0-9.-]+$/u.test(domain) ||
+        domain.startsWith(".") ||
+        domain.endsWith(".") ||
+        domain.includes("..") ||
+        domain === "localhost" ||
+        domain.endsWith(".localhost") ||
+        domain.endsWith(".local") ||
+        isIP(domain) !== 0 ||
+        domain.split(".").some(
+          (label) => !label || label.startsWith("-") || label.endsWith("-"),
+        ),
+    )
+  ) {
+    throw new AgentPublicResearchPolicyError(
+      "PUBLIC_RESEARCH_DOMAIN_INVALID",
+      "Domain restrictions must be public ASCII hostnames without paths, IP addresses, or wildcards.",
+    );
+  }
+  return [...new Set(normalized)].sort();
+}
+
+export function assertPublicResearchAuthorization(
+  authorization: AgentWebResearchAuthorization,
+): AgentWebResearchAuthorization {
+  const allowedDomains = normalizePublicResearchDomains(
+    authorization.allowedDomains,
+  );
+  const queryAnchors = [
+    ...new Set(
+      authorization.queryAnchors.map((anchor) =>
+        anchor.normalize("NFKC").trim().toLowerCase(),
+      ),
+    ),
+  ];
+  if (
+    queryAnchors.length < 1 ||
+    queryAnchors.length > 5 ||
+    queryAnchors.some(
+      (anchor) =>
+        anchor.length < 2 ||
+        anchor.length > 100 ||
+        PERSON_INTENT.test(anchor) ||
+        EMAIL.test(anchor) ||
+        PHONE.test(anchor) ||
+        PERSON_PROFILE_URL.test(anchor),
+    )
+  ) {
+    throw new AgentPublicResearchPolicyError(
+      "PUBLIC_RESEARCH_QUERY_ANCHOR_INVALID",
+      "Research requires 1-5 non-person company or market query anchors.",
+    );
+  }
+  if (
+    authorization.accessMode === "domain_allowlist" &&
+    allowedDomains.length === 0
+  ) {
+    throw new AgentPublicResearchPolicyError(
+      "PUBLIC_RESEARCH_DOMAIN_REQUIRED",
+      "Domain-allowlist research requires at least one explicit public domain.",
+    );
+  }
+  if (
+    authorization.accessMode === "open_web" &&
+    allowedDomains.length > 0
+  ) {
+    throw new AgentPublicResearchPolicyError(
+      "PUBLIC_RESEARCH_ACCESS_MODE_CONFLICT",
+      "Open-web authorization cannot also imply a hidden domain allowlist.",
+    );
+  }
+  for (const count of [authorization.maximumSearchCount, authorization.maximumFetchCount]) {
+    if (count !== undefined && (!Number.isSafeInteger(count) || count <= 0)) {
+      throw new AgentPublicResearchPolicyError("PUBLIC_RESEARCH_BUDGET_INVALID", "An explicitly selected research call count must be a positive safe integer.");
+    }
+  }
+  return Object.freeze({ ...authorization, allowedDomains, queryAnchors });
+}
+
+const PERSON_INTENT =
+  /\b(?:candidate|person|people|employee|contact|email|e-mail|phone|mobile|linkedin\s+profile|background\s+check|home\s+address|personal\s+address|acceptance\s+probability)\b|候选人|个人邮箱|手机号|家庭住址|领英个人|接受概率/iu;
+const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/iu;
+const PHONE = /(?:\+?\d[\d\s().-]{7,}\d)/u;
+const PERSON_PROFILE_URL = /linkedin\.com\/in\//iu;
+
+export function assertPublicResearchQuery(
+  query: string,
+  authorization?: AgentWebResearchAuthorization,
+): void {
+  const normalized = query.normalize("NFKC").trim();
+  if (normalized.length < 2 || normalized.length > 240) {
+    throw new AgentPublicResearchPolicyError(
+      "PUBLIC_RESEARCH_QUERY_INVALID",
+      "A public research query must contain 2-240 characters.",
+    );
+  }
+  if (
+    PERSON_INTENT.test(normalized) ||
+    EMAIL.test(normalized) ||
+    PHONE.test(normalized) ||
+    PERSON_PROFILE_URL.test(normalized)
+  ) {
+    throw new AgentPublicResearchPolicyError(
+      "PUBLIC_RESEARCH_PERSON_QUERY_PROHIBITED",
+      "Public company/market research cannot search for a person, candidate, contact detail, or person profile.",
+    );
+  }
+  if (
+    authorization &&
+    !authorization.queryAnchors.some((anchor) =>
+      normalized.toLowerCase().includes(anchor.toLowerCase()),
+    )
+  ) {
+    throw new AgentPublicResearchPolicyError(
+      "PUBLIC_RESEARCH_QUERY_OUT_OF_SCOPE",
+      "Every search query must contain an explicitly authorized company or market anchor.",
+    );
+  }
+}
+
+export function publicResearchDomainAllowed(
+  hostname: string,
+  authorization: AgentWebResearchAuthorization,
+): boolean {
+  if (authorization.accessMode === "open_web") return true;
+  const normalized = hostname.toLowerCase();
+  return authorization.allowedDomains.some(
+    (domain) => normalized === domain || normalized.endsWith(`.${domain}`),
+  );
+}

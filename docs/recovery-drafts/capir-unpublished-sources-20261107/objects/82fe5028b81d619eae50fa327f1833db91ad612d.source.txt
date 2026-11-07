@@ -1,0 +1,336 @@
+// Source-free synthetic metadata controls. These do not claim a paid provider or HTTP finalization.
+import { randomUUID } from "node:crypto";
+import { Pool, type PoolClient } from "pg";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { buildApp } from "../app.js";
+import { inTransaction } from "../database/pool.js";
+import { maintainOrdinaryChatLifecycle } from "./legacyChatMaintenance.js";
+import { finishLifecycleAttempt, registerLifecycleRun, releaseLifecycleRun,
+  pendingLifecycleRunForAttempt, notifyLifecycleMaintenanceOwner,
+  type LifecycleIdentity, type LifecycleMaintenanceOwner } from "./legacyChatLifecycle.js";
+import { ApiError } from "../lib/apiError.js";
+const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
+if (database && !["localhost","127.0.0.1"].includes(new URL(database).hostname)) throw new Error("Owned loopback metadata controls only.");
+const pool = database ? new Pool({connectionString:database,max:5}) : null;
+afterAll(async () => { await pool?.end(); });
+function gate() { let release!:()=>void;const pending = new Promise<void>(resolve=>{release=resolve;});return {release,pending}; }
+async function fixture(options: { execution?: "past"|"future"; canonical?: "past"|"future";
+  operation?: "create_chat_task"|"create_unscoped_chat_task"; original?: boolean; completed?: boolean; dispatched?: boolean } = {}) {
+  const accountSlug = `maintenance-${randomUUID()}`, userEmail = `${randomUUID()}@synthetic.invalid`;
+  const account = randomUUID(), actor = randomUUID(), session = randomUUID(), intent = randomUUID(), attempt = randomUUID(), task = randomUUID(), run = randomUUID();
+  const now = (await pool!.query("SELECT clock_timestamp() AS now")).rows[0]!.now as Date;
+  const execution = new Date(now.valueOf() + (options.execution === "future" ? 3600000 : -3600000));
+  const canonical = new Date(now.valueOf() + (options.canonical === "past" ? -7200000 : 86400000));
+  const state = options.completed ? "completed" : "running";
+  const dispatch = options.dispatched === false ? "not_dispatched" : "dispatched";
+  const original = {version:1,kind:"ordinary",session:{accountID:account,userID:actor,id:session,actorKind:"simulated_human",expiresAt:execution.valueOf()}};
+  await inTransaction(pool!,async client=>{
+    await client.query("INSERT INTO accounts(id,slug,name) VALUES($1,$2,'Synthetic metadata')",[account,accountSlug]);
+    await client.query("INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Synthetic owner','simulated_human')",[actor,account,userEmail]);
+    await client.query("INSERT INTO sessions(id,account_id,user_id,token_hash,client_label,expires_at) VALUES($1,$2,$3,$4,'synthetic',$5)",[session,account,actor,randomUUID(),execution]);
+    await client.query(`INSERT INTO legacy_chat_task_intents(id,account_id,actor_user_id,operation_scope,idempotency_key,request_hash,task_id,state,
+      current_attempt_id,fencing_generation,auth_session_id,execution_authority_expires_at,canonical_retention_expires_at)
+      VALUES($1,$2,$3,$4,$5,repeat('a',64),$6,$7,$8,1,$9,$10,$11)`,[intent,account,actor,options.operation??"create_chat_task",randomUUID(),task,state,attempt,session,execution,canonical]);
+    await client.query(`INSERT INTO legacy_chat_task_attempts(id,account_id,intent_id,actor_user_id,task_id,run_id,fencing_generation,state,auth_session_id,
+      auth_actor_kind,execution_authority_expires_at,original_authority,dispatch_state,lease_until)
+      VALUES($1,$2,$3,$4,$5,$6,1,$7,$8,'simulated_human',$9,$10::jsonb,$11,clock_timestamp()+interval '1 hour')`,
+      [attempt,account,intent,actor,task,run,state,session,execution,options.original===false?null:JSON.stringify(original),dispatch]);
+  });
+  const identity:LifecycleIdentity = {intentID:intent,attemptID:attempt,taskID:task,runID:run,fencingGeneration:1,revision:1,
+    state,dispatchState:dispatch,executionAuthorityExpiresAt:execution,canonicalRetentionExpiresAt:canonical};
+  const owner: LifecycleMaintenanceOwner = {accountID:account,actorUserID:actor,operationScope:"create_chat_task",
+    intentID:intent,attemptID:attempt,taskID:task,runID:run,fencingGeneration:1};
+  const settlement=gate(), controller = new AbortController(), failures:ApiError[]=[];
+  const register = (events?:string[]) => registerLifecycleRun(identity,controller,settlement.pending,{accountID:account,actorUserID:actor,
+    operationScope:"create_chat_task",onFailure:error=>{events?.push("hook");failures.push(error);}});
+  const cleanup = () => {settlement.release();releaseLifecycleRun(attempt);};
+  const read = async () => (await pool!.query(`SELECT i.state AS intent_state,i.terminal_reason AS intent_reason,
+    i.current_attempt_id,i.fencing_generation,i.canonical_retention_expires_at AS canonical,
+    a.state AS attempt_state,a.terminal_reason AS attempt_reason,a.usage_uncertain,a.dispatch_state,
+    a.execution_authority_expires_at AS execution FROM legacy_chat_task_intents i JOIN legacy_chat_task_attempts a
+    ON a.account_id=i.account_id AND a.id=$2 WHERE i.account_id=$1 AND i.id=$3`,[account,attempt,intent])).rows[0]!;
+  return {account,accountSlug,userEmail,actor,session,intent,attempt,task,run,execution,canonical,identity,owner,controller,failures,register,cleanup,read};
+}
+function watchedPool(connect:(client:PoolClient)=>unknown) {
+  return {query:(sql:string,values?:unknown[])=>pool!.query(sql,values),connect:async()=>connect(await pool!.connect())} as Pool;
+}
+async function reader(shared: Pool, retentionSweepIntervalMs=1000) {
+  return buildApp({pool:shared,config:{databaseUrl:database!,host:"127.0.0.1",port:0,allowedOrigins:[],appleSignInAudiences:[],
+    appleSignInEnabled:false,passwordAuthEnabled:false,passwordRegistrationEnabled:false,simulatedAuthEnabled:true,
+    internalLabEnabled:false,retentionSweepIntervalMs,sessionTtlSeconds:3600},conversationQueueWorkerEnabled:false,
+    remoteChatProvider:null,personResearchProvider:null} as never);
+}
+describe.skipIf(!pool)("ordinary metadata maintenance transaction controls",()=>{
+  it("notifies only after the actual server COMMIT acknowledgement and client release",async()=>{
+    const f=await fixture(), events:string[]=[],ack=gate();let committed=false;
+    f.register(events);f.controller.signal.addEventListener("abort",()=>events.push("abort"));
+    const watched=watchedPool(client=>{
+      let role="probe";
+      return {release:()=>{client.release();events.push(`${role}_release`);},query:async(sql:string,values?:unknown[])=>{
+        if(sql.startsWith("UPDATE legacy_chat_task_"))role="retire";
+        const result=await client.query(sql,values);
+        if(sql==="ROLLBACK")events.push(`${role}_rollback`);
+        if(sql==="COMMIT"){committed=true;events.push(`${role}_server_commit`);await ack.pending;events.push(`${role}_ack`);}
+        return result;
+      }};
+    });
+    const running=maintainOrdinaryChatLifecycle(watched);
+    try {
+      await vi.waitFor(()=>expect(committed).toBe(true));
+      expect(await f.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked",intent_reason:"execution_authority_expired",usage_uncertain:true,
+        dispatch_state:"dispatched",execution:f.execution,canonical:f.canonical,current_attempt_id:f.attempt,fencing_generation:"1"});
+      expect(f.controller.signal.aborted).toBe(false);expect(f.failures).toHaveLength(0);
+      expect(pendingLifecycleRunForAttempt(f.attempt)).toMatchObject(f.identity);
+      ack.release();expect(await running).toBe(1);
+      expect(events).toEqual(["probe_rollback","probe_release","retire_server_commit","retire_ack","retire_release","hook","abort"]);
+      expect(f.controller.signal.reason).toMatchObject({code:"LEGACY_CHAT_AUTHORITY_EXPIRED"});
+      expect(pendingLifecycleRunForAttempt(f.attempt)).toMatchObject(f.identity);
+    }finally{ack.release();try{await running;}finally{f.cleanup();}}
+  });
+  it("reconciles an actual successful server COMMIT with lost acknowledgement without another mutation or execution",async()=>{
+    const f=await fixture(),events:string[]=[],lost=new Error("SYNTHETIC_COMMIT_ACK_LOST");let inject=true,updates=0;
+    f.register(events);f.controller.signal.addEventListener("abort",()=>events.push("abort"));
+    const watched=watchedPool(client=>{
+      let role="probe";
+      return {release:()=>{client.release();events.push(`${role}_release`);},query:async(sql:string,values?:unknown[])=>{
+        if(sql.startsWith("UPDATE legacy_chat_task_")){updates++;role="retire";}
+        const result=await client.query(sql,values);
+        if(sql.startsWith("SELECT i.account_id") && result.rows[0]?.intent_state==="revoked")role="readback";
+        if(sql==="ROLLBACK")events.push(`${role}_rollback`);
+        if(sql==="COMMIT"){events.push(`${role}_server_commit`);if(inject){inject=false;throw lost;}events.push(`${role}_ack`);}
+        return result;
+      }};
+    });
+    try{
+      await expect(maintainOrdinaryChatLifecycle(watched)).rejects.toBe(lost);
+      expect(await f.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked",usage_uncertain:true,intent_reason:"execution_authority_expired"});
+      expect(events).toEqual(["probe_rollback","probe_release","retire_server_commit","retire_rollback","retire_release"]);expect(f.controller.signal.aborted).toBe(false);
+      expect(pendingLifecycleRunForAttempt(f.attempt)).toMatchObject(f.identity);expect(updates).toBe(2);
+      expect(await maintainOrdinaryChatLifecycle(watched)).toBe(0);
+      expect(events.slice(5)).toEqual(["readback_server_commit","readback_ack","readback_release","hook","abort"]);
+      expect(updates).toBe(2);expect(f.failures).toHaveLength(1);
+      expect(await maintainOrdinaryChatLifecycle(watched)).toBe(0);expect(f.failures).toHaveLength(1);expect(updates).toBe(2);
+      expect(pendingLifecycleRunForAttempt(f.attempt)).toMatchObject(f.identity);
+    }finally{f.cleanup();}
+  });
+  it.each(["rejected_commit","rollback_ack_lost","release_failed"] as const)("does not notify from %s and permits fresh exact reconciliation",async mode=>{
+    const f=await fixture(),primary=new Error(`SYNTHETIC_${mode}`),rollbackLost=new Error("SYNTHETIC_ROLLBACK_ACK_LOST");
+    f.register();let injected=false;
+    const watched=watchedPool(client=>{
+      let retirement=false;
+      return {release:()=>{client.release();if(retirement && mode==="release_failed" && !injected){injected=true;throw primary;}},
+        query:async(sql:string,values?:unknown[])=>{
+          if(sql.startsWith("UPDATE legacy_chat_task_"))retirement=true;
+          if(retirement && sql==="COMMIT" && mode!=="release_failed" && !injected){injected=true;throw primary;}
+          const result=await client.query(sql,values);
+          if(retirement && sql==="ROLLBACK" && mode==="rollback_ack_lost")throw rollbackLost;
+          return result;
+        }};
+    });
+    try{
+      await expect(maintainOrdinaryChatLifecycle(watched)).rejects.toBe(primary);expect(injected).toBe(true);
+      const revoked=mode==="release_failed";
+      expect(await f.read()).toMatchObject({intent_state:revoked?"revoked":"running",attempt_state:revoked?"revoked":"running",
+        usage_uncertain:revoked,intent_reason:revoked?"execution_authority_expired":null});
+      expect(f.controller.signal.aborted).toBe(false);expect(f.failures).toHaveLength(0);
+      expect(pendingLifecycleRunForAttempt(f.attempt)).toMatchObject(f.identity);
+      expect(await maintainOrdinaryChatLifecycle(watched)).toBe(revoked?0:1);
+      expect(f.controller.signal.reason).toMatchObject({code:"LEGACY_CHAT_AUTHORITY_EXPIRED"});expect(f.failures).toHaveLength(1);
+      expect(await f.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked",usage_uncertain:true});
+    }finally{f.cleanup();}
+  });
+  it("preserves the exact authority signal and physical owner even if its trusted callback throws",async()=>{
+    const f=await fixture(),hookFailure=new Error("SYNTHETIC_TRUSTED_CALLBACK_FAILED"),settlement=gate();let notified:ApiError|undefined;
+    registerLifecycleRun(f.identity,f.controller,settlement.pending,{accountID:f.account,actorUserID:f.actor,operationScope:"create_chat_task",
+      onFailure:error=>{notified=error;throw hookFailure;}});
+    try{
+      await expect(maintainOrdinaryChatLifecycle(pool!)).rejects.toBe(hookFailure);
+      expect(notified).toBeInstanceOf(ApiError);expect(f.controller.signal.reason).toBe(notified);
+      expect(pendingLifecycleRunForAttempt(f.attempt)).toMatchObject(f.identity);
+      expect(await f.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked",usage_uncertain:true});
+      expect(await maintainOrdinaryChatLifecycle(pool!)).toBe(0);expect(f.controller.signal.reason).toBe(notified);
+    }finally{settlement.release();f.cleanup();}
+  });
+  it("registers shared flight before connection acquisition can reenter it",async()=>{
+    const f=await fixture();f.register();let outer:Promise<number>|undefined;const nested:Promise<number>[]=[];
+    const acquisition=gate();let acquired=false;
+    const watched={query:(sql:string,values?:unknown[])=>pool!.query(sql,values),connect:async()=>{
+      nested.push(maintainOrdinaryChatLifecycle(watched));
+      await acquisition.pending;
+      const client=await pool!.connect();acquired=true;return client;
+    }} as Pool;
+    try{
+      outer=maintainOrdinaryChatLifecycle(watched);
+      await vi.waitFor(()=>expect(nested).toHaveLength(1));expect(nested[0]).toBe(outer);
+      expect(acquired).toBe(false);expect(f.controller.signal.aborted).toBe(false);
+      acquisition.release();expect(await outer).toBe(1);
+      for(const promise of nested)expect(promise).toBe(outer);
+      expect(f.failures).toHaveLength(1);expect(pendingLifecycleRunForAttempt(f.attempt)).toMatchObject(f.identity);
+    }finally{acquisition.release();try{await outer;}finally{f.cleanup();}}
+  });
+  it("continues beyond a metadata page while a busy first-page owner waits for a later pass",async()=>{
+    const rows:Awaited<ReturnType<typeof fixture>>[]=[];let holder:PoolClient|undefined;const pageSizes:number[]=[];
+    const watched={query:async(sql:string,values?:unknown[])=>{
+      const result=await pool!.query(sql,values);if(sql.includes("ORDER BY i.id LIMIT 256"))pageSizes.push(result.rows.length);return result;
+    },connect:()=>pool!.connect()} as Pool;
+    try{
+      for(let index=0;index<258;index++)rows.push(await fixture());
+      rows.sort((a,b)=>a.intent.localeCompare(b.intent));const busy=rows[0]!;
+      holder=await pool!.connect();await holder.query("BEGIN");
+      await holder.query("SELECT id FROM legacy_chat_task_intents WHERE id=$1 FOR UPDATE",[busy.intent]);
+      expect(await maintainOrdinaryChatLifecycle(watched)).toBe(257);expect(pageSizes).toEqual([256,2,0]);
+      const states=(await pool!.query("SELECT state,count(*)::int AS count FROM legacy_chat_task_intents WHERE id=ANY($1::uuid[]) GROUP BY state",[rows.map(row=>row.intent)])).rows;
+      expect(states).toEqual(expect.arrayContaining([{state:"revoked",count:257},{state:"running",count:1}]));expect(states).toHaveLength(2);
+      expect(await busy.read()).toMatchObject({intent_state:"running",attempt_state:"running",usage_uncertain:false});
+      await holder.query("ROLLBACK");holder.release();holder=undefined;
+      expect(await maintainOrdinaryChatLifecycle(watched)).toBe(1);
+      expect(await busy.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked",usage_uncertain:true});
+    }finally{try{if(holder){try{await holder.query("ROLLBACK");}finally{holder.release();}}}finally{for(const row of rows)row.cleanup();}}
+  },30000);
+  it.each(["attempt","intent"] as const)("skips a competing %s lock, releases partial locks and still retires an unrelated exact owner",async lock=>{
+    const held=await fixture(),other=await fixture();held.register();other.register();let holder:PoolClient|undefined,probe:PoolClient|undefined;
+    try{
+      holder=await pool!.connect();await holder.query("BEGIN");
+      await holder.query(`SELECT id FROM legacy_chat_task_${lock==="attempt"?"attempts":"intents"} WHERE id=$1 FOR UPDATE`,[lock==="attempt"?held.attempt:held.intent]);
+      const outcome=maintainOrdinaryChatLifecycle(pool!);expect(await outcome).toBe(1);
+      expect(await held.read()).toMatchObject({intent_state:"running",attempt_state:"running",usage_uncertain:false});
+      expect(held.controller.signal.aborted).toBe(false);expect(other.controller.signal.aborted).toBe(true);
+      expect(await other.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked",usage_uncertain:true});
+      probe=await pool!.connect();await probe.query("BEGIN");
+      await probe.query(`SELECT id FROM legacy_chat_task_${lock==="intent"?"attempts":"intents"} WHERE id=$1 FOR UPDATE NOWAIT`,[lock==="intent"?held.attempt:held.intent]);
+      await probe.query("ROLLBACK");probe.release();probe=undefined;
+      await holder.query("ROLLBACK");holder.release();holder=undefined;
+      expect(await maintainOrdinaryChatLifecycle(pool!)).toBe(1);expect(held.controller.signal.aborted).toBe(true);
+    }finally{
+      try{if(probe){try{await probe.query("ROLLBACK");}finally{probe.release();}}}
+      finally{try{if(holder){try{await holder.query("ROLLBACK");}finally{holder.release();}}}finally{held.cleanup();other.cleanup();}}
+    }
+  });
+  it("does not deadlock an actual authenticated intent-first cancel or replace its first signal",async()=>{
+    const held=gate();let paused=false;
+    const shared=watchedPool(client=>({release:()=>client.release(),query:async(sql:string,values?:unknown[])=>{
+      const result=await client.query(sql,values);
+      if(sql.includes("SELECT id,current_attempt_id,revision,state,fencing_generation FROM legacy_chat_task_intents")){
+        paused=true;await held.pending;
+      }return result;
+    }}));
+    const app=await reader(shared,60000);await app.ready();
+    let f:Awaited<ReturnType<typeof fixture>>|undefined,request:Promise<unknown>|undefined,probe:PoolClient|undefined;
+    try{
+      f=await fixture();f.register();
+      const login=await app.inject({method:"POST",url:"/v1/auth/simulated-login",payload:{account_slug:f.accountSlug,user_email:f.userEmail,client_label:"metadata-cancel-control"}});
+      expect(login.statusCode,login.body).toBe(200);
+      const pending=app.inject({method:"POST",url:`/v1/chat/tasks/${f.task}/cancel`,headers:{authorization:`Bearer ${login.json().access_token}`},
+        payload:{attempt_id:f.attempt,expected_revision:1}}).then(result=>result);request=pending;
+      await vi.waitFor(()=>expect(paused).toBe(true));
+      expect(await maintainOrdinaryChatLifecycle(shared)).toBe(0);expect(f.controller.signal.aborted).toBe(false);
+      probe=await pool!.connect();await probe.query("BEGIN");
+      await probe.query("SELECT id FROM legacy_chat_task_attempts WHERE id=$1 FOR UPDATE NOWAIT",[f.attempt]);
+      await probe.query("ROLLBACK");probe.release();probe=undefined;
+      held.release();const cancelled=await pending;expect(cancelled.statusCode,cancelled.body).toBe(200);expect(cancelled.json().state).toBe("cancelling");
+      const firstReason=f.controller.signal.reason;expect(firstReason.message).toBe("LEGACY_CHAT_CANCELLED:owner_cancel");
+      expect(await maintainOrdinaryChatLifecycle(shared)).toBe(1);
+      expect(f.controller.signal.reason).toBe(firstReason);expect(f.failures).toHaveLength(0);
+      expect(await f.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked",usage_uncertain:true});
+      expect(pendingLifecycleRunForAttempt(f.attempt)).toMatchObject(f.identity);
+    }finally{
+      held.release();try{if(probe){try{await probe.query("ROLLBACK");}finally{probe.release();}}}
+      finally{try{await request;}finally{try{await app.close();}finally{f?.cleanup();}}}
+    }
+  });
+  it("backs off while the producer's attempt-first cancellation writes own both metadata rows",async()=>{
+    const f=await fixture();f.register();let cancelling:PoolClient|undefined;
+    try{
+      cancelling=await pool!.connect();await cancelling.query("BEGIN");
+      await cancelling.query(`UPDATE legacy_chat_task_attempts SET state='cancelling'
+        WHERE account_id=$1 AND id=$2 AND fencing_generation=$3 AND state IN ('admitted','running')`,[f.account,f.attempt,1]);
+      await cancelling.query(`UPDATE legacy_chat_task_intents SET state='cancelling',revision=revision+1,updated_at=now()
+        WHERE id=$1 AND current_attempt_id=$2 AND fencing_generation=$3 AND state IN ('admitted','running')`,[f.intent,f.attempt,1]);
+      expect(await maintainOrdinaryChatLifecycle(pool!)).toBe(0);expect(f.controller.signal.aborted).toBe(false);
+      await cancelling.query("COMMIT");cancelling.release();cancelling=undefined;
+      expect(await maintainOrdinaryChatLifecycle(pool!)).toBe(1);
+      expect(await f.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked",usage_uncertain:true});
+    }finally{try{if(cancelling){try{await cancelling.query("ROLLBACK");}finally{cancelling.release();}}}finally{f.cleanup();}}
+  });
+  it("does not replace a real fenced finalization that owns both rows",async()=>{
+    const f=await fixture();f.register();let final:PoolClient|undefined;
+    try{
+      final=await pool!.connect();await final.query("BEGIN");
+      expect(await finishLifecycleAttempt(final,{accountID:f.account,identity:f.identity,state:"completed"})).toBe(true);
+      expect(await maintainOrdinaryChatLifecycle(pool!)).toBe(0);expect(f.controller.signal.aborted).toBe(false);
+      await final.query("COMMIT");final.release();final=undefined;
+      expect(await maintainOrdinaryChatLifecycle(pool!)).toBe(0);
+      expect(await f.read()).toMatchObject({intent_state:"completed",attempt_state:"completed",intent_reason:null,attempt_reason:null,usage_uncertain:false});
+      expect(f.failures).toHaveLength(0);
+    }finally{try{if(final){try{await final.query("ROLLBACK");}finally{final.release();}}}finally{f.cleanup();}}
+  });
+  it("cannot retire or notify a successor or a noncurrent expired predecessor",async()=>{
+    const f=await fixture();f.register();const nextAttempt=randomUUID(),nextTask=randomUUID(),nextRun=randomUUID();
+    const execution=new Date(Date.now()+3600000);
+    const original={version:1,kind:"ordinary",session:{accountID:f.account,userID:f.actor,id:f.session,actorKind:"simulated_human",expiresAt:execution.valueOf()}};
+    try{
+      await inTransaction(pool!,async client=>{
+        await client.query(`UPDATE legacy_chat_task_intents SET current_attempt_id=$2,task_id=$3,fencing_generation=2,execution_authority_expires_at=$4
+          WHERE account_id=$1 AND id=$5`,[f.account,nextAttempt,nextTask,execution,f.intent]);
+        await client.query(`INSERT INTO legacy_chat_task_attempts(id,account_id,intent_id,actor_user_id,task_id,run_id,fencing_generation,state,
+          auth_session_id,auth_actor_kind,execution_authority_expires_at,original_authority,dispatch_state,lease_until)
+          VALUES($1,$2,$3,$4,$5,$6,2,'running',$7,'simulated_human',$8,$9::jsonb,'not_dispatched',clock_timestamp()+interval '1 hour')`,
+          [nextAttempt,f.account,f.intent,f.actor,nextTask,nextRun,f.session,execution,JSON.stringify(original)]);
+      });
+      expect(await maintainOrdinaryChatLifecycle(pool!)).toBe(0);
+      expect(await f.read()).toMatchObject({intent_state:"running",attempt_state:"running",current_attempt_id:nextAttempt,fencing_generation:"2",usage_uncertain:false});
+      expect((await pool!.query("SELECT state,usage_uncertain FROM legacy_chat_task_attempts WHERE id=$1",[nextAttempt])).rows[0]).toMatchObject({state:"running",usage_uncertain:false});
+      expect(f.controller.signal.aborted).toBe(false);expect(f.failures).toHaveLength(0);
+      expect(notifyLifecycleMaintenanceOwner({...f.owner,runID:nextRun},new ApiError(409,"LEGACY_CHAT_AUTHORITY_EXPIRED","Synthetic"))).toBe(false);
+      expect(pendingLifecycleRunForAttempt(f.attempt)).toMatchObject(f.identity);
+    }finally{f.cleanup();}
+  });
+  it("preserves completed execution-expired history, other scopes and missing descriptors, but retires the separate canonical cutoff",async()=>{
+    const completed=await fixture({completed:true}),other=await fixture({operation:"create_unscoped_chat_task"}),legacy=await fixture({original:false}),
+      canonical=await fixture({execution:"future",canonical:"past",dispatched:false});
+    canonical.register();
+    try{
+      expect(await maintainOrdinaryChatLifecycle(pool!)).toBe(1);
+      expect(await completed.read()).toMatchObject({intent_state:"completed",attempt_state:"completed",intent_reason:null});
+      for(const f of [other,legacy])expect(await f.read()).toMatchObject({intent_state:"running",attempt_state:"running",usage_uncertain:false});
+      expect(await canonical.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked",intent_reason:"canonical_retention_expired",
+        attempt_reason:"canonical_retention_expired",dispatch_state:"not_dispatched",usage_uncertain:false,execution:canonical.execution,canonical:canonical.canonical});
+      expect(canonical.failures).toHaveLength(1);expect(pendingLifecycleRunForAttempt(canonical.attempt)).toMatchObject(canonical.identity);
+    }finally{for(const f of [completed,other,legacy,canonical])f.cleanup();}
+  });
+  it("shares actual two-app startup and periodic passes, drains metadata before close and preserves the remaining app timer",async()=>{
+    const first=await fixture();first.register();const barrier1=gate(),barrier2=gate();let entries=0,phase=1,readyHooks=0;const metadataQueries:string[]=[];
+    const shared=watchedPool(client=>({release:()=>client.release(),query:async(sql:string,values?:unknown[])=>{
+      if(sql.includes("legacy_chat_task_"))metadataQueries.push(sql.replace(/\s+/g," ").trim().slice(0,100));
+      const result=await client.query(sql,values);
+      if(sql.includes("SELECT id FROM legacy_chat_task_attempts")){
+        entries++;if(phase===1)await barrier1.pending;else if(phase===2)await barrier2.pending;
+      }return result;
+    }}));
+    let app1:Awaited<ReturnType<typeof reader>>|undefined,app2:Awaited<ReturnType<typeof reader>>|undefined;
+    let ready1:Promise<unknown>|undefined,ready2:Promise<unknown>|undefined,closing:Promise<void>|undefined;
+    const extras:Awaited<ReturnType<typeof fixture>>[]=[];
+    try{
+      app1=await reader(shared);app2=await reader(shared);
+      app1.addHook("onReady",async()=>{readyHooks++;});app2.addHook("onReady",async()=>{readyHooks++;});
+      ready1=Promise.resolve(app1.ready()).then(()=>undefined);ready2=Promise.resolve(app2.ready()).then(()=>undefined);
+      await vi.waitFor(()=>expect({entries,readyHooks,metadataQueries}).toMatchObject({entries:1}),{timeout:3000});
+      await new Promise(resolve=>setTimeout(resolve,1200));expect(entries).toBe(1);
+      expect(first.controller.signal.aborted).toBe(false);
+      barrier1.release();await Promise.all([ready1,ready2]);expect(first.failures).toHaveLength(1);
+      phase=2;const second=await fixture();second.register();extras.push(second);
+      const before=entries;await vi.waitFor(()=>expect(entries).toBeGreaterThan(before),{timeout:3000});
+      const heldEntries=entries;let closed=false;closing=app1.close().then(()=>{closed=true;});
+      await new Promise(resolve=>setTimeout(resolve,1200));expect(closed).toBe(false);expect(entries).toBe(heldEntries);
+      expect(second.controller.signal.aborted).toBe(false);barrier2.release();await closing;expect(closed).toBe(true);
+      expect(second.failures).toHaveLength(1);phase=3;
+      const third=await fixture();third.register();extras.push(third);
+      await vi.waitFor(()=>expect(third.failures).toHaveLength(1),{timeout:3000});
+      expect(await third.read()).toMatchObject({intent_state:"revoked",attempt_state:"revoked"});
+    }finally{
+      barrier1.release();barrier2.release();
+      try{await Promise.allSettled([ready1,ready2,closing]);}
+      finally{try{await app1?.close();}finally{try{await app2?.close();}finally{first.cleanup();for(const f of extras)f.cleanup();}}}
+    }
+  },30000);
+});

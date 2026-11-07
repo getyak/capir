@@ -1,0 +1,51 @@
+import AppKit
+import Foundation
+import Vision
+
+struct VisionResult: Encodable {
+    let status: String
+    let text: String?
+    let reason: String?
+}
+
+func emit(_ result: VisionResult, exitCode: Int32 = 0) -> Never {
+    let encoder = JSONEncoder()
+    let data = (try? encoder.encode(result)) ?? Data("{\"status\":\"failed\",\"reason\":\"encoding failed\"}".utf8)
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data("\n".utf8))
+    exit(exitCode)
+}
+
+guard CommandLine.arguments.count == 2 else {
+    emit(.init(status: "failed", text: nil, reason: "invalid helper invocation"), exitCode: 2)
+}
+
+let input = URL(fileURLWithPath: CommandLine.arguments[1])
+guard input.isFileURL,
+      let attributes = try? FileManager.default.attributesOfItem(atPath: input.path),
+      let size = attributes[.size] as? NSNumber,
+      size.intValue > 0,
+      size.intValue <= 12_000_000,
+      let image = NSImage(contentsOf: input),
+      let data = image.tiffRepresentation,
+      let bitmap = NSBitmapImageRep(data: data),
+      let cgImage = bitmap.cgImage else {
+    emit(.init(status: "failed", text: nil, reason: "capture is missing, unreadable, or exceeds 12 MB"), exitCode: 3)
+}
+
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.usesLanguageCorrection = true
+request.recognitionLanguages = ["zh-Hans", "en-US"]
+
+do {
+    try VNImageRequestHandler(cgImage: cgImage).perform([request])
+    let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    let text = lines.joined(separator: "\n")
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        emit(.init(status: "failed", text: nil, reason: "Vision found no readable text"), exitCode: 4)
+    }
+    emit(.init(status: "recognized", text: text, reason: nil))
+} catch {
+    emit(.init(status: "failed", text: nil, reason: "Vision recognition failed"), exitCode: 5)
+}

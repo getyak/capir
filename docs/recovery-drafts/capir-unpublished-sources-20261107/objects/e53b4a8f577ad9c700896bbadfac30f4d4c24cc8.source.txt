@@ -1,0 +1,67 @@
+-- The workspace SDK may create a new derived authored source while its
+-- original-image lease is active. Initial, unconsumed filing checkpoints add
+-- evidence; they do not correct or revoke the SDK's previously read sources.
+-- This flag is host-owned admission state, never a public request parameter.
+CREATE FUNCTION initial_workspace_author_filing(old_task screenshot_contact_tasks, new_task screenshot_contact_tasks)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT (old_task).state->>'workspace_author_filing' = 'true'
+    AND ((old_task).status = 'running' OR (
+      (old_task).status IN ('completed','waiting_for_user') AND (new_task).status=(old_task).status
+      AND ((old_task).state - ARRAY['tokens','model_receipts','response'])=((new_task).state - ARRAY['tokens','model_receipts','response'])
+      AND (((old_task).state->'response') - ARRAY['revision','updated_at'])=(((new_task).state->'response') - ARRAY['revision','updated_at'])
+    ))
+    AND (new_task).status IN ('running','completed','waiting_for_user')
+    AND (old_task).expires_at IS NOT DISTINCT FROM (new_task).expires_at
+    AND NOT COALESCE(((new_task).state->>'deletion_requested')::boolean,false)
+    AND NOT COALESCE(((new_task).state->>'preprocessing_deletion_requested')::boolean,false)
+    AND NOT EXISTS (SELECT 1 FROM agent_session_chat_sources dependency
+      WHERE dependency.account_id=(old_task).account_id AND dependency.screenshot_task_id=(old_task).id)
+$$;
+
+DROP TRIGGER invalidate_harness_screenshot ON screenshot_contact_tasks;
+CREATE TRIGGER invalidate_harness_screenshot
+  AFTER UPDATE OF state,status,expires_at,capture_id,subject_id,assignment_id ON screenshot_contact_tasks
+  FOR EACH ROW WHEN (NOT COALESCE(initial_workspace_author_filing(OLD,NEW),false))
+  EXECUTE FUNCTION invalidate_harness_source_generation();
+CREATE TRIGGER invalidate_harness_screenshot_delete AFTER DELETE ON screenshot_contact_tasks
+  FOR EACH ROW EXECUTE FUNCTION invalidate_harness_source_generation();
+
+-- Completing the initial retained-source review does not change its content or
+-- authorization. Ephemeral purge and every other retention edit still revoke.
+DROP TRIGGER invalidate_harness_retention ON source_retention_receipts;
+CREATE TRIGGER invalidate_harness_retention AFTER UPDATE ON source_retention_receipts
+ FOR EACH ROW WHEN (NOT (OLD.review_completed_at IS NULL AND NEW.review_completed_at IS NOT NULL
+   AND NEW.effective_mode <> 'ephemeral'
+   AND (to_jsonb(OLD)-ARRAY['review_completed_at','review_completion_event','updated_at'])=
+       (to_jsonb(NEW)-ARRAY['review_completed_at','review_completion_event','updated_at'])))
+ EXECUTE FUNCTION invalidate_harness_source_generation();
+CREATE TRIGGER invalidate_harness_retention_delete AFTER DELETE ON source_retention_receipts
+ FOR EACH ROW EXECUTE FUNCTION invalidate_harness_source_generation();
+
+-- Derived author-task context cannot outlive the exact admitted parent pixels.
+-- Filed captures keep the independent, existing resource-retention lifecycle.
+ALTER FUNCTION agent_session_screenshot_context_available(uuid,uuid) RENAME TO agent_session_screenshot_context_available_without_author;
+CREATE FUNCTION agent_session_screenshot_context_available(account uuid, task uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+ SELECT agent_session_screenshot_context_available_without_author(account,task)
+   AND EXISTS(SELECT 1 FROM screenshot_contact_tasks t WHERE t.account_id=account AND t.id=task
+     AND (t.state->'workspace_author_source' IS NULL OR meeting_image_source_available(account,
+       (t.state->'workspace_author_source'->>'session_id')::uuid,
+       t.state->'workspace_author_source'->>'message_id',t.state->'workspace_author_source')))
+$$;
+CREATE FUNCTION retire_unavailable_author_image_tasks() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE owner uuid;
+BEGIN
+ owner=COALESCE(NEW.account_id,OLD.account_id);
+ UPDATE screenshot_contact_tasks t SET status='deleted',state='{}'::jsonb,input_manifest='{}'::jsonb,
+   revision=revision+1,lease_epoch=lease_epoch+1,lease_until=NULL,updated_at=now()
+ WHERE t.account_id=owner AND t.status<>'deleted' AND t.state->'workspace_author_source' IS NOT NULL
+   AND NOT meeting_image_source_available(owner,(t.state->'workspace_author_source'->>'session_id')::uuid,
+      t.state->'workspace_author_source'->>'message_id',t.state->'workspace_author_source');
+ RETURN NULL;
+END;
+$$;
+CREATE TRIGGER retire_author_image_sources AFTER DELETE OR UPDATE ON conversation_message_images
+ FOR EACH ROW EXECUTE FUNCTION retire_unavailable_author_image_tasks();
+CREATE TRIGGER retire_author_image_revocations AFTER INSERT ON memory_source_revocations
+ FOR EACH ROW EXECUTE FUNCTION retire_unavailable_author_image_tasks();

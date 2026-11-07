@@ -1,0 +1,10 @@
+import { expect, it } from "vitest";
+import config from "../next.config";
+it("never mirrors mailbox OAuth callback proofs to development request logs", () => {
+  const logging = config.logging;
+  expect(logging).not.toBe(false);
+  const incoming = logging && logging.incomingRequests;
+  const patterns = incoming && typeof incoming === "object" ? incoming.ignore : undefined;
+  expect(Array.isArray(patterns)).toBe(true);
+  for (const provider of ["gmail", "outlook"]) expect((patterns as RegExp[]).some(pattern => pattern.test(`/api/integrations/mail/${provider}/callback?code=synthetic-proof&state=synthetic-state`))).toBe(true);
+});
