@@ -64,6 +64,29 @@ afterEach(() => {
 });
 
 describe("same-origin Memory BFF", () => {
+  it("forwards opaque proposal continuation while deriving every scope field from the signed entry", async () => {
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>().mockResolvedValue(jsonResponse({ proposals: [], has_more: false, next_cursor: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await memoryReviewRoute(new Request("http://web.local/api/memory/proposals?paginate=true&cursor=mp1.returned_opaque", {
+      headers: headers(capability("relationship", { personId: PERSON, contextId: CONTEXT })),
+    }), ["proposals"]);
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = new URL(String(fetchMock.mock.calls[0]![0]));
+    expect(Object.fromEntries(url.searchParams)).toEqual({ purpose: "relationship", person_id: PERSON,
+      relationship_context_id: CONTEXT, paginate: "true", cursor: "mp1.returned_opaque" });
+  });
+
+  it.each(["cursor=", "cursor=one&cursor=two", "cursor=https%3A%2F%2Fexample.invalid",
+    "paginate=unknown", "paginate=true&paginate=false", `purpose=chat&person_id=${CONTEXT}`])(
+    "refuses ambiguous, malformed or foreign proposal pagination %s before dispatch", async query => {
+      const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+      const response = await memoryReviewRoute(new Request(`http://web.local/api/memory/proposals?${query}`, {
+        headers: headers(capability("people", { personId: PERSON })),
+      }), ["proposals"]);
+      expect(response.status).toBe(403); expect(fetchMock).not.toHaveBeenCalled();
+    });
+
   it("forwards returned pagination only inside the signed People scope", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ surface: "people", person_id: PERSON, items: [] }));
     vi.stubGlobal("fetch", fetchMock);

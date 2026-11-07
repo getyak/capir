@@ -4,13 +4,15 @@ import { useT } from "@/components/locale-provider";
 import Link from "next/link";
 import type {
   MemoryProposalRecord,
+  MemoryProposalListResponse,
   MemoryPursuitScope,
 } from "@talent-signal/contracts";
 
-import { MemoryReviewCard } from "./memory-review-card";
+import { MemoryProposalPages } from "./memory-proposal-pages";
 
 export type PursuitMemoryScopeEntry = MemoryPursuitScope & {
   proposals: MemoryProposalRecord[];
+  proposalPage?: MemoryProposalListResponse;
   capability: string;
 };
 
@@ -46,26 +48,11 @@ export function PursuitMemoryReview({
               {scope.person_display_label}
               {scope.relationship_display_label ? ` · ${scope.relationship_display_label}` : ""}
             </h3>
-            {scope.proposals.length === 0 ? (
-              <p>{t("没有等待确认的变化。")}</p>
-            ) : (
-              scope.proposals.map((proposal) => (
-                <MemoryReviewCard
-                  binding={binding}
-                  contextId={scope.relationship_context_id ?? null}
-                  entryCapability={scope.capability}
-                  key={proposal.proposal_id}
-                  personId={scope.person_id}
-                  proposal={{ proposal_id: proposal.proposal_id, revision: proposal.revision }}
-                  purpose="relationship"
-                  pursuit={{
-                    pursuitId,
-                    roleId: scope.role_id ?? null,
-                    evidenceFragmentId: scope.role_evidence_fragment_id ?? null,
-                  }}
-                />
-              ))
-            )}
+            <MemoryProposalPages binding={binding} contextId={scope.relationship_context_id ?? null}
+              entryCapability={scope.capability} personId={scope.person_id} purpose="relationship"
+              initialPage={scope.proposalPage ?? { proposals: scope.proposals }}
+              pursuit={{ pursuitId, roleId: scope.role_id ?? null,
+                evidenceFragmentId: scope.role_evidence_fragment_id ?? null }} />
           </article>
         ))
       )}

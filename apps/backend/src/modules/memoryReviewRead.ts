@@ -37,6 +37,7 @@ import {
 } from "./memoryReviewStore.js";
 import { verifyPendingSourceAuthority } from "./memorySourceVerification.js";
 import { assertPursuitAssociationCurrent } from "./memoryPursuitScopes.js";
+import { readMemoryProposalPage, type MemoryProposalPageRequest } from "./memoryProposalPagination.js";
 
 /**
  * Revalidate a stored Pursuit association before any read/mutation, in the
@@ -287,6 +288,8 @@ async function proposalRecordFor(
     if (!surfaceAllowsScope(purpose, item.scope)) return false;
     if (purpose !== "chat") {
       if (!personId || item.subject_id !== personId) return false;
+      // Match the actual relationship review's exact context visibility.
+      if (purpose === "relationship" && item.relationship_context_id !== contextId) return false;
       if (contextId && item.relationship_context_id && item.relationship_context_id !== contextId) {
         return false;
       }
@@ -324,35 +327,15 @@ export async function listMemoryProposals(
   personId: string | null,
   contextId: string | null,
   sessionId: string | null = null,
+  page: MemoryProposalPageRequest = {},
 ): Promise<MemoryProposalListResponse> {
   const effectivePurpose = purpose ?? "chat";
   if (effectivePurpose !== "chat" && !personId) {
     throw new ApiError(400, "MEMORY_SCOPE_REQUIRED", "This surface needs one contact to list Memory proposals.");
   }
-  const result = await client.query<ProposalRow>(
-    `SELECT * FROM memory_proposals
-     WHERE account_id = $1
-       AND created_by_user_id = $2
-       AND status IN ('open', 'partially_committed')
-       AND expires_at > now()
-       AND ($3::uuid IS NULL OR session_id = $3)
-     ORDER BY created_at DESC, id
-     LIMIT 50`,
-    [auth.accountId, auth.userId, sessionId],
-  );
-  const proposals: MemoryProposalRecord[] = [];
-  for (const row of result.rows) {
-    const record = await proposalRecordFor(
-      client,
-      row,
-      auth,
-      effectivePurpose,
-      personId,
-      contextId,
-    );
-    if (record) proposals.push(record);
-  }
-  return { contract_version: CONTRACT_VERSION, proposals };
+  return readMemoryProposalPage(client, auth,
+    { purpose: effectivePurpose, personId, contextId, sourceSessionId: sessionId }, page,
+    row => proposalRecordFor(client, row, auth, effectivePurpose, personId, contextId));
 }
 
 export interface OpenReviewResult {

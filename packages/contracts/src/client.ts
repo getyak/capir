@@ -1645,11 +1645,15 @@ export class TalentSignalClient {
     return this.request("/v1/memory/proposals", { method: "POST", body });
   }
 
-  listMemoryProposals(query: { purpose?: "chat" | "people" | "relationship"; person_id?: string | null; relationship_context_id?: string | null } = {}): Promise<MemoryProposalListResponse> {
+  listMemoryProposals(query: { purpose?: "chat" | "people" | "relationship"; person_id?: string | null; relationship_context_id?: string | null;
+    session_id?: string | null; paginate?: boolean; cursor?: string | null } = {}): Promise<MemoryProposalListResponse> {
     const params = new URLSearchParams();
     if (query.purpose) params.set("purpose", query.purpose);
     if (query.person_id) params.set("person_id", query.person_id);
     if (query.relationship_context_id) params.set("relationship_context_id", query.relationship_context_id);
+    if (query.session_id) params.set("session_id", query.session_id);
+    if (query.paginate === true) params.set("paginate", "true");
+    if (query.cursor) params.set("cursor", query.cursor);
     const suffix = params.toString();
     return this.request(`/v1/memory/proposals${suffix ? `?${suffix}` : ""}`, { method: "GET" });
   }

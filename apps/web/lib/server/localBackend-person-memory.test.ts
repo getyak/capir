@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { client } = vi.hoisted(() => ({ client: {
   currentSession: vi.fn(), getPerson: vi.fn(), listPeople: vi.fn(),
   listMemoryProposals: vi.fn(), recallMemories: vi.fn(),
+  resolveMemoryPursuitScopes: vi.fn(),
 } }));
 vi.mock("server-only", () => ({}));
 vi.mock("./backendAuth", () => ({
@@ -10,7 +11,7 @@ vi.mock("./backendAuth", () => ({
   authSecret: vi.fn(() => "synthetic-memory-loader-test"),
 }));
 
-import { loadPersonMemory } from "./localBackend";
+import { loadPersonMemory, loadPursuitMemoryScopes } from "./localBackend";
 
 const personId = "11111111-1111-4111-8111-111111111111";
 const otherPersonId = "22222222-2222-4222-8222-222222222222";
@@ -22,13 +23,26 @@ beforeEach(() => {
   client.getPerson.mockResolvedValue({ person: { id: personId }, basic_fields: [], contact_points: [] });
   client.listMemoryProposals.mockResolvedValue({ proposals: [] });
   client.recallMemories.mockResolvedValue({ surface: "people", person_id: personId, items: [item], has_more: false });
+  client.resolveMemoryPursuitScopes.mockResolvedValue({ scopes: [] });
 });
 
 describe("exact Person Memory destination", () => {
+  it("pages only exact relationship scopes and never lets an unresolved scope conceal the other authorized entries", async () => {
+    client.resolveMemoryPursuitScopes.mockResolvedValue({ scopes: [
+      { person_id: personId, relationship_context_id: null },
+      { person_id: personId, relationship_context_id: otherPersonId },
+    ] });
+    const result = await loadPursuitMemoryScopes(personId);
+    expect(client.listMemoryProposals).toHaveBeenCalledTimes(1);
+    expect(client.listMemoryProposals).toHaveBeenCalledWith({ purpose: "relationship", person_id: personId,
+      relationship_context_id: otherPersonId, paginate: true });
+    expect(result).toHaveLength(1); expect(result[0]?.relationship_context_id).toBe(otherPersonId);
+  });
   it("reads the exact person independently of the bounded directory and keeps continuation", async () => {
     client.recallMemories.mockResolvedValue({ surface: "people", person_id: personId, items: [item], has_more: true, next_cursor: "returned-cursor" });
     const result = await loadPersonMemory(personId);
     expect(client.getPerson).toHaveBeenCalledWith(personId);
+    expect(client.listMemoryProposals).toHaveBeenCalledWith({ purpose: "people", person_id: personId, paginate: true });
     expect(client.listPeople).not.toHaveBeenCalled();
     expect(client.recallMemories).toHaveBeenCalledWith({ surface: "people", person_id: personId, limit: 50 });
     expect(result).toMatchObject({ person: { id: personId }, items: [item], basicFields: [], contactPoints: [], hasMore: true, nextCursor: "returned-cursor" });

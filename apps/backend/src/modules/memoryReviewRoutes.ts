@@ -93,6 +93,8 @@ function reviewCredential(request: {
   return null;
 }
 const listQuery = Type.Object({
+  paginate: Type.Optional(Type.Boolean()),
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
   purpose: Type.Optional(
     Type.Union([
       Type.Literal("chat"),
@@ -133,6 +135,8 @@ export function registerMemoryReviewRoutes(
   app.get<{
     Querystring: {
       purpose?: MemorySurface;
+      paginate?: boolean;
+      cursor?: string;
       session_id?: string;
       person_id?: string;
       relationship_context_id?: string;
@@ -148,6 +152,7 @@ export function registerMemoryReviewRoutes(
         request.query.person_id ?? null,
         request.query.relationship_context_id ?? null,
         request.query.session_id ?? null,
+        { paginate: request.query.paginate, cursor: request.query.cursor },
       ),
   );
 
