@@ -30,10 +30,7 @@ import {
 } from "./types.js";
 
 export { AGENT_BUDGET_CEILING, AgentCapabilityError } from "./runtimePolicy.js";
-
-export const DEFAULT_AGENT_BUDGET: Readonly<AgentBudget> = Object.freeze({
-  ...AGENT_BUDGET_CEILING,
-});
+export { DEFAULT_AGENT_BUDGET } from "./runBudget.js";
 
 type TerminalCandidate =
   | {
