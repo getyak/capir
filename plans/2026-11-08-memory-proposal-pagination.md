@@ -50,16 +50,19 @@ claim the final query reproduces every deployment predicate.
 1. Completed: current-source reproduction, bounded implementation, independent
    scope/source/cursor/Web review, and the two review corrections above.
 2. Active: submit the reviewed candidate and execute applicable exact-head
-   Hosted gates, including ninety new PostgreSQL cases. Thirty-four backend and
-   sixty-three relevant Web host checks passed; changed-file semantic/lint
-   checks passed. These are bounded evidence, not full builds or PG execution.
+   Hosted gates. At c48e9e60, the full backend typecheck/test/build and187 real
+   PostgreSQL Memory cases passed, including all ninety added cases with no
+   skips. Web lint/typecheck and password protocol passed; the full Web suite
+   exposed one incomplete old mock, now repaired without changing the product
+   expiry guard. New-head full gates remain required. Thirty-four backend and
+   sixty-three relevant Web host checks are separate earlier bounded evidence.
 3. Pending: real browser acceptance, affected resident deployment from clean
    committed source, live revision/behavior readback, and normal merge after
    gates. Keep Linear In Progress until the requested acceptance is complete.
 
 PostgreSQL cases cover mixed/hidden proposals, stable microsecond pages,
 cross-scope cursors, live mutations, original source-verifier equivalence and
-nineteen Lab lineage cases. They have not run locally. Detailed synthetic
+nineteen Lab lineage cases. They ran in Hosted, not locally. Detailed synthetic
 evidence and temporary artifact recovery references are kept in the host's
 GET-439 operational run, outside tracked source. No live database, account,
 provider or resident process was changed during implementation.
