@@ -68,11 +68,13 @@ claim the final query reproduces every deployment predicate.
 3. Active before merge: reproduce the previous-token acceptance boundary over
    actual HTTP AuthGuard/currentSession and real disposable PostgreSQL. Three
    list-form cases each cover slot withdrawal and natural original microsecond
-   expiry, with legal list200 and fresh old401/current200 controls. These six
-   flows are test source only, not an observed red. Then bind the actual accepted
-   branch/deadline while preserving current generation/cursor and existing
-   source verifier; independently review and rerun exact-head gates.03344 remains
-   draft despite its earlier green gates.
+   expiry, with legal list200 and fresh old401/current200 controls. Atbdce1fd9, all six flows
+   reached their safety assertions and reproduced late200/data despite old401
+   and current200;198 prior cases passed. The4-path fix now binds actual accepted
+   branch/deadline while preserving current generation/cursor and the original
+   source verifier. Root/peer reviews and52 pure/5-root semantic checks pass;
+   execute latest Hosted PG and applicable gates before merge. Earlier03344
+   green does not cover this boundary.
 4. Pending: real browser acceptance, affected resident deployment from clean
    committed source, live revision/behavior readback, and normal source merge
    after all applicable current checks. Keep Linear In Progress until acceptance.
@@ -82,7 +84,7 @@ cross-scope cursors, live mutations and original source-verifier equivalence.
 The original ninety additions include nineteen Lab cases and passed in Hosted.
 Eleven new legacy-form authority cases bring additions to101 and the full suite
 to198; all ran successfully at03344. The additional accepted-previous HTTP
-flows remain unexecuted and must actually run in the explicit PG lane. Detailed synthetic
+flows produced3 real red groups atbdce. Post-fix execution remains required. Detailed synthetic
 evidence and temporary artifact recovery references are kept in the host's
 GET-439 operational run, outside tracked source. No production data, account,
 provider or resident process was changed during implementation.

@@ -5,7 +5,8 @@ import type { DatabaseClient } from "../database/pool.js";
 import type { AuthContext } from "./auth.js";
 import type { ProposalRow } from "./memoryReviewStore.js";
 import { listMemoryProposals } from "./memoryReviewRead.js";
-import { readMemoryProposalPage } from "./memoryProposalPagination.js";
+import { readMemoryProposalPage, memoryProposalAcceptedLogin, type MemoryProposalAcceptedLogin } from "./memoryProposalPagination.js";
+import { sha256 } from "../lib/hash.js";
 import { openMemoryProposalCursor } from "./memoryProposalCursor.js";
 import { labWorkspaceSessionActiveSQL } from "./labWorkspaceAccess.js";
 
@@ -31,6 +32,7 @@ describe("Memory proposal list admission before its bounded window", () => {
     const queries: string[] = [];
     const now = Date.now();
     const liveLogin = { token_hash: "a".repeat(64), expires_at: new Date(now + 3_600_000),
+      accepted_deadline: new Date(now + 3_600_000).toISOString().replace(/(\.\d{3})Z$/u, "$1000Z"),
       checked_ms: String(now), snapshot_at: new Date(now).toISOString().replace(/(\.\d{3})Z$/u, "$1000Z"), scope_active: true };
     // This narrow query double models the ordering regression, not PostgreSQL
     // semantics. Real mixed-scope SQL execution is covered by the Hosted PG case.
@@ -59,12 +61,13 @@ describe("Memory proposal list admission before its bounded window", () => {
 });
 
 describe("bounded proposal page publication", () => {
-  function fixture(count = 50) {
+  function fixture(count = 50, acceptedTtlMs = 3_600_000) {
     const now = Date.now();
     const auth: AuthContext = { accountId: randomUUID(), userId: randomUUID(), sessionId: randomUUID(),
       accountSlug: "page-fixture", userEmail: "page@synthetic.local", userKind: "simulated_human" };
     const scope = { purpose: "people" as const, personId: randomUUID(), contextId: null, sourceSessionId: null };
     const authority = { token_hash: "a".repeat(64), expires_at: new Date(now + 3_600_000), checked_ms: String(now),
+      accepted_deadline: new Date(now + acceptedTtlMs).toISOString().replace(/(\.\d{3})Z$/u, "$1000Z"),
       snapshot_at: new Date(now).toISOString().replace(/(\.\d{3})Z$/u, "$1000Z") };
     const rows = Array.from({ length: count }, (_, index) => ({ id: randomUUID(), revision: 1,
       created_at: new Date("2026-09-22T10:00:00.123Z"), cursor_time: `2026-09-22T10:00:00.123${String(999 - index).padStart(3, "0")}Z`,
@@ -82,8 +85,9 @@ describe("bounded proposal page publication", () => {
     const client = { query } as unknown as DatabaseClient;
     const serialize = vi.fn(async (row: ProposalRow) => ({ proposal_id: row.id, revision: row.revision,
       item_count: 1, default_selected_count: 1 } as MemoryProposalRecord | null));
-    const read = (request = { paginate: true } as { paginate?: boolean | undefined; cursor?: string | null | undefined }) =>
-      readMemoryProposalPage(client, auth, scope, request, serialize);
+    const read = (request = { paginate: true } as { paginate?: boolean | undefined; cursor?: string | null | undefined },
+      accepted: MemoryProposalAcceptedLogin | null = null) =>
+      readMemoryProposalPage(client, auth, scope, request, serialize, accepted);
     return { auth, scope, rows, authority, query, read, serialize,
       unavailableInitial: () => { initialAvailable = false; }, unavailableFinal: () => { finalAvailable = false; },
       revokeLogin: () => { finalLoginAvailable = false; },
@@ -124,6 +128,48 @@ describe("bounded proposal page publication", () => {
   it("returns a truthful final page without cursor when fewer than50 qualified rows remain", async () => {
     const page = await fixture(2).read();
     expect(page.proposals).toHaveLength(2); expect(page.has_more).toBe(false); expect(page.next_cursor).toBeNull();
+  });
+
+  it.each([undefined, false, true])("does not replace an admitted previous-slot deadline with the live current deadline (paginate=%s)", async paginate => {
+    // A synthetic row boundary for the deadline projection only. The real
+    // accepted-bearer query and slot withdrawal execute in the Hosted PG case.
+    const f = fixture(1, 1_000);
+    f.serialize.mockImplementationOnce(async row => {
+      f.advance(); // Previous expires; current session/hash remains live.
+      return { proposal_id: row.id, revision: row.revision, item_count: 1, default_selected_count: 1 } as MemoryProposalRecord;
+    });
+    await expect(f.read(paginate === undefined ? {} : { paginate })).rejects.toThrow(/fresh read/);
+  });
+
+  it.each([undefined, false, true])("binds the actual accepted header and original deadline in both observations (paginate=%s)", async paginate => {
+    const f = fixture(1);
+    const token = "synthetic-accepted-previous-unit-only";
+    const accepted = memoryProposalAcceptedLogin(`Bearer ${token}`);
+    await f.read(paginate === undefined ? {} : { paginate }, accepted);
+    const initial = f.query.mock.calls.find(([sql]) => sql.includes("FROM sessions"))!;
+    const final = f.query.mock.calls.find(([sql]) => sql.includes("qualified AS MATERIALIZED"))!;
+    expect(initial[1][3]).toBe(sha256(token));
+    expect(final[1][9]).toBe(sha256(token));
+    expect(final[1][10]).toBe(f.authority.accepted_deadline);
+    expect(initial[0]).toContain("sessions.previous_token_hash=$4");
+    expect(final[0]).toContain("sessions.previous_token_hash=$10");
+    expect(final[0]).toContain("tick.checked_at<$11::timestamptz");
+    expect(JSON.stringify(f.query.mock.calls).includes(token)).toBe(false);
+  });
+
+  it("keeps the cursor generation key while capping it to the accepted grace deadline", async () => {
+    const f = fixture(50, 10_000);
+    const accepted = memoryProposalAcceptedLogin("Bearer synthetic-accepted-previous-unit-only");
+    const page = await f.read({ paginate: true }, accepted);
+    const scope = { ...f.scope, accountId: f.auth.accountId, userId: f.auth.userId, loginSessionId: f.auth.sessionId };
+    const bounds = { nowMs: Number(f.authority.checked_ms), sessionExpiresAtMs: f.authority.expires_at.getTime() };
+    const decoded = openMemoryProposalCursor(page.next_cursor!, f.authority.token_hash, scope, bounds);
+    expect(decoded.validUntilMs).toBe(Date.parse(f.authority.accepted_deadline));
+    expect(() => openMemoryProposalCursor(page.next_cursor!, accepted.tokenHash, scope, bounds)).toThrow(/fresh read/);
+  });
+
+  it.each([undefined, "", "Bearer ", "Basic synthetic"])("does not let a missing accepted HTTP bearer become a domain read", header => {
+    expect(() => memoryProposalAcceptedLogin(header)).toThrow(/fresh read/);
   });
 
   it.each([true, false])("uses the original live Lab lineage before selection and after all source awaits with paginate=%s", async paginate => {

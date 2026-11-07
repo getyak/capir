@@ -37,7 +37,7 @@ import {
 } from "./memoryReviewStore.js";
 import { verifyPendingSourceAuthority } from "./memorySourceVerification.js";
 import { assertPursuitAssociationCurrent } from "./memoryPursuitScopes.js";
-import { readMemoryProposalPage, type MemoryProposalPageRequest } from "./memoryProposalPagination.js";
+import { readMemoryProposalPage, type MemoryProposalPageRequest, type MemoryProposalAcceptedLogin } from "./memoryProposalPagination.js";
 
 /**
  * Revalidate a stored Pursuit association before any read/mutation, in the
@@ -328,6 +328,7 @@ export async function listMemoryProposals(
   contextId: string | null,
   sessionId: string | null = null,
   page: MemoryProposalPageRequest = {},
+  acceptedLogin: MemoryProposalAcceptedLogin | null = null,
 ): Promise<MemoryProposalListResponse> {
   const effectivePurpose = purpose ?? "chat";
   if (effectivePurpose !== "chat" && !personId) {
@@ -335,7 +336,7 @@ export async function listMemoryProposals(
   }
   return readMemoryProposalPage(client, auth,
     { purpose: effectivePurpose, personId, contextId, sourceSessionId: sessionId }, page,
-    row => proposalRecordFor(client, row, auth, effectivePurpose, personId, contextId));
+    row => proposalRecordFor(client, row, auth, effectivePurpose, personId, contextId), acceptedLogin);
 }
 
 export interface OpenReviewResult {

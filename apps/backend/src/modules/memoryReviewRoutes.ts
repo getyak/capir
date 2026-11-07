@@ -33,6 +33,7 @@ import type { Pool } from "pg";
 import { inTransaction } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import { claimIdempotency, completeIdempotency } from "../lib/idempotency.js";
+import { memoryProposalAcceptedLogin } from "./memoryProposalPagination.js";
 import {
   commitMemoryReview,
   decideMemoryReviewItem,
@@ -153,6 +154,7 @@ export function registerMemoryReviewRoutes(
         request.query.relationship_context_id ?? null,
         request.query.session_id ?? null,
         { paginate: request.query.paginate, cursor: request.query.cursor },
+        memoryProposalAcceptedLogin(request.headers.authorization),
       ),
   );
 

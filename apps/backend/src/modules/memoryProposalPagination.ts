@@ -1,6 +1,7 @@
 import { CONTRACT_VERSION, type MemoryProposalListResponse, type MemoryProposalRecord } from "@talent-signal/contracts";
 import type { DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
+import { sha256 } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
 import type { ProposalRow } from "./memoryReviewStore.js";
 import { MEMORY_PROPOSAL_CURSOR_TTL_MS, MEMORY_PROPOSAL_PAGE_SIZE,
@@ -12,11 +13,25 @@ import { labWorkspaceSessionActiveSQL } from "./labWorkspaceAccess.js";
 export interface MemoryProposalPageRequest { paginate?: boolean | undefined; cursor?: string | null | undefined }
 type ListScope = Pick<MemoryProposalCursorScope, "purpose" | "personId" | "contextId" | "sourceSessionId">;
 type ListRow = ProposalRow & { cursor_time: string; qualified_count: number; qualified_default_count: number };
-type AuthorityRow = { token_hash: string; expires_at: Date; checked_ms: string; snapshot_at: string };
+type AuthorityRow = { token_hash: string; expires_at: Date; accepted_deadline: string; checked_ms: string; snapshot_at: string };
+const acceptedLoginBrand = Symbol("memory-proposal-accepted-login");
+export interface MemoryProposalAcceptedLogin {
+  readonly [acceptedLoginBrand]: true;
+  readonly tokenHash: string;
+}
 
 function changed(): never {
   throw new ApiError(409, "MEMORY_PROPOSAL_CURSOR_STALE",
     "The proposal list changed. Start a fresh read.");
+}
+
+/** Only the authenticated HTTP adapter supplies this proof. It comes from the
+ * actual accepted header, never query/body data or the session's newer slot.
+ * Trusted domain readers without a header retain their current-slot semantics.
+ */
+export function memoryProposalAcceptedLogin(authorization: string | undefined): MemoryProposalAcceptedLogin {
+  if (!authorization?.startsWith("Bearer ") || !authorization.slice(7)) return changed();
+  return Object.freeze({ [acceptedLoginBrand]: true as const, tokenHash: sha256(authorization.slice(7)) });
 }
 
 // Scope predicates apply before LIMIT, and are reused by the final envelope.
@@ -45,7 +60,10 @@ const qualifiedItemsSQL = `SELECT count(*)::int AS item_count,
         AND ($6::uuid IS NULL OR i.relationship_context_id IS NULL OR i.relationship_context_id = $6)))
       AND ${MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_SQL}`;
 
-const authoritySQL = (loginParameter: number) => `SELECT sessions.token_hash, sessions.expires_at,
+const acceptedDeadlineSQL = (parameter: number) => `CASE WHEN $${parameter}::text IS NULL
+  OR sessions.token_hash=$${parameter} THEN sessions.expires_at ELSE sessions.previous_token_expires_at END`;
+const authoritySQL = (loginParameter: number, acceptedParameter: number, originalDeadlineParameter?: number) => `SELECT sessions.token_hash, sessions.expires_at,
+  to_char((${acceptedDeadlineSQL(acceptedParameter)}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS accepted_deadline,
   floor(extract(epoch FROM tick.checked_at) * 1000)::text AS checked_ms,
   to_char(tick.checked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS snapshot_at
   FROM sessions
@@ -54,6 +72,9 @@ const authoritySQL = (loginParameter: number) => `SELECT sessions.token_hash, se
   CROSS JOIN tick
   WHERE sessions.account_id = $1 AND sessions.user_id = $2 AND sessions.id = $${loginParameter}::uuid
     AND sessions.revoked_at IS NULL AND sessions.expires_at > tick.checked_at
+    AND ($${acceptedParameter}::text IS NULL OR sessions.token_hash=$${acceptedParameter}
+      OR (sessions.previous_token_hash=$${acceptedParameter} AND sessions.previous_token_expires_at>tick.checked_at))
+    ${originalDeadlineParameter ? `AND tick.checked_at<$${originalDeadlineParameter}::timestamptz` : ""}
     AND ${labWorkspaceSessionActiveSQL}`;
 
 const requalifiedSQL = (expectedParameter: number) => `qualified AS MATERIALIZED (
@@ -67,8 +88,10 @@ const requalifiedSQL = (expectedParameter: number) => `qualified AS MATERIALIZED
 )`;
 
 function bounds(row: AuthorityRow) {
-  if (!/^[a-f0-9]{64}$/u.test(row.token_hash ?? "")) return changed();
-  const value = { nowMs: Number(row.checked_ms), sessionExpiresAtMs: row.expires_at.getTime() };
+  if (!/^[a-f0-9]{64}$/u.test(row.token_hash ?? "")
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/u.test(row.accepted_deadline ?? "")) return changed();
+  const value = { nowMs: Number(row.checked_ms),
+    sessionExpiresAtMs: Math.min(row.expires_at.getTime(), Date.parse(row.accepted_deadline)) };
   if (!Number.isSafeInteger(value.nowMs) || !Number.isSafeInteger(value.sessionExpiresAtMs)
     || value.sessionExpiresAtMs <= value.nowMs) return changed();
   return value;
@@ -79,7 +102,10 @@ export async function readMemoryProposalPage(
   client: DatabaseClient, auth: AuthContext, scope: ListScope,
   request: MemoryProposalPageRequest,
   serialize: (row: ProposalRow) => Promise<MemoryProposalRecord | null>,
+  acceptedLogin: MemoryProposalAcceptedLogin | null = null,
 ): Promise<MemoryProposalListResponse> {
+  if (acceptedLogin && (acceptedLogin[acceptedLoginBrand] !== true || !/^[a-f0-9]{64}$/u.test(acceptedLogin.tokenHash))) return changed();
+  const acceptedHash = acceptedLogin?.tokenHash ?? null;
   const params: unknown[] = [auth.accountId, auth.userId, scope.sourceSessionId,
     scope.purpose, scope.personId, scope.contextId, auth.sessionId];
   const paginated = request.paginate === true || Boolean(request.cursor);
@@ -88,10 +114,12 @@ export async function readMemoryProposalPage(
   // Every list form repeats the same live authority. Pagination is only a
   // representation choice, never a caller-controlled permission switch.
   // token_hash is SHA256(bearer), not a server secret or issuer credential;
-  // reading it here only binds both observations to the same generation.
+  // reading it here binds both observations to the same generation. HTTP also
+  // binds the actually accepted current/previous token and original deadline;
+  // a newer current slot cannot extend the accepted previous slot's authority.
   const authority = (await client.query<AuthorityRow>(
-    `WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at) ${authoritySQL(3)}`,
-    [auth.accountId, auth.userId, auth.sessionId],
+    `WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at) ${authoritySQL(3, 4)}`,
+    [auth.accountId, auth.userId, auth.sessionId, acceptedHash],
   )).rows[0];
   if (!authority) return changed();
   const originalBounds = bounds(authority);
@@ -138,8 +166,8 @@ export async function readMemoryProposalPage(
   const envelope = (await client.query<AuthorityRow & { scope_active: boolean }>(
     `WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at),
      ${requalifiedSQL(8)} SELECT current_auth.*, ${activeScopeSQL} AS scope_active
-     FROM (${authoritySQL(7)}) current_auth WHERE (SELECT count(*) FROM qualified) = $9`,
-    [...params, JSON.stringify(expected), expected.length],
+     FROM (${authoritySQL(7, 10, 11)}) current_auth WHERE (SELECT count(*) FROM qualified) = $9`,
+    [...params, JSON.stringify(expected), expected.length, acceptedHash, authority.accepted_deadline],
   )).rows[0];
   if (!envelope || envelope.token_hash !== authority.token_hash) return changed();
   const finalBounds = bounds(envelope);
