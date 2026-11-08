@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import type { LightMyRequestResponse } from "fastify";
 import { Pool, type PoolClient } from "pg";
@@ -22,10 +22,10 @@ function barrier() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise,resolve };
 }
-async function enteredWithin(promise: Promise<void>) {
+async function enteredWithin(promise: Promise<void>,failure = "Synthetic provider did not enter.") {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try { await Promise.race([promise,new Promise<never>((_resolve,reject) => {
-    timer = setTimeout(() => reject(new Error("Synthetic provider did not enter.")),2_000);
+    timer = setTimeout(() => reject(new Error(failure)),2_000);
   })]); } finally { if (timer) clearTimeout(timer); }
 }
 type Headers = { authorization: string };
@@ -36,24 +36,43 @@ interface Fixture {
   calls: () => number; answerBody: (body: string) => void;
   post: (key: string,headers?: Headers,objective?: string) => Promise<LightMyRequestResponse>;
 }
+interface PublicationCommitAck {
+  entered: ReturnType<typeof barrier>; release: ReturnType<typeof barrier>;
+  expectedTaskID: string | null; armed: boolean; commits: number;
+}
 async function withFixture(operation: (f: Fixture) => Promise<void>,checkpointAck?: {
   entered: ReturnType<typeof barrier>; release: ReturnType<typeof barrier>; loseAck?: boolean;
-},disabled = false) {
+},disabled = false,publicationAck?: PublicationCommitAck) {
   const actualPool = new Pool({ connectionString: database!,max: 1,connectionTimeoutMillis: 2_000,statement_timeout: 5_000,query_timeout: 6_000 });
   // Real PostgreSQL COMMIT first, controlled acknowledgement second. Pool.query
   // keeps its genuine callback implementation; only this app's explicit
   // borrowed client is wrapped. This is not a fake DB or production fault hook.
-  const pool = checkpointAck ? new Proxy(actualPool,{ get(target,key) {
+  const pool = checkpointAck || publicationAck ? new Proxy(actualPool,{ get(target,key) {
     if (key !== "connect") { const value = Reflect.get(target,key,target); return typeof value === "function" ? value.bind(target) : value; }
     return async () => {
-      const client = await target.connect(); let checkpoint = false;
+      const client = await target.connect(); let checkpoint = false,publication = false;
       return new Proxy(client,{ get(owner,name) {
         if (name !== "query") { const value = Reflect.get(owner,name,owner); return typeof value === "function" ? value.bind(owner) : value; }
         return (...args: unknown[]) => {
           const sql = typeof args[0] === "string" ? args[0] : "";
           if (sql.includes("state='result_ready',checkpoint=")) checkpoint = true;
           const result = Reflect.apply(owner.query,owner,args);
-          if (sql === "COMMIT" && checkpoint) return Promise.resolve(result).then(async value => {
+          if (publicationAck?.armed && sql.includes("SELECT e.state,e.task_id,p.response_status,p.response_body,p.status AS parent_status")) {
+            return Promise.resolve(result).then((value: unknown) => {
+              const actual = value as { rows?: Array<{ state?: unknown; task_id?: unknown }> };
+              // Only an actual completed row for A's real task arms this
+              // borrowed transaction. Never fabricate rows or intercept auth.
+              publication = actual.rows?.length === 1 && actual.rows[0]?.state === "completed"
+                && actual.rows[0]?.task_id === publicationAck.expectedTaskID;
+              return value;
+            });
+          }
+          if (sql === "COMMIT" && publication && publicationAck) return Promise.resolve(result).then(async value => {
+            publication = false; publicationAck.armed = false; publicationAck.commits++;
+            publicationAck.entered.resolve(); await publicationAck.release.promise;
+            return value; // The real COMMIT already succeeded; this is only its ACK.
+          });
+          if (sql === "COMMIT" && checkpoint && checkpointAck) return Promise.resolve(result).then(async value => {
             checkpointAck.entered.resolve(); await checkpointAck.release.promise;
             if (checkpointAck.loseAck) throw new Error("Synthetic lost checkpoint acknowledgement.");
             return value;
@@ -106,7 +125,7 @@ async function withFixture(operation: (f: Fixture) => Promise<void>,checkpointAc
         pending.push(result); void result.catch(() => {}); return result;
       } });
   } finally {
-    release.resolve(); checkpointAck?.release.resolve(); await Promise.allSettled(pending);
+    release.resolve(); checkpointAck?.release.resolve(); publicationAck?.release.resolve(); await Promise.allSettled(pending);
     try { await Promise.all(otherApps.map(other => other.close())); await app?.close(); }
     finally { await Promise.all([pool.end(),control.end()]); }
     // Only the Hosted owner destroys this generated disposable CI database.
@@ -251,6 +270,78 @@ describe.skipIf(!database)("durable legacy same-attempt recovery over actual han
       expect(f.calls()).toBe(1);
     });
   });
+
+  it.each([false,true])("fences completed-publication delivery after its real COMMIT ACK (readerExpired=%s)",async readerExpired => {
+    const ack: PublicationCommitAck = { entered: barrier(),release: barrier(),expectedTaskID: null,armed: false,commits: 0 };
+    await withFixture(async f => {
+      // A genuinely publishes first. No owner death, ready adoption, replacement
+      // attempt or shortened lease is involved in this completed-read boundary.
+      const key = randomUUID(),first = await f.post(key);
+      expect(first.statusCode).toBe(201); expect(f.calls()).toBe(1);
+      expect(first.json<{ blocks: Array<{ body: string }> }>().blocks[0]?.body).toBe("Synthetic durable answer.");
+      const taskID = first.json<{ task_id: string }>().task_id;
+      ack.expectedTaskID = taskID;
+      const readerB = await f.login();
+      // This is B's actual accepted credential, found by its private in-memory
+      // digest. Neither token/digest nor a fabricated AuthContext enters output.
+      const digest = createHash("sha256").update(readerB.authorization.slice(7)).digest("hex");
+      const narrowed = await f.control.query<{ id: string; exact_expiry: string }>(`UPDATE sessions
+        SET expires_at=clock_timestamp()+interval '5 seconds'
+        WHERE account_id=$1 AND user_id=$2 AND token_hash=$3 AND revoked_at IS NULL
+        RETURNING id,to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS exact_expiry`,
+      [f.accountId,f.userId,digest]);
+      expect(narrowed.rowCount).toBe(1);
+      const reader = narrowed.rows[0];
+      expect(Boolean(reader && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(reader.exact_expiry))).toBe(true);
+      if (!reader) throw new Error("Synthetic reader expiry was not established.");
+      const readClock = async () => (await f.control.query<{ live: boolean; same: boolean }>(`SELECT
+        expires_at>clock_timestamp() AS live,
+        to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')=$4 AS same
+        FROM sessions WHERE account_id=$1 AND user_id=$2 AND id=$3`,
+      [f.accountId,f.userId,reader.id,reader.exact_expiry])).rows[0];
+      const facts = async () => (await f.control.query<{ attempts: number; audits: number; completed: boolean }>(`SELECT
+        (SELECT count(*)::int FROM legacy_chat_executions WHERE account_id=$1 AND task_id=$2) AS attempts,
+        (SELECT count(*)::int FROM audit_events WHERE account_id=$1 AND entity_id=$2 AND event_type='unscoped_chat_task.completed') AS audits,
+        (SELECT state='completed' AND original_proof IS NULL AND source_snapshot IS NULL AND checkpoint IS NULL
+          FROM legacy_chat_executions WHERE account_id=$1 AND task_id=$2) AS completed`,[f.accountId,taskID])).rows[0];
+      let resolving: Promise<LightMyRequestResponse> | undefined;
+      try {
+        ack.armed = true;
+        resolving = f.app.inject({ method: "POST",url: "/v1/chat/unscoped-task-resolve",headers: readerB,
+          payload: { idempotency_key: key } }).then(response => response);
+        void resolving.catch(() => {});
+        await enteredWithin(ack.entered.promise,"Synthetic completed-publication COMMIT did not enter.");
+        expect(ack.commits).toBe(1);
+        // The independent control observes an actual completed fact and B
+        // still live AFTER publication COMMIT, before its ACK is released.
+        expect(await facts()).toEqual({ attempts: 1,audits: 1,completed: true });
+        expect(await readClock()).toEqual({ live: true,same: true });
+        if (readerExpired) {
+          const bound = performance.now()+7_000;
+          while ((await readClock())?.live && performance.now()<bound) {
+            await new Promise(resolve => setTimeout(resolve,100));
+          }
+          expect(await readClock()).toEqual({ live: false,same: true });
+        }
+        ack.release.resolve();
+        const replay = await resolving;
+        expect(replay.statusCode).toBe(readerExpired ? 409 : 201);
+        if (readerExpired) expect(replay.body.includes("Synthetic durable answer.")).toBe(false);
+        else {
+          expect(replay.json()).toEqual(first.json());
+          expect(replay.headers["idempotent-replayed"]).toBe("true");
+        }
+        expect(await facts()).toEqual({ attempts: 1,audits: 1,completed: true });
+        expect(f.calls()).toBe(1); expect(ack.commits).toBe(1);
+        // Expiring B cannot erase A's lawful completion. A remains an actual
+        // authorized reader and sees the same fact without a second RPC.
+        const ownerRead = await f.app.inject({ method: "POST",url: "/v1/chat/unscoped-task-resolve",headers: f.headers,
+          payload: { idempotency_key: key } });
+        expect(ownerRead.statusCode).toBe(201); expect(ownerRead.json()).toEqual(first.json());
+        expect(f.calls()).toBe(1);
+      } finally { ack.release.resolve(); if (resolving) await resolving.catch(() => {}); }
+    },undefined,false,ack);
+  },20_000);
 
   it("does not cancel owner A when duplicate waiter B disconnects over real TCP",async () => {
     await withFixture(async f => {
