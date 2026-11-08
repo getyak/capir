@@ -113,8 +113,11 @@ describe.skipIf(!savedMemoryDatabase)("actual Session Memory runtime admission",
         }
         expect(saved?.payload?.turns).toHaveLength(6);
         expect(probe.frames).toHaveLength(6);
+        const metadata = probe.frames.map(frame => ({ historyMessages: frame.history.length,
+          selfItems: frame.selfItems, selfCharacters: frame.selfCharacters }));
         expect(probe.frames.every(frame => frame.history.length === 0 && frame.selfItems === 14
-          && frame.selfCharacters > 16_000 && frame.selfCharacters < 24_000)).toBe(true);
+          && frame.selfCharacters > 16_000 && frame.selfCharacters < 24_000),
+        "Actual synthetic frame counts: " + JSON.stringify(metadata)).toBe(true);
         const calls = f.provider.calls, before = JSON.stringify(saved!.payload), key = randomUUID();
         const response = await f.post({ idempotency_key: key, session_id: sessionID,
           objective: "Continue this synthetic conversation under the same shared context budget." });
