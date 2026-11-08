@@ -55,3 +55,6 @@ export * from "./capirAuthSchemas.js";
 
 export * from "./memoryAcceptedContent.js";
 export * from "./memoryLiteralSchemas.js";
+export * from "./memoryLiteralData.js";
+export * from "./memoryLiteralV2Schemas.js";
+export * from "./memoryLiteralConfirmation.js";
