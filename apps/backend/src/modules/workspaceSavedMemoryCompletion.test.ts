@@ -146,7 +146,7 @@ describe("private Workspace Memory completion handoff", () => {
     expect(a.owner.signal.aborted && b.owner.signal.aborted).toBe(true);
   });
 
-  it.each(["self", "recall", "search"])("refuses and latches a late %s producer before it reads", async kind => {
+  it.each(["self", "recall", "search"] as const)("refuses and latches a late %s producer before it reads", async kind => {
     const f = await fixture(); await sealWorkspaceSavedMemoryRun(f.admission, taskID, runID);
     const before = f.proofs.length;
     const rejected = kind === "search" ? f.run.search({ terms: ["synthetic"] }) : f.run[kind](tracked(10));
