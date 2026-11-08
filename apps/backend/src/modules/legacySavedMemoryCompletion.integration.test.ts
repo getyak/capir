@@ -142,9 +142,21 @@ describe.skipIf(!savedMemoryDatabase)("sealed canonical completion and actual cu
           [r.auth.accountId, a.body.task_id])).rows;
         expect(stored).toHaveLength(1); expect(stored[0]!.format_version).toBe(2);
         expect(stored[0]!.dependency_count).toBeGreaterThan(0);
-        const expired = await r.pool.query(`UPDATE memory_discovery_queries SET expires_at=clock_timestamp()-interval '1 second'
-          WHERE account_id=$1 AND reader_actor_id=$2`, [r.auth.accountId, r.auth.userId]);
+        // Expire the original registry rows without violating their legal
+        // created/cutoff lifetime or changing their original creation clock.
+        const expired = await r.pool.query<{ valid_lifetime: boolean; expired: boolean }>(`
+          UPDATE memory_discovery_queries SET expires_at=created_at+interval '1 microsecond'
+          WHERE account_id=$1 AND reader_actor_id=$2 AND created_at+interval '1 microsecond'<clock_timestamp()
+          RETURNING expires_at>created_at AS valid_lifetime,expires_at<=clock_timestamp() AS expired`,
+        [r.auth.accountId, r.auth.userId]);
         expect(expired.rowCount).toBeGreaterThan(0);
+        expect(expired.rows.every(row => row.valid_lifetime && row.expired)).toBe(true);
+        const readback = await r.pool.query<{ valid_lifetime: boolean; expired: boolean }>(`
+          SELECT expires_at>created_at AS valid_lifetime,expires_at<=clock_timestamp() AS expired
+          FROM memory_discovery_queries WHERE account_id=$1 AND reader_actor_id=$2`, [r.auth.accountId, r.auth.userId]);
+        expect(readback.rows).toHaveLength(expired.rows.length);
+        expect(readback.rows.every(row => row.valid_lifetime && row.expired)).toBe(true);
+        expect(await r.current()).toBe(200);
         const current = await reader(r), calls = r.provider.calls;
         try {
           const retained = await readLegacySavedMemoryPublication(current.owner, current.auth, a.body.task_id);
