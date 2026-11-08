@@ -128,8 +128,10 @@ describe.skipIf(!sessionDatabase)("empty Session durable source, publication and
       } else if (kind === "context") {
         const body = prior!.json<UnscopedChatTaskResponse>(), stamp = body.created_at;
         const turn = { id: randomUUID(), objective: "Give a synthetic greeting.", createdAt: stamp, response: {
-          contractVersion: body.contract_version, taskID: body.task_id, contextManifestID: body.context_manifest_id,
-          knowledgeSnapshotID: body.knowledge_snapshot_id, disposition: body.disposition, createdAt: stamp } };
+          // The real Native UnscopedChatResponse.relationshipAskProjection
+          // uses non-authorizing markers, not invented context/knowledge IDs.
+          contractVersion: body.contract_version, taskID: body.task_id, contextManifestID: "none-unbound-conversation",
+          knowledgeSnapshotID: "none-unbound-conversation", disposition: body.disposition, createdAt: stamp } };
         const response = await f.app.inject({ method: "PUT", url: "/v1/agent-sessions/" + session.id, headers: f.headers,
           payload: { expected_revision: session.revision, idempotency_key: randomUUID(),
             payload: { ...session.payload, turns: [turn], updatedAt: new Date().toISOString() } } });
