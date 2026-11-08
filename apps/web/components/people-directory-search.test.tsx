@@ -290,3 +290,85 @@ it("does not reclaim focus after an intentional move to nonfocusable space", asy
   await finish();
   expect(document.activeElement).toBe(document.body);
 });
+
+const longDirectoryQueries = [
+  { kind: "email", query: `reader.${"a".repeat(48)}@${"b".repeat(60)}.${"c".repeat(55)}.example.invalid` },
+  { kind: "profile URL", query: `https://profiles.example.invalid/people/${"a".repeat(145)}/tail` },
+];
+
+it.each(longDirectoryQueries)("keeps a newer unsent draft when a complete long $kind submission returns", async ({ query }) => {
+  await mount();
+  const field = input();
+  await act(async () => field.focus());
+  await type(query); await send();
+  expect(navigations[0]?.query).toBe(query);
+  expect(new URL(navigations[0]!.href, window.location.origin).searchParams.get("session")).toBe(returnSession);
+  const newer = `${"n".repeat(501)} newer unsent draft`;
+  await type(newer);
+  field.setSelectionRange(170, 170);
+  await finish();
+  expect(input()).toBe(field);
+  expect(input().value).toBe(newer);
+  expect(document.activeElement).toBe(field);
+  expect(field.selectionStart).toBe(170);
+  expect(field.selectionEnd).toBe(170);
+  expect(host.querySelector("[data-results-query]")?.textContent).toContain(query);
+  expect(submit().getAttribute("aria-busy")).toBe("false");
+});
+
+it("does not use a native prefix ceiling that silently discards a pasted draft", async () => {
+  await mount();
+  // happy-dom does not implement the browser's trusted paste/edit algorithm.
+  // This checks its actual native input constraint; rendered paste is still a
+  // separate Hosted Playwright requirement, not simulated by assigning .value.
+  expect(input().hasAttribute("maxlength")).toBe(false);
+});
+
+it("refuses an oversized submit without navigation, pending state or replacing the raw draft", async () => {
+  await mount("committed");
+  const field = input(), draft = "q".repeat(501);
+  await act(async () => field.focus());
+  await type(draft); field.setSelectionRange(300, 300);
+  await send();
+  expect(navigations).toHaveLength(0);
+  expect(input()).toBe(field);
+  expect(input().value).toBe(draft);
+  expect(document.activeElement).toBe(field);
+  expect(field.selectionStart).toBe(300);
+  expect(field.selectionEnd).toBe(300);
+  expect(submit().getAttribute("aria-busy")).toBe("false");
+  expect(host.querySelector('[role="alert"]')?.textContent?.trim()).toBeTruthy();
+  expect(host.querySelector("[data-results-query]")?.textContent).toContain("committed");
+});
+
+it("keeps provisional long IME input and submits its complete settled query once", async () => {
+  await mount();
+  const query = longDirectoryQueries[1]!.query;
+  await act(async () => input().dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+  await type(query);
+  await act(async () => input().dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Enter", keyCode: 229, bubbles: true, cancelable: true, isComposing: true,
+  })));
+  await send();
+  expect(navigations).toHaveLength(0);
+  expect(input().value).toBe(query);
+  expect(submit().disabled).toBe(true);
+  await act(async () => input().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
+  await act(async () => input().dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true })));
+  await send();
+  expect(navigations.map(operation => operation.query)).toEqual([query]);
+  await finish(); expect(input().value).toBe(query);
+});
+
+it("restores complete long Back/Forward query props through the existing input without changing return scope", async () => {
+  const first = longDirectoryQueries[0]!.query, second = longDirectoryQueries[1]!.query;
+  await mount(first);
+  const field = input();
+  await type("unsent");
+  await act(async () => restore(second));
+  expect(input()).toBe(field); expect(input().value).toBe(second);
+  await act(async () => restore(first));
+  expect(input()).toBe(field); expect(input().value).toBe(first);
+  expect(host.querySelector<HTMLInputElement>('input[name="session"]')?.value).toBe(returnSession);
+  expect(navigations).toHaveLength(0);
+});
