@@ -31,6 +31,7 @@ import { sweepHarnessSessions } from "./harnessSessions.js";
 import { sweepConversationQueue } from "./conversationQueueSweep.js";
 import { assertConversationQueueOwnedClaim, type ConversationQueueRunFence } from "./conversationQueueState.js";
 import { invalidateMemoriesForSessionIds } from "./memoryReviewRecall.js";
+import { retireLegacyChatSessionContent } from "./legacyChatRetirement.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 if (!FormatRegistry.Has("uuid"))
@@ -374,6 +375,7 @@ export async function sweepAgentSessions(
     [accountId ?? null],
   );
   for (const session of expiring.rows) {
+    await retireLegacyChatSessionContent(client,session.account_id,session.id);
     await invalidateMcpInteractionsForSession(client, session.account_id, session.id);
   }
   await client.query(
@@ -1161,6 +1163,11 @@ export async function mutateAgentSession(
           { session: current ? record(current) : null },
         );
       }
+      // Run against the actual stored canonical result. Its shared exact
+      // source predicate retains title-only changes, and scrubs only private
+      // active attempts whose own Session/source is now invalid. The UPSERT's
+      // Session row lock and this retirement remain in this same transaction.
+      await retireLegacyChatSessionContent(client,auth.accountId,id);
       await client.query(
         `INSERT INTO agent_session_operations(account_id,session_id,actor_user_id,idempotency_key,request_hash,resulting_revision) VALUES ($1,$2,$3,$4,$5,$6)`,
         [
