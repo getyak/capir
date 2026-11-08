@@ -118,5 +118,20 @@ and memoryLiteralReferenceSchemas under Backend modules. Independent source
 review closed the move; the actualf2d full build now proves it. Historical183
 still does not replace a current applicable gate after the latest fixture fix.
 
+## StageB pure regression contract
+
+The reviewed StageB design now requires one joint final content/authority SQL
+envelope and finite safe Memory refusal outcomes. The first code batch adds
+only Backend-owned DTO, preparation, confirmation and projection test sources.
+They resolve planned APIs through existing real module namespaces, so an absent
+new protocol fails a Vitest assertion instead of missing imports/type exports.
+Finite Unicode/range/proof fixtures and independent fixed ASCII confirmation
+tuples define the new contracts; there is no implementation mock or production
+V2 route/Agent/envelope exposure. Confirmation is consistency, not an access grant.
+No local test, compiler, PG, build, installation or child service was run for
+this batch. Root must publish/read back actual Hosted initial red before the
+four pure implementations. That expected new-feature red is not evidence of a
+current production HTTP/DB vulnerability. Existing API/Run/source budgets stay.
+
 Stage/commit/read/recall wire integration, Web/native, exact-head full gates and
 resident/runtime acceptance remain incomplete. Keep original worktrees/evidence.
