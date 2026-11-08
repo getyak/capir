@@ -4,7 +4,8 @@ import type { AuthContext } from "./auth.js";
 import type { IdempotencyClaim } from "../lib/idempotency.js";
 import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
 import { LegacyChatTerminated, type LegacyChatAuthority } from "./legacyChatAuthority.js";
-import { captureLegacyChatSourceSnapshot } from "./legacyChatSourceSnapshot.js";
+import { captureLegacyChatSourceSnapshot, restoreLegacyChatSourceGuard, validateLegacyChatSourceSnapshot,
+  type LegacyChatSourceSnapshot } from "./legacyChatSourceSnapshot.js";
 import type { EncodedLegacyChatCheckpoint, LegacyChatCheckpointBinding } from "./legacyChatCheckpoint.js";
 
 export const LEGACY_CHAT_OPERATION = "create_unscoped_chat_task";
@@ -69,14 +70,19 @@ const exactDeadline = "to_char(execution_deadline AT TIME ZONE 'UTC','YYYY-MM-DD
 
 export async function admitLegacyChatExecution(client: PoolClient, auth: AuthContext,
   claim: IdempotencyClaim, authority: LegacyChatAuthority,
-  selected: NonNullable<ReturnType<typeof snapshotEligibleLegacyProvider>>, messageID?: string): Promise<LegacyChatAdmission> {
+  selected: NonNullable<ReturnType<typeof snapshotEligibleLegacyProvider>>, messageID?: string,
+  sessionSource?: Readonly<LegacyChatSourceSnapshot>): Promise<LegacyChatAdmission> {
   await authority.assertCurrent();
   const proof = authority.snapshotOriginal();
-  const deadline = (await client.query<{ deadline: string }>(`SELECT to_char(
+  const deadline = sessionSource ? validateLegacyChatSourceSnapshot(sessionSource).expiresAt : (await client.query<{ deadline: string }>(`SELECT to_char(
     LEAST($1::timestamptz,clock_timestamp()+interval '60 seconds') AT TIME ZONE 'UTC',
     'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS deadline`, [proof.originalDeadline])).rows[0]?.deadline;
   if (!deadline) throw new LegacyChatTerminated();
-  const source = await captureLegacyChatSourceSnapshot(client, auth, deadline, client);
+  const source = sessionSource ? validateLegacyChatSourceSnapshot(sessionSource)
+    : await captureLegacyChatSourceSnapshot(client, auth, deadline, client);
+  if (sessionSource && (source.version !== 2 || source.expiresAt > proof.originalDeadline || messageID !== undefined))
+    throw new LegacyChatTerminated();
+  if (sessionSource) await restoreLegacyChatSourceGuard(client,auth,source,client)();
   await authority.assertCurrent();
   const token: LegacyChatOwnerToken = Object.freeze({ accountId: auth.accountId, parentID: claim.id,
     taskID: randomUUID(), attemptID: randomUUID(), instance: legacyChatOwnerInstance,

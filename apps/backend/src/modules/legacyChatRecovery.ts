@@ -3,7 +3,7 @@ import type { BackendConfig } from "../config.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
 import { restoreLegacyChatAuthority, type LegacyChatAuthority } from "./legacyChatAuthority.js";
-import { restoreLegacyChatSourceGuard } from "./legacyChatSourceSnapshot.js";
+import { lockLegacyChatSessionSource, restoreLegacyChatSourceGuard, type LegacyChatSourceGuard } from "./legacyChatSourceSnapshot.js";
 import { createLegacyChatDatabase, LegacyChatCommitUnknown } from "./legacyChatDatabase.js";
 import { adoptLegacyChatCheckpoint, readLegacyChatExecution,
   type LegacyChatExecutionRow, type LegacyChatOwnerToken } from "./legacyChatExecutions.js";
@@ -72,36 +72,42 @@ export async function resolveLegacyChatExecution(input: RecoveryInput & { config
   }
   if (row.state !== "result_ready") throw unavailable();
   let original: LegacyChatAuthority | undefined;
+  let source: LegacyChatSourceGuard | undefined;
   let adopted: LegacyChatOwnerToken | undefined;
   let adoptionAttempted = false,adoptionCommitted = false;
   try {
     original = await restoreLegacyChatAuthority(input.pool,input.auth,row.original_proof,input.config);
     const database = createLegacyChatDatabase(input.pool,original);
-    const source = restoreLegacyChatSourceGuard(database.database,input.auth,row.source_snapshot,database.database);
+    source = restoreLegacyChatSourceGuard(database.database,input.auth,row.source_snapshot,database.database,row.task_id);
     original.observeSource(source);
     await database.run(async client => {
       await original!.lockAccountsForFinalization(client);
+      await lockLegacyChatSessionSource(client,input.auth,row.source_snapshot);
       await original!.assertFinalCurrent(client);
+      source!.assertLive();
       await original!.lockReadersForFinalization(client);
       adoptionAttempted = true;
       adopted = await adoptLegacyChatCheckpoint(client,input.auth,row);
       await original!.assertFinalCurrent(client);
+      source!.assertLive();
     });
     adoptionCommitted = true;
+    source.assertLive();
     if (!adopted) throw unavailable();
     try {
-      const completed = await finalizeLegacyChatCheckpoint({ database,authority: original,auth: input.auth,token: adopted });
+      const completed = await finalizeLegacyChatCheckpoint({ database,authority: original,auth: input.auth,token: adopted,sourceSnapshot: row.source_snapshot,source });
       // Original A may lawfully publish; current resolver B independently owns
       // delivery. Recheck B after every original-owner await/COMMIT. A lawful
       // committed fact survives B's later revocation without exposing it to B.
       const current = await readLegacyChatStatus(input);
       if (!current.completed) throw unavailable();
+      source.assertLive();
       return { ...completed,body: current.completed.body };
     }
     catch (error) {
       if (!(error instanceof LegacyChatCommitUnknown)) throw error;
       const current = await readLegacyChatStatus(input);
-      if (current.completed) return current.completed;
+      if (current.completed) { source.assertLive(); return current.completed; }
       throw error;
     }
   } catch (error) {
@@ -114,7 +120,13 @@ export async function resolveLegacyChatExecution(input: RecoveryInput & { config
     // A concurrent lawful finalizer may have won. Its current-reader replay
     // does not inherit the old original-proof lifetime or lose completed facts.
     const current = await readLegacyChatStatus(input).catch(() => null);
-    if (current?.completed) return current.completed;
+    if (current?.completed) {
+      // A previously completed lookup has its own lawful read policy. This
+      // in-flight recovery must still not deliver beyond its fixed original
+      // source bound merely because a COMMIT acknowledgement was delayed.
+      try { source?.assertLive(); } catch { throw unavailable(); }
+      return current.completed;
+    }
     throw unavailable();
   } finally { original?.dispose(); }
 }
