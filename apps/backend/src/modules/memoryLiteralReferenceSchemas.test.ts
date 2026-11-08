@@ -1,7 +1,7 @@
 import { Value } from "@sinclair/typebox/value";
 import { describe, expect, it } from "vitest";
 import { MemoryLiteralReferenceSchema, MemoryLiteralPreviewSchema,
-  MemoryLiteralPageRequestSchema, MemoryLiteralPageSchema } from "./memoryLiteralSchemas.js";
+  MemoryLiteralPageRequestSchema, MemoryLiteralPageSchema } from "@talent-signal/contracts";
 
 const descriptor = { sha256: "a".repeat(64), utf8_bytes: 8, utf16_code_units: 4, unicode_scalar_count: 3 };
 const base = { reference_version: 1, descriptor, content_protocol: "literal-v2", content_manifest_digest: "b".repeat(64) };

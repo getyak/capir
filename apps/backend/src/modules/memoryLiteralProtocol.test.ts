@@ -6,9 +6,9 @@ import {
   encodeMemoryLiteralRequest, memoryContentPage, resolveMemoryContentProtocol,
   createMemoryContentManifest, createMemoryEvidenceManifest,
   type MemoryTextStatistics, type MemoryEvidenceManifestInput,
-} from "./memoryContent.js";
+} from "@talent-signal/contracts";
 
-const golden = JSON.parse(readFileSync(new URL("./memoryContentGolden.json", import.meta.url), "utf8")) as {
+const golden = JSON.parse(readFileSync(new URL("../../../../packages/contracts/src/memoryContentGolden.json", import.meta.url), "utf8")) as {
   vectors: Array<{ text: string; sha256: string } & MemoryTextStatistics>;
   manifest_digest_sha256: string;
   evidence_manifests: Array<{ name: string; input: MemoryEvidenceManifestInput; excerpt_descriptor: MemoryTextStatistics & { sha256: string }; manifest_digest_sha256: string }>;

@@ -77,7 +77,7 @@ typechecked with actual compiler API6.0.3/exactSDK declarations at zero diagnost
 The later independent evidence/accepted manifest and read-reference helpers
 passed172 tests with12 selected typecheck roots at their recorded hashes.
 New draft references first produced10 failures/173 passes against the previous
-helper, then the current eight-file host selection passed183/183. The latest
+helper, then the pre-move eight-file host selection passed183/183. The latest
 draft delta has no fresh full typecheck or actual SQL evidence yet. Empty
 unfinished edits retain exact bytes and zero counts; canonical statements still
 require nonempty text and their stored v2 proof. A draft ref binds its current
@@ -99,6 +99,16 @@ negative writes require their exact SQLSTATE/constraint. It has no resident URL
 fallback, no database reset/drop and no permission/substring/source-authorization
 claim. Root registers113, advances the reviewed frozen manifest digest without
 changing its115 old SQL files, and selects this suite with REQUIRED=1.
+
+The actual0f7 Hosted build stopped before PG: the contracts package intentionally
+has no Node/Vitest test dependencies but its production TS glob collected three
+new tests. Those tests now belong to Backend, which already owns those peers
+and typechecks/collects them by default. They consume the existing public
+contracts exports and the identical golden JSON; bodies/assertions are unchanged.
+No dependency, TS exclusion, compiler flag or CI gate was added or relaxed.
+The three current names are memoryLiteralProtocol, memoryAcceptedLiteralProtocol
+and memoryLiteralReferenceSchemas under Backend modules. Independent source
+review closed the move; historical183 does not replace the new full Hosted build.
 
 Stage/commit/read/recall wire integration, Web/native, exact-head full gates and
 resident/runtime acceptance remain incomplete. Keep original worktrees/evidence.

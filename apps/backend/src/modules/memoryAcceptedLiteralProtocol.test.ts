@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { createMemoryAcceptedContentManifest, type MemoryAcceptedContentManifestInput } from "./memoryAcceptedContent.js";
-import { MemoryContentError } from "./memoryContent.js";
+import { createMemoryAcceptedContentManifest, type MemoryAcceptedContentManifestInput } from "@talent-signal/contracts";
+import { MemoryContentError } from "@talent-signal/contracts";
 
-const golden = JSON.parse(readFileSync(new URL("./memoryAcceptedContentGolden.json", import.meta.url), "utf8")) as {
+const golden = JSON.parse(readFileSync(new URL("../../../../packages/contracts/src/memoryAcceptedContentGolden.json", import.meta.url), "utf8")) as {
   vectors: Array<{ name: string; input: MemoryAcceptedContentManifestInput; manifest: unknown; manifest_digest_sha256: string }>;
 };
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
