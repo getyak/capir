@@ -47,9 +47,13 @@ function literal(value: string): boolean {
   }
   return scalars <= SAVED_MEMORY_SEARCH_TERM_SCALARS;
 }
-export const SavedMemorySearchInputSchema = z.preprocess(plainInput, z.object({
+/** Object transport schema for an explicitly admitted named tool. Sharing the
+ * host parser's inner object preserves its scalar/UTF-8 policy; transport
+ * registration does not replace the host-only plain-input admission above. */
+export const SavedMemorySearchToolInputSchema = z.object({
   terms: z.array(z.string().min(1).max(240).refine(literal)).min(1).max(SAVED_MEMORY_SEARCH_MAX_TERMS),
   limit: z.number().int().min(1).max(SAVED_MEMORY_SEARCH_MAX_PAGE).default(10),
   cursor: z.string().min(1).max(SAVED_MEMORY_SEARCH_CURSOR_MAX).regex(/^[A-Za-z0-9_.-]+$/).optional(),
-}).strict().refine(value => value.terms.reduce((sum, term) => sum + utf8.encode(term).byteLength, 0) <= SAVED_MEMORY_SEARCH_TERMS_UTF8));
+}).strict().refine(value => value.terms.reduce((sum, term) => sum + utf8.encode(term).byteLength, 0) <= SAVED_MEMORY_SEARCH_TERMS_UTF8);
+export const SavedMemorySearchInputSchema = z.preprocess(plainInput, SavedMemorySearchToolInputSchema);
 export type SavedMemorySearchInput = z.output<typeof SavedMemorySearchInputSchema>;

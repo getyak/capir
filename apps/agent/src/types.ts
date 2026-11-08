@@ -31,6 +31,8 @@ export const ALL_AGENT_TOOL_NAMES = [
   "create_research_artifact",
   ...PERSON_RESEARCH_AGENT_TOOL_NAMES,
   ...WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES,
+  // Inventory only: the host must explicitly append this for an admitted Run.
+  "search_saved_memory",
 ] as const;
 
 // Backwards-compatible name for the original bounded Pursuit definition.

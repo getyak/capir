@@ -112,3 +112,12 @@ independent source ownership, the full migration manifest order (113 before112),
 private receipts and existing transport/schema contracts. No production secrets
 or user source content belong in lineage metadata, tests or reports. Synthetic
 CI does not prove actual provider, physical-device or production acceptance.
+
+
+## Private Run preparation after 7876 (unactivated)
+
+Exact7876 Hosted backend types/build passed. The original source-owner pure9 and newly required PostgreSQL3 passed. Runtime publication remained4PASS/11FAIL, with the later discovery6 step skipped; this does not complete C03.
+
+The next source batch adds the private Legacy credential/source/Memory/query joint owner (pure15/requiredPG6 source cases), static named-tool transport/catalog (six source cases, all existing default manifests unchanged), and a prepared Workspace Core bridge (12 source cases). The actual Core deadline and real runID are captured at its timeout origin; Self/recall/search share one context/read-set owner, only selected original tuples enter the proof, and terminal failures retain the Legacy abort/fallback boundary. Independent V1 review found and V2 repairs physical-self versus semantic-null metadata, invalid test epochs, pre-handle construction terminal behavior, the last startup-await window before provider exposure, and mutable admission references. V2 review and exact-head Hosted execution are still required.
+
+No actual HTTP/queue/Lab caller supplies this prepared capability. Canonical completion/readback, source retention receipt and durable lineage registration in the actual outer transaction, final source/credential/Memory COMMIT/ACK and replay, original Lab admission floor, complete issuer-specific image/claim qualifications, and bounded withdrawal/retention consumers remain required before activation. The unchanged Runtime15 and Discovery6 gates are retained; the new requiredPG6 is serialized before them. No resident deployment or user acceptance is implied by this source preparation.

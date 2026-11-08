@@ -102,7 +102,7 @@ describe("provider-neutral Agent capability catalog", () => {
       (capability) => capability.consequence === "durable_candidate",
     );
 
-    expect(capabilities).toHaveLength(14);
+    expect(capabilities).toHaveLength(15);
     expect(durable.map((capability) => capability.name)).toEqual([
       "stage_pursuit_proposal",
       "create_research_artifact",

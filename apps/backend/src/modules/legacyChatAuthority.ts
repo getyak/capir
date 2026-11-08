@@ -1,13 +1,21 @@
 import type { Pool, PoolClient } from "pg";
+import { types } from "node:util";
 import type { BackendConfig } from "../config.js";
 import type { DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import { sha256 } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
-import { labWorkspaceSessionActiveSQL, operatorLabDeploymentActiveSQL,
+import { labWorkspaceSessionActiveSQL, labWorkspaceSessionActiveAtTickSQL, operatorLabDeploymentActiveSQL,
   operatorTestDeployment } from "./labWorkspaceAccess.js";
 import { readLegacyChatSnapshotRecord, snapshotLegacyChatAuth, validateLegacyChatOriginalProof,
   type LegacyChatOriginalProof, type LegacyChatLabBinding } from "./legacyChatOriginalProof.js";
+import { readHarnessRunSourceBinding, type HarnessRunSourceHandle } from "./harnessSourceGuard.js";
+import { SavedMemoryReadSet, captureSavedMemoryReadProof, savedMemoryOwnRecord, savedMemoryUUID,
+  savedMemoryBudgetLimited, type SavedMemoryAuthority, type SavedMemoryReadProof } from "./savedMemoryLineage.js";
+import type { SavedMemoryFinalReadDomain } from "./savedMemoryDiscovery.js";
+import { assertLegacySavedMemoryProofSuperset, captureLegacySavedMemoryDomain, captureLegacySavedMemoryEnvelope,
+  legacySavedMemoryMicroseconds, legacySavedMemoryProofSQL, legacySavedMemorySourceSQL,
+  type LegacySavedMemoryReadEnvelope } from "./legacySavedMemoryDomain.js";
 
 type LegacyChatFailureCode = "LEGACY_CHAT_AUTHORITY_UNAVAILABLE" | "CHAT_COMPLETION_SOURCE_CHANGED";
 export class LegacyChatTerminated extends ApiError {
@@ -42,6 +50,9 @@ const authoritySQL = `FROM sessions
    AND sessions.revoked_at IS NULL AND sessions.expires_at>tick.checked_at
    AND (sessions.token_hash=$1 OR (sessions.previous_token_hash=$1 AND sessions.previous_token_expires_at>tick.checked_at))
    AND ${labWorkspaceSessionActiveSQL} AND ${operatorLabDeploymentActiveSQL}`;
+// Only the new joint path uses the equivalent closed tick variant. The original
+// Legacy predicate and its slot layout stay byte-for-byte unchanged above.
+const memoryAuthoritySQL = authoritySQL.replace(labWorkspaceSessionActiveSQL, labWorkspaceSessionActiveAtTickSQL);
 
 export interface LegacyChatAuthority {
   readonly signal: AbortSignal;
@@ -60,6 +71,66 @@ export interface LegacyChatAuthority {
   provider<T>(operation: () => Promise<T>, sourceCheck?: (() => Promise<void>) | undefined): Promise<T>;
   throwIfTerminated(): void;
   dispose(): void;
+}
+
+declare const legacySavedMemoryRunBrand: unique symbol;
+export interface LegacySavedMemoryRunHandle { readonly [legacySavedMemoryRunBrand]: true }
+export interface LegacySavedMemoryRunInput {
+  readonly auth: AuthContext;
+  readonly taskID: string;
+  readonly runID: string;
+  /** Actual Core timeout origin + duration, never a fresh duration or seven days. */
+  readonly runDeadlineMonotonicMs: number;
+  readonly source: HarnessRunSourceHandle;
+  readonly guard: () => Promise<void>;
+}
+export interface LegacySavedMemoryRunAccess {
+  readonly runID: string;
+  readonly authority: SavedMemoryAuthority;
+  readonly reads: SavedMemoryReadSet;
+  finalizeRead(domain: SavedMemoryFinalReadDomain): Promise<Readonly<LegacySavedMemoryReadEnvelope>>;
+  finalizeProof(proof: SavedMemoryReadProof): Promise<Readonly<LegacySavedMemoryReadEnvelope>>;
+  assertCurrent(): Promise<void>;
+  throwIfTerminated(): void;
+  terminate(error: unknown): never;
+}
+type MemoryBinder = { bind(input: LegacySavedMemoryRunInput): Promise<LegacySavedMemoryRunHandle>; terminate(error: unknown): never };
+const memoryBinders = new WeakMap<object, MemoryBinder>();
+const memoryRuns = new WeakMap<object, { owner: LegacyChatAuthority; auth: Readonly<AuthContext>; access: LegacySavedMemoryRunAccess }>();
+
+/** Only an actually minted Legacy credential owner can bind this capability. */
+export function bindLegacySavedMemoryRun(owner: LegacyChatAuthority, input: LegacySavedMemoryRunInput): Promise<LegacySavedMemoryRunHandle> {
+  const binder = memoryBinders.get(owner);
+  if (!binder) return Promise.reject(new LegacyChatTerminated());
+  return binder.bind(input);
+}
+/** Construction can fail before a Run handle exists. Only the actual private
+ * owner may latch that failure; structural clones never invoke foreign code. */
+export function terminateLegacySavedMemoryRun(owner: LegacyChatAuthority, error: unknown): never {
+  const binder = memoryBinders.get(owner);
+  if (!binder) throw new LegacyChatTerminated();
+  return binder.terminate(error);
+}
+export function accessLegacySavedMemoryRun(handle: LegacySavedMemoryRunHandle, owner: LegacyChatAuthority,
+  auth: AuthContext): Readonly<LegacySavedMemoryRunAccess> {
+  const entry = memoryRuns.get(handle);
+  // A real handle belonging to A cannot be used to terminate a different real
+  // owner B. Refuse before touching AuthContext hooks or B's terminal latch.
+  if (entry && entry.owner !== owner) throw new LegacyChatTerminated();
+  const binder = memoryBinders.get(owner);
+  try {
+    const current = snapshotLegacyChatAuth(auth);
+    if (!entry || entry.owner !== owner || entry.auth.accountId !== current.accountId || entry.auth.userId !== current.userId
+      || entry.auth.sessionId !== current.sessionId || entry.auth.userKind !== current.userKind) throw new LegacyChatTerminated();
+    entry.access.throwIfTerminated(); return entry.access;
+  } catch (error) { if (binder) return binder.terminate(error); throw new LegacyChatTerminated(); }
+}
+/** Retain the existing terminal class so Legacy fallback cannot turn a caught
+ * Memory budget failure into a successful answer. Only this closed413 is kept. */
+class LegacySavedMemoryBudgetTerminated extends LegacyChatTerminated {
+  override readonly statusCode = 413;
+  override readonly code = "SAVED_MEMORY_BUDGET_LIMITED";
+  constructor() { super(); this.message = "The current Run cannot admit another complete saved Memory page."; }
 }
 
 /** Called only after the real route authenticator, with that request's actual
@@ -156,6 +227,9 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   let active: PoolClient | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const sourceChecks = new Set<() => Promise<void>>();
+  let memoryRun: LegacySavedMemoryRunAccess | null = null;
+  let memoryBindingPending = false;
+  let memoryDeadline: number | null = null;
   const fail = (failure = stop): never => {
     if (!terminated) terminalFailure = failure;
     terminated = true;
@@ -164,9 +238,10 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   };
   // Timers request cancellation, but a delayed timer task cannot extend the
   // conservative monotonic bound established by the original DB clock read.
-  const alive = () => { if (terminated || disposed || performance.now() >= deadline) fail(); };
+  const alive = () => { if (terminated || disposed || performance.now() >= deadline
+    || (memoryDeadline !== null && performance.now() >= memoryDeadline)) fail(); };
   const arm = () => {
-    const remaining = deadline - performance.now();
+    const remaining = Math.min(deadline, memoryDeadline ?? Infinity) - performance.now();
     if (remaining <= 0) { terminated = true; controller.abort(stop); return; }
     timer = setTimeout(arm, Math.min(2_147_483_647, Math.max(1, remaining)));
     timer.unref?.();
@@ -174,6 +249,8 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   arm();
   const check = async (database: DatabaseClient) => {
     alive();
+    if (memoryBindingPending) return fail();
+    if (memoryRun) return memoryRun.assertCurrent();
     try {
       const result = await database.query(`WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at)
         SELECT 1 ${authoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10
@@ -212,7 +289,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
     try { if ((await client.query(sql, values)).rowCount !== count) fail(); }
     catch { fail(); }
   };
-  return {
+  const owner: LegacyChatAuthority = {
     signal: controller.signal, throwIfTerminated: alive,
     snapshotOriginal: () => { alive(); return original; },
     assertCurrent: () => check(active ?? pool), source,
@@ -285,4 +362,133 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
       if (!controller.signal.aborted) controller.abort(terminalFailure);
     },
   };
+  const terminateMemory = (error: unknown): never => {
+    // Never forward arbitrary error/SQL prose, getters or a caller's status.
+    if (error !== null && typeof error === "object" && !types.isProxy(error) && error instanceof ApiError) {
+      const code = Object.getOwnPropertyDescriptor(error, "code"), status = Object.getOwnPropertyDescriptor(error, "statusCode");
+      if (code && "value" in code && code.value === "SAVED_MEMORY_BUDGET_LIMITED"
+        && status && "value" in status && status.value === 413) return fail(new LegacySavedMemoryBudgetTerminated());
+      if (code && "value" in code && code.value === "HARNESS_SOURCE_CHANGED"
+        && status && "value" in status && status.value === 409) return fail(sourceStop);
+    }
+    return fail();
+  };
+  memoryBinders.set(owner, { terminate: terminateMemory, bind: async input => {
+    if (memoryRun || memoryBindingPending) return fail();
+    memoryBindingPending = true;
+    try {
+      alive();
+      const row = savedMemoryOwnRecord(input, ["auth", "taskID", "runID", "runDeadlineMonotonicMs", "source", "guard"]);
+      const actor = snapshotLegacyChatAuth(row.auth as AuthContext);
+      const taskID = savedMemoryUUID(row.taskID), runID = savedMemoryUUID(row.runID);
+      const coreDeadline = row.runDeadlineMonotonicMs;
+      if (actor.accountId !== original.accountId || actor.userId !== original.userId
+        || actor.sessionId !== original.sessionId || actor.userKind !== original.userKind
+        || typeof coreDeadline !== "number" || !Number.isFinite(coreDeadline)
+        || coreDeadline <= performance.now() || typeof row.guard !== "function") return fail();
+      // Original Legacy proof has no original Lab deadline. In particular,
+      // capirTestSessions only caps the child to workspace/sessionTTL, not the
+      // grant absolute expiry. A later Lab query cannot reconstruct that floor.
+      if (original.userKind === "lab_human") return fail();
+      const guard = row.guard as () => Promise<void>, sourceHandle = row.source as HarnessRunSourceHandle;
+      readHarnessRunSourceBinding(sourceHandle, guard, actor); // Validate identity before executing any supplied function.
+      await source(guard);
+      const sourceBinding = readHarnessRunSourceBinding(sourceHandle, guard, actor);
+      const begun = performance.now(), remainingMs = Math.floor(Math.min(deadline, coreDeadline) - begun);
+      if (!Number.isSafeInteger(remainingMs) || remainingMs <= 0) return fail();
+      // pool.query owns one autocommit command, independently of `active`.
+      // https://node-postgres.com/apis/pool#poolquery
+      const initialization = await pool.query(`WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at),
+        admitted AS MATERIALIZED (SELECT LEAST($9::timestamptz,(${acceptedDeadlineSQL}),sessions.expires_at,
+          tick.checked_at + $13::bigint * interval '1 millisecond',
+          ($12::jsonb->'source'->>'sourceExpiresAt')::timestamptz,
+          COALESCE(($12::jsonb->'source'->>'sessionExpiresAt')::timestamptz,'infinity'::timestamptz)) AS read_deadline
+          ${memoryAuthoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10 AND users.kind<>'lab_human'
+          AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb AND ${legacySavedMemorySourceSQL})
+        SELECT true AS available,to_char(tick.checked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at,
+          to_char(admitted.read_deadline AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS read_until
+        FROM tick,admitted WHERE admitted.read_deadline>tick.checked_at`, [...proof, JSON.stringify({ source: sourceBinding }), remainingMs]);
+      if (initialization.rows.length !== 1) return fail();
+      const initial = captureLegacySavedMemoryEnvelope(initialization.rows[0]);
+      // Charge all acquisition, database and ACK time; never reset Core's clock.
+      const lifetimeMs = Number((legacySavedMemoryMicroseconds(initial.read_until)
+        - legacySavedMemoryMicroseconds(initial.checked_at)) / 1000n);
+      let runDeadline = Math.min(deadline, coreDeadline, begun + lifetimeMs);
+      if (performance.now() >= runDeadline) return fail();
+      const authority: SavedMemoryAuthority = Object.freeze({ auth: Object.freeze({ accountId: actor.accountId, userId: actor.userId }),
+        taskID, expiresAt: initial.read_until, assertCurrent: () => owner.assertCurrent() });
+      const reads = new SavedMemoryReadSet(authority);
+      const domains: Readonly<SavedMemoryFinalReadDomain>[] = [];
+      let tail: Promise<unknown> = Promise.resolve();
+      const runAlive = () => { alive(); if (performance.now() >= runDeadline) return fail(); };
+      const finalize = (value?: SavedMemoryReadProof, query?: SavedMemoryFinalReadDomain) => {
+        let captured: Readonly<SavedMemoryReadProof> | undefined, domain: Readonly<SavedMemoryFinalReadDomain> | undefined;
+        try {
+          runAlive();
+          captured = value === undefined ? undefined : captureSavedMemoryReadProof(value);
+          domain = query === undefined ? undefined : captureLegacySavedMemoryDomain(query);
+          if (domain && JSON.stringify(domain.proof) !== JSON.stringify(captured)) return terminateMemory(null);
+        } catch (error) { return terminateMemory(error); }
+        const operation = tail.then(async () => {
+          try {
+            runAlive();
+            const next = captured ?? reads.snapshot();
+            assertLegacySavedMemoryProofSuperset(reads.snapshot(), next);
+            const allDomains = domain ? [...domains, domain] : [...domains];
+            if (allDomains.length > 64 || Buffer.byteLength(JSON.stringify(allDomains), "utf8") > 256 * 1024) savedMemoryBudgetLimited();
+            for (const current of new Set([...sourceChecks, guard])) await source(current);
+            runAlive();
+            const actualSource = readHarnessRunSourceBinding(sourceHandle, guard, actor);
+            const started = performance.now();
+            const metadata = JSON.stringify({ source: actualSource, proof: next, domains: allDomains });
+            if (Buffer.byteLength(metadata, "utf8") > 512 * 1024) savedMemoryBudgetLimited();
+            // All original credential slots stay inside this owner. One fresh
+            // statement snapshot and one MATERIALIZED tick govern every domain.
+            // https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED
+            const result = await pool.query(`WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at),
+              admitted AS MATERIALIZED (SELECT LEAST($9::timestamptz,(${acceptedDeadlineSQL}),sessions.expires_at,
+                ($12::jsonb->'proof'->>'expires_at')::timestamptz,
+                ($12::jsonb->'source'->>'sourceExpiresAt')::timestamptz,
+                COALESCE(($12::jsonb->'source'->>'sessionExpiresAt')::timestamptz,'infinity'::timestamptz),
+                COALESCE((SELECT min((d->>'query_expires_at')::timestamptz)
+                  FROM jsonb_array_elements($12::jsonb->'domains') d),'infinity'::timestamptz)) AS read_deadline
+                ${memoryAuthoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10 AND users.kind<>'lab_human'
+                AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb
+                AND ${legacySavedMemorySourceSQL} AND ${legacySavedMemoryProofSQL})
+              SELECT true AS available,to_char(tick.checked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at,
+                to_char(admitted.read_deadline AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS read_until
+              FROM tick,admitted WHERE admitted.read_deadline>tick.checked_at`, [...proof, metadata]);
+            if (result.rows.length !== 1) return fail();
+            const envelope = captureLegacySavedMemoryEnvelope(result.rows[0]);
+            if (envelope.read_until > authority.expiresAt) return fail();
+            const milliseconds = Number((legacySavedMemoryMicroseconds(envelope.read_until)
+              - legacySavedMemoryMicroseconds(envelope.checked_at)) / 1000n);
+            runDeadline = Math.min(runDeadline, started + milliseconds);
+            memoryDeadline = runDeadline;
+            if (timer) clearTimeout(timer);
+            arm();
+            runAlive();
+            if (domain) domains.push(domain);
+            return envelope;
+          } catch (error) { return terminateMemory(error); }
+        });
+        tail = operation.catch(() => {});
+        return operation;
+      };
+      const access: LegacySavedMemoryRunAccess = Object.freeze({ runID, authority, reads,
+        finalizeRead: (value: SavedMemoryFinalReadDomain) => {
+          try { const domain = captureLegacySavedMemoryDomain(value); return finalize(domain.proof, domain); }
+          catch (error) { return terminateMemory(error); }
+        },
+        finalizeProof: (value: SavedMemoryReadProof) => finalize(value),
+        assertCurrent: async () => { await finalize(); }, throwIfTerminated: runAlive, terminate: terminateMemory });
+      const handle = Object.freeze({}) as LegacySavedMemoryRunHandle;
+      memoryRuns.set(handle, { owner, auth: actor, access });
+      memoryRun = access; memoryDeadline = runDeadline; memoryBindingPending = false;
+      if (timer) clearTimeout(timer);
+      arm();
+      return handle;
+    } catch (error) { return terminateMemory(error); }
+  } });
+  return owner;
 }
