@@ -18,6 +18,7 @@ import type { DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import { sha256 } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
+import type { MemoryDependence } from "./memoryReviewPolicy.js";
 
 export interface ProposalRow {
   id: string;
@@ -126,6 +127,33 @@ export interface MemoryItemRow {
   superseded_by_id: string | null;
   conflict_group_id: string | null;
   created_at: Date;
+}
+
+/** Proposal self targets use a null subject; accepted self rows carry the
+ * authenticated owner's stable subject. Resolve that representation only from
+ * the actual current owner binding, never a caller-supplied contact ID. This
+ * lookup takes no owner lock: Stage's later previous-item FK must not invert
+ * Commit's memory-before-owner order. Commit rechecks after its original
+ * resolveOwnerSubject lock, before any acceptance writes. */
+export async function memoryTargetSubjectMatches(
+  client: DatabaseClient,
+  auth: AuthContext,
+  row: MemoryItemRow,
+  target: MemoryDependence,
+): Promise<boolean> {
+  if (row.account_id !== auth.accountId || row.scope !== target.scope) return false;
+  if (target.scope !== "self") return row.subject_id === target.subjectId;
+  if (target.subjectKind !== "owner_self" || target.subjectId !== null
+    || target.relationshipKind !== "none" || target.relationshipContextId !== null
+    || row.relationship_context_id !== null || row.owner_user_id !== auth.userId) return false;
+  // Keep the historical, already-valid null-subject representation readable.
+  if (row.subject_id === null) return true;
+  const owner = await client.query<{ id: string }>(
+    `SELECT id FROM subjects
+     WHERE account_id = $1 AND external_ref = $2 AND id = $3 AND status = 'active'`,
+    [auth.accountId, `workspace-owner:${auth.userId}`, row.subject_id],
+  );
+  return owner.rows.length === 1 && owner.rows[0]!.id === row.subject_id;
 }
 
 export interface EvidenceRow {

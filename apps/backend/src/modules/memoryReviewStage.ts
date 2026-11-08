@@ -27,6 +27,7 @@ import {
   artifactForLocator,
   loadProposal,
   loadProposalItems,
+  memoryTargetSubjectMatches,
   resolveIdentityBinding,
   resolveSessionSourceAuthority,
   revokedSourceKeys,
@@ -93,7 +94,7 @@ async function loadPreviousTarget(
   const row = result.rows[0];
   if (!row || row.status !== "active") return { row: null, status: "stale" };
   if (row.scope !== dependence.scope) return { row: null, status: "stale" };
-  if (row.subject_id !== dependence.subjectId) return { row: null, status: "stale" };
+  if (!await memoryTargetSubjectMatches(client, auth, row, dependence)) return { row: null, status: "stale" };
   if (row.relationship_context_id !== dependence.relationshipContextId) {
     return { row: null, status: "stale" };
   }

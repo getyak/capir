@@ -98,6 +98,7 @@ export interface SavedMemoryFixture {
   auth: AuthContext;
   provider: MemoryReadingProvider;
   request(options: Omit<InjectOptions, "headers">): Promise<LightMyRequestResponse>;
+  confirmReview(reviewScopeID: string, credential: string, body: MemoryCommitRequest): Promise<LightMyRequestResponse>;
   post(request: UnscopedChatTaskRequest): Promise<LightMyRequestResponse>;
   current(): Promise<number>;
   recall(): Promise<MemoryRecallResponse>;
@@ -189,6 +190,9 @@ export async function withSavedMemoryFixture(operation: (fixture: SavedMemoryFix
     };
     const fixture: SavedMemoryFixture = {
       pool, auth, provider, request,
+      confirmReview: (reviewScopeID, credential, body) => activeApp.inject({ method: "POST",
+        url: `/v1/memory/reviews/${reviewScopeID}/commits`,
+        headers: { ...headers, "x-memory-review-credential": credential }, payload: body }).then(value => value),
       post: body => request({ method: "POST", url: "/v1/chat/unscoped-tasks", payload: body }),
       current: async () => (await request({ method: "GET", url: "/v1/auth/session" })).statusCode,
       recall: async () => {

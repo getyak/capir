@@ -88,6 +88,7 @@ import {
   loadProposal,
   loadProposalItems,
   loadReviewScope,
+  memoryTargetSubjectMatches,
   resolveIdentityBinding,
   resolveOwnerSubject,
   serializeReceipt,
@@ -561,7 +562,13 @@ export async function commitMemoryReview(
       }
       if (
         row.scope !== item.scope
-        || row.subject_id !== item.subject_id
+        || !await memoryTargetSubjectMatches(client, auth, row, {
+          scope: item.scope,
+          subjectKind: item.subject_kind,
+          subjectId: item.subject_id,
+          relationshipKind: item.relationship_kind,
+          relationshipContextId: item.relationship_context_id,
+        })
         || row.relationship_context_id !== item.relationship_context_id
       ) {
         throw new ApiError(
@@ -589,6 +596,22 @@ export async function commitMemoryReview(
       selected.some((item) => item.scope === "self")
         ? await resolveOwnerSubject(client, auth.accountId, auth.userId)
         : null;
+
+    // Keep the original memory-row -> owner-row lock order. Stage's lookup is
+    // preliminary; recheck the actual self binding under the canonical owner's
+    // existing lock, after every previous Memory row has been locked.
+    for (const item of selected) {
+      const previous = previousById.get(item.id);
+      if (!previous || item.scope !== "self") continue;
+      if ((previous.subject_id !== null && previous.subject_id !== ownerSubjectId)
+        || !await memoryTargetSubjectMatches(client, auth, previous, {
+          scope: item.scope, subjectKind: item.subject_kind, subjectId: item.subject_id,
+          relationshipKind: item.relationship_kind, relationshipContextId: item.relationship_context_id,
+        })) {
+        throw new ApiError(409, "MEMORY_ITEM_SCOPE_CHANGED",
+          "The previous memory no longer belongs to this owner.", { item_id: item.id });
+      }
+    }
 
     const createdItemIds: string[] = [];
     const updatedItemIds: string[] = [];

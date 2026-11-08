@@ -158,7 +158,7 @@ export async function withSavedMemoryRuntime(operation: (runtime: {
             binding_basis: "The synthetic human explicitly selects this new contact and its email." },
             resource: { client_resource_id: clientID, kind: "contact_record", display_name: "Synthetic runtime contact card",
               media_type: "text/plain", observed_at: now, source_timezone: "UTC",
-              retention: { requested_mode: "full_source", source_scope: "full_reviewed_source" } },
+              retention: { requested_mode: "evidence_crop", source_scope: "reviewed_extracted_text" } },
             confirmed_identity_handles: [{ type: "email", value: email, source_client_resource_id: clientID }],
             fragments: [{ client_resource_id: clientID, kind: "contact_field", sequence: 0, text: email,
               locator: { kind: "contact_field", field: "email", source_record_version: "synthetic-runtime-v1" },
