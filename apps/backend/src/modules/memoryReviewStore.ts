@@ -54,6 +54,9 @@ export interface ProposalRow {
 }
 
 export interface ProposalItemRow {
+  content_protocol?: "legacy-v1" | "literal-v2";
+  content_manifest?: unknown;
+  content_manifest_digest?: string | null;
   id: string;
   account_id: string;
   proposal_id: string;
@@ -105,6 +108,9 @@ export interface ProposalItemRow {
 }
 
 export interface MemoryItemRow {
+  content_protocol?: "legacy-v1" | "literal-v2";
+  content_manifest?: unknown;
+  content_manifest_digest?: string | null;
   id: string;
   account_id: string;
   owner_user_id: string;
@@ -372,7 +378,15 @@ export async function loadDraft(
   };
 }
 
+/** Legacy DTOs cannot silently relabel or truncate an opt-in literal row. */
+export function assertLegacyMemoryRepresentation(protocol: unknown): void {
+  if (protocol !== undefined && protocol !== "legacy-v1") {
+    throw new ApiError(409, "MEMORY_CONTENT_VERSION_UNSUPPORTED", "Use this Memory's explicit content protocol.");
+  }
+}
+
 export function serializeProposalItem(row: ProposalItemRow): MemoryProposalItem {
+  assertLegacyMemoryRepresentation(row.content_protocol);
   return {
     id: row.id,
     scope: row.scope,
@@ -410,6 +424,7 @@ export function serializeRecallItem(
   evidence: readonly EvidenceRow[],
   evidenceRetained: boolean,
 ): MemoryRecallItem {
+  assertLegacyMemoryRepresentation(item.content_protocol);
   return {
     id: item.id,
     scope: item.scope,

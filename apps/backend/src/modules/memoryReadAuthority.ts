@@ -45,3 +45,8 @@ export function memoryReadAuthorityBounds(row: MemoryReadAuthorityRow): MemoryRe
   return value;
 }
 
+
+// Additive opt-in core only. Existing GET448 SQL/bounds and every current
+// HTTP/Agent adapter retain their original behavior until separately wired.
+export { createMemoryContentReaderProbeFactory } from "./memoryContentReadEnvelope.js";
+export type { MemoryContentReaderProbe, MemoryContentReaderProbeFactory, MemoryContentReaderOptions } from "./memoryContentReadEnvelope.js";

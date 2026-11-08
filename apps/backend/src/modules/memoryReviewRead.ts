@@ -1,4 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { projectMemoryLiteralReviewItem } from "./memoryLiteralProjection.js";
+import { refuseLiteralDowngrade, takeLiteralOpen, type LiteralWriterTicket } from "./memoryLiteralWriterProtocol.js";
+import { captureMemoryReviewContent, type PreparedMemoryReviewContent } from "./memoryContentFinalFence.js";
 
 import {
   CONTRACT_VERSION,
@@ -10,9 +13,10 @@ import {
   type MemoryReviewDraftRequest,
   type MemoryReviewResponse,
   type MemoryReviewView,
+  type MemoryLiteralReviewItemV2,
   type MemorySurface,
 } from "@talent-signal/contracts";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
@@ -221,8 +225,13 @@ async function buildReviewView(
   auth: AuthContext,
   scope: ReviewScopeRow,
   proposal: ProposalRow,
-): Promise<MemoryReviewView> {
+  literal = false,
+) {
   const items = await loadProposalItems(client, auth.accountId, proposal.id);
+  if (!literal) refuseLiteralDowngrade(items);
+  else if (items.some(item => item.content_protocol !== "literal-v2" || item.scope !== "self" || item.operation !== "add")) {
+    throw new ApiError(409, "MEMORY_CONTENT_VERSION_UNSUPPORTED", "This entry requires the matching Memory content protocol.");
+  }
   const scoped = visibleItems(scope, items);
   const verification = await verifyPendingSourceAuthority(
     client,
@@ -238,6 +247,13 @@ async function buildReviewView(
     await loadDraft(client, auth.accountId, proposal.id, auth.userId),
     new Set(visible.map((item) => item.id)),
   );
+  if (literal && (!verification.proposalSourceAvailable || unavailableVisibleCount > 0)) {
+    throw new ApiError(409, "MEMORY_SOURCE_UNAVAILABLE", "The original admitted source is no longer available.");
+  }
+  if (literal && draft !== null) {
+    // A legacy draft is not a literal-v2 current-draft producer.
+    throw new ApiError(409, "MEMORY_CONTENT_VERSION_UNSUPPORTED", "Reopen the original draft using its content protocol.");
+  }
   return {
     contract_version: CONTRACT_VERSION,
     review_scope_id: scope.id,
@@ -267,9 +283,14 @@ async function buildReviewView(
       ? "unavailable"
       : "available",
     source_unavailable_visible_item_count: unavailableVisibleCount,
-    items: visible.map(serializeProposalItem),
+    items: literal ? await Promise.all(visible.map(projectMemoryLiteralReviewItem)) : visible.map(serializeProposalItem),
     draft,
   };
+}
+
+export interface MemoryLiteralReviewResponse {
+  content_protocol: "literal-v2"; contract_version: string; review_credential: string;
+  review: Omit<MemoryReviewView, "items"> & { items: readonly Readonly<MemoryLiteralReviewItemV2>[] };
 }
 
 async function proposalRecordFor(
@@ -344,26 +365,33 @@ export interface OpenReviewResult {
   created: boolean;
 }
 
-export async function openMemoryReview(
-  pool: Pool,
-  auth: AuthContext,
-  proposalId: string,
-  request: {
-    purpose: MemorySurface;
-    person_id?: string | null;
-    relationship_context_id?: string | null;
-    pursuit_id?: string | null;
-    pursuit_role_id?: string | null;
-    pursuit_role_evidence_fragment_id?: string | null;
-    session_id?: string | null;
-    pursuit_capture_id?: string | null;
-    pursuit_capture_version?: number | null;
-  },
-): Promise<MemoryReviewResponse> {
-  return inTransaction(pool, async (client) => {
+export interface OpenMemoryReviewRequest {
+  purpose: MemorySurface; person_id?: string | null; relationship_context_id?: string | null;
+  pursuit_id?: string | null; pursuit_role_id?: string | null; pursuit_role_evidence_fragment_id?: string | null;
+  session_id?: string | null; pursuit_capture_id?: string | null; pursuit_capture_version?: number | null;
+}
+export async function openMemoryReview(pool: Pool, auth: AuthContext, proposalId: string,
+  request: OpenMemoryReviewRequest): Promise<MemoryReviewResponse> {
+  return inTransaction(pool, client => openMemoryReviewOnClient(client, auth, proposalId, request));
+}
+export function openMemoryReviewOnClient(client: DatabaseClient, auth: AuthContext, proposalId: string,
+  request: OpenMemoryReviewRequest): Promise<MemoryReviewResponse>;
+export function openMemoryReviewOnClient(client: DatabaseClient, auth: AuthContext, proposalId: string,
+  request: OpenMemoryReviewRequest, literalTicket: LiteralWriterTicket): Promise<MemoryLiteralReviewResponse>;
+export async function openMemoryReviewOnClient(client: DatabaseClient, auth: AuthContext, proposalId: string,
+  request: OpenMemoryReviewRequest, literalTicket?: LiteralWriterTicket): Promise<MemoryReviewResponse | MemoryLiteralReviewResponse> {
+  if (literalTicket) takeLiteralOpen(literalTicket, client, auth, proposalId);
+  {
     const proposal = await loadProposal(client, auth.accountId, proposalId, true);
     if (!proposal || proposal.created_by_user_id !== auth.userId) {
       throw new ApiError(404, "MEMORY_NOT_FOUND", "The requested Memory proposal was not found.");
+    }
+    if (literalTicket && (request.purpose !== "chat" || request.session_id !== proposal.session_id
+      || proposal.target_person_id !== null || proposal.target_relationship_context_id !== null
+      || request.person_id != null || request.relationship_context_id != null || request.pursuit_id != null
+      || request.pursuit_role_id != null || request.pursuit_role_evidence_fragment_id != null
+      || request.pursuit_capture_id != null || request.pursuit_capture_version != null)) {
+      throw new ApiError(409, "MEMORY_REVIEW_SCOPE_MISMATCH", "This literal writer opens only its exact Chat entry.");
     }
     let personId = request.person_id ?? proposal.target_person_id;
     let contextId = request.relationship_context_id ?? proposal.target_relationship_context_id;
@@ -514,12 +542,34 @@ export async function openMemoryReview(
     }
     // Each render gets its own credential; opening another tab never revokes it.
     await insertReviewCredential(client, scope, credential);
-    return {
-      contract_version: CONTRACT_VERSION,
-      review_credential: credential,
-      review: await buildReviewView(client, auth, scope, proposal),
-    };
-  });
+    const review = await buildReviewView(client, auth, scope, proposal, Boolean(literalTicket));
+    return literalTicket ? { content_protocol: "literal-v2", contract_version: CONTRACT_VERSION,
+      review_credential: credential, review } as MemoryLiteralReviewResponse
+      : { contract_version: CONTRACT_VERSION, review_credential: credential, review: review as MemoryReviewView };
+  }
+}
+
+export async function readMemoryReviewOnClient(
+  client: DatabaseClient,
+  auth: AuthContext,
+  reviewScopeId: string,
+  credential: string | null,
+): Promise<MemoryReviewResponse> {
+  const scope = await loadReviewScope(client, auth.accountId, reviewScopeId);
+  if (!scope || scope.reader_user_id !== auth.userId) {
+    throw new ApiError(404, "MEMORY_NOT_FOUND", "The requested Memory review was not found.");
+  }
+  await assertReviewCredential(client, scope, credential);
+  await revalidateScopePursuit(client, auth, scope, false);
+  const proposal = await loadProposal(client, auth.accountId, scope.proposal_id);
+  if (!proposal) {
+    throw new ApiError(404, "MEMORY_NOT_FOUND", "The reviewed proposal was not found.");
+  }
+  return {
+    contract_version: CONTRACT_VERSION,
+    review_credential: null,
+    review: await buildReviewView(client, auth, scope, proposal) as MemoryReviewView,
+  };
 }
 
 export async function readMemoryReview(
@@ -528,23 +578,20 @@ export async function readMemoryReview(
   reviewScopeId: string,
   credential: string | null,
 ): Promise<MemoryReviewResponse> {
-  return inTransaction(pool, async (client) => {
-    const scope = await loadReviewScope(client, auth.accountId, reviewScopeId);
-    if (!scope || scope.reader_user_id !== auth.userId) {
-      throw new ApiError(404, "MEMORY_NOT_FOUND", "The requested Memory review was not found.");
-    }
-    await assertReviewCredential(client, scope, credential);
-    await revalidateScopePursuit(client, auth, scope, false);
-    const proposal = await loadProposal(client, auth.accountId, scope.proposal_id);
-    if (!proposal) {
-      throw new ApiError(404, "MEMORY_NOT_FOUND", "The reviewed proposal was not found.");
-    }
-    return {
-      contract_version: CONTRACT_VERSION,
-      review_credential: null,
-      review: await buildReviewView(client, auth, scope, proposal),
-    };
-  });
+  return inTransaction(pool, client => readMemoryReviewOnClient(client, auth, reviewScopeId, credential));
+}
+
+/** Actual Review owner: retain the same credential/scope/source verifier and
+ * legacy body. The new factory publishes only this opaque same-client result;
+ * callers cannot construct a content fence or submit arbitrary SQL. */
+export async function prepareMemoryReviewContent(
+  client: PoolClient, auth: AuthContext, reviewScopeId: string, credential: string,
+): Promise<PreparedMemoryReviewContent> {
+  if (typeof credential !== "string" || !credential) {
+    throw new ApiError(403, "MEMORY_REVIEW_CREDENTIAL_INVALID", "This Memory review scope needs its rendered credential.");
+  }
+  const capturedAuth = Object.freeze({ ...auth });
+  return captureMemoryReviewContent(client, capturedAuth, reviewScopeId, credential);
 }
 
 /**
@@ -582,6 +629,7 @@ export async function saveMemoryReviewDraft(
       throw new ApiError(409, "MEMORY_REVIEW_DRAFT_STALE", "The proposal changed; reopen it before saving draft choices.");
     }
     const items = await loadProposalItems(client, auth.accountId, proposal.id);
+    refuseLiteralDowngrade(items);
     const visible = await visibleReviewItems(client, auth, scope, proposal, items);
     const visibleIds = new Set(visible.map((item) => item.id));
     for (const selectedId of request.selected_item_ids) {
@@ -655,7 +703,7 @@ export async function saveMemoryReviewDraft(
     return {
       contract_version: CONTRACT_VERSION,
       review_credential: null,
-      review: await buildReviewView(client, auth, updated, proposal),
+      review: await buildReviewView(client, auth, updated, proposal) as MemoryReviewView,
     };
   });
 }
