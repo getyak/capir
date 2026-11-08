@@ -143,3 +143,21 @@ Session/tool-capable/Agent/operator-principal phase3 flows remain outside this
 first answer-only slice. Resident rollout must drain old unledgered work;
 existing processing records without a ledger cannot be treated as recoverable
 or as permission to call the provider again.
+
+## Next Session-bound regression slice
+
+The answer-only continuation at d45d7741 passed all26 real PostgreSQL cases,
+original14 authority and42 feedback cases; its native gates remain separate.
+This new test-only continuation covers the actual Native Session-bearing
+unscoped entry with an actual answer-only adapter and a new empty canonical
+Session. Both internalLab configurations first prove a lawful201 and the exact
+provider answer, then hold a second call and probe the same max1 product Pool.
+Final assertions retain actual Session source registration, a scrubbed completed
+attempt and one audit. The existing26 cases remain unchanged and the explicit
+serial Hosted selector adds these two cases. No runtime eligibility, codec,
+Session retention, provider capability or tool staging is changed in this step.
+The expected pool-acquisition failure is not yet observed; Hosted must first
+prove the real Session setup and meaningful red. Implementation follows only
+after that result and independent review. Full tool-capable/relationship,
+operator configuration, Native recovery consumers and resident acceptance
+remain later work.

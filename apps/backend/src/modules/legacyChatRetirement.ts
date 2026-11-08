@@ -5,9 +5,45 @@ import type { LegacyChatOwnerToken, LegacyChatTerminalReason } from "./legacyCha
 import { labStopAuthorityKeySQL } from "./labStopAuthority.js";
 import type { AuthContext } from "./auth.js";
 import { ApiError } from "../lib/apiError.js";
+import { legacyChatSessionSnapshotCurrentSQL } from "./legacyChatSourceSnapshot.js";
 
 const privateScrub = `original_proof=NULL,source_snapshot=NULL,checkpoint=NULL,
   checkpoint_bytes=NULL,checkpoint_sha256=NULL,checkpoint_expires_at=NULL,updated_at=clock_timestamp()`;
+
+/** Exact canonical Session owner hook. One statement is atomic even when the
+ * retention caller passes a Pool. A title-only update leaves the source
+ * predicate true, whereas deletion/context/shorter expiry removes private
+ * active copies without changing keys, attempts or unrelated source epochs.
+ * Completed facts remain under the existing Session lineage/read policy. */
+export async function retireLegacyChatSessionContent(client: DatabaseClient, accountId: string,
+  sessionID: string): Promise<void> {
+  const result = await client.query<{ fenced: number; retired: number }>(`WITH account_fence AS MATERIALIZED (
+      SELECT id FROM accounts WHERE id=$1 FOR SHARE NOWAIT
+    ), session_fence AS MATERIALIZED (
+      SELECT s.id FROM agent_sessions s JOIN account_fence a ON a.id=s.account_id
+      WHERE s.id=$2 FOR UPDATE OF s NOWAIT
+    ), parents AS MATERIALIZED (
+      SELECT p.id FROM idempotency_records p JOIN legacy_chat_executions e
+        ON e.account_id=p.account_id AND e.idempotency_id=p.id
+      CROSS JOIN account_fence a CROSS JOIN (SELECT count(*) FROM session_fence) fenced
+      WHERE fenced.count<=1 AND p.account_id=a.id AND p.operation_scope='create_unscoped_chat_task'
+        AND p.actor_user_id::text=e.source_snapshot->>'userId'
+        AND e.source_snapshot->>'version'='2' AND e.source_snapshot->>'sessionID'=$2::text
+        AND e.state IN ('admitted','dispatch_started','result_ready')
+        AND NOT (${legacyChatSessionSnapshotCurrentSQL})
+      ORDER BY p.id FOR UPDATE OF p NOWAIT
+    ), executions AS MATERIALIZED (
+      SELECT e.idempotency_id FROM legacy_chat_executions e JOIN parents p ON p.id=e.idempotency_id
+      WHERE e.account_id=$1 ORDER BY e.idempotency_id FOR UPDATE OF e NOWAIT
+    ), scrubbed AS (
+      UPDATE legacy_chat_executions e SET state='authority_lost',terminal_reason='source_withdrawn',
+        content_retired_at=COALESCE(e.content_retired_at,clock_timestamp()),${privateScrub}
+      FROM executions x WHERE e.account_id=$1 AND e.idempotency_id=x.idempotency_id RETURNING e.idempotency_id
+    ) SELECT (SELECT count(*)::int FROM account_fence) AS fenced,(SELECT count(*)::int FROM scrubbed) AS retired`,
+  [accountId,sessionID]);
+  if (result.rows[0]?.fenced !== 1) throw new ApiError(409,"LEGACY_CHAT_SOURCE_RETIREMENT_PENDING",
+    "The Session cleanup could not be fenced. Retry it after the current source operation settles.");
+}
 
 /** Authority-reducing only. The caller owns account -> parent -> execution
  * locks; this never asks an expired original credential to become live again. */
@@ -97,10 +133,11 @@ export async function retireLegacyChatMcpContent(client: DatabaseClient, account
  * explicit same-attempt resolve window. The janitor never publishes answers. */
 export async function sweepLegacyChatExecutions(pool: Pool): Promise<number> {
   const candidates = (await inLegacyChatRetirementTransaction(pool,client => client.query<{ account_id: string; idempotency_id: string }>(`
-    SELECT account_id,idempotency_id FROM legacy_chat_executions
+    SELECT account_id,idempotency_id FROM legacy_chat_executions e
     WHERE state IN ('admitted','dispatch_started','result_ready') AND (
       execution_deadline<=clock_timestamp() OR
-      (state<>'result_ready' AND lease_until<=clock_timestamp()))
+      (state<>'result_ready' AND lease_until<=clock_timestamp()) OR
+      (source_snapshot->>'version'='2' AND NOT (${legacyChatSessionSnapshotCurrentSQL})))
     ORDER BY execution_deadline,idempotency_id LIMIT 64`))).rows;
   let retired = 0;
   for (const candidate of candidates) {
@@ -115,18 +152,28 @@ export async function sweepLegacyChatExecutions(pool: Pool): Promise<number> {
         if (lab && (lab.state !== "active" || !lab.live || !lab.stop_clear)) return 0;
         const account = await client.query(`SELECT id FROM accounts WHERE id=$1 AND retired_at IS NULL FOR SHARE NOWAIT`, [candidate.account_id]);
         if (account.rowCount !== 1) return 0;
+        // Inspect only private source metadata first, then acquire its Session
+        // before the parent/execution locks. Missing Sessions are invalid, not
+        // a replacement baseline. This query cannot expose checkpoint text.
+        await client.query(`SELECT s.id FROM agent_sessions s JOIN legacy_chat_executions e
+          ON e.account_id=s.account_id AND e.source_snapshot->>'sessionID'=s.id::text
+          WHERE e.account_id=$1 AND e.idempotency_id=$2 AND e.source_snapshot->>'version'='2'
+          FOR UPDATE OF s NOWAIT`,[candidate.account_id,candidate.idempotency_id]);
         await client.query(`SELECT id FROM idempotency_records WHERE account_id=$1 AND id=$2 FOR UPDATE NOWAIT`,
           [candidate.account_id,candidate.idempotency_id]);
-        const row = (await client.query<{ state: string; expired: boolean }>(`
-          SELECT state,execution_deadline<=clock_timestamp() AS expired FROM legacy_chat_executions
+        const row = (await client.query<{ state: string; expired: boolean; source_invalid: boolean }>(`
+          SELECT state,execution_deadline<=clock_timestamp() AS expired,
+            (source_snapshot->>'version'='2' AND NOT (${legacyChatSessionSnapshotCurrentSQL})) AS source_invalid
+          FROM legacy_chat_executions e
           WHERE account_id=$1 AND idempotency_id=$2 AND state IN ('admitted','dispatch_started','result_ready')
-            AND (execution_deadline<=clock_timestamp() OR (state<>'result_ready' AND lease_until<=clock_timestamp()))
+            AND (execution_deadline<=clock_timestamp() OR (state<>'result_ready' AND lease_until<=clock_timestamp())
+              OR (source_snapshot->>'version'='2' AND NOT (${legacyChatSessionSnapshotCurrentSQL})))
           FOR UPDATE NOWAIT`, [candidate.account_id,candidate.idempotency_id])).rows[0];
         if (!row) return 0;
-        const state = row.expired ? "expired" : row.state === "dispatch_started" ? "unknown" : "expired";
+        const state = row.source_invalid ? "authority_lost" : row.expired ? "expired" : row.state === "dispatch_started" ? "unknown" : "expired";
         const result = await client.query(`UPDATE legacy_chat_executions SET state=$3,terminal_reason=$4,${privateScrub}
           WHERE account_id=$1 AND idempotency_id=$2`, [candidate.account_id,candidate.idempotency_id,
-          state,row.expired ? "expired" : "lease_lost"]);
+          state,row.source_invalid ? "source_withdrawn" : row.expired ? "expired" : "lease_lost"]);
         return result.rowCount ?? 0;
       });
     } catch (error) {
