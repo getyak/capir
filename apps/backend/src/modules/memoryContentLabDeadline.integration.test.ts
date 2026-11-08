@@ -9,6 +9,7 @@ import { buildApp } from "../app.js";
 import type { BackendConfig } from "../config.js";
 import { ApiError } from "../lib/apiError.js";
 import { createAuthGuard, type AuthContext } from "./auth.js";
+import { ensureCapirTestProvisioningPrincipal } from "./capirTests.js";
 import { LocalChatMediaStorage } from "./chatMediaStorage.js";
 import { LabWorkspaceService } from "./labWorkspaces.js";
 import { barrier, bounded, database, observedClient, requiredContentAPIs, withReviewFixture, type PreparedReview } from "./fixtures/memoryContentReadEnvelope.fixture.js";
@@ -16,7 +17,9 @@ import { barrier, bounded, database, observedClient, requiredContentAPIs, withRe
 type Kind = "human" | "grant-v2" | "grant-v3" | "operator";
 type TTL = "human_workspace" | "human_entry" | "parent" | "grant" | "operator_workspace" | "operator_entry";
 const sentence = "Synthetic Lab evidence stays purpose bound until delivery.";
-const web = "https://memory-content-lab-web.example.invalid", backend = "https://memory-content-lab-api.example.invalid";
+const suite = randomUUID(), provisioningKey = randomBytes(32).toString("base64url");
+const web = `https://memory-content-${suite}.web.example.invalid`, backend = `https://memory-content-${suite}.api.example.invalid`;
+let provisioningGeneration: Promise<number> | undefined;
 
 /** The parent is the existing real password/HTTP fixture. Child workspaces,
  * entries, grants/PKCE, operator provisioning, child auth, Session stage/open all
@@ -29,18 +32,30 @@ async function withLabReview(kind: Kind, run: (f: {
   shorten(change: TTL): Promise<string>; extend(change: TTL): Promise<void>;
 }) => Promise<void>) {
   await withReviewFixture(async parent => {
+    // The real registry has one configured principal for this disposable DB,
+    // not one per origin pair. Register this suite once at a legal generation;
+    // changing a per-case key at generation 1 is not a valid rotation.
+    const generation = await (provisioningGeneration ??= (async () => {
+      const existing = (await parent.control.query<{ generation: number }>(
+        "SELECT generation FROM capir_test_provisioners WHERE label='configured'")).rows[0];
+      if (existing && (!Number.isSafeInteger(existing.generation) || existing.generation < 1 || existing.generation >= 2_147_483_647))
+        throw new Error("Synthetic provisioning registry has no valid next generation.");
+      return existing ? existing.generation + 1 : 1;
+    })());
     const directory = await mkdtemp(join(tmpdir(), "capir-memory-content-lab-"));
     const storage = new LocalChatMediaStorage(directory);
-    const provisioningKey = randomBytes(32).toString("base64url");
     const config: BackendConfig = { ...parent.config, internalLabEnabled: true, allowedOrigins: [web],
       chatMediaStorage: { provider: "local", directory },
       capirAuth: { enabled: true, webOrigin: web, backendOrigin: backend, codeTtlSeconds: 60,
         accessTtlSeconds: 60, refreshIdleTtlSeconds: 600, refreshAbsoluteTtlSeconds: 3600 },
-      capirTests: { enabled: true, provisioningKey, provisioningGeneration: 1, webOrigin: web,
+      capirTests: { enabled: true, provisioningKey, provisioningGeneration: generation, webOrigin: web,
         backendOrigin: backend, webConsumerKey: randomBytes(32).toString("base64url"), maxActiveRuns: 8 } };
     let app: Awaited<ReturnType<typeof buildApp>> | undefined, workspaceID: string | undefined;
     let captured: AuthContext | undefined;
     try {
+      // Use the canonical configuration lifecycle, including revoked-principal
+      // refusal. Do not invent a registry row, grant, or authenticated child.
+      await ensureCapirTestProvisioningPrincipal(parent.control, config.capirTests);
       app = await buildApp({ pool: parent.pool, config, chatMediaStorage: storage,
         remoteChatProvider: null, personResearchProvider: null, privateConversationProvider: null,
         labProviders: new Map(), labJobWorkerEnabled: false, conversationQueueWorkerEnabled: false,
