@@ -220,7 +220,18 @@ export async function withSavedMemoryFixture(operation: (fixture: SavedMemoryFix
         const proposalID = staged.json<{ proposal: { proposal_id: string } }>().proposal.proposal_id;
         const opened = await request({ method: "POST", url: `/v1/memory/proposals/${proposalID}/reviews`,
           payload: { purpose: "chat", person_id: null, relationship_context_id: null } });
-        expect(opened.statusCode).toBe(200);
+        // Failure-only closed metadata: no response message, source text,
+        // credential or arbitrary server field may enter an assertion report.
+        let reviewFailureCode = "UNCLASSIFIED";
+        if (opened.statusCode !== 200) {
+          try {
+            const value = opened.json<{ error?: { code?: unknown }; code?: unknown }>();
+            const code = value.error?.code ?? value.code;
+            if (typeof code === "string" && ["MEMORY_NOT_FOUND", "MEMORY_SOURCE_SESSION_NOT_FOUND",
+              "MEMORY_SOURCE_MESSAGE_NOT_FOUND", "NOT_FOUND", "FST_ERR_NOT_FOUND"].includes(code)) reviewFailureCode = code;
+          } catch { reviewFailureCode = "INVALID_ERROR_ENVELOPE"; }
+        }
+        expect(opened.statusCode, `Actual Memory review HTTP status; closed code=${reviewFailureCode}`).toBe(200);
         const reviewed = opened.json<MemoryReviewResponse>();
         if (!reviewed.review_credential) throw new Error("The actual review omitted its confirmation credential.");
         const commitRequest: MemoryCommitRequest = {
