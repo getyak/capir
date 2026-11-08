@@ -57,8 +57,8 @@ function candidate(media: boolean): MemoryProposalCandidate {
 async function stageSource(auth: AuthContext, media: boolean) {
   const sessionID = randomUUID(), messageID = randomUUID(), attachmentID = randomUUID(), queueID = randomUUID();
   const bytes = Buffer.from([1, 2, 3, 4]), contentHash = hash(bytes), stamp = new Date().toISOString();
-  await q(pool!, `INSERT INTO agent_sessions(account_id,id,created_by_user_id,revision,payload,expires_at)
-    VALUES($1,$2,$3,1,$4::jsonb,clock_timestamp()+interval '1 hour')`, [auth.accountId, sessionID, auth.userId,
+  await q(pool!, `INSERT INTO agent_sessions(account_id,id,created_by_user_id,revision,payload,created_at,expires_at)
+    VALUES($1,$2,$3,1,$4::jsonb,clock_timestamp(),clock_timestamp()+interval '1 hour')`, [auth.accountId, sessionID, auth.userId,
     JSON.stringify({ id: sessionID, scopeKind: "unresolved_intent", personDisplayLabel: "", contextDisplayLabel: "",
       title: "Synthetic clock source", updatedAt: stamp, isUnread: false, turns: [{ id: messageID, objective: text, createdAt: stamp,
         response: { contractVersion: CONTRACT_VERSION, taskID: randomUUID(), contextManifestID: "none-unbound-conversation",
