@@ -276,12 +276,12 @@ async function main() {
     await run("ime_commit_guard", async () => {
       await long.fill(directoryInput, ""); await long.quiet(); const before = data.observationCount(), beforeUrl = await long.url();
       await long.call("Input.imeSetComposition", { text: "中", selectionStart: 1, selectionEnd: 1 });
-      await until(() => long.evaluate<boolean>('window.__get452Events.composing>0 && !!document.querySelector(\'form[action="/workspace/people"] button[type="submit"]\')?.disabled'), "GET452 trusted composition start");
+      await until(() => long.evaluate<boolean>('window.__get452Events.composing>0 && !!document.querySelector(\'main#main-content form[action="/workspace/people"] button[type="submit"]\')?.disabled'), "GET452 trusted composition start");
       await long.key("Enter", "Enter", 229); await long.quiet();
       requireProtocol(data.observationCount() === before && await long.url() === beforeUrl, "IME_CANDIDATE_NO_DISPATCH");
       const committed = "中文-尾部";
       await long.call("Input.insertText", { text: committed });
-      await until(() => long.evaluate<boolean>('window.__get452Events.composed>0 && !document.querySelector(\'form[action="/workspace/people"] button[type="submit"]\')?.disabled'), "GET452 trusted composition commit");
+      await until(() => long.evaluate<boolean>('window.__get452Events.composed>0 && !document.querySelector(\'main#main-content form[action="/workspace/people"] button[type="submit"]\')?.disabled'), "GET452 trusted composition commit");
       requireProtocol(await long.value() === committed, "IME_COMMITTED_TEXT");
       await long.key("Enter", "Enter", 13); await currentDirectory(long, committed);
       requireProtocol(data.seen(committed, before), "IME_EXPLICIT_SUBMIT"); await long.health();
@@ -294,14 +294,14 @@ async function main() {
       await long.historyGo(b); await currentDirectory(long, data.tailB); await long.health();
     });
     await run("clear_focus", async () => {
-      await long.click('form[action="/workspace/people"] a');
+      await long.click('main#main-content form[action="/workspace/people"] a');
       await until(() => long.evaluate<boolean>(`location.pathname==="/workspace/people" && !new URL(location.href).searchParams.has("query") && document.querySelector(${JSON.stringify(directoryInput)})?.value==="" && document.activeElement===document.querySelector(${JSON.stringify(directoryInput)})`), "GET452 clear readback focus");
       await long.health();
     });
     await run("mobile375_geometry", async () => {
       await long.call("Emulation.setDeviceMetricsOverride", { width: 375, height: 812, deviceScaleFactor: 1, mobile: false });
       await search(long, data, unicode);
-      requireProtocol(await long.evaluate<boolean>(`(() => {const f=document.querySelector('form[action="/workspace/people"]'),i=f?.querySelector('input[name="query"]'),b=f?.querySelector('button[type="submit"]');if(!f||!i||!b)return false;const a=f.getBoundingClientRect(),x=i.getBoundingClientRect(),y=b.getBoundingClientRect();return innerWidth===375&&document.documentElement.scrollWidth<=innerWidth+1&&a.left>=0&&a.right<=innerWidth+1&&x.width>=100&&y.width>=32&&y.height>=32&&x.right<=y.left+1&&x.left>=a.left&&y.right<=a.right+1;})()`), "MOBILE375_GEOMETRY");
+      requireProtocol(await long.evaluate<boolean>(`(() => {const f=document.querySelector('main#main-content form[action="/workspace/people"]'),i=f?.querySelector('input[name="query"]'),b=f?.querySelector('button[type="submit"]');if(!f||!i||!b)return false;const a=f.getBoundingClientRect(),x=i.getBoundingClientRect(),y=b.getBoundingClientRect();return innerWidth===375&&document.documentElement.scrollWidth<=innerWidth+1&&a.left>=0&&a.right<=innerWidth+1&&x.width>=100&&y.width>=32&&y.height>=32&&x.right<=y.left+1&&x.left>=a.left&&y.right<=a.right+1;})()`), "MOBILE375_GEOMETRY");
       await long.health();
     });
     receipt.phase = "source_readback";

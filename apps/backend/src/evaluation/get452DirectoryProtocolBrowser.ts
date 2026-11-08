@@ -1,7 +1,7 @@
 import { ProtocolCdp, until } from "./get350NextProtocolCdp.js";
 import { requireProtocol } from "./get452DirectoryProtocolHost.js";
 
-export const directoryInput = 'form[action="/workspace/people"] input[name="query"]';
+export const directoryInput = 'main#main-content form[action="/workspace/people"] input[name="query"]';
 const observer = `(() => {
   const state = { paste:0, composing:0, composed:0, input:0 };
   Object.defineProperty(window,"__get452Events",{value:state});
@@ -293,7 +293,7 @@ export class DirectoryProtocolPage {
     const rect = await this.evaluate<{ x: number; y: number; visible: boolean; probe: unknown } | null>(`(() => { const e=document.querySelector(${JSON.stringify(selector)});if(!(e instanceof HTMLElement))return null;e.scrollIntoView({block:"center",behavior:"instant"});const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),visible=r.width>0&&r.height>0&&!e.hasAttribute("disabled")&&hit?.closest(${JSON.stringify(selector)})===e;return{x:r.x+r.width/2,y:r.y+r.height/2,visible,probe:{found:true,disabled:e.hasAttribute("disabled"),connected:e.isConnected,active:document.activeElement===e,targetTag:e.tagName,hitTag:hit?.tagName??"NONE",hitRelation:!hit?"none":hit===e?"self":e.contains(hit)?"descendant":hit.contains(e)?"ancestor":"other",left:r.left,top:r.top,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight,scrollY,scrollBehavior:getComputedStyle(document.documentElement).scrollBehavior}};})()`);
     const target = selector === "#account-email" ? "identifier" : selector === "#account-password" ? "password"
       : selector === directoryInput ? "directory_query" : selector === 'form:has(#account-email) button[type="submit"]' ? "login_submit"
-        : selector === 'form[action="/workspace/people"] button[type="submit"]' ? "directory_submit" : "other";
+        : selector === 'main#main-content form[action="/workspace/people"] button[type="submit"]' ? "directory_submit" : "other";
     // Closed geometry only, captured by the original evaluation at its exact
     // failed hit test. Never serialize selector, attributes, text or values.
     this.lastClickProbe = clickProbe(rect?.probe, target);
@@ -316,7 +316,7 @@ export class DirectoryProtocolPage {
     await this.key("v", "KeyV", 86, 2);
   }
   value() { return this.evaluate<string>(`document.querySelector(${JSON.stringify(directoryInput)})?.value ?? ""`); }
-  async submit() { await this.click('form[action="/workspace/people"] button[type="submit"]'); }
+  async submit() { await this.click('main#main-content form[action="/workspace/people"] button[type="submit"]'); }
   async historyEntry() {
     const history = await this.call<{ currentIndex: number; entries: Array<{ id: number }> }>("Page.getNavigationHistory");
     const entry = history.entries[history.currentIndex]; requireProtocol(entry, "BROWSER_HISTORY_ENTRY"); return entry.id;
@@ -372,7 +372,7 @@ export class DirectoryProtocolPage {
     // Called once only after a fixed failure. Raw values stay in this read-only expression.
     const value = await this.evaluate<Record<string, unknown>>(`(() => {
       const expected=${JSON.stringify(expectedQuery)},url=new URL(location.href),query=url.searchParams.get("query"),
-        input=document.querySelector(${JSON.stringify(directoryInput)}),submit=document.querySelector('form[action="/workspace/people"] button[type="submit"]'),
+        input=document.querySelector(${JSON.stringify(directoryInput)}),submit=document.querySelector('main#main-content form[action="/workspace/people"] button[type="submit"]'),
         active=document.activeElement,alerts=Math.min(501,document.querySelectorAll('[role="alert"]').length);
       const chars=value=>{if(typeof value!=="string")return null;let n=0;for(const _ of value){if(++n===501)break;}return n;};
       return {urlDirectoryMatch:url.pathname==="/workspace/people",urlQueryMatch:query===expected,urlQueryChars:chars(query),
