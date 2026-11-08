@@ -38,7 +38,7 @@ async function advance<T>(database: OwnerDatabase, authority: LegacyChatAuthorit
     await authority.assertFinalCurrent(client);
     source.assertLive();
     return result;
-  });
+  },true,() => source.assertLive());
   // COMMIT can itself finish after the source's shorter original deadline.
   // Do not describe an acknowledged commit as rollback or deliver late bytes;
   // lawful completed facts retain their separate current-reader replay policy.

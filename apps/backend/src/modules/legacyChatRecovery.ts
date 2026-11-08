@@ -90,7 +90,7 @@ export async function resolveLegacyChatExecution(input: RecoveryInput & { config
       adopted = await adoptLegacyChatCheckpoint(client,input.auth,row);
       await original!.assertFinalCurrent(client);
       source!.assertLive();
-    });
+    },true,() => source!.assertLive());
     adoptionCommitted = true;
     source.assertLive();
     if (!adopted) throw unavailable();
