@@ -497,6 +497,15 @@ jobs:
           DATABASE_URL="$GET_298_TEST_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
           pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 src/modules/memoryDraftTarget.integration.test.ts
 
+      - name: Verify exact Memory literal SQL with a populated isolated upgrade
+        env:
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          GET_451_MEMORY_LITERAL_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/talent_signal_get451_literal_ci
+          GET_451_MEMORY_LITERAL_SQL_REQUIRED: "1"
+        run: |
+          pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('CREATE DATABASE talent_signal_get451_literal_ci'); } finally { await pool.end(); }"
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryLiteralSql.integration.test.ts
+
       - name: Exercise saved regression lifecycle with a synthetic provider
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
