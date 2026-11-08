@@ -27,10 +27,16 @@ export type ProtocolFlow = {matches:boolean;live:boolean;hasAttempt:boolean;vali
   createdAtHash:string;expHash:string;iatHash:string;jtiHash:string;envelopeHash:string};
 type Params = Record<string, unknown>;
 type Message = { id?: number; sessionId?: string; method?: string; params?: Params; result?: unknown; error?: unknown };
+type TerminalRouteCounts = { rawSameFinished:number; rawSameFailed:number; rawForeignSameIdFinished:number; rawForeignSameIdFailed:number;
+  handlersSameCalled:number; handlersSameReturned:number; handlersForeignSameIdCalled:number; handlersForeignSameIdReturned:number };
+const emptyTerminalRoutes=():TerminalRouteCounts=>({rawSameFinished:0,rawSameFailed:0,rawForeignSameIdFinished:0,rawForeignSameIdFailed:0,
+  handlersSameCalled:0,handlersSameReturned:0,handlersForeignSameIdCalled:0,handlersForeignSameIdReturned:0});
+type TerminalAudit = { session:string; ids:ReadonlySet<string>; counts:Map<string,TerminalRouteCounts>; invalid:boolean; saturated:boolean };
 export class ProtocolCdp {
   private sequence = 0;
   private waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; method:string }>();
   private handlers = new Map<string, Set<(params: Params) => void>>();
+  private terminalAudits=new Set<TerminalAudit>();
   private constructor(private socket: WebSocket) {
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data)) as Message;
@@ -50,7 +56,14 @@ export class ProtocolCdp {
         }
         else pending.resolve(message.result);
       } else if (message.method) {
+        if(this.terminalAudits.size&&(message.method==="Network.loadingFinished"||message.method==="Network.loadingFailed")){
+          this.recordTerminalRoute(message,"raw",0,0);
+          let called=0,returned=0;
+          try{for(const handler of this.handlers.get(`${message.sessionId ?? ""}:${message.method}`)??[]){called++;handler(message.params??{});returned++;}}
+          finally{this.recordTerminalRoute(message,"dispatch",called,returned);}
+        }else{
         for (const handler of this.handlers.get(`${message.sessionId ?? ""}:${message.method}`) ?? []) handler(message.params ?? {});
+        }
       }
     });
     socket.addEventListener("close", () => {
@@ -89,6 +102,29 @@ export class ProtocolCdp {
     if (!this.handlers.has(key)) this.handlers.set(key, new Set());
     this.handlers.get(key)!.add(handler);
     return () => { this.handlers.get(key)?.delete(handler); };
+  }
+  /** Optional closed diagnostic, with no raw message callback or public IDs. */
+  watchTerminalRoutes(session:string,ids:ReadonlySet<string>){
+    const audit:TerminalAudit={session,ids,counts:new Map(),invalid:false,saturated:false};
+    if(this.terminalAudits.size<8)this.terminalAudits.add(audit);else audit.invalid=true;
+    return { forRequest:(id:string)=>({...emptyTerminalRoutes(),...audit.counts.get(id)}),
+      status:()=>({invalid:audit.invalid,saturated:audit.saturated}),
+      dispose:()=>{this.terminalAudits.delete(audit);audit.counts.clear();} };
+  }
+  private recordTerminalRoute(message:Message,phase:"raw"|"dispatch",called:number,returned:number){
+    const id=message.params?.requestId;
+    if(typeof id!=="string")return;
+    for(const audit of this.terminalAudits){
+      try{
+        if(!audit.ids.has(id))continue;
+        let counts=audit.counts.get(id);
+        if(!counts){if(audit.counts.size>=64){audit.saturated=true;continue;}counts=emptyTerminalRoutes();audit.counts.set(id,counts);}
+        const add=(key:keyof TerminalRouteCounts,value:number)=>{if(counts![key]+value>4096)audit.saturated=true;counts![key]=Math.min(4096,counts![key]+value);};
+        const same=(message.sessionId??"")===audit.session;
+        if(phase==="raw")add(same?(message.method==="Network.loadingFinished"?"rawSameFinished":"rawSameFailed"):(message.method==="Network.loadingFinished"?"rawForeignSameIdFinished":"rawForeignSameIdFailed"),1);
+        else{add(same?"handlersSameCalled":"handlersForeignSameIdCalled",called);add(same?"handlersSameReturned":"handlersForeignSameIdReturned",returned);}
+      }catch{audit.invalid=true;}
+    }
   }
   close() { this.socket.close(); }
 }

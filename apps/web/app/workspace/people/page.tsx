@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { parsePeopleDirectoryQuery } from "@talent-signal/contracts";
 
 import { auth } from "@/auth";
 import { PeopleDirectoryApp } from "@/components/people-directory-app";
@@ -39,14 +40,15 @@ export default async function PeoplePage({
   const locale = await getMarketingLocale();
   const parameters = await searchParams;
   const returnSessionId = validReturnSessionId(parameters.session);
-  const queryInvalid = parameters.query !== undefined && typeof parameters.query !== "string";
-  const query = (typeof parameters.query === "string" ? parameters.query : "")
-    .normalize("NFKC")
-    .trim()
-    .slice(0, 160);
+  const submittedQuery = parameters.query;
+  const admitted = parsePeopleDirectoryQuery(submittedQuery, { allowMissing: true });
+  const queryInvalid = !admitted.ok;
+  // A rejected route keeps its raw text available for correction, but never
+  // encodes it as an admitted callback or dispatches a shortened search.
+  const query = admitted.ok ? admitted.query : typeof submittedQuery === "string" ? submittedQuery : "";
   const directoryHref = withReturnSession(
-    query
-      ? `/workspace/people?query=${encodeURIComponent(query)}`
+    admitted.ok && admitted.query
+      ? `/workspace/people?query=${encodeURIComponent(admitted.query)}`
       : "/workspace/people",
     returnSessionId,
   );
@@ -60,7 +62,10 @@ export default async function PeoplePage({
   }
 
   let people: Awaited<ReturnType<typeof loadPeopleDirectory>>["people"] = [];
-  let error: string | null = queryInvalid ? translate(locale, "搜索条件无效，请只使用一个搜索条件。") : null;
+  let error: string | null = admitted.ok ? null : translate(locale,
+    admitted.reason === "too_long" ? "搜索条件最多500个Unicode字符；请缩短后重试，输入内容已保留。"
+      : admitted.reason === "invalid_unicode" ? "搜索条件包含无法使用的字符；请修改后重试，输入内容已保留。"
+        : "搜索条件无效，请只使用一个搜索条件。");
   let sessionRecoveryHref: string | null = null;
   try {
     if (!queryInvalid) people = (

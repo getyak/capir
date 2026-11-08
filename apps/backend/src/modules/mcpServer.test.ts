@@ -320,3 +320,92 @@ describe("MCP tool registry projection", () => {
     expect(registry.every((item) => item.readOnly)).toBe(true);
   });
 });
+
+describe("complete bounded directory queries through the actual MCP registry", () => {
+  function directory() {
+    const queries: unknown[][] = [];
+    const registry = createMcpToolRegistry({
+      query: async (_sql: string, parameters: unknown[] = []) => {
+        queries.push([...parameters]);
+        return { rows: [] };
+      },
+    } as never);
+    const app = Fastify(); apps.push(app);
+    registerMcpServerRoutes(app, dependencies({ tools: registry }));
+    const call = (query?: unknown, authorized = true) => app.inject({
+      method: "POST", url: "/v1/mcp",
+      headers: authorized ? { authorization: `Bearer ${TOKEN}` } : {},
+      payload: { id: 1, jsonrpc: "2.0", method: "tools/call", params: {
+        name: "talent_signal_people", arguments: query === undefined ? {} : { query },
+      } },
+    });
+    return { call, queries, registry };
+  }
+
+  it("preserves different tails after character 160 without acquiring contact-handle matching", async () => {
+    const { call, queries } = directory();
+    const prefix = `Shared display name ${"a".repeat(160)}`;
+    const complete = [`${prefix} first`, `${prefix} second`];
+    expect(complete[0]!.slice(0, 160)).toBe(complete[1]!.slice(0, 160));
+    for (const query of complete) {
+      const response = await call(query);
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ result: { isError: false, structuredContent: { people: [] } } });
+    }
+    // Actual listPeople SQL, not a fake tool callback. Handle type/hash remain
+    // NULL: C16 must not switch this directory grant to searchPeople authority.
+    expect(queries).toEqual(complete.map(query => [
+      "10000000-0000-4000-8000-000000000001", query.toLowerCase(), null, null, null,
+    ]));
+  });
+
+  it("passes an admitted long email as a complete literal name query, never a handle oracle", async () => {
+    const { call, queries } = directory();
+    const query = `reader.${"a".repeat(48)}@${"b".repeat(60)}.${"c".repeat(55)}.example.invalid`;
+    expect(query.length).toBeGreaterThan(160);
+    const response = await call(query);
+    expect(response.json()).toMatchObject({ result: { isError: false } });
+    expect(queries).toEqual([["10000000-0000-4000-8000-000000000001", query, null, null, null]]);
+  });
+
+  it("advertises and transports the complete 500-scalar input budget independently of result limits", async () => {
+    const { call, queries, registry } = directory();
+    const query = "😀".repeat(500);
+    expect((await call(query)).json()).toMatchObject({ result: { isError: false } });
+    expect(queries).toEqual([["10000000-0000-4000-8000-000000000001", query, null, null, null]]);
+    const tool = registry.find(candidate => candidate.name === "talent_signal_people")!;
+    expect(tool.inputSchema).toMatchObject({ properties: {
+      query: { type: "string", maxLength: 500 }, limit: { maximum: 20 },
+    } });
+  });
+
+  it.each([
+    { label: "raw scalar limit", query: "a".repeat(501) },
+    { label: "raw whitespace budget before trim", query: `${" ".repeat(500)}a` },
+    { label: "normalized scalar limit", query: "ﬃ".repeat(170) },
+    { label: "NUL", query: "reader\0tail" },
+    { label: "unpaired surrogate", query: "reader\ud800tail" },
+    { label: "provided nonstring", query: 42 },
+  ])("explicitly refuses $label before any directory SQL", async ({ query }) => {
+    const { call, queries } = directory();
+    const response = await call(query);
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ error: { code: number; message: string } }>();
+    expect(body).toMatchObject({ id: 1, jsonrpc: "2.0", error: { code: -32602 } });
+    expect(body.error.message).toMatch(/query|search|input/i);
+    expect(body.error.message).toMatch(/limit|long|invalid|unicode|supported/i);
+    if (typeof query === "string") expect(body.error.message).not.toContain(query);
+    expect(queries).toEqual([]);
+  });
+
+  it("keeps optional empty-directory semantics and authenticates before query errors", async () => {
+    const { call, queries } = directory();
+    expect((await call()).json()).toMatchObject({ result: { isError: false, structuredContent: { people: [] } } });
+    expect(queries).toEqual([["10000000-0000-4000-8000-000000000001", "", null, null, null]]);
+    queries.length = 0;
+    const denied = await call("a".repeat(501), false);
+    expect(denied.statusCode).toBe(401);
+    expect(denied.json()).toMatchObject({ error: { code: -32001 } });
+    expect(queries).toEqual([]);
+  });
+});

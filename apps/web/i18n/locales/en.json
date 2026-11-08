@@ -2719,5 +2719,7 @@
   "本机消息记录暂时无法读取，内容已保留。恢复存储后请刷新重试。": "Local message records cannot be read right now. Your content is retained. Restore storage access, then refresh to retry.",
   "撤回尚未发出。本机无法保存恢复记录，内容已保留，请恢复存储后重试。": "The withdrawal has not been sent. This device could not save its recovery record. Your content is retained. Restore storage access and retry.",
   "服务端已撤回，但本机记录尚未保存。内容已保留，请恢复存储后刷新重试。": "The server has withdrawn the message, but this device could not save the confirmation. Your content is retained. Restore storage access, then refresh to retry.",
-  "消息已撤回，本机清理尚未确认。恢复存储后刷新可重试清理。": "The message has been withdrawn. Cleanup on this device is not yet confirmed. Restore storage access, then refresh to retry cleanup."
+  "消息已撤回，本机清理尚未确认。恢复存储后刷新可重试清理。": "The message has been withdrawn. Cleanup on this device is not yet confirmed. Restore storage access, then refresh to retry cleanup.",
+  "搜索条件最多500个Unicode字符；请缩短后重试，输入内容已保留。": "Use at most 500 Unicode characters. Shorten your search and try again; your draft is unchanged.",
+  "搜索条件包含无法使用的字符；请修改后重试，输入内容已保留。": "The query contains unsupported characters. Edit it and try again; your draft is unchanged."
 }
