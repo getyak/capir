@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Pool, PoolClient } from "pg";
 import type { BackendConfig } from "../config.js";
 import { ApiError } from "../lib/apiError.js";
@@ -234,5 +234,136 @@ describe("continuation mirror original-login boundary", () => {
   });
   it.each(["append", "load", "listSubkeys", "delete", "listSessions", "listSessionSummaries"] as const)("denies %s data after revocation during its await", async method => {
     await continuationStoreBoundary(method, "during");
+  });
+});
+
+describe("durable original credential restoration (synthetic SQL boundary)", () => {
+  async function originalFixture(branch: "current" | "previous" = "current") {
+    let live = true, remaining = "60000", failed = false;
+    const originalDeadline = "2099-01-01T00:00:00.123456Z";
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const pool = { query: async (sql: string, params: unknown[]) => {
+      queries.push({ sql, params });
+      if (failed) throw new Error("PRIVATE_SYNTHETIC_DB_ERROR");
+      if (sql.includes("AS original_deadline")) return { rows: [{ original_deadline: originalDeadline, remaining_ms: "60000",
+        user_kind: auth.userKind, token_branch: branch, lab_binding: null }], rowCount: 1 };
+      const matchesOriginal = params[7] === auth.sessionId && params[8] === originalDeadline;
+      return { rows: live && matchesOriginal ? [sql.includes("AS remaining_ms") ? { remaining_ms: remaining } : { current: 1 }] : [], rowCount: 1 };
+    } } as unknown as Pool;
+    const original = await admitLegacyChatAuthority(pool, auth, "Bearer synthetic-unit-only", config);
+    admissions.push(original);
+    return { pool, original, queries, originalDeadline, revoke: () => { live = false; }, resumeRow: () => { live = true; },
+      expire: () => { remaining = "0"; }, setRemaining: (value: string) => { remaining = value; }, fail: () => { failed = true; } };
+  }
+
+  it.each(["current", "previous"] as const)("keeps original %s provenance/session/deadline across a fresh login", async branch => {
+    const f = await originalFixture(branch);
+    const proof = f.original.snapshotOriginal();
+    expect(Object.isFrozen(proof)).toBe(true); expect(Object.isFrozen(proof.deployment)).toBe(true);
+    expect(proof.originalDeadline).toBe(f.originalDeadline);
+    expect(proof.tokenBranch).toBe(branch);
+    expect(JSON.stringify(proof)).not.toContain("synthetic-unit-only");
+    expect(proof).not.toHaveProperty("userEmail"); expect(proof).not.toHaveProperty("accountSlug");
+    const { restoreLegacyChatAuthority } = await import("./legacyChatAuthority.js");
+    const fresh = { ...auth, sessionId: "00000000-0000-4000-8000-000000000004" };
+    const restored = await restoreLegacyChatAuthority(f.pool, fresh, proof, config);
+    admissions.push(restored);
+    expect(restored.snapshotOriginal()).toEqual(proof);
+    await expect(restored.assertCurrent()).resolves.toBeUndefined();
+    for (const q of f.queries.slice(1)) {
+      expect(q.params[7]).toBe(auth.sessionId); expect(q.params[8]).toBe(f.originalDeadline);
+      expect(q.sql).toContain("sessions.previous_token_hash=$1");
+    }
+  });
+
+  it.each(["foreign", "foreign_account", "deployment", "expired", "revoked", "database"])("does not replace or revive original proof on %s", async kind => {
+    const f = await originalFixture("previous");
+    const proof = f.original.snapshotOriginal();
+    const { restoreLegacyChatAuthority } = await import("./legacyChatAuthority.js");
+    if (kind === "expired") f.expire();
+    if (kind === "revoked") f.revoke();
+    if (kind === "database") f.fail();
+    const currentAuth = kind === "foreign" ? { ...auth, userId: "00000000-0000-4000-8000-000000000004" }
+      : kind === "foreign_account" ? { ...auth, accountId: "00000000-0000-4000-8000-000000000004" } : auth;
+    const currentConfig = kind === "deployment" ? { ...config, capirTests: { enabled: false, webOrigin: "https://different.invalid" } } as BackendConfig : config;
+    await expect(restoreLegacyChatAuthority(f.pool, currentAuth, proof, currentConfig))
+      .rejects.toBeInstanceOf(LegacyChatTerminated);
+    if (kind === "foreign" || kind === "foreign_account" || kind === "deployment") expect(f.queries).toHaveLength(1);
+  });
+
+  it("aborts using conservative DB remaining time without replacing the original microsecond deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const f = await originalFixture("previous");
+      f.setRemaining("2");
+      const { restoreLegacyChatAuthority } = await import("./legacyChatAuthority.js");
+      const restored = await restoreLegacyChatAuthority(f.pool, auth, f.original.snapshotOriginal(), config);
+      admissions.push(restored);
+      expect(restored.snapshotOriginal().originalDeadline).toBe(f.originalDeadline);
+      expect(f.queries[1]!.sql).toContain("LEAST($9::timestamptz");
+      await vi.advanceTimersByTimeAsync(2);
+      expect(restored.signal.aborted).toBe(true);
+      await expect(restored.assertCurrent()).rejects.toBeInstanceOf(LegacyChatTerminated);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not await a delayed timer callback to honor the original DB remaining bound", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const f = await originalFixture();
+      f.setRemaining("2");
+      const { restoreLegacyChatAuthority } = await import("./legacyChatAuthority.js");
+      const restored = await restoreLegacyChatAuthority(f.pool, auth, f.original.snapshotOriginal(), config);
+      admissions.push(restored);
+      // A delayed event loop must not extend the consumed monotonic budget,
+      // even when no timer callback has yet run and a DB read reports live.
+      const clock = vi.spyOn(performance, "now").mockReturnValue(3);
+      let calls = 0;
+      try {
+        await expect(restored.provider(async () => { calls++; return "must not run"; })).rejects.toBeInstanceOf(LegacyChatTerminated);
+        expect(calls).toBe(0);
+      } finally { clock.mockRestore(); }
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("preserves exact Lab lineage and denies a changed grant even while the original login stays live", async () => {
+    const labAuth: AuthContext = { ...auth, userKind: "lab_human" };
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+    const lab = { entry: id(4), workspace: id(5), parent: id(6), principal: null, generation: null,
+      ownerAccount: id(7), ownerUser: id(8), grant: id(9), entitlementGeneration: 17, run: null };
+    let admission = true, sameBinding = true;
+    const queries: unknown[][] = [];
+    const pool = { query: async (sql: string, params: unknown[]) => {
+      queries.push(params);
+      if (admission) { admission = false; return { rows: [{ original_deadline: "2099-01-01T00:00:00.123456Z", remaining_ms: "60000",
+        user_kind: "lab_human", token_branch: "current", lab_binding: lab }] }; }
+      expect(JSON.parse(params[10] as string)).toEqual(lab);
+      return { rows: sameBinding ? [sql.includes("AS remaining_ms") ? { remaining_ms: "60000" } : {}] : [] };
+    } } as unknown as Pool;
+    const original = await admitLegacyChatAuthority(pool, labAuth, "Bearer synthetic-lab-unit", config);
+    admissions.push(original);
+    const proof = original.snapshotOriginal();
+    expect(Object.isFrozen(proof.labBinding)).toBe(true);
+    expect(proof.labBinding?.entitlementGeneration).toBe(17);
+    const { restoreLegacyChatAuthority } = await import("./legacyChatAuthority.js");
+    const restored = await restoreLegacyChatAuthority(pool, { ...labAuth, sessionId: id(10) }, proof, config);
+    admissions.push(restored);
+    await expect(restored.assertCurrent()).resolves.toBeUndefined();
+    sameBinding = false;
+    await expect(restored.assertCurrent()).rejects.toBeInstanceOf(LegacyChatTerminated);
+    expect(queries.slice(1).every(params => params[7] === auth.sessionId)).toBe(true);
+  });
+
+  it("latches a failed restored original even if its row later looks live again", async () => {
+    const f = await originalFixture();
+    const { restoreLegacyChatAuthority } = await import("./legacyChatAuthority.js");
+    const restored = await restoreLegacyChatAuthority(f.pool, auth, f.original.snapshotOriginal(), config);
+    admissions.push(restored);
+    f.revoke();
+    await expect(restored.assertCurrent()).rejects.toBeInstanceOf(LegacyChatTerminated);
+    const first = restored.signal.reason;
+    f.resumeRow();
+    await expect(restored.provider(async () => "must not run")).rejects.toBe(first);
+    expect(() => restored.snapshotOriginal()).toThrow(LegacyChatTerminated);
   });
 });

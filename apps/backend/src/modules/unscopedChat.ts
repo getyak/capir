@@ -22,7 +22,10 @@ import type { Pool, PoolClient } from "pg";
 
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
-import { appendAudit } from "../lib/audit.js";
+import { appendUnscopedChatCompletionAudit } from "./unscopedChatCompletion.js";
+import { admitLegacyChatExecution, legacyChatWaiterForClaim, snapshotEligibleLegacyProvider,
+  type LegacyChatAdmission, type LegacyChatWaiter } from "./legacyChatExecutions.js";
+import { runLegacyChatExecution, waitLegacyChatExecution } from "./legacyChatLifecycle.js";
 import {
   claimIdempotency,
   completeIdempotency,
@@ -136,6 +139,8 @@ export async function executeUnscopedChatTask(input: {
   hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
   /** HTTP-only original credential fence; never a queue staging authority. */
   legacyAuthority?: LegacyChatAuthority;
+  /** Private durable no-Session owner restores its ORIGINAL source baseline. */
+  legacySourceCurrent?: () => Promise<void>;
   /** Host queue admission for this message's review-only Person draft. */
   memoryDraftTarget?: import("@talent-signal/contracts").ConversationMemoryDraftTarget | null;
   provider: RemoteChatAnswerProviding | null;
@@ -187,7 +192,7 @@ export async function executeUnscopedChatTask(input: {
   // Keep `assertCurrent` presence and every existing capability selection as
   // before. The additional HTTP source fence grants no history/tool capability.
   const legacySourceCurrent = input.legacyAuthority && input.database && input.auth
-    ? assertCurrent ?? await input.legacyAuthority.source(() => createHarnessSourceGuard(
+    ? assertCurrent ?? input.legacySourceCurrent ?? await input.legacyAuthority.source(() => createHarnessSourceGuard(
       input.database!, input.auth!, input.request.session_id, sources, input.probePool ?? input.database)) : undefined;
   if (legacySourceCurrent) input.legacyAuthority!.observeSource(legacySourceCurrent);
   if (input.legacyAuthority && input.provider)
@@ -482,9 +487,10 @@ export async function createUnscopedChatTask(
 }
 
 export async function createLegacyUnscopedChatTask(authority: LegacyChatAuthority,
-  ...args: Parameters<typeof createUnscopedChatTask>): Promise<UnscopedChatTaskMutationResult> {
-  const [pool, auth, request, provider, select, reference] = args;
-  try { return await createUnscopedChatTaskInternal(pool, auth, request, provider, select, reference, authority); }
+  pool: Pool, auth: AuthContext, request: UnscopedChatTaskRequest, provider: RemoteChatAnswerProviding | null,
+  select?: (client: DatabaseClient) => Promise<RemoteChatAnswerProviding | null>, reference?: Date,
+  options?: { signal?: AbortSignal }): Promise<UnscopedChatTaskMutationResult> {
+  try { return await createUnscopedChatTaskInternal(pool, auth, request, provider, select, reference, authority, options?.signal); }
   finally { authority.dispose(); }
 }
 
@@ -496,9 +502,10 @@ async function createUnscopedChatTaskInternal(
   selectRemoteProvider?: (client: DatabaseClient) => Promise<RemoteChatAnswerProviding | null>,
   referenceTime?: Date,
   legacyAuthority: LegacyChatAuthority | null = null,
+  legacySignal?: AbortSignal,
 ): Promise<UnscopedChatTaskMutationResult> {
   if (request.session_id) await purgeUnavailableSessionChatSources(pool, auth);
-  const execute = async (client: PoolClient): Promise<UnscopedChatTaskMutationResult> => {
+  const execute = async (client: PoolClient): Promise<UnscopedChatTaskMutationResult | LegacyChatAdmission | LegacyChatWaiter> => {
     if (request.session_id) await assertSessionForChat(client, auth, request.session_id);
     const requestIdentity = {
       objective_hash: createHash("sha256")
@@ -512,13 +519,21 @@ async function createUnscopedChatTaskInternal(
       ...(request.session_id ? { session_id: request.session_id } : {}),
       ...(request.message_id ? { message_id: request.message_id } : {}),
     };
-    const idempotency = await claimIdempotency(
+    let idempotency: Awaited<ReturnType<typeof claimIdempotency>>;
+    try { idempotency = await claimIdempotency(
       client,
       { accountId: auth.accountId, actorUserId: auth.userId },
       "create_unscoped_chat_task",
       request.idempotency_key,
       requestIdentity,
-    );
+    ); } catch (error) {
+      if (legacyAuthority && !request.session_id && error instanceof ApiError
+        && error.code === "IDEMPOTENCY_REQUEST_IN_PROGRESS") {
+        const waiter = await legacyChatWaiterForClaim(client, auth, request.idempotency_key);
+        if (waiter) return waiter;
+      }
+      throw error;
+    }
     if (idempotency.replay) {
       if (request.session_id) await assertSessionForChat(client, auth, request.session_id, true);
       const replay = idempotency.replay.body as UnscopedChatTaskResponse;
@@ -546,6 +561,12 @@ async function createUnscopedChatTaskInternal(
     }
 
     if (selectRemoteProvider) provider = await selectRemoteProvider(client);
+    // Only after actual fresh selection. Ineligible providers retain this SAME
+    // original atomic path and its final-lock timing; no new SHARE spans RPC.
+    if (legacyAuthority && !request.session_id) {
+      const selected = snapshotEligibleLegacyProvider(provider);
+      if (selected) return admitLegacyChatExecution(client, auth, idempotency, legacyAuthority, selected, request.message_id);
+    }
     const protectContinuation = provider?.providerId === "claude-agent-sdk" && Boolean(request.session_id);
     if (protectContinuation) await client.query("SAVEPOINT harness_product_reply");
     const execution = await executeUnscopedChatTask({
@@ -576,7 +597,16 @@ async function createUnscopedChatTaskInternal(
     return { body: execution.body, replayed: false, status: 201,
       labProductOutcome: execution.remoteStatus === "agent_completed" || execution.remoteStatus === "completed" ? "accepted" : "fallback" };
   };
-  return inTransaction(pool, client => legacyAuthority ? legacyAuthority.withClient(client, execute) : execute(client));
+  const result = await inTransaction(pool, client => legacyAuthority ? legacyAuthority.withClient(client, execute) : execute(client));
+  if ("kind" in result && legacyAuthority) {
+    if (result.kind === "legacy_durable_waiter") return waitLegacyChatExecution({ pool,auth,authority: legacyAuthority,
+      waiter: result,...(legacySignal ? { signal: legacySignal } : {}) });
+    return runLegacyChatExecution({ pool,auth,request,authority: legacyAuthority,admission: result,
+      execute: executeUnscopedChatTask,...(referenceTime ? { referenceTime } : {}),
+      ...(legacySignal ? { signal: legacySignal } : {}) });
+  }
+  if ("kind" in result) throw new LegacyChatTerminated();
+  return result;
 }
 
 /**
@@ -591,39 +621,18 @@ export async function recordUnscopedChatCompletionEvidence(
   request: UnscopedChatTaskRequest,
   execution: UnscopedChatExecution,
 ): Promise<void> {
-  await appendAudit(
-    client,
-    { accountId: auth.accountId, actorUserId: auth.userId },
-    "unscoped_chat_task.completed",
-    "unscoped_chat_task",
-    execution.body.task_id,
-    {
-      context_scope: "agent_bounded_contact_lookup",
-      conversation_session_id: request.session_id ?? null,
-      conversation_message_ids: execution.conversationMessageIDs,
-      current_message_id: request.message_id ?? null,
-      evidence_count: 0,
-      external_effect_count: 0,
-      disposition: execution.body.disposition,
-      remote_chat_status: execution.remoteStatus,
-      remote_chat_provider_id:
-        execution.agentProviderResult?.providerID
-          ?? execution.providerResult?.provider_id
-          ?? null,
-      remote_chat_model:
-        execution.agentProviderResult?.model
-          ?? execution.providerResult?.model
-          ?? null,
-      remote_chat_provider_request_id:
-        execution.agentProviderResult?.providerRequestID
-          ?? execution.providerResult?.provider_request_id
-          ?? null,
-      contact_agent_event_kind: execution.body.agent_event?.kind ?? null,
-      prompt: execution.agentProviderResult?.prompt ?? (execution.providerResult?.prompt_snapshot
-        ? { name: execution.providerResult.prompt_snapshot.name, revision: execution.providerResult.prompt_snapshot.revision,
-          versionId: execution.providerResult.prompt_snapshot.versionId, source: execution.providerResult.prompt_snapshot.source } : null),
-    },
-  );
+  await appendUnscopedChatCompletionAudit(client, auth, {
+    taskID: execution.body.task_id, sessionID: request.session_id ?? null,
+    messageID: request.message_id ?? null, conversationMessageIDs: execution.conversationMessageIDs,
+    disposition: execution.body.disposition, remoteStatus: execution.remoteStatus,
+    providerID: execution.agentProviderResult?.providerID ?? execution.providerResult?.provider_id ?? null,
+    model: execution.agentProviderResult?.model ?? execution.providerResult?.model ?? null,
+    providerRequestID: execution.agentProviderResult?.providerRequestID ?? execution.providerResult?.provider_request_id ?? null,
+    eventKind: execution.body.agent_event?.kind ?? null,
+    prompt: execution.agentProviderResult?.prompt ?? (execution.providerResult?.prompt_snapshot
+      ? { name: execution.providerResult.prompt_snapshot.name, revision: execution.providerResult.prompt_snapshot.revision,
+        versionId: execution.providerResult.prompt_snapshot.versionId, source: execution.providerResult.prompt_snapshot.source } : null),
+  });
   await recordSessionChatSources(
     client,
     auth,
