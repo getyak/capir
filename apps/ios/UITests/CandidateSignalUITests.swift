@@ -4,10 +4,12 @@ import UIKit
 @MainActor
 final class CandidateSignalUITests: XCTestCase {
     private var app: XCUIApplication!
+    private var checkedObservedKeyboardTutorial = false
     private let previewWorkspaceEnvironmentKey = "TS_IOS_UI_TEST_PREVIEW_WORKSPACE"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        checkedObservedKeyboardTutorial = false
         app = XCUIApplication()
         app.terminate()
         XCTAssertEqual(app.state, .notRunning)
@@ -6339,6 +6341,47 @@ final class CandidateSignalUITests: XCTestCase {
         return candidate
     }
 
+    // Fail-closed locator candidate from the retained QuickPath recording.
+    // Visible labels alone do not prove this subtree: no match leaves the
+    // original native typing path and all its value/wait assertions intact.
+    private func tapObservedKeyboardTutorialContinueIfPresent() -> Bool {
+        guard !checkedObservedKeyboardTutorial else { return false }
+        checkedObservedKeyboardTutorial = true
+        var keyboardCount = 0
+        var tutorialCount = 0
+        var continueCount = 0
+        var eligible = false
+        var tapReturned = false
+        defer {
+            let facts = XCTAttachment(string:
+                "keyboard_count=\(keyboardCount); tutorial_count=\(tutorialCount); "
+                + "continue_count=\(continueCount); eligible=\(eligible); tap_returned=\(tapReturned)"
+            )
+            facts.name = "Observed keyboard tutorial prerequisite"
+            facts.lifetime = .keepAlways
+            add(facts)
+        }
+        let keyboards = app.keyboards.allElementsBoundByAccessibilityElement
+        keyboardCount = keyboards.count
+        guard keyboardCount == 1, let keyboard = keyboards.first else { return false }
+        let narrative = "Speed up your typing by sliding your finger across the letters to compose a word."
+        let tutorials = keyboard.staticTexts.matching(
+            NSPredicate(format: "label == %@", narrative)
+        ).allElementsBoundByAccessibilityElement
+        let continues = keyboard.buttons.matching(
+            NSPredicate(format: "label == %@", "Continue")
+        ).allElementsBoundByAccessibilityElement
+        tutorialCount = tutorials.count
+        continueCount = continues.count
+        guard tutorialCount == 1, continueCount == 1,
+              let button = continues.first else { return false }
+        eligible = button.isEnabled && button.isHittable
+        guard eligible else { return false }
+        button.tap()
+        tapReturned = true
+        return true
+    }
+
     private func typeTextReliably(_ text: String, into field: XCUIElement) {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         let keyboard = app.keyboards.firstMatch
@@ -6347,6 +6390,13 @@ final class CandidateSignalUITests: XCTestCase {
 
         for _ in 0..<4 {
             field.tap()
+            if tapObservedKeyboardTutorialContinueIfPresent() {
+                guard field.exists, field.isEnabled, field.isHittable else {
+                    XCTFail("The original input must remain available after the keyboard tutorial tap.")
+                    return
+                }
+                field.tap()
+            }
             if keyboard.waitForExistence(timeout: 1.5) {
                 if let currentValue = field.value as? String {
                     if currentValue == text {
