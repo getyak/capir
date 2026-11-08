@@ -2150,7 +2150,8 @@ export async function executeWorkspaceConversationAgent(input: {
       }
   };
   const authorizeMemoryRecall = async (client: DatabaseClient,
-    { personID, identityClue, imageAuthority }: Parameters<WorkspaceMemoryLookup["recall"]>[0]) => {
+    { personID, identityClue, imageAuthority }: Pick<Parameters<WorkspaceMemoryLookup["recall"]>[0],
+      "personID" | "identityClue" | "imageAuthority">) => {
       if (memoryDraftTarget) throw new ApiError(403, "MEMORY_RECALL_NOT_AUTHORIZED", "This text draft action does not admit Memory recall.");
       if (imageAuthority && !await imageCurrent(client, imageAuthority.artifactId, imageAuthority.index, imageAuthority.hash, true)) {
         throw new Error("MEMORY_IMAGE_AUTHORITY_NO_LONGER_CURRENT");
@@ -2164,7 +2165,9 @@ export async function executeWorkspaceConversationAgent(input: {
     ...(input.hostAuthority ? { withdraw: (request: Parameters<NonNullable<WorkspaceMemoryLookup["withdraw"]>>[0]) =>
       withdrawMemoryProposalForRun(input.database, input.auth, { ...request, authority: input.hostAuthority! }) } : {}),
     recall: async ({ personID, contextID, scope, cursor, limit, identityClue, imageAuthority }) => withDatabaseTransaction(async (client) => {
-      await authorizeMemoryRecall(client, { personID, contextID, scope, cursor, limit, identityClue, imageAuthority });
+      await authorizeMemoryRecall(client, { personID,
+        ...(identityClue === undefined ? {} : { identityClue }),
+        ...(imageAuthority === undefined ? {} : { imageAuthority }) });
       const recalled = await recallMemories(client, input.auth, {
         surface: "chat",
         person_id: personID,
