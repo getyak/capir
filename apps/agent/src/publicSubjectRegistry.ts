@@ -119,6 +119,7 @@ const PRIVATE_CONTEXT=/住址|家住|住在|婚姻|离婚|怀孕|疾病|病史|�
 // to name/profile research instead of trusting the inspector's category.
 const PUBLIC_PROJECT_IDENTIFIERS=new Set(["nanoGPT","nanochat","micrograd","makemore","minGPT","GPT","GPT-2","GPT-3","GPT-4","BERT","LLM","RNN","CNN","PyTorch","TensorFlow","JAX","ChatGPT","StableDiffusion","Llama"]);
 const PROFESSIONAL_ROLE=/^(?:(?:OpenAI|Google|DeepMind|Anthropic|Microsoft|Meta|Tesla|Stanford|MIT) )?(?:engineer|researcher|scientist|professor|founder|co-founder|CEO|CTO|developer|designer|工程师|研究员|科学家|教授|创始人|开发者|设计师)$/iu;
+const PUBLIC_HANDLE=/^@[A-Za-z0-9_.-]{2,40}$/u;
 
 /**
  * One bounded, source-grounded context anchor. The text must be an exact
@@ -129,7 +130,10 @@ const PROFESSIONAL_ROLE=/^(?:(?:OpenAI|Google|DeepMind|Anthropic|Microsoft|Meta|
 function publicAnchorText(source:string):string {
   // An email is private contact data in its entirety, including any local or
   // domain fragment that happens to resemble an allowed work/role/handle.
-  return source.normalize("NFKC").replace(/[^\s@<>()[\]{}"'，,。！？；;]+@[^\s@<>()[\]{}"'，,。！？；;]+/gu," ");
+  // Scan each complete token once. A standalone public handle retains the
+  // existing handle grammar; chained or incomplete contact tokens stay private.
+  return source.normalize("NFKC").replace(/[^\s<>()[\]{}"'，,。！？；;]+/gu,
+    token=>token.includes("@")&&!PUBLIC_HANDLE.test(token)?" ":token);
 }
 
 export function admitPublicContextAnchor(
@@ -149,7 +153,7 @@ export function admitPublicContextAnchor(
         if(url.protocol!=="https:"||url.username||url.password||url.port||url.search||url.hash||!PLATFORM_PROFILE_PATHS[url.hostname]?.test(url.pathname))return null;
       }catch{return null;}
     }else {
-      if(!/^@[A-Za-z0-9_.-]{2,40}$/u.test(value))return null;
+      if(!PUBLIC_HANDLE.test(value))return null;
       // Substrings of a private email are never public account handles.
       const escaped=value.replace(/[.*+?^${}()|[\]\\]/gu,"\\$&");
       const token=new RegExp(`(?<![\\p{L}\\p{N}_.+%\\-@])${escaped}(?![A-Za-z0-9_.-])`,"u");

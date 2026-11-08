@@ -190,20 +190,31 @@ export function registerProductRunMonitoring(app: FastifyInstance, pool: Pool, a
     const blocks = Array.isArray(output.blocks) ? output.blocks : [];
     const status = reply.statusCode >= 400 ? "failed" : output.status === "running" ? "running"
       : blocks.some(block => ["AI answer unavailable", "Local reply", "本地回复"].includes(String(bodyObject(block).title))) ? "fallback" : "completed";
-    await inTransaction(pool, async client => {
-      if (taskID && tasks.get(request.routeOptions.url ?? "") === "screenshot") {
-        // Background checkpoints acquire this task before their Run row too.
-        await client.query("SELECT id FROM screenshot_contact_tasks WHERE account_id=$1 AND created_by_user_id=$2 AND id=$3 FOR SHARE",
-          [request.auth.accountId,request.auth.userId,taskID]);
-      }
-      if (taskID && status !== "failed") {
-        await client.query("UPDATE product_runs SET task_id=COALESCE(task_id,$4::uuid),input=$2::jsonb,objective=$3,status=$5 WHERE id=$1 AND (task_id IS NULL OR task_id=$4::uuid)",
-          [record.id,JSON.stringify(record.input),record.objective,taskID,status]);
-      }
-      await saveProductRunOutput(client, { id: record.id, ...(taskID ? { taskID } : {}) }, output, status);
-      await client.query(`UPDATE product_runs SET input=NULL,output=NULL,objective='',comment='',correction='',selected_text=''
-        WHERE id=$1 AND NOT product_run_source_available(id)`,[record.id]);
-    });
+    try {
+      await inTransaction(pool, async client => {
+        if (taskID && tasks.get(request.routeOptions.url ?? "") === "screenshot") {
+          // Background checkpoints acquire this task before their Run row too.
+          await client.query("SELECT id FROM screenshot_contact_tasks WHERE account_id=$1 AND created_by_user_id=$2 AND id=$3 FOR SHARE",
+            [request.auth.accountId,request.auth.userId,taskID]);
+        }
+        if (taskID && status !== "failed") {
+          await client.query("UPDATE product_runs SET task_id=COALESCE(task_id,$4::uuid),input=$2::jsonb,objective=$3,status=$5 WHERE id=$1 AND (task_id IS NULL OR task_id=$4::uuid)",
+            [record.id,JSON.stringify(record.input),record.objective,taskID,status]);
+        }
+        await saveProductRunOutput(client, { id: record.id, ...(taskID ? { taskID } : {}) }, output, status);
+        await client.query(`UPDATE product_runs SET input=NULL,output=NULL,objective='',comment='',correction='',selected_text=''
+          WHERE id=$1 AND NOT product_run_source_available(id)`,[record.id]);
+      });
+    } catch (error) {
+      // A canonical Lab stop may close its write guard after the handler has
+      // already rejected this request. Diagnostic persistence cannot replace
+      // that rejection or reopen the workspace. Successful answers and every
+      // other database failure still fail through the normal error handler.
+      const failure = error as { code?: string; message?: string };
+      if (reply.statusCode < 400 || request.auth.userKind !== "lab_human"
+        || failure.code !== "P0001" || failure.message !== "LAB_TEST_WORKSPACE_CLOSED") throw error;
+      request.log.info({ failure_code: "LAB_MONITOR_WITHDRAWN" }, "Rejected Lab response retained after diagnostic withdrawal");
+    }
     await record.flush();
     // The background runner can finish before HTTP serialization assigns its task ID.
     if (taskID && tasks.get(request.routeOptions.url ?? "") === "screenshot") {

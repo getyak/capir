@@ -2123,13 +2123,17 @@ export async function executeWorkspaceConversationAgent(input: {
       const sourceParts = (input.inputParts ?? []).filter(part => part.kind === "image"
         ? part.artifactID.match(/^conversation-image-([0-9a-f-]{36})-/iu)?.[1] === sourceMessageID
         : sourceMessageID === rootMessageID);
+      const hasAdmittedText = messageSources.has(sourceMessageID);
       const admittedText = messageSources.get(sourceMessageID);
-      if (admittedText === undefined && !sourceParts.length) return null;
+      // Admission belongs to this live host-owned map, never to body content.
+      // A corrupt admitted value must not fall back to a persisted source.
+      if (hasAdmittedText && typeof admittedText !== "string") return null;
+      if (!hasAdmittedText && !sourceParts.length) return null;
       if (sourceText !== undefined && sourceText !== admittedText) return null;
       // Only host-admitted authored text may use temporary Run authority.
-      // Missing text always resolves persisted source authority, even when a
+      // Missing admission resolves persisted source authority, even when a
       // caller omits its Session ID (the resolver then fails closed to empty).
-      const authority: MemorySourceAuthority = admittedText === undefined
+      const authority: MemorySourceAuthority = !hasAdmittedText
         ? await resolveSessionSourceAuthority(client, input.auth, input.sessionID ?? null, sourceMessageID)
         : {
         text: admittedText ?? "",
