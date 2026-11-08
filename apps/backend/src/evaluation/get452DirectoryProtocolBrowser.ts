@@ -23,6 +23,19 @@ function routeKind(path: string): string {
 }
 type FetchObservation = { decision: "continue" | "fail"; command: "requested" | "acknowledged" | "rejected"; correlation: "matched" | "ambiguous" };
 type ExtraObservation = "unobserved" | "seen" | "ambiguous";
+function clickProbe(value: unknown, target: string): Record<string, unknown> {
+  const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const finite = (key: string) => typeof row[key] === "number" && Number.isFinite(row[key])
+    ? Math.round(Math.max(-1_000_000, Math.min(1_000_000, row[key] as number)) * 1000) / 1000 : null;
+  const flag = (key: string) => typeof row[key] === "boolean" ? row[key] : null;
+  const tag = (key: string) => ["INPUT", "BUTTON", "LABEL", "DIV", "HEADER", "NAV", "MAIN", "FORM", "SECTION", "ASIDE", "BODY", "HTML", "SPAN", "A", "SVG", "NONE"].includes(row[key] as string) ? row[key] : "OTHER";
+  return { target, found: flag("found"), disabled: flag("disabled"), connected: flag("connected"), active: flag("active"),
+    targetTag: tag("targetTag"), hitTag: tag("hitTag"),
+    hitRelation: ["self", "descendant", "ancestor", "other", "none"].includes(row.hitRelation as string) ? row.hitRelation : "unknown",
+    left: finite("left"), top: finite("top"), width: finite("width"), height: finite("height"),
+    viewportWidth: finite("viewportWidth"), viewportHeight: finite("viewportHeight"), scrollY: finite("scrollY"),
+    scrollBehavior: ["auto", "smooth"].includes(row.scrollBehavior as string) ? row.scrollBehavior : "other" };
+}
 type IconLifetime = { id:string; ordinal:number; requestOrder:number; mainDocumentReceiveCountAtRequest:number; reportedDocumentRoute:string;
   reportedFrameRelation:"main"|"other"|"unobserved"; ambiguous:boolean; responseStatus:number|null; responseOrder:number|null;
   finished:number; failed:number; terminalOrder:number|null; canceled:boolean|null; failure:"aborted"|"failed"|"connection_closed"|"other"|"unobserved" };
@@ -43,6 +56,7 @@ export class DirectoryProtocolPage {
   private httpStatuses = new Map<string, number>();
   private changedAt = Date.now();
   private observerFailed = false;
+  private lastClickProbe: Record<string, unknown> | null = null;
   private mainLoaderId = "";
   private transportIds = new Set<string>();
   private transportHistorySaturated = false;
@@ -275,7 +289,14 @@ export class DirectoryProtocolPage {
     requireProtocol(await this.evaluate<boolean>('document.title.length>0 && !!document.querySelector("main") && !document.querySelector("nextjs-portal")'), "BROWSER_PAGE_IDENTITY");
   }
   async click(selector: string) {
-    const rect = await this.evaluate<{ x: number; y: number; visible: boolean } | null>(`(() => { const e=document.querySelector(${JSON.stringify(selector)});if(!(e instanceof HTMLElement))return null;e.scrollIntoView({block:"center"});const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2,visible:r.width>0&&r.height>0&&!e.hasAttribute("disabled")&&document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest(${JSON.stringify(selector)})===e};})()`);
+    this.lastClickProbe = null;
+    const rect = await this.evaluate<{ x: number; y: number; visible: boolean; probe: unknown } | null>(`(() => { const e=document.querySelector(${JSON.stringify(selector)});if(!(e instanceof HTMLElement))return null;e.scrollIntoView({block:"center"});const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),visible=r.width>0&&r.height>0&&!e.hasAttribute("disabled")&&hit?.closest(${JSON.stringify(selector)})===e;return{x:r.x+r.width/2,y:r.y+r.height/2,visible,probe:{found:true,disabled:e.hasAttribute("disabled"),connected:e.isConnected,active:document.activeElement===e,targetTag:e.tagName,hitTag:hit?.tagName??"NONE",hitRelation:!hit?"none":hit===e?"self":e.contains(hit)?"descendant":hit.contains(e)?"ancestor":"other",left:r.left,top:r.top,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight,scrollY,scrollBehavior:getComputedStyle(document.documentElement).scrollBehavior}};})()`);
+    const target = selector === "#account-email" ? "identifier" : selector === "#account-password" ? "password"
+      : selector === directoryInput ? "directory_query" : selector === 'form:has(#account-email) button[type="submit"]' ? "login_submit"
+        : selector === 'form[action="/workspace/people"] button[type="submit"]' ? "directory_submit" : "other";
+    // Closed geometry only, captured by the original evaluation at its exact
+    // failed hit test. Never serialize selector, attributes, text or values.
+    this.lastClickProbe = clickProbe(rect?.probe, target);
     requireProtocol(rect?.visible, "BROWSER_CLICK_TARGET");
     await this.call("Input.dispatchMouseEvent", { type: "mousePressed", x: rect.x, y: rect.y, button: "left", clickCount: 1 });
     await this.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: rect.x, y: rect.y, button: "left", clickCount: 1 });
@@ -328,6 +349,7 @@ export class DirectoryProtocolPage {
     }
     return { ...this.observed, cookieBlocks: { ...this.observed.cookieBlocks }, httpErrors: { ...this.observed.httpErrors },
       observerFailed: this.observerFailed, activeRequests: this.active.size,
+      clickProbeVersion: 1, lastClickProbe: this.lastClickProbe ? { ...this.lastClickProbe } : null,
       settlementVersion: 1, settlement: { basis: "committed_main_document", documentCommitted: this.documentCommitted,
         activeRequests: this.documentActive.size, replacedDocumentRequests: this.replacedDocumentRequests,
         unterminatedPriorDocumentRequests: [...this.active].filter(id => !this.documentActive.has(id)).length },
