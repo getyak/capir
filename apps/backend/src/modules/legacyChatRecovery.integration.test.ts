@@ -339,7 +339,7 @@ describe.skipIf(!database)("durable legacy same-attempt recovery over actual han
     await withFixture(async f => {
       const source = await mcpSession(f),key = randomUUID(); f.answerBody(`Synthetic withdrawn completed ${source.requestID}`);
       const completed = await f.post(key); expect(completed.statusCode).toBe(201);
-      expect(completed.json<{ blocks: { body: string }[] }>().blocks[0].body)
+      expect(completed.json<{ blocks: { body: string }[] }>().blocks[0]?.body)
         .toBe(`Synthetic withdrawn completed ${source.requestID}`);
       await source.remove(); await assertRetiredMcpCopy(f,key,true);
       expect((await f.post(key)).statusCode).toBe(409);
