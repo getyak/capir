@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { DeepSeekRelationshipTextProvider } from "../../../agent/src/deepSeekRelationshipTextProvider.js";
+import { DeepSeekRelationshipTextProvider } from "@talent-signal/agent/chat-answer-provider";
 import { executeUnscopedChatTask, type UnscopedChatExecution } from "./unscopedChat.js";
 import {
   decodeLegacyChatCheckpoint, encodeLegacyChatCheckpoint, LegacyChatCheckpointError,

@@ -82,13 +82,28 @@ retirement-query bound and disabled SQL-NULL findings. Separate review covers
 the original-proof/source codec and the JSONB-safe canonical checkpoint codec.
 Current host evidence is217 passing affected tests plus the separately passing
 disabled-descriptor regression;15 PostgreSQL cases were skipped in that host
-run. The new disabled-branch PG case brings the current authored PG selection
-to16, all pending execution against the replacement runtime. Actual TypeScript
+run. The disabled-branch, Lab and process-death additions bring the authored PG
+selection to26, all pending execution against the replacement runtime. Actual TypeScript
 6.0.3 with pinned SDK0.3.312 declarations reports zero diagnostics for18 selected
 roots, including app wiring. This is selected-source evidence, not a full build.
 
-New Lab-stop/grant-withdrawal and owned-child process-death fixtures are being
-reviewed separately. They are not included in this candidate's executed counts.
+New Lab-stop/grant-withdrawal and owned-child process-death fixtures have passed
+independent source review, including strict disposable database URL gates. The
+Lab two cases use actual stop/grant owners; eight child cases hold the actual
+COMMIT acknowledgement, observe durable state, kill only the owned process and
+verify the same attempt after restart. The positive ready-checkpoint case waits
+for its unchanged real lease rather than extending execution authority. These
+ten cases have no typecheck or actual PG execution evidence yet and are not
+included in the executed counts above. The explicit Hosted selector includes
+all26 cases with one worker and no file parallelism.
+
+The first candidate's actual Hosted build exposed a private cross-workspace
+test import and an unfrozen manifest entry before PostgreSQL could execute.
+The repair uses the existing public answer-provider package entry and advances
+the reviewed frozen count/digest to116, after verifying all115 old SQL files
+are byte-identical to main. Independent source review closed both repairs;
+fresh Hosted results, rather than the earlier selected typecheck, must prove
+the package build and actual runtime.
 No local database, dependency installation, Simulator, resident service change,
 native build, real paid provider or release was used for this implementation.
 
