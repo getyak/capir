@@ -28,7 +28,7 @@ export async function retireLegacyChatOwnerAfterFailure(pool: Pool, auth: AuthCo
   await inLegacyChatRetirementTransaction(pool, async client => {
     const lab = (await client.query<{ state: string; live: boolean; stop_clear: boolean }>(`SELECT state,
       expires_at>clock_timestamp() AS live,pg_try_advisory_xact_lock_shared(${labStopAuthorityKeySQL}) AS stop_clear
-      FROM lab_test_workspaces WHERE target_account_id=$1 FOR SHARE NOWAIT`, [token.accountId])).rows[0];
+      FROM lab_test_workspaces WHERE target_account_id=$1::uuid FOR SHARE NOWAIT`, [token.accountId])).rows[0];
     if (lab && (lab.state !== "active" || !lab.live || !lab.stop_clear)) return; // canonical Lab cleanup owns deletion
     if ((await client.query("SELECT id FROM accounts WHERE id=$1 AND retired_at IS NULL FOR SHARE NOWAIT", [token.accountId])).rowCount !== 1) return;
     if ((await client.query(`SELECT id FROM idempotency_records WHERE account_id=$1 AND id=$2
@@ -109,7 +109,7 @@ export async function sweepLegacyChatExecutions(pool: Pool): Promise<number> {
         const lab = (await client.query<{ state: string; live: boolean; stop_clear: boolean }>(`
           SELECT state,expires_at>clock_timestamp() AS live,
             pg_try_advisory_xact_lock_shared(${labStopAuthorityKeySQL}) AS stop_clear
-          FROM lab_test_workspaces WHERE target_account_id=$1 FOR SHARE NOWAIT`, [candidate.account_id])).rows[0];
+          FROM lab_test_workspaces WHERE target_account_id=$1::uuid FOR SHARE NOWAIT`, [candidate.account_id])).rows[0];
         // Closed Lab UPDATE is deliberately forbidden by its existing guard.
         // Its actual stop owner performs canonical whole-graph DELETE instead.
         if (lab && (lab.state !== "active" || !lab.live || !lab.stop_clear)) return 0;

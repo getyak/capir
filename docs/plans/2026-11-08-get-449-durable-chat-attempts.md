@@ -83,7 +83,7 @@ the original-proof/source codec and the JSONB-safe canonical checkpoint codec.
 Current host evidence is217 passing affected tests plus the separately passing
 disabled-descriptor regression;15 PostgreSQL cases were skipped in that host
 run. The disabled-branch, Lab and process-death additions bring the authored PG
-selection to26, all pending execution against the replacement runtime. Actual TypeScript
+selection to26, still unexecuted at that initial host snapshot. Actual TypeScript
 6.0.3 with pinned SDK0.3.312 declarations reports zero diagnostics for18 selected
 roots, including app wiring. This is selected-source evidence, not a full build.
 
@@ -93,8 +93,8 @@ Lab two cases use actual stop/grant owners; eight child cases hold the actual
 COMMIT acknowledgement, observe durable state, kill only the owned process and
 verify the same attempt after restart. The positive ready-checkpoint case waits
 for its unchanged real lease rather than extending execution authority. These
-ten cases have no typecheck or actual PG execution evidence yet and are not
-included in the executed counts above. The explicit Hosted selector includes
+ten cases had no typecheck or actual PG evidence at that source snapshot and
+were not included in its executed counts. The explicit Hosted selector includes
 all26 cases with one worker and no file parallelism.
 
 The first candidate's actual Hosted build exposed a private cross-workspace
@@ -109,6 +109,22 @@ before PG on two optional Node process.disconnect typings in the new fixture.
 The fixture now uses one explicit checked disconnect helper: missing IPC remains
 a static failure, never an optional skip. Independent source review closed that
 delta; current full typecheck/PG still require a fresh Hosted run.
+At ead47fea, actual full typecheck/default tests/build passed and the original14
+authority PG cases passed. The replacement26 PG cases actually ran:25 failed,
+one passed. A frozen own callable data property violated the existing provider
+guard Proxy's get invariant, preventing the delegate call and producing the
+ordinary fallback201. The private adapters now use a captured callable accessor,
+preserving immutable metadata and the exact actual method receiver; both owned
+wrappers share that construction. A new unit traverses the real guard/window.
+
+The actual PostgreSQL service log also reported uuid=text in two retirement
+Lab probes: the advisory-key expression typed their shared parameter as text.
+Their UUID comparison is now explicitly cast. The completed-MCP test now first
+proves the exact synthetic private answer before withdrawal, so an unrelated
+fallback201 cannot masquerade as that positive control. No additional MCP
+retirement wiring flaw was confirmed; its original predicates and all26
+obligations remain. These source repairs still need the full real PG rerun;
+they do not establish that every process/retirement failure is resolved.
 No local database, dependency installation, Simulator, resident service change,
 native build, real paid provider or release was used for this implementation.
 

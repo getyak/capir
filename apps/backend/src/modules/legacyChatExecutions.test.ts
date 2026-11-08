@@ -1,7 +1,31 @@
 import { expect, it } from "vitest";
 import type { PoolClient } from "pg";
 import type { LegacyChatAuthority } from "./legacyChatAuthority.js";
-import { admitLegacyChatExecution, snapshotEligibleLegacyProvider } from "./legacyChatExecutions.js";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { admitLegacyChatExecution, freezeLegacyChatAnswerProvider, snapshotEligibleLegacyProvider } from "./legacyChatExecutions.js";
+import { guardLegacyProvider } from "./legacyChatProviderGuard.js";
+import { runLegacyChatAnswerWindow } from "./legacyChatOwner.js";
+
+it("delegates the frozen answer-only window through the real original-authority guard",async () => {
+  let calls = 0;
+  const actual: RemoteChatAnswerProviding = { providerId: "deepseek-chat-completions",model: "synthetic-frozen-answer",
+    supportsImageInput: false,async answer() {
+      expect(this).toBe(actual); calls++;
+      return { kind: "answer",title: "Synthetic",body: "Exact synthetic answer",citation_ids: [],
+        provider_id: "deepseek-chat-completions",model: actual.model,provider_request_id: null,input_tokens: 1,output_tokens: 1 };
+    } };
+  const selected = snapshotEligibleLegacyProvider(actual)!.provider!;
+  const controller = new AbortController();
+  const authority = { signal: controller.signal,provider: <T>(operation: () => Promise<T>) => operation() } as unknown as LegacyChatAuthority;
+  const bounded = freezeLegacyChatAnswerProvider(selected.model,request => runLegacyChatAnswerWindow({
+    answer: () => selected.answer(request),poll: async () => {},signal: controller.signal }));
+  expect(Object.isFrozen(selected)).toBe(true); expect(Object.isFrozen(bounded)).toBe(true);
+  expect((bounded as { run?: unknown }).run).toBeUndefined();
+  const guarded = guardLegacyProvider(bounded,authority);
+  await expect(guarded.answer({ objective: "Synthetic",context_blocks: [],allowed_citation_ids: [] }))
+    .resolves.toMatchObject({ body: "Exact synthetic answer" });
+  expect(calls).toBe(1);
+});
 
 it("binds disabled provider absence as SQL NULL rather than JSON null",async () => {
   const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;

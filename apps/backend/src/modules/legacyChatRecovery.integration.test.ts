@@ -338,7 +338,10 @@ describe.skipIf(!database)("durable legacy same-attempt recovery over actual han
   it("retires a completed private copy without erasing its truthful paid-completion fact or key",async () => {
     await withFixture(async f => {
       const source = await mcpSession(f),key = randomUUID(); f.answerBody(`Synthetic withdrawn completed ${source.requestID}`);
-      expect((await f.post(key)).statusCode).toBe(201); await source.remove(); await assertRetiredMcpCopy(f,key,true);
+      const completed = await f.post(key); expect(completed.statusCode).toBe(201);
+      expect(completed.json<{ blocks: { body: string }[] }>().blocks[0].body)
+        .toBe(`Synthetic withdrawn completed ${source.requestID}`);
+      await source.remove(); await assertRetiredMcpCopy(f,key,true);
       expect((await f.post(key)).statusCode).toBe(409);
       const status = await f.app.inject({ method: "GET",url: `/v1/chat/unscoped-task-status?idempotency_key=${key}`,headers: f.headers });
       expect(status.statusCode).toBe(200); expect(status.json<{ state: string }>().state).toBe("content_unavailable");

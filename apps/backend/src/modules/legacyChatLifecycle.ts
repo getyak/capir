@@ -8,7 +8,7 @@ import { restoreLegacyChatSourceGuard } from "./legacyChatSourceSnapshot.js";
 import { createLegacyChatDatabase, LegacyChatCommitUnknown } from "./legacyChatDatabase.js";
 import { runLegacyChatAnswerWindow } from "./legacyChatOwner.js";
 import { decodeLegacyChatCheckpoint, encodeLegacyChatCheckpoint, LegacyChatCheckpointError } from "./legacyChatCheckpoint.js";
-import { completeLegacyChatExecution, legacyChatCheckpointBinding, lockLegacyChatExecution,
+import { completeLegacyChatExecution, freezeLegacyChatAnswerProvider, legacyChatCheckpointBinding, lockLegacyChatExecution,
   markLegacyChatDispatch, readLegacyChatExecution, renewLegacyChatLease, storeLegacyChatCheckpoint,
   type LegacyChatAdmission, type LegacyChatExecutionRow, type LegacyChatOwnerToken, type LegacyChatWaiter } from "./legacyChatExecutions.js";
 import { retireLegacyChatOwnerAfterFailure } from "./legacyChatRetirement.js";
@@ -139,8 +139,8 @@ export async function runLegacyChatExecution(input: {
     }
     stage = "answer";
     const frozen = admission.provider;
-    const provider = frozen ? Object.freeze({ providerId: frozen.providerId,model: frozen.model,supportsImageInput: false,
-      answer: (request: Parameters<typeof frozen.answer>[0]) => runLegacyChatAnswerWindow({
+    const provider = frozen ? freezeLegacyChatAnswerProvider(frozen.model,
+      request => runLegacyChatAnswerWindow({
         answer: () => frozen.answer(request),signal: authority.signal,
         poll: async () => {
           try { await advance(database,authority,auth,admission.token,async (client,row) => {
@@ -148,7 +148,7 @@ export async function runLegacyChatExecution(input: {
             await renewLegacyChatLease(client,admission.token);
           }); } catch { authority.dispose(); throw authority.signal.reason; }
         },
-      }) }) : null;
+      })) : null;
     const execution = await input.execute({ request: input.request,taskID: admission.token.taskID,provider,
       database: database.database,auth,legacyAuthority: authority,legacySourceCurrent: source,
       signal: authority.signal,...(input.referenceTime ? { referenceTime: input.referenceTime } : {}) });

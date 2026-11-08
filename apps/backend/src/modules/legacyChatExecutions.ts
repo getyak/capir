@@ -38,6 +38,15 @@ export interface LegacyChatAdmission {
 }
 export interface LegacyChatWaiter { kind: "legacy_durable_waiter"; parentID: string }
 
+/** A frozen callable data slot cannot be replaced by the original-authority
+ * Proxy's get trap. A captured accessor keeps this private adapter immutable
+ * while allowing that existing guard to wrap its actual answer capability. */
+export function freezeLegacyChatAnswerProvider(model: string,
+  answer: RemoteChatAnswerProviding["answer"]): RemoteChatAnswerProviding {
+  return Object.freeze({ providerId: "deepseek-chat-completions" as const, model,
+    supportsImageInput: false, get answer() { return answer; } });
+}
+
 /** Freeze only the actual selected answer capability, retaining its method
  * receiver. Adapter names do not imply Agent capabilities or known policy. */
 export function snapshotEligibleLegacyProvider(provider: RemoteChatAnswerProviding | null):
@@ -52,8 +61,8 @@ export function snapshotEligibleLegacyProvider(provider: RemoteChatAnswerProvidi
   const digest = actual.loadedTaskConfiguration?.taskConfigurationDigest ?? null;
   if (digest !== null && (typeof digest !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(digest))) throw new LegacyChatTerminated();
   const descriptor = Object.freeze({ providerID: "deepseek-chat-completions" as const, model, configurationDigest: digest });
-  return { descriptor, provider: Object.freeze({ providerId: descriptor.providerID, model,
-    supportsImageInput: false, answer: (request: Parameters<RemoteChatAnswerProviding["answer"]>[0]) => Reflect.apply(answer, actual, [request]) }) };
+  return { descriptor, provider: freezeLegacyChatAnswerProvider(model,
+    request => Reflect.apply(answer, actual, [request])) };
 }
 
 const exactDeadline = "to_char(execution_deadline AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS execution_deadline_exact";
