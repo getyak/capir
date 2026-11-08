@@ -77,8 +77,9 @@ typechecked with actual compiler API6.0.3/exactSDK declarations at zero diagnost
 The later independent evidence/accepted manifest and read-reference helpers
 passed172 tests with12 selected typecheck roots at their recorded hashes.
 New draft references first produced10 failures/173 passes against the previous
-helper, then the pre-move eight-file host selection passed183/183. The latest
-draft delta has no fresh full typecheck or actual SQL evidence yet. Empty
+helper, then the pre-move eight-file host selection passed183/183. Atf2d9d8bc,
+actual Hosted full typecheck/default tests/build and preceding PG steps passed.
+The new dedicated SQL group ran all45, with44 passes and one fixture failure. Empty
 unfinished edits retain exact bytes and zero counts; canonical statements still
 require nonempty text and their stored v2 proof. A draft ref binds its current
 draft/revision/review-scope/item and never claims an accepted manifest.
@@ -91,7 +92,13 @@ per edit, including empty unfinished values. Multiple bounded saves may exceed
 Existing legacy JSON is not tightened or silently filtered. Independent SQL
 and five-path draft/PG-source reviews closed their confirmed findings.
 
-The dedicated Hosted suite is expected to collect45 cases but has not executed.
+The dedicated Hosted suite actually collected and ran all45 cases atf2d9d8bc.
+Its sole failure was a negative fixture that assigned the same NFD bytes already
+present in its default evidence; SQL correctly accepted unchanged content. The
+repair starts that loop's evidence at explicit NFC, first proves it valid and
+requires each of the four mutations to differ before retaining the rejection
+assertion. SQL113 is unchanged. Independent source review closed this test-only
+delta; a fresh45/45 run is still required, not inferred from44 earlier passes.
 It requires an exclusive empty loopback talent_signal_get451_literal_* database,
 applies the real old manifest prefix, seeds populated legacy rows and calls
 production migrate() for113. A real UPDATE observer includes a positive control;
@@ -108,7 +115,8 @@ contracts exports and the identical golden JSON; bodies/assertions are unchanged
 No dependency, TS exclusion, compiler flag or CI gate was added or relaxed.
 The three current names are memoryLiteralProtocol, memoryAcceptedLiteralProtocol
 and memoryLiteralReferenceSchemas under Backend modules. Independent source
-review closed the move; historical183 does not replace the new full Hosted build.
+review closed the move; the actualf2d full build now proves it. Historical183
+still does not replace a current applicable gate after the latest fixture fix.
 
 Stage/commit/read/recall wire integration, Web/native, exact-head full gates and
 resident/runtime acceptance remain incomplete. Keep original worktrees/evidence.

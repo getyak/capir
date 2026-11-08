@@ -382,7 +382,10 @@ suite("GET-451 real canonical migration and bounded literal SQL", () => {
   it("binds actual columns and digest domains, not normalized text or JSONB key order", async () => {
     for (const changed of ["e\u0301", "é ", "é\r\n", "é\n"]) {
       const p = proposal(); p.display = changed; expect(await proposalValid(p)).toBe(false);
-      const e = evidence(); e.excerpt = changed; expect(await evidenceValid(e)).toBe(false);
+      // Evidence's default golden is NFD. Use an explicit NFC baseline so
+      // every listed mutation actually differs from its admitted bytes.
+      const e = evidence("é"); expect(await evidenceValid(e)).toBe(true);
+      expect(changed).not.toBe(e.excerpt); e.excerpt = changed; expect(await evidenceValid(e)).toBe(false);
       const a = accepted(); a.display = changed; expect(await acceptedValid(a)).toBe(false);
     }
     const p = proposal(), e = evidence(), a = accepted();
