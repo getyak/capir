@@ -465,6 +465,11 @@ jobs:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
         run: pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('DROP DATABASE talent_signal_get455_upgrade_ci'); } finally { await pool.end(); }"
 
+      - name: Verify saved Memory runtime publication and replay with PostgreSQL
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+        run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/savedMemoryRuntime.integration.test.ts
+
       - name: Verify saved Memory withdrawal with PostgreSQL
         env:
           CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
