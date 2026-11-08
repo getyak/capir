@@ -13,6 +13,7 @@ import type {
   MemorySurface,
   MemoryTimeStatus,
 } from "@talent-signal/contracts";
+import { verifiedLiteralMessageRange, type MemoryLiteralGroundingOptions } from "./memoryLiteralSource.js";
 
 /**
  * Pure GET-40 Memory review policy. No database, model, or I/O. The backend
@@ -177,7 +178,14 @@ export function isAdmittedLocator(
 export function isGroundedExcerpt(
   excerpt: string,
   sourceText: string | null,
+  literal?: MemoryLiteralGroundingOptions,
 ): boolean {
+  const protocol = literal?.contentProtocol;
+  if (literal && protocol !== undefined && protocol !== "legacy-v1") {
+    const authority = literal.authority, locator = literal.locator;
+    if (sourceText !== authority.text) return false;
+    return verifiedLiteralMessageRange(excerpt, { contentProtocol: protocol, authority, locator }) !== null;
+  }
   const value = excerpt.normalize("NFKC");
   if (!value.trim()) return false;
   if (sourceText === null) return false;
