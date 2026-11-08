@@ -17,6 +17,12 @@ type Status = "not_started" | "running" | "passed" | "failed";
 const unicode = "😀".repeat(499) + "🚀";
 const directory = (query: string) => "/workspace/people?query=" + encodeURIComponent(query);
 const fieldValue = (selector: string) => `document.querySelector(${JSON.stringify(selector)})?.value`;
+type LoginCheckpoint = "directory_navigation" | "login_form" | "login_network_settlement" | "login_callback_binding"
+  | "fill_identifier" | "fill_password" | "credentials_readback" | "submit_password"
+  | "onboarding_form" | "onboarding_network_settlement" | "onboarding_callback_binding"
+  | "submit_onboarding_skip" | "onboarding_readback" | "directory_readback" | "auth_cookie_presence"
+  | "backend_login_search_receipt" | "recovery_login_form";
+type LoginFields = { identifierEqual: boolean; passwordEqual: boolean };
 async function currentDirectory(page: DirectoryProtocolPage, query: string) {
   await until(async () => {
     const url = new URL(await page.url());
@@ -24,23 +30,40 @@ async function currentDirectory(page: DirectoryProtocolPage, query: string) {
   }, "GET452 exact directory query");
   await page.ready(directoryInput); await page.quiet();
 }
-async function login(page: DirectoryProtocolPage, fixture: DirectoryFixture, query: string, first: boolean) {
+async function login(page: DirectoryProtocolPage, fixture: DirectoryFixture, query: string, first: boolean,
+  note: (checkpoint: LoginCheckpoint, fields?: LoginFields) => void) {
   const before = fixture.observationCount(), logins = fixture.counters().passwordLogins;
-  await page.ready("#account-email"); await page.quiet();
+  note("login_form"); await page.ready("#account-email");
+  note("login_network_settlement"); await page.quiet();
+  note("login_callback_binding");
   const loginUrl = new URL(await page.url());
   requireProtocol(loginUrl.pathname === "/login" && loginUrl.searchParams.get("callbackUrl") === directory(query), "LOGIN_FULL_CALLBACK");
   requireProtocol(await page.evaluate<string>(fieldValue('input[name="redirectTo"]')) === directory(query), "LOGIN_HIDDEN_CALLBACK");
-  await page.fill("#account-email", fixture.email); await page.fill("#account-password", fixture.password);
+  note("fill_identifier"); await page.fill("#account-email", fixture.email);
+  note("fill_password"); await page.fill("#account-password", fixture.password);
+  const fields = {
+    identifierEqual: await page.evaluate<boolean>(`${fieldValue("#account-email")}===${JSON.stringify(fixture.email)}`),
+    passwordEqual: await page.evaluate<boolean>(`${fieldValue("#account-password")}===${JSON.stringify(fixture.password)}`),
+  };
+  note("credentials_readback", fields);
+  requireProtocol(fields.identifierEqual && fields.passwordEqual, "LOGIN_FIELDS_NOT_FILLED");
+  note("submit_password");
   await page.click('form:has(#account-email) button[type="submit"]');
   if (first) {
-    await page.ready("#onboarding-title"); await page.quiet();
+    note("onboarding_form"); await page.ready("#onboarding-title");
+    note("onboarding_network_settlement"); await page.quiet();
+    note("onboarding_callback_binding");
     const url = new URL(await page.url());
     requireProtocol(url.pathname === "/onboarding" && url.searchParams.get("callbackUrl") === directory(query), "ONBOARDING_FULL_CALLBACK");
-    await page.click('section[aria-labelledby="onboarding-title"] > button[type="button"]');
+    note("submit_onboarding_skip"); await page.click('section[aria-labelledby="onboarding-title"] > button[type="button"]');
+    note("onboarding_readback");
     await until(() => fixture.onboardingWasSkipped(), "GET452 canonical onboarding receipt");
   }
+  note("directory_readback");
   await currentDirectory(page, query);
+  note("auth_cookie_presence");
   requireProtocol((await page.cookies()).primary, "REAL_AUTH_SESSION_COOKIE");
+  note("backend_login_search_receipt");
   requireProtocol(fixture.seen(query, before) && fixture.counters().passwordLogins === logins + 1, "REAL_AUTHORIZED_BACKEND_SEARCH");
 }
 async function search(page: DirectoryProtocolPage, fixture: DirectoryFixture, query: string) {
@@ -61,16 +84,23 @@ async function main() {
   requireProtocol(await realpath(requested) === requested && (await stat(requested)).isDirectory(), "ARTIFACT_REALPATH");
   const runtime = await mkdtemp(join(runnerRoot, "get452-directory-runtime-"));
   const receipt: { schema: string; status: "failed" | "passed"; phase: string; failure: string | null; cleanup: boolean;
-    source: unknown; chrome: string | null; cases: Record<CaseName, Status>; observations: unknown[]; backend: unknown } = {
+    source: unknown; chrome: string | null; cases: Record<CaseName, Status>; observations: unknown[]; backend: unknown;
+    diagnosticVersion: 1; checkpoint: LoginCheckpoint | null; loginFields: LoginFields | null; failureSurfaces: unknown[] } = {
     schema: "get452-directory-next.v1", status: "failed", phase: "source", failure: null, cleanup: false,
     source: null, chrome: null, cases: Object.fromEntries(cases.map(name => [name, "not_started"])) as Record<CaseName, Status>, observations: [], backend: null,
+    diagnosticVersion: 1, checkpoint: null, loginFields: null, failureSurfaces: [],
   };
   let next: ChildProcess | undefined, chrome: ChildProcess | undefined, cdp: ProtocolCdp | undefined;
   let fixture: DirectoryFixture | undefined;
   const pages: DirectoryProtocolPage[] = [];
   const run = async (name: CaseName, operation: () => Promise<void>) => {
-    receipt.phase = name; receipt.cases[name] = "running";
+    receipt.phase = name; receipt.cases[name] = "running"; receipt.checkpoint = null; receipt.loginFields = null;
     try { await operation(); receipt.cases[name] = "passed"; } catch (error) { receipt.cases[name] = "failed"; throw error; }
+  };
+  const note = (checkpoint: LoginCheckpoint, fields?: LoginFields) => {
+    receipt.checkpoint = checkpoint;
+    if (checkpoint === "login_form") receipt.loginFields = null;
+    if (fields) receipt.loginFields = fields;
   };
   try {
     const source = await bindDirectorySource(); receipt.source = source.receipt;
@@ -106,7 +136,7 @@ async function main() {
     requireProtocol(/^(?:HeadlessChrome|Chrome)\/\d+(?:\.\d+){1,3}$/.test(version.product), "CHROME_VERSION"); receipt.chrome = version.product;
     const ordinary = await DirectoryProtocolPage.create(cdp, origin); pages.push(ordinary);
     await run("ordinary_login_onboarding", async () => {
-      await ordinary.navigate(directory("Directory")); await login(ordinary, data, "Directory", true);
+      note("directory_navigation"); await ordinary.navigate(directory("Directory")); await login(ordinary, data, "Directory", true, note);
       requireProtocol((await ordinary.cookies()).callback, "ORDINARY_CALLBACK_COOKIE");
       await ordinary.health();
     });
@@ -118,16 +148,17 @@ async function main() {
     const long = await DirectoryProtocolPage.create(cdp, origin); pages.push(long);
     await run("unicode_login_callback", async () => {
       requireProtocol([...unicode].length === 500 && Buffer.byteLength(unicode) === 2000 && encodeURIComponent(unicode).length === 6000, "UNICODE_VECTOR");
-      await long.navigate(directory(unicode)); await login(long, data, unicode, false); await long.health();
+      note("directory_navigation"); await long.navigate(directory(unicode)); await login(long, data, unicode, false, note); await long.health();
       requireProtocol(long.observed.maxRequestTargetBytes > 10_000, "OBSERVED_NESTED_CALLBACK_TRANSPORT");
     });
     await run("backend_session_recovery", async () => {
       await ordinary.quiet(); const denials = data.counters().renewalDenials;
       requireProtocol((await ordinary.cookies()).callback, "EXISTING_ORDINARY_CALLBACK_COOKIE");
       await data.revokeBrowserLogin(data.tailA); // Exact login captured by its genuine successful search; no cookie mutation.
-      await ordinary.navigate(directory(unicode)); await ordinary.ready("#account-email");
+      note("directory_navigation"); await ordinary.navigate(directory(unicode));
+      note("recovery_login_form"); await ordinary.ready("#account-email");
       requireProtocol(data.counters().renewalDenials > denials, "REAL_BACKEND_RENEWAL_DENIAL");
-      await login(ordinary, data, unicode, false); await ordinary.health();
+      await login(ordinary, data, unicode, false, note); await ordinary.health();
     });
     await run("trusted_paste_and_refusal", async () => {
       const rejected = unicode + "x", priorUrl = await long.url();
@@ -179,8 +210,16 @@ async function main() {
     receipt.status = "passed";
   } catch (error) {
     receipt.failure = error instanceof DirectoryProtocolFailure ? error.code : "UNCLASSIFIED_PROTOCOL_FAILURE";
+    // Capture pending/counter facts before an asynchronous diagnostic can settle them.
+    receipt.observations = pages.map(page => page.diagnostics()); receipt.backend = fixture?.counters() ?? null;
+    for (const [pageIndex, page] of pages.entries()) {
+      try { receipt.failureSurfaces.push({ pageIndex, available: true, surface: await page.surface() }); }
+      catch { receipt.failureSurfaces.push({ pageIndex, available: false }); }
+    }
   } finally {
-    receipt.observations = pages.map(page => ({ ...page.observed })); receipt.backend = fixture?.counters() ?? null;
+    if (receipt.failure === null) {
+      receipt.observations = pages.map(page => page.diagnostics()); receipt.backend = fixture?.counters() ?? null;
+    }
     let clean = true;
     for (const page of pages) try { await page.close(); } catch { clean = false; }
     try { cdp?.close(); } catch { clean = false; }

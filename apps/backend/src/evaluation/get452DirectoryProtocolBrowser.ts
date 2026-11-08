@@ -9,11 +9,20 @@ const observer = `(() => {
     document.addEventListener(type,event=>{if(event.isTrusted && event.target instanceof HTMLInputElement && event.target.name==="query")state[key]++;},true);
 })()`;
 const cookieReasons = new Set(["NameValuePairExceedsMaxSize", "DisallowedCharacter", "SameSiteNoneInsecure", "SecureOnly", "SyntaxError"]);
+const resourceKinds = new Set(["Document", "Stylesheet", "Image", "Font", "Script", "XHR", "Fetch", "EventSource", "WebSocket", "Other"]);
+function routeKind(path: string): string {
+  return path === "/login" ? "login" : path === "/onboarding" ? "onboarding" : path === "/workspace/people" ? "directory"
+    : path === "/api/auth/persistent" ? "auth_persistent" : path === "/api/auth/session" ? "auth_session"
+      : path.startsWith("/api/auth/callback/") ? "auth_callback" : path.startsWith("/api/auth/") ? "auth_other"
+        : path.startsWith("/_next/") ? "asset" : "other";
+}
 export class DirectoryProtocolPage {
   readonly observed = { blockedExternal: 0, runtimeErrors: 0, consoleErrors: 0, cookieBlocks: {} as Record<string, number>, maxRequestTargetBytes: 0,
     lastDocumentStatus: null as number | null, lastDocumentRoute: "unobserved", httpErrors: {} as Record<string, number> };
   private disposers: Array<() => void> = [];
   private active = new Set<string>();
+  private activeKinds = new Map<string, { route: string; method: string; type: string }>();
+  private httpStatuses = new Map<string, number>();
   private changedAt = Date.now();
   private observerFailed = false;
   private constructor(private cdp: ProtocolCdp, readonly session: string, readonly context: string, readonly origin: string) {}
@@ -36,19 +45,27 @@ export class DirectoryProtocolPage {
       }));
       current.disposers.push(cdp.on(sessionId, "Network.requestWillBeSent", value => {
         try {
-          const request = value.request as { url: string }, url = new URL(request.url);
+          const request = value.request as { url: string; method: string }, url = new URL(request.url);
           if (url.origin === origin) current.observed.maxRequestTargetBytes = Math.max(current.observed.maxRequestTargetBytes, Buffer.byteLength(url.pathname + url.search));
           requireProtocol(current.active.size < 1024, "BROWSER_REQUEST_BUDGET");
           current.active.add(String(value.requestId)); current.changedAt = Date.now();
+          current.activeKinds.set(String(value.requestId), { route: routeKind(url.pathname),
+            method: ["GET", "POST"].includes(request.method) ? request.method : "OTHER",
+            type: typeof value.type === "string" && resourceKinds.has(value.type) ? value.type : "Other" });
         } catch { current.observerFailed = true; }
       }));
-      for (const event of ["Network.loadingFinished", "Network.loadingFailed"]) current.disposers.push(cdp.on(sessionId, event, value => { current.active.delete(String(value.requestId)); current.changedAt = Date.now(); }));
+      for (const event of ["Network.loadingFinished", "Network.loadingFailed"]) current.disposers.push(cdp.on(sessionId, event, value => {
+        current.active.delete(String(value.requestId)); current.activeKinds.delete(String(value.requestId)); current.changedAt = Date.now();
+      }));
       current.disposers.push(cdp.on(sessionId, "Network.responseReceived", value => {
         try {
           const response = value.response as { url: string; status: number }, path = new URL(response.url).pathname;
           const route = path === "/login" ? "login" : path === "/onboarding" ? "onboarding" : path === "/workspace/people" ? "directory"
             : path.startsWith("/api/auth/") ? "auth" : path.startsWith("/_next/") ? "asset" : "other";
           requireProtocol(Number.isInteger(response.status) && response.status >= 100 && response.status <= 599, "BROWSER_HTTP_STATUS");
+          const requestKind = current.activeKinds.get(String(value.requestId));
+          const statusKey = `${routeKind(path)}:${requestKind?.method ?? "UNOBSERVED"}:${requestKind?.type ?? "Other"}:${response.status}`;
+          current.httpStatuses.set(statusKey, (current.httpStatuses.get(statusKey) ?? 0) + 1);
           if (value.type === "Document") { current.observed.lastDocumentStatus = response.status; current.observed.lastDocumentRoute = route; }
           if (response.status >= 400) current.observed.httpErrors[route] = (current.observed.httpErrors[route] ?? 0) + 1;
         } catch { current.observerFailed = true; }
@@ -137,6 +154,36 @@ export class DirectoryProtocolPage {
   }
   async health() {
     await this.quiet(); this.assertHealthy();
+  }
+  diagnostics() {
+    const pending = new Map<string, number>();
+    for (const entry of this.activeKinds.values()) {
+      const key = `${entry.route}:${entry.method}:${entry.type}`; pending.set(key, (pending.get(key) ?? 0) + 1);
+    }
+    return { ...this.observed, cookieBlocks: { ...this.observed.cookieBlocks }, httpErrors: { ...this.observed.httpErrors },
+      observerFailed: this.observerFailed, activeRequests: this.active.size,
+      pendingKinds: Object.fromEntries([...pending].sort(([a], [b]) => a.localeCompare(b))),
+      httpStatuses: Object.fromEntries([...this.httpStatuses].sort(([a], [b]) => a.localeCompare(b))) };
+  }
+  async surface() {
+    // Presence only. Never return text, field values, HTML, attributes, URLs or error messages.
+    const value = await this.evaluate<Record<string, unknown>>(`(() => {
+      const identifier=document.querySelector("#account-email"),password=document.querySelector("#account-password"),
+        directory=document.querySelector(${JSON.stringify(directoryInput)}),submit=document.querySelector('form:has(#account-email) button[type="submit"]');
+      return {identifier:!!identifier,password:!!password,submit:!!submit,directory:!!directory,
+        identifierDisabled:identifier instanceof HTMLInputElement?identifier.disabled:null,
+        passwordDisabled:password instanceof HTMLInputElement?password.disabled:null,
+        submitDisabled:submit instanceof HTMLButtonElement?submit.disabled:null,
+        onboarding:!!document.querySelector("#onboarding-title"),main:!!document.querySelector("main"),
+        overlay:!!document.querySelector("nextjs-portal"),alerts:document.querySelectorAll('[role="alert"]').length,
+        active:identifier&&document.activeElement===identifier?"identifier":password&&document.activeElement===password?"password":directory&&document.activeElement===directory?"directory":submit&&document.activeElement===submit?"submit":"other"};
+    })()`);
+    const bool = (key: string) => typeof value[key] === "boolean" ? value[key] : null;
+    return { identifier: bool("identifier"), password: bool("password"), submit: bool("submit"), directory: bool("directory"),
+      identifierDisabled: bool("identifierDisabled"), passwordDisabled: bool("passwordDisabled"), submitDisabled: bool("submitDisabled"),
+      onboarding: bool("onboarding"), main: bool("main"), overlay: bool("overlay"),
+      alerts: typeof value.alerts === "number" && Number.isSafeInteger(value.alerts) && value.alerts >= 0 ? Math.min(value.alerts, 1000) : null,
+      active: typeof value.active === "string" && ["identifier", "password", "directory", "submit", "other"].includes(value.active) ? value.active : "unobserved" };
   }
   async close() {
     for (const dispose of this.disposers) dispose();

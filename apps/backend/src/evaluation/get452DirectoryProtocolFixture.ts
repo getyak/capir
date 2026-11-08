@@ -72,8 +72,21 @@ export async function createDirectoryFixture(runtime: string, rawUrl: string) {
     const observations: Array<{ query: string; status: number; owner: boolean }> = [];
     const observedAuth = new Map<string, AuthContext>();
     let renewalDenials = 0, passwordLogins = 0;
+    let serverStarted = 0, serverCompleted = 0;
+    const serverStatuses = new Map<string, number>();
+    app.addHook("onRequest", async () => { serverStarted++; });
     app.addHook("onResponse", async (request, reply) => {
       const path = request.url.split("?")[0];
+      const route = path === "/v1/auth/password/login" ? "password_login"
+        : path === "/v1/auth/persistent/enroll" ? "persistent_enroll"
+          : path === "/v1/auth/persistent/renew" ? "persistent_renew"
+            : path === "/v1/auth/session" ? "auth_session"
+              : path === "/v1/account/onboarding" ? "onboarding"
+                : path === "/v1/people/search" ? "people_search" : path === "/v1/people" ? "people_list" : "other";
+      const method = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(request.method) ? request.method : "OTHER";
+      const status = Number.isInteger(reply.statusCode) && reply.statusCode >= 100 && reply.statusCode <= 599 ? reply.statusCode : "INVALID";
+      const key = `${route}:${method}:${status}`;
+      serverCompleted++; serverStatuses.set(key, (serverStatuses.get(key) ?? 0) + 1);
       if (path === "/v1/auth/persistent/renew" && reply.statusCode === 401) renewalDenials++;
       if (path === "/v1/auth/password/login" && reply.statusCode === 200) passwordLogins++;
       if (request.method !== "POST" || path !== "/v1/people/search") return;
@@ -88,7 +101,8 @@ export async function createDirectoryFixture(runtime: string, rawUrl: string) {
       backend, email, password, tailA, tailB, personA, personB,
       seen(query: string, after = 0) { return observations.slice(after).some(value => value.query === query && value.owner && value.status === 200); },
       observationCount() { return observations.length; },
-      counters() { return { passwordLogins, renewalDenials, searches: observations.length }; },
+      counters() { return { passwordLogins, renewalDenials, searches: observations.length,
+        serverStarted, serverCompleted, serverStatuses: Object.fromEntries([...serverStatuses].sort(([a], [b]) => a.localeCompare(b))) }; },
       async onboardingWasSkipped() {
         const row = (await pool!.query<{ status: string }>("SELECT onboarding_status AS status FROM users WHERE account_id=$1 AND id=$2", [accountId, userId])).rows[0];
         return row?.status === "skipped";
