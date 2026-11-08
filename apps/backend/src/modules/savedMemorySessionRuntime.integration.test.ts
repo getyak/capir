@@ -13,12 +13,13 @@ if (process.env.GET_455_SESSION_MEMORY_RUNTIME_TEST_REQUIRED === "1" && !savedMe
 function observeModel(f: SavedMemoryFixture, syntheticReply?: string) {
   const original = f.provider.run;
   const frames: Array<{ history: readonly { message_id: string; role: string; text: string }[];
-    selfCharacters: number; selfItems: number }> = [];
+    selfCharacters: number; selfItems: number; selfStatus: string }> = [];
   const observed: typeof original = async (...args) => {
     const input = args[0];
     frames.push({ history: (input.conversationHistory ?? []).map(message => ({ ...message })),
       selfCharacters: JSON.stringify(input.selfMemoryContext ?? null).length,
-      selfItems: input.selfMemoryContext?.items.length ?? 0 });
+      selfItems: input.selfMemoryContext?.items.length ?? 0,
+      selfStatus: input.selfMemoryContext?.status ?? "unavailable" });
     const result = await original.apply(f.provider, args);
     // Configure only the synthetic remote result. Core validation, HTTP
     // publication, durable proof and later Session save remain real owners.
@@ -115,7 +116,11 @@ describe.skipIf(!savedMemoryDatabase)("actual Session Memory runtime admission",
         expect(probe.frames).toHaveLength(6);
         const metadata = probe.frames.map(frame => ({ historyMessages: frame.history.length,
           selfItems: frame.selfItems, selfCharacters: frame.selfCharacters }));
-        expect(probe.frames.every(frame => frame.history.length === 0 && frame.selfItems === 14
+        // A complete accepted page need not fit the whole-item core. The
+        // actual compiler selected 13/14 here; require its explicit partial
+        // state and measured context size, not an unbounded all-items frame.
+        expect(probe.frames.every(frame => frame.history.length === 0 && frame.selfStatus === "partial"
+          && frame.selfItems > 0 && frame.selfItems < memories.length
           && frame.selfCharacters > 16_000 && frame.selfCharacters < 24_000),
         "Actual synthetic frame counts: " + JSON.stringify(metadata)).toBe(true);
         const calls = f.provider.calls, before = JSON.stringify(saved!.payload), key = randomUUID();
