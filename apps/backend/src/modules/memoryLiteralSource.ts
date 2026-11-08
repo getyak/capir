@@ -30,3 +30,5 @@ export function verifiedLiteralMessageRange(excerpt: string, options: MemoryLite
     throw error;
   }
 }
+
+export { prepareMemoryLiteralProposalBatch } from "./memoryLiteralPreparation.js";
