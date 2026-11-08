@@ -51,7 +51,10 @@ export async function inLegacyChatRetirementTransaction<T>(pool: Pool,
  * legacy transactions keep their original PoolClient/probe construction. */
 export function createLegacyChatDatabase(pool: Pool, authority: LegacyChatAuthority) {
   const gate = createLegacyChatOwnerGate(), context = new AsyncLocalStorage<PoolClient>();
-  const run = <T>(operation: (client: PoolClient) => Promise<T>, transaction = true): Promise<T> => gate(async () => {
+  // Only a server-owned synchronous guard may use this hook. It runs after
+  // withClient's final credential await, without yielding before COMMIT.
+  const run = <T>(operation: (client: PoolClient) => Promise<T>, transaction = true,
+    beforeCommit?: () => void): Promise<T> => gate(async () => {
     const client = await borrow(pool);
     let began = false, commitSent = false, discard = false;
     try {
@@ -62,6 +65,8 @@ export function createLegacyChatDatabase(pool: Pool, authority: LegacyChatAuthor
       }
       const value = await authority.withClient(client, guarded => context.run(guarded, () => operation(guarded)));
       if (transaction) {
+        beforeCommit?.();
+        authority.throwIfTerminated();
         commitSent = true;
         try { await client.query("COMMIT"); }
         catch { discard = true; throw new LegacyChatCommitUnknown(); }

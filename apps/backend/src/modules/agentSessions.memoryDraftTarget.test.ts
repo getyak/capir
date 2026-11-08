@@ -22,9 +22,10 @@ function payload(target = true): AgentSessionPayload {
 }
 
 /** A SQL-boundary fake: production mutateAgentSession owns validation and provenance.
- * It does not model source lifecycle; that requires the isolated PostgreSQL suite.
+ * It models no legacy attempts, so an acquired Session retirement fence retires
+ * zero copies. Source lifecycle and actual rollback require isolated PostgreSQL.
  */
-function fakeStore(previous: AgentSessionPayload | null) {
+function fakeStore(previous: AgentSessionPayload | null, retirementFence: number | null = 1) {
   type Row = { id: string; created_by_user_id: string; revision: number; payload: AgentSessionPayload | null;
     created_at: Date; updated_at: Date; expires_at: Date; deleted_at: Date | null;
     composer_draft_hash: null; composer_draft_started_at: null };
@@ -43,6 +44,13 @@ function fakeStore(previous: AgentSessionPayload | null) {
         payload: JSON.parse(values[3] as string), created_at: values[4] as Date, updated_at: new Date(),
         expires_at: values[5] as Date, deleted_at: null, composer_draft_hash: null, composer_draft_started_at: null };
       return result([structuredClone(row)]);
+    }
+    if (sql.startsWith("WITH account_fence AS MATERIALIZED (")
+      && sql.includes("FROM agent_sessions s JOIN account_fence")
+      && sql.includes("AS fenced,(SELECT count(*)::int FROM scrubbed) AS retired")) {
+      expect(row).not.toBeNull();
+      expect(values).toEqual([auth.accountId, row?.id]);
+      return result(retirementFence === null ? [] : [{ fenced: retirementFence, retired: 0 }]);
     }
     return result();
   });
@@ -69,7 +77,21 @@ describe("server-owned Memory target history", () => {
     expect(saved.payload!.scopeKind).toBe("unresolved_intent");
     expect(saved.payload).not.toHaveProperty("personID");
     expect(legacy.turns[0]).not.toHaveProperty("memoryDraftTarget");
+    expect(store.query.mock.calls.filter(([sql]) => sql.includes("AS fenced,(SELECT count(*)::int FROM scrubbed) AS retired"))).toHaveLength(1);
   });
+
+  it.each([{ label: "missing", fence: null }, { label: "unacquired", fence: 0 }])(
+    "refuses a canonical target update with a $label Session retirement fence", async ({ fence }) => {
+      const original = payload();
+      const store = fakeStore(original, fence);
+      await expect(mutate(store, structuredClone(original))).rejects.toMatchObject({
+        statusCode: 409, code: "LEGACY_CHAT_SOURCE_RETIREMENT_PENDING",
+      });
+      expect(store.query.mock.calls.filter(([sql]) => sql === "ROLLBACK")).toHaveLength(1);
+      expect(store.query.mock.calls.some(([sql]) => sql === "COMMIT")).toBe(false);
+      expect(store.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO agent_session_operations("))).toBe(false);
+    },
+  );
 
   it("refuses a target on a new client-authored turn", async () => {
     const store = fakeStore(null);

@@ -22,7 +22,8 @@ import type { Pool, PoolClient } from "pg";
 
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
-import { appendUnscopedChatCompletionAudit } from "./unscopedChatCompletion.js";
+import { appendUnscopedChatCompletionAudit, recordUnscopedChatCompletionSources } from "./unscopedChatCompletion.js";
+import { tryCaptureEmptySessionSource } from "./legacyChatSourceSnapshot.js";
 import { admitLegacyChatExecution, legacyChatWaiterForClaim, snapshotEligibleLegacyProvider,
   type LegacyChatAdmission, type LegacyChatWaiter } from "./legacyChatExecutions.js";
 import { runLegacyChatExecution, waitLegacyChatExecution } from "./legacyChatLifecycle.js";
@@ -39,8 +40,7 @@ import { boundedConversationHistory } from "./chatAnswerProvider.js";
 import { readAgentSessionConversation } from "./agentSessions.js";
 import { firstTurnSessionTitle } from "./sessionTitles.js";
 import { productObservationContext } from "./runtimeObservationSources.js";
-import { assertSessionChatSourcesAvailable, assertSessionForChat, purgeUnavailableSessionChatSources, recordSessionChatSources, markSessionContextAnswer, SESSION_CHAT_SOURCE_LIMIT, type AgentSessionChatSource } from "./agentSessionSources.js";
-import { recordMeetingDraftsForTask } from "./meetingDrafts.js";
+import { assertSessionChatSourcesAvailable, assertSessionForChat, purgeUnavailableSessionChatSources, markSessionContextAnswer, SESSION_CHAT_SOURCE_LIMIT, type AgentSessionChatSource } from "./agentSessionSources.js";
 import {
   executeWorkspaceConversationAgent,
   isWorkspaceConversationAgentProvider,
@@ -527,7 +527,7 @@ async function createUnscopedChatTaskInternal(
       request.idempotency_key,
       requestIdentity,
     ); } catch (error) {
-      if (legacyAuthority && !request.session_id && error instanceof ApiError
+      if (legacyAuthority && error instanceof ApiError
         && error.code === "IDEMPOTENCY_REQUEST_IN_PROGRESS") {
         const waiter = await legacyChatWaiterForClaim(client, auth, request.idempotency_key);
         if (waiter) return waiter;
@@ -563,9 +563,15 @@ async function createUnscopedChatTaskInternal(
     if (selectRemoteProvider) provider = await selectRemoteProvider(client);
     // Only after actual fresh selection. Ineligible providers retain this SAME
     // original atomic path and its final-lock timing; no new SHARE spans RPC.
-    if (legacyAuthority && !request.session_id) {
+    if (legacyAuthority && (!request.session_id || request.message_id === undefined)) {
       const selected = snapshotEligibleLegacyProvider(provider);
-      if (selected) return admitLegacyChatExecution(client, auth, idempotency, legacyAuthority, selected, request.message_id);
+      if (selected && !request.session_id)
+        return admitLegacyChatExecution(client, auth, idempotency, legacyAuthority, selected, request.message_id);
+      if (selected && request.session_id && request.message_id === undefined) {
+        const source = await tryCaptureEmptySessionSource(client,auth,request.session_id,
+          legacyAuthority.snapshotOriginal().originalDeadline,() => legacyAuthority.lockAccountsForFinalization(client));
+        if (source) return admitLegacyChatExecution(client,auth,idempotency,legacyAuthority,selected,undefined,source);
+      }
     }
     const protectContinuation = provider?.providerId === "claude-agent-sdk" && Boolean(request.session_id);
     if (protectContinuation) await client.query("SAVEPOINT harness_product_reply");
@@ -633,20 +639,7 @@ export async function recordUnscopedChatCompletionEvidence(
       ? { name: execution.providerResult.prompt_snapshot.name, revision: execution.providerResult.prompt_snapshot.revision,
         versionId: execution.providerResult.prompt_snapshot.versionId, source: execution.providerResult.prompt_snapshot.source } : null),
   });
-  await recordSessionChatSources(
-    client,
-    auth,
-    request.session_id,
-    execution.body.task_id,
-    execution.conversationSources ?? [],
-    execution.previousTaskIDs,
-  );
-  if (request.session_id) {
-    await recordMeetingDraftsForTask(client, auth, {
-      blocks: execution.body.blocks,
-      ...(request.message_id ? { messageID: request.message_id } : {}),
-      sessionID: request.session_id,
-      taskID: execution.body.task_id,
-    });
-  }
+  await recordUnscopedChatCompletionSources(client,auth,{ sessionID: request.session_id,
+    taskID: execution.body.task_id,blocks: execution.body.blocks,messageID: request.message_id,
+    conversationSources: execution.conversationSources ?? [],previousTaskIDs: execution.previousTaskIDs });
 }
