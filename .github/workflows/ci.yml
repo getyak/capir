@@ -449,6 +449,11 @@ jobs:
           pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/legacyChatAuthority.integration.test.ts
           pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/legacyChatLifecycle.integration.test.ts src/modules/legacyChatRecovery.integration.test.ts src/modules/legacyChatLabLifecycle.integration.test.ts src/modules/legacyChatProcess.integration.test.ts
 
+      - name: Verify saved Memory withdrawal with PostgreSQL
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+        run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/savedMemoryDiscovery.integration.test.ts
+
       - name: Verify Chat media upload and deletion completion with PostgreSQL
         env:
           CHAT_MEDIA_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
