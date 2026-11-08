@@ -174,3 +174,6 @@ export function readMemoryLiteralPage(source: unknown, input: unknown): Readonly
   if (Buffer.byteLength(JSON.stringify(result), "utf8") > MEMORY_CONTENT_PAGE_MAX_JSON_BYTES) return unavailable();
   return result as Readonly<MemoryLiteralPageResponse>;
 }
+
+export { projectMemoryLiteralReviewItem, projectMemoryLiteralDraft,
+  projectMemoryLiteralRecallItem, projectMemoryLiteralReceiptFacts } from "./memoryLiteralProjection.js";
