@@ -22,7 +22,7 @@ if (supplied) {
   }
   databaseName = parsed.pathname.slice(1);
 }
-const suite = supplied ? describe.sequential : describe.skip;
+const suite = supplied ? describe : describe.skip;
 const hash = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
 const sql = (name: string) => readFile(new URL(`../database/${name}.sql`, import.meta.url), "utf8");
 type Graph = { account: string; user: string; memory: string; session: string; harness: string; workspace: string | null };
@@ -210,7 +210,7 @@ afterAll(async () => {
   // Root owns creation/destruction of this unique DB, even on setup failure.
 });
 
-suite("saved Memory populated upgrade and fixed caller snapshot", () => {
+suite("saved Memory populated upgrade and fixed caller snapshot", { concurrent: false }, () => {
   it("propagates unknown cutover failure and rolls back all DDL/backfill/SDK writes", async () => {
     await client!.query("BEGIN");
     try {
