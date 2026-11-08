@@ -135,3 +135,25 @@ current production HTTP/DB vulnerability. Existing API/Run/source budgets stay.
 
 Stage/commit/read/recall wire integration, Web/native, exact-head full gates and
 resident/runtime acceptance remain incomplete. Keep original worktrees/evidence.
+
+## Shared reader authority before the literal HTTP path
+
+The pure-protocol slice is merged in f649771da91d1e60c64d2ca56aea1002d9eff430.
+Its actual103 pure,45 SQL and42 feedback cases passed; HTTP/Agent/BFF/client
+wiring, final content fencing and resident acceptance remain incomplete.
+
+Active milestone: extract the existing accepted-login SQL and deadline bounds
+from proposal pagination into memoryReadAuthority.ts, preserving the public
+opaque header proof, parameter positions, current/previous-token and Lab
+predicates, final content requalification, whole-roundtrip expiry bound and
+49-record-plus-lookahead traversal. The new owner is reused by the forthcoming
+literal reader; it does not itself establish content permission or configured
+serving-deployment eligibility. Keep the concrete joint domain/auth final SQL
+and commit-before-final-envelope integration as the next milestone.
+
+The existing pagination unit and real Memory HTTP/PG bodies are unchanged.
+Source extraction proof, independent review and latest Hosted results are
+required before landing; prior201-case PG evidence stays revision-qualified.
+No schema, migration, source predicate, authentication configuration or runtime
+retention policy changes in this extraction. GET-451 stays In Progress until
+the actual literal path and affected resident behavior are accepted.
