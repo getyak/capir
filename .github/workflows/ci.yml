@@ -471,6 +471,12 @@ jobs:
           GET_455_MEMORY_OWNER_TARGET_TEST_REQUIRED: "1"
         run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryReviewOwnerTarget.integration.test.ts
 
+      - name: Verify tracked Memory recall and original epochs with PostgreSQL
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          GET_455_TRACKED_RECALL_TEST_REQUIRED: "1"
+        run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryReviewTrackedRecall.integration.test.ts
+
       - name: Verify saved Memory runtime publication and replay with PostgreSQL
         env:
           CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci

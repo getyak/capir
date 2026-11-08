@@ -118,6 +118,7 @@
     "111_conversation_memory_draft_target",
     "113_memory_literal_content",
     "112_legacy_chat_executions",
-    "114_saved_memory_lineage"
+    "114_saved_memory_lineage",
+    "115_saved_memory_durable_retention"
   ]
 }

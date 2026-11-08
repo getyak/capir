@@ -2,6 +2,9 @@ import type { DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
 import type { ChatResponseBlock } from "@talent-signal/contracts";
+import type { PoolClient } from "pg";
+import { savedMemoryDeadline, savedMemoryOwnArray, savedMemoryOwnRecord,
+  savedMemoryUnavailable, savedMemoryUUID } from "./savedMemoryLineage.js";
 
 export function markSessionContextAnswer(
   block: ChatResponseBlock,
@@ -22,6 +25,92 @@ export function markSessionContextAnswer(
 export interface AgentSessionChatSource {
   taskID: string;
   fingerprint: string;
+}
+
+export type SessionChatRetention =
+  | Readonly<{ kind: "session_bound"; original_expires_at: string }>
+  | Readonly<{ kind: "canonical_no_session" }>;
+declare const sessionChatRetentionBrand: unique symbol;
+export interface SessionChatRetentionReceipt { readonly [sessionChatRetentionBrand]: true }
+interface SessionChatRetentionFact {
+  readonly accountID: string;
+  readonly actorID: string;
+  readonly taskID: string;
+  readonly originSessionID: string | null;
+  readonly retention: SessionChatRetention;
+}
+const sessionChatRetentionReceipts = new WeakMap<object,
+  Readonly<SessionChatRetentionFact & { client: PoolClient }>>();
+
+/** Source-retention fact only: not authentication, canonical completion,
+ * transaction/COMMIT proof, or permission to publish a reply. The durable owner
+ * must consume this exact receipt on the same client and verify its real
+ * canonical completion before registering Memory lineage. */
+export async function recordSessionChatSourcesWithRetention(
+  client: PoolClient,
+  auth: AuthContext,
+  sessionID: string | undefined,
+  taskID: string,
+  sources: AgentSessionChatSource[],
+  previousTaskIDs: string[] = [],
+): Promise<SessionChatRetentionReceipt> {
+  const fields = savedMemoryOwnRecord(auth,
+    ["accountId", "accountSlug", "userId", "userEmail", "userKind", "sessionId"]);
+  for (const key of ["accountSlug", "userEmail", "userKind", "sessionId"]) {
+    if (typeof fields[key] !== "string") return savedMemoryUnavailable();
+  }
+  fields.accountId = savedMemoryUUID(fields.accountId);
+  fields.userId = savedMemoryUUID(fields.userId);
+  const current = Object.freeze(fields) as unknown as AuthContext;
+  const currentTaskID = savedMemoryUUID(taskID);
+  const currentSessionID = sessionID === undefined ? undefined : savedMemoryUUID(sessionID);
+  const currentSources = savedMemoryOwnArray(sources, SESSION_CHAT_SOURCE_LIMIT).map(value => {
+    const source = savedMemoryOwnRecord(value, ["taskID", "fingerprint"]);
+    if (typeof source.fingerprint !== "string") return savedMemoryUnavailable();
+    return Object.freeze({ taskID: savedMemoryUUID(source.taskID), fingerprint: source.fingerprint });
+  });
+  // The existing history owner supplies its own bound; do not invent a new
+  // parent-count policy or silently truncate its admitted ancestry here.
+  const currentPrevious = savedMemoryOwnArray(previousTaskIDs, Number.MAX_SAFE_INTEGER).map(savedMemoryUUID);
+  await recordSessionChatSources(client, current, currentSessionID, currentTaskID,
+    currentSources, currentPrevious);
+  let retention: SessionChatRetention;
+  if (currentSessionID === undefined) {
+    // This is the real source owner's validated no-Session/no-source branch.
+    // Missing task rows and caller-supplied NULL deadlines cannot select it.
+    if (currentSources.length !== 0) return savedMemoryUnavailable();
+    retention = Object.freeze({ kind: "canonical_no_session" });
+  } else {
+    // Same transaction/client readback of the row the canonical source owner
+    // just inserted, preserving the database's six-digit value and all original
+    // Session/ancestor/30-day narrowing. Never recreate it from a JS Date.
+    const row = (await client.query<{ original_expires_at: string }>(
+      `SELECT to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS original_expires_at
+       FROM agent_session_chat_tasks
+       WHERE account_id=$1 AND actor_user_id=$2 AND task_id=$3 AND origin_session_id=$4`,
+      [current.accountId, current.userId, currentTaskID, currentSessionID],
+    )).rows;
+    if (row.length !== 1) return savedMemoryUnavailable();
+    retention = Object.freeze({ kind: "session_bound",
+      original_expires_at: savedMemoryDeadline(row[0]!.original_expires_at) });
+  }
+  const receipt = Object.freeze({}) as SessionChatRetentionReceipt;
+  sessionChatRetentionReceipts.set(receipt, Object.freeze({ client,
+    accountID: current.accountId, actorID: current.userId, taskID: currentTaskID,
+    originSessionID: currentSessionID ?? null, retention }));
+  return receipt;
+}
+
+/** Only the actual durable publication owner consumes this private one-use
+ * source fact. A JSON copy, different client/actor/task or second use refuses. */
+export function consumeSessionChatRetentionReceipt(client: PoolClient, auth: AuthContext,
+  taskID: string, receipt: SessionChatRetentionReceipt): Readonly<SessionChatRetentionFact> {
+  const fact = sessionChatRetentionReceipts.get(receipt);
+  sessionChatRetentionReceipts.delete(receipt);
+  if (!fact || fact.client !== client || fact.accountID !== auth.accountId
+    || fact.actorID !== auth.userId || fact.taskID !== taskID) return savedMemoryUnavailable();
+  return Object.freeze({ accountID: fact.accountID, actorID: fact.actorID,
+    taskID: fact.taskID, originSessionID: fact.originSessionID, retention: fact.retention });
 }
 export const SESSION_CHAT_SOURCE_LIMIT = 20;
 export interface AgentSessionScreenshotContext {

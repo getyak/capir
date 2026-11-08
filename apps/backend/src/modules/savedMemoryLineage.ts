@@ -179,6 +179,24 @@ export async function assertSavedMemoryProofCurrent(database: DatabaseClient, au
   if (row?.available !== true) return savedMemoryUnavailable();
 }
 
+/** Deterministic final Memory locks, never a read/authentication grant. Self
+ * stamps intentionally use semantic null; include their actual stable owner
+ * subjects before locking items so the mapped readable predicate stays fenced. */
+export async function lockSavedMemoryLineageTargets(client: PoolClient,
+  proof: Readonly<Pick<SavedMemoryReadProof, "account_id" | "stamps">>): Promise<void> {
+  const ids = proof.stamps.map(stamp => stamp.item_id);
+  const people = [...new Set(proof.stamps.flatMap(stamp => stamp.subject_id ? [stamp.subject_id] : []))].sort();
+  const contexts = [...new Set(proof.stamps.flatMap(stamp => stamp.relationship_context_id ? [stamp.relationship_context_id] : []))].sort();
+  await client.query(`SELECT s.id FROM subjects s WHERE s.account_id=$1 AND (s.id=ANY($2::uuid[]) OR EXISTS (
+    SELECT 1 FROM memory_items m WHERE m.account_id=s.account_id AND m.id=ANY($3::uuid[]) AND m.scope='self'
+      AND m.subject_id=s.id))
+    ORDER BY s.id FOR SHARE OF s NOWAIT`, [proof.account_id, people, ids]);
+  await client.query("SELECT id FROM assignments WHERE account_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE NOWAIT", [proof.account_id, contexts]);
+  await client.query("SELECT id FROM memory_items WHERE account_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE NOWAIT", [proof.account_id, ids]);
+  await client.query("SELECT id FROM memory_item_evidence WHERE account_id=$1 AND memory_item_id=ANY($2::uuid[]) ORDER BY id FOR SHARE NOWAIT", [proof.account_id, ids]);
+  await client.query("SELECT memory_item_id FROM memory_item_lineage WHERE account_id=$1 AND memory_item_id=ANY($2::uuid[]) ORDER BY memory_item_id FOR SHARE NOWAIT", [proof.account_id, ids]);
+}
+
 /** Caller owns account/source/claim locks and the canonical publication Tx.
  * New locks are short, deterministic and NOWAIT; no model/network await here.
  * Targets -> items -> evidence -> epochs, then the caller's final live-auth
@@ -186,14 +204,7 @@ export async function assertSavedMemoryProofCurrent(database: DatabaseClient, au
 export async function registerSavedMemoryLineage(client: PoolClient, authority: SavedMemoryAuthority,
   value: unknown): Promise<void> {
   const proof = captureSavedMemoryReadProof(value); binding(authority, proof);
-  const ids = proof.stamps.map(stamp => stamp.item_id);
-  const people = [...new Set(proof.stamps.flatMap(stamp => stamp.subject_id ? [stamp.subject_id] : []))].sort();
-  const contexts = [...new Set(proof.stamps.flatMap(stamp => stamp.relationship_context_id ? [stamp.relationship_context_id] : []))].sort();
-  await client.query("SELECT id FROM subjects WHERE account_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE NOWAIT", [proof.account_id, people]);
-  await client.query("SELECT id FROM assignments WHERE account_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE NOWAIT", [proof.account_id, contexts]);
-  await client.query("SELECT id FROM memory_items WHERE account_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE NOWAIT", [proof.account_id, ids]);
-  await client.query("SELECT id FROM memory_item_evidence WHERE account_id=$1 AND memory_item_id=ANY($2::uuid[]) ORDER BY id FOR SHARE NOWAIT", [proof.account_id, ids]);
-  await client.query("SELECT memory_item_id FROM memory_item_lineage WHERE account_id=$1 AND memory_item_id=ANY($2::uuid[]) ORDER BY memory_item_id FOR SHARE NOWAIT", [proof.account_id, ids]);
+  await lockSavedMemoryLineageTargets(client, proof);
   await assertSavedMemoryProofCurrent(client, authority, proof);
   const json = JSON.stringify(proof), digest = createHash("sha256").update(json, "utf8").digest("hex");
   const recorded = (await client.query<{ recorded: boolean }>(`SELECT register_saved_memory_lineage($1,$2,$3,$4::timestamptz,$5::jsonb,$6) AS recorded`,
