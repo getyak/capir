@@ -44,13 +44,19 @@ export interface SessionLedger extends QueryResultRow {
   state: string; task_id: string; attempt_id: string; scrubbed: boolean; dispatched: boolean;
   snapshot_version: number | null; exact_session: boolean; fixed_deadline: string; lease_elapsed: boolean;
 }
-export async function withEmptySessionScenario(options: { disabled?: boolean; internalLab?: boolean },
+interface ScenarioOptions {
+  disabled?: boolean; internalLab?: boolean;
+  /** Test-only delay of a real final query/COMMIT result, never its execution. */
+  finalDelay?: "credential" | "commit";
+}
+type FinalWindowEvent = "source" | "credential_1" | "credential_2" | "credential_3" | "commit_entered" | "commit_acknowledged";
+export async function withEmptySessionScenario(options: ScenarioOptions,
   run: (fixture: Awaited<ReturnType<typeof scenario>>) => Promise<void>): Promise<void> {
   const fixture = await scenario(options);
   try { await run(fixture); }
   finally { await fixture.close(); }
 }
-async function scenario(options: { disabled?: boolean; internalLab?: boolean }) {
+async function scenario(options: ScenarioOptions) {
   const accountId = randomUUID(), userId = randomUUID(), password = randomBytes(24).toString("base64url");
   const email = "empty-session-" + userId + "@example.invalid";
   const pool = new Pool({ connectionString: sessionDatabase!, max: 4, connectionTimeoutMillis: 2_000,
@@ -60,6 +66,16 @@ async function scenario(options: { disabled?: boolean; internalLab?: boolean }) 
   let poolError = false, calls = 0, readyCount = 0, holdReady = false, holdSource = false;
   const heldCalls = new Map<number, ReturnType<typeof sessionBarrier>>(), requests: Promise<unknown>[] = [];
   const readyRelease = sessionBarrier(), sourceEntered = sessionBarrier(), sourceRelease = sessionBarrier();
+  const finalEntered = sessionBarrier(), finalRelease = sessionBarrier();
+  let finalDelayed = false;
+  const finalEvidence = { acknowledgedFinalCommit: false, realFinalSourceRead: false,
+    credentialChecksAfterSource: 0, positiveCredentialResults: 0, positiveCredentialResult: false,
+    selectedCredential: null as 3 | null, credentialQueriesAfterSelected: 0,
+    commitEntered: false, credentialChecksAtCommit: null as number | null, sequence: [] as FinalWindowEvent[] };
+  const noteFinal = (event: FinalWindowEvent) => {
+    if (finalEvidence.sequence.length >= 6) throw new Error("Synthetic final sequence exceeded its fixed bound.");
+    finalEvidence.sequence.push(event);
+  };
   pool.on("error", () => { poolError = true; }); control.on("error", () => { poolError = true; });
   const q = async <T extends QueryResultRow>(sql: string, args: unknown[] = []) => {
     try { return await control.query<T>(sql, args); }
@@ -70,16 +86,93 @@ async function scenario(options: { disabled?: boolean; internalLab?: boolean }) 
       const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
     }
     return async () => {
-      const client = await target.connect(); let readyTransaction = false;
+      const client = await target.connect(); let readyTransaction = false, finalTransaction = false;
+      let finalSourceRead = false, credentialChecksAfterSource = 0;
       return new Proxy(client, { get(owner, name) {
         if (name !== "query") {
           const value = Reflect.get(owner, name, owner); return typeof value === "function" ? value.bind(owner) : value;
         }
         return (...args: unknown[]) => {
           const sql = typeof args[0] === "string" ? args[0] : "";
-          if (sql === "BEGIN") readyTransaction = false;
+          if (sql === "BEGIN") {
+            readyTransaction = false; finalTransaction = false;
+            finalSourceRead = false; credentialChecksAfterSource = 0;
+          }
           if (sql.includes("SET state='result_ready',checkpoint=")) readyTransaction = true;
+          if (sql.includes("SET state='completed',completed_at=")) finalTransaction = true;
+          const finalCommit = sql === "COMMIT" && finalTransaction && Boolean(options.finalDelay);
+          if (finalCommit) {
+            const expected: readonly FinalWindowEvent[] = ["source", "credential_1", "credential_2", "credential_3"];
+            if (!finalSourceRead || credentialChecksAfterSource !== 3 || finalEvidence.positiveCredentialResults !== 3
+              || finalEvidence.selectedCredential !== 3 || finalEvidence.credentialQueriesAfterSelected !== 0
+              || finalEvidence.commitEntered || finalEvidence.sequence.length !== expected.length
+              || expected.some((event, index) => finalEvidence.sequence[index] !== event))
+              throw new Error("Synthetic final COMMIT requires the exact real source and three-credential sequence.");
+          }
           const actual = Reflect.apply(owner.query, owner, args);
+          if (finalCommit) {
+            finalEvidence.commitEntered = true;
+            finalEvidence.credentialChecksAtCommit = credentialChecksAfterSource;
+            noteFinal("commit_entered");
+            if (!actual || typeof actual.then !== "function") throw new Error("Synthetic final COMMIT barrier requires an acknowledged Promise.");
+            return Promise.resolve(actual).then(async value => {
+              finalEvidence.acknowledgedFinalCommit = true;
+              noteFinal("commit_acknowledged");
+              if (options.finalDelay === "commit" && !finalDelayed) {
+                finalDelayed = true;
+                finalEntered.resolve(); await finalRelease.promise;
+              }
+              return value;
+            });
+          }
+          if (options.finalDelay && finalTransaction && sql.includes("AS remaining_ms")
+            && sql.includes("FROM agent_sessions s")) {
+            if (!actual || typeof actual.then !== "function") throw new Error("Synthetic final source observation requires a real query Promise.");
+            return Promise.resolve(actual).then(value => {
+              const result = value as { rows?: unknown };
+              if (!Array.isArray(result.rows) || result.rows.length !== 1)
+                throw new Error("Synthetic final source observation requires one actual source row.");
+              if (finalSourceRead || finalEvidence.realFinalSourceRead)
+                throw new Error("Synthetic final window requires exactly one source observation.");
+              finalSourceRead = true; credentialChecksAfterSource = 0;
+              finalEvidence.realFinalSourceRead = true;
+              noteFinal("source");
+              return value;
+            });
+          }
+          // The DB facade itself checks the original credential after its
+          // source SELECT (check1). advance.assertFinalCurrent checks after
+          // its source callback (check2). withClient then performs the actual
+          // trailing credential check after operation returns (check3).
+          const credentialQuery = finalTransaction && finalSourceRead
+            && sql.includes("WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at)")
+            && sql.includes("FROM sessions") && sql.includes("tick.checked_at<$9::timestamptz")
+            && sql.includes("users.kind=$10");
+          if (options.finalDelay && credentialQuery) {
+            credentialChecksAfterSource++;
+            finalEvidence.credentialChecksAfterSource = credentialChecksAfterSource;
+            if (finalEvidence.selectedCredential !== null) finalEvidence.credentialQueriesAfterSelected++;
+            if (credentialChecksAfterSource > 3 || finalEvidence.commitEntered)
+              throw new Error("Synthetic final window observed an unexpected later credential query.");
+            const index = credentialChecksAfterSource;
+            if (!actual || typeof actual.then !== "function") throw new Error("Synthetic final credential barrier requires a real query Promise.");
+            return Promise.resolve(actual).then(async value => {
+              const result = value as { rows?: unknown };
+              if (!Array.isArray(result.rows) || result.rows.length !== 1)
+                throw new Error("Synthetic final credential observation requires actual positive authority.");
+              finalEvidence.positiveCredentialResults++;
+              noteFinal(index === 1 ? "credential_1" : index === 2 ? "credential_2" : "credential_3");
+              if (index === 3) {
+                finalEvidence.selectedCredential = 3;
+                finalEvidence.positiveCredentialResult = true;
+                if (options.finalDelay === "credential" && !finalDelayed) {
+                  finalDelayed = true;
+                  finalEntered.resolve(); await finalRelease.promise;
+                }
+              }
+              return value;
+            });
+          }
           if (sql === "COMMIT" && readyTransaction && holdReady) {
             if (!actual || typeof actual.then !== "function") throw new Error("Synthetic ready barrier requires an acknowledged Promise COMMIT.");
             return Promise.resolve(actual).then(async value => { readyCount++; await readyRelease.promise; return value; });
@@ -130,6 +223,8 @@ async function scenario(options: { disabled?: boolean; internalLab?: boolean }) 
       waitCalls: (count: number) => waitSessionCondition(() => calls === count),
       holdReady() { holdReady = true; }, readyCount: () => readyCount, releaseReady() { readyRelease.resolve(); },
       holdNextSource() { holdSource = true; }, sourceEntered, releaseSource() { sourceRelease.resolve(); },
+      finalEntered, releaseFinal() { finalRelease.resolve(); },
+      finalEvidence: () => ({ ...finalEvidence, sequence: [...finalEvidence.sequence] }),
       async createSession() {
         const id = randomUUID(), payload = emptySessionPayload(id);
         const response = await activeApp.inject({ method: "PUT", url: "/v1/agent-sessions/" + id, headers,
@@ -163,14 +258,14 @@ async function scenario(options: { disabled?: boolean; internalLab?: boolean }) 
             AND metadata->>'conversation_session_id'=$2) AS audits`, [accountId, sessionID])).rows[0]!;
       },
       async close() {
-        for (const barrier of heldCalls.values()) barrier.resolve(); readyRelease.resolve(); sourceRelease.resolve();
+        for (const barrier of heldCalls.values()) barrier.resolve(); readyRelease.resolve(); sourceRelease.resolve(); finalRelease.resolve();
         try { await Promise.allSettled(requests); }
         finally { try { await activeApp.close(); } finally { await Promise.all([pool.end(), control.end()]); } }
         expect(poolError, "No task-owned Pool may fail silently.").toBe(false);
       },
     };
   } catch {
-    for (const barrier of heldCalls.values()) barrier.resolve(); readyRelease.resolve(); sourceRelease.resolve();
+    for (const barrier of heldCalls.values()) barrier.resolve(); readyRelease.resolve(); sourceRelease.resolve(); finalRelease.resolve();
     await app?.close().catch(() => {}); await Promise.allSettled([pool.end(), control.end()]);
     throw new Error("Synthetic empty Session fixture setup failed; credentials/private rows withheld.");
   }

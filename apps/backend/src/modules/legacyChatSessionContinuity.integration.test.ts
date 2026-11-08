@@ -251,4 +251,92 @@ describe.skipIf(!sessionDatabase)("empty Session durable source, publication and
       }
     });
   }, 90_000);
+
+  it.each([
+    ["credential", false], ["credential", true], ["commit", false], ["commit", true],
+  ] as const)("keeps the original short source bound across the actual final %s await (crossExpiry=%s)", async (window, crossExpiry) => {
+    await withEmptySessionScenario({ finalDelay: window }, async f => {
+      const session = await f.createSession();
+      // Only the synthetic canonical source lifetime is made short. The
+      // execution deadline, lease, checkpoint and proof are never rewritten.
+      await f.q("UPDATE agent_sessions SET expires_at=clock_timestamp()+interval '5 seconds' WHERE account_id=$1 AND id=$2",
+        [f.accountId, session.id]);
+      const first = f.start(session.id);
+      await waitSessionCondition(() => f.finalEntered.settled());
+      const before = await f.ledger(first.key, session.id);
+      expect(before).toBeDefined(); expect(before?.dispatched).toBe(true); expect(f.calls()).toBe(1);
+      expect(before?.state).toBe(window === "credential" ? "result_ready" : "completed");
+      expect(await f.counts(session.id)).toEqual(window === "credential"
+        ? { lineage: 0, audits: 0 } : { lineage: 1, audits: 1 });
+      const evidence = f.finalEvidence();
+      expect(evidence.realFinalSourceRead).toBe(true);
+      expect(evidence.acknowledgedFinalCommit).toBe(window === "commit");
+      expect(evidence.positiveCredentialResult).toBe(true);
+      expect(evidence.positiveCredentialResults).toBe(3);
+      expect(evidence.selectedCredential).toBe(3);
+      expect(evidence.credentialChecksAfterSource).toBe(3);
+      expect(evidence.credentialQueriesAfterSelected).toBe(0);
+      expect(evidence.commitEntered).toBe(window === "commit");
+      expect(evidence.credentialChecksAtCommit).toBe(window === "commit" ? 3 : null);
+      const credentials = ["source", "credential_1", "credential_2", "credential_3"];
+      expect(evidence.sequence).toEqual(window === "commit"
+        ? [...credentials, "commit_entered", "commit_acknowledged"] : credentials);
+      const clock = async () => (await f.q<{ expired: boolean; exact_original: boolean }>(`SELECT
+        clock_timestamp()>=s.expires_at AS expired,e.execution_deadline=s.expires_at AS exact_original
+        FROM agent_sessions s JOIN legacy_chat_executions e ON e.account_id=s.account_id
+        JOIN idempotency_records p ON p.account_id=e.account_id AND p.id=e.idempotency_id
+        WHERE s.account_id=$1 AND s.id=$2 AND p.idempotency_key=$3`, [f.accountId, session.id, first.key])).rows[0]!;
+      expect(await clock()).toEqual({ expired: false, exact_original: true });
+      if (crossExpiry) {
+        // Observe the real control connection's DB clock crossing the unchanged
+        // source boundary. No fake timer/DOM error/proof/SQL result is supplied.
+        await waitSessionCondition(async () => {
+          const current = await clock(); expect(current.exact_original).toBe(true); return current.expired;
+        }, 7_000);
+      }
+      f.releaseFinal();
+      const response = await first.promise;
+      expect(response.statusCode).toBe(crossExpiry ? 409 : 201);
+      expect(f.calls()).toBe(1);
+      const finalEvidence = f.finalEvidence(), committed = window === "commit" || !crossExpiry;
+      expect(finalEvidence.positiveCredentialResults).toBe(3);
+      expect(finalEvidence.credentialChecksAfterSource).toBe(3);
+      expect(finalEvidence.selectedCredential).toBe(3);
+      expect(finalEvidence.credentialQueriesAfterSelected).toBe(0);
+      expect(finalEvidence.commitEntered).toBe(committed);
+      expect(finalEvidence.acknowledgedFinalCommit).toBe(committed);
+      expect(finalEvidence.credentialChecksAtCommit).toBe(committed ? 3 : null);
+      expect(finalEvidence.sequence).toEqual(committed
+        ? [...credentials, "commit_entered", "commit_acknowledged"] : credentials);
+      const after = await f.ledger(first.key, session.id);
+      expect(after?.attempt_id).toBe(before?.attempt_id); expect(after?.task_id).toBe(before?.task_id);
+      expect(after?.fixed_deadline).toBe(before?.fixed_deadline); expect(after?.scrubbed).toBe(true);
+      const published = !crossExpiry || window === "commit";
+      expect(after?.state).toBe(published ? "completed" : "authority_lost");
+      expect(await f.counts(session.id)).toEqual(published
+        ? { lineage: 1, audits: 1 } : { lineage: 0, audits: 0 });
+      expect((await f.q<{ status: string; response_status: number | null; has_body: boolean; completed: boolean }>(`SELECT
+        p.status,p.response_status,p.response_body IS NOT NULL AS has_body,e.completed_at IS NOT NULL AS completed
+        FROM idempotency_records p JOIN legacy_chat_executions e ON e.account_id=p.account_id AND e.idempotency_id=p.id
+        WHERE p.account_id=$1 AND p.actor_user_id=$2 AND p.idempotency_key=$3`, [f.accountId, f.userId, first.key])).rows[0])
+        .toEqual(published ? { status: "completed", response_status: 201, has_body: true, completed: true }
+          : { status: "processing", response_status: null, has_body: false, completed: false });
+      if (crossExpiry) {
+        expect(response.json()).not.toHaveProperty("task_id"); expect(response.json()).not.toHaveProperty("blocks");
+        // Current Session read policy now refuses this source. It must not
+        // convert the same durable key into an automatic replacement RPC.
+        const repeat = await f.start(session.id, first.key).promise;
+        expect(repeat.statusCode).toBe(410); expect(f.calls()).toBe(1);
+        const retained = await f.ledger(first.key, session.id);
+        expect(retained?.state).toBe(after?.state); expect(retained?.attempt_id).toBe(before?.attempt_id);
+      } else {
+        expect((await clock()).expired).toBe(false);
+        const repeat = await f.start(session.id, first.key).promise;
+        expect(repeat.statusCode).toBe(201); expect(repeat.json()).toEqual(response.json()); expect(f.calls()).toBe(1);
+        expect(await f.counts(session.id)).toEqual({ lineage: 1, audits: 1 });
+      }
+      // In particular, crossExpiry+commit is an acknowledged committed fact
+      // with refused late HTTP delivery, never a claimed rollback.
+    });
+  }, 15_000);
 });
