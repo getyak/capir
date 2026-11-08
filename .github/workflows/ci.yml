@@ -504,6 +504,11 @@ jobs:
         run: |
           pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryFinalClock.integration.test.ts
 
+      - name: Verify final Memory content reads with PostgreSQL
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+        run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryContentReadEnvelope.integration.test.ts
+
       - name: Verify exact Memory literal SQL with a populated isolated upgrade
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
