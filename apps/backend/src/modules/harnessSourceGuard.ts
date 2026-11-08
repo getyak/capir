@@ -1,10 +1,117 @@
 import { recordProductEvent } from "@talent-signal/agent";
+import { types } from "node:util";
 import type { DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
 import { labStopAuthorityKeySQL } from "./labStopAuthority.js";
+import { legacyChatProofDeadline, legacyChatProofId, readLegacyChatSnapshotRecord,
+  snapshotLegacyChatAuth } from "./legacyChatOriginalProof.js";
 
 export interface HarnessSourceAuthority { expiresAt: Date; personIDs: readonly string[] }
+
+type HarnessSourceGuard = () => Promise<void>;
+declare const harnessRunSourceBrand: unique symbol;
+/** In-process owner identity only. This handle and its metadata grant neither
+ * authentication nor current source/Memory availability or publication. */
+export interface HarnessRunSourceHandle { readonly [harnessRunSourceBrand]: true }
+export interface HarnessRunSourceBinding {
+  readonly accountId: string;
+  readonly userId: string;
+  readonly sessionID: string | null;
+  readonly generation: string;
+  readonly sessionStamp: string | null;
+  readonly sessionExpiresAt: string | null;
+  /** Original observed sources() SQL input, only narrowed thereafter. Not a
+   * new Run/credential/retention lifetime or proof of source independence. */
+  readonly sourceExpiresAt: string;
+  readonly personIDs: readonly string[];
+}
+interface SourceObservation {
+  generation: string; sessionStamp: string | null;
+  sessionExpiresAt: string | null; sourceExpiresAt: string | null; personIDs: string[];
+}
+interface SourceBindingState {
+  readonly auth: Readonly<AuthContext>;
+  readonly guard: HarnessSourceGuard;
+  readonly sessionID: string | null;
+  readonly generation: string;
+  readonly sessionStamp: string | null;
+  sessionExpiresAt: string | null;
+  sourceExpiresAt: string | null;
+  readonly personIDs: Set<string>;
+  latestSourceDefined: boolean;
+  latestSequence: number;
+  checking: number;
+  failed: boolean;
+}
+const sourceBindings = new WeakMap<object, SourceBindingState>();
+
+// Opt-in observation columns only. Preserve PostgreSQL microseconds as text:
+// https://node-postgres.com/features/types#date--timestamp--timestamptz
+// https://www.postgresql.org/docs/18/functions-formatting.html
+const sourceBindingColumnsSQL = `,
+        to_char($4::timestamptz AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS source_expires_at,
+        (SELECT to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+          FROM agent_sessions WHERE account_id=$1 AND created_by_user_id=$2 AND id=$3
+            AND deleted_at IS NULL AND expires_at>clock_timestamp()) AS session_expires_at,
+        $5::uuid[] AS source_person_ids`;
+
+function sourceObservation(value: unknown, sessionID: string | null): SourceObservation {
+  try {
+    const row = readLegacyChatSnapshotRecord(value, ["generation", "session_stamp", "current",
+      "source_expires_at", "session_expires_at", "source_person_ids"]);
+    if (row.current !== true || typeof row.generation !== "string"
+      || !/^(?:0|-?[1-9][0-9]{0,18})$/u.test(row.generation)
+      || BigInt(row.generation) < -9223372036854775808n || BigInt(row.generation) > 9223372036854775807n
+      || !Array.isArray(row.source_person_ids) || types.isProxy(row.source_person_ids)) throw unavailable();
+    const people = row.source_person_ids;
+    if (Object.getPrototypeOf(people) !== Array.prototype
+      || Reflect.ownKeys(people).length !== people.length + 1) throw unavailable();
+    const personIDs: string[] = [];
+    for (let i = 0; i < people.length; i++) {
+      const slot = Object.getOwnPropertyDescriptor(people, String(i));
+      if (!slot || !("value" in slot) || !slot.enumerable) throw unavailable();
+      personIDs.push(legacyChatProofId(slot.value));
+    }
+    const stamp = row.session_stamp;
+    if (sessionID === null ? stamp !== null || row.session_expires_at !== null
+      : typeof stamp !== "string" || !/^[a-f0-9]{32}$/u.test(stamp)) throw unavailable();
+    return { generation: row.generation, sessionStamp: stamp as string | null,
+      sessionExpiresAt: sessionID === null ? null : legacyChatProofDeadline(row.session_expires_at),
+      sourceExpiresAt: row.source_expires_at === null ? null : legacyChatProofDeadline(row.source_expires_at), personIDs };
+  } catch { throw unavailable(); }
+}
+function narrowSourceBinding(state: SourceBindingState, observed: SourceObservation, sequence: number): void {
+  if (observed.sessionExpiresAt !== null && (state.sessionExpiresAt === null
+    || observed.sessionExpiresAt < state.sessionExpiresAt)) state.sessionExpiresAt = observed.sessionExpiresAt;
+  if (observed.sourceExpiresAt !== null && (state.sourceExpiresAt === null
+    || observed.sourceExpiresAt < state.sourceExpiresAt)) state.sourceExpiresAt = observed.sourceExpiresAt;
+  for (const id of observed.personIDs) state.personIDs.add(id);
+  // Concurrent rechecks may finish out of order. Only actual callback-observation
+  // order controls whether the latest source was defined; floors/people union
+  // include every successful observation. Pending reads cannot be unpacked.
+  if (sequence > state.latestSequence) {
+    state.latestSequence = sequence;
+    state.latestSourceDefined = observed.sourceExpiresAt !== null;
+  }
+}
+
+/** Parameter facts for a future fixed owner-joined SQL, not an availability
+ * assertion. That owner must check current credential/Lab/source/Memory/query
+ * at one DB tick. A clone cannot replace this private handle at that entry. */
+export function readHarnessRunSourceBinding(handle: HarnessRunSourceHandle,
+  guard: HarnessSourceGuard, auth: AuthContext): Readonly<HarnessRunSourceBinding> {
+  let current: Readonly<AuthContext>;
+  try { current = snapshotLegacyChatAuth(auth); } catch { throw unavailable(); }
+  const state = sourceBindings.get(handle);
+  if (!state || state.guard !== guard || state.failed || state.checking !== 0
+    || !state.latestSourceDefined || state.sourceExpiresAt === null
+    || state.auth.accountId !== current.accountId || state.auth.userId !== current.userId
+    || state.auth.sessionId !== current.sessionId || state.auth.userKind !== current.userKind) throw unavailable();
+  return Object.freeze({ accountId: state.auth.accountId, userId: state.auth.userId, sessionID: state.sessionID,
+    generation: state.generation, sessionStamp: state.sessionStamp, sessionExpiresAt: state.sessionExpiresAt,
+    sourceExpiresAt: state.sourceExpiresAt, personIDs: Object.freeze([...state.personIDs].sort()) });
+}
 
 /** Lifecycle point whose read observed the rejection. */
 export type HarnessSourceGuardPhase = "admission" | "recheck";
@@ -72,8 +179,33 @@ export async function assertHarnessLabAuthority(probe: DatabaseClient, auth: Aut
  */
 export async function createHarnessSourceGuard(database: DatabaseClient, auth: AuthContext,
   sessionID: string | undefined, sources: () => HarnessSourceAuthority | undefined, probe: DatabaseClient = database): Promise<() => Promise<void>> {
+  return (await createSourceGuardOwner(database, auth, sessionID, sources, probe, false)).guard;
+}
+
+/** Opt in before reading/compiling source. Not wired to any tool or reader.
+ * A pending undefined sources() cannot be unpacked as an independent domain. */
+export async function createHarnessSourceGuardWithBinding(database: DatabaseClient, auth: AuthContext,
+  sessionID: string | undefined, sources: () => HarnessSourceAuthority | undefined, probe: DatabaseClient = database,
+): Promise<Readonly<{ guard: HarnessSourceGuard; source: HarnessRunSourceHandle }>> {
+  const owner = await createSourceGuardOwner(database, auth, sessionID, sources, probe, true);
+  if (!owner.source) throw unavailable();
+  return Object.freeze({ guard: owner.guard, source: owner.source });
+}
+
+async function createSourceGuardOwner(database: DatabaseClient, auth: AuthContext,
+  sessionID: string | undefined, sources: () => HarnessSourceAuthority | undefined, probe: DatabaseClient,
+  binding: boolean,
+): Promise<{ guard: HarnessSourceGuard; source?: HarnessRunSourceHandle }> {
+  // The original entry keeps its argument behavior and exact SQL predicate.
+  if (binding) {
+    try { auth = snapshotLegacyChatAuth(auth); if (sessionID !== undefined) sessionID = legacyChatProofId(sessionID); }
+    catch { throw unavailable(); }
+  }
+  let sequence = 0;
+  const observations = new WeakMap<object, { value: SourceObservation; sequence: number }>();
   const read = async (phase: HarnessSourceGuardPhase) => {
     await assertHarnessLabAuthority(probe, auth, phase);
+    const observedSequence = binding ? ++sequence : 0;
     const authority = sources();
     if (authority && (!Number.isFinite(authority.expiresAt.valueOf()) || authority.expiresAt.valueOf() <= Date.now())) {
       noteGuardRejection(phase, "SOURCE_AUTHORITY_EXPIRED_OR_INVALID");
@@ -88,7 +220,7 @@ export async function createHarnessSourceGuard(database: DatabaseClient, auth: A
             AND deleted_at IS NULL AND expires_at>clock_timestamp()) AS session_stamp,
         ($4::timestamptz IS NULL OR $4>clock_timestamp()) AND NOT EXISTS (
           SELECT 1 FROM identity_handles WHERE account_id=$1 AND subject_id=ANY($5::uuid[])
-            AND status='confirmed' AND valid_until<=clock_timestamp()) AS current`,
+            AND status='confirmed' AND valid_until<=clock_timestamp()) AS current${binding ? sourceBindingColumnsSQL : ""}`,
     [auth.accountId, auth.userId, sessionID ?? null, authority?.expiresAt ?? null, [...(authority?.personIDs ?? [])]])).rows[0];
     } catch (error) {
       noteGuardRejection(phase, "UNEXPECTED_PROBE_FAILURE");
@@ -97,12 +229,38 @@ export async function createHarnessSourceGuard(database: DatabaseClient, auth: A
     if (!row) { noteGuardRejection(phase, "SOURCE_ROW_UNAVAILABLE"); throw unavailable(); }
     if (!row.current) { noteGuardRejection(phase, "SOURCE_NOT_CURRENT"); throw unavailable(); }
     if (sessionID && !row.session_stamp) { noteGuardRejection(phase, "SESSION_MISSING"); throw unavailable(); }
+    if (binding) {
+      try { observations.set(row, { value: sourceObservation(row, sessionID ?? null), sequence: observedSequence }); }
+      catch { noteGuardRejection(phase, "SOURCE_ROW_UNAVAILABLE"); throw unavailable(); }
+    }
     return row;
   };
   const admitted = await read("admission");
-  return async () => {
-    const current = await read("recheck");
-    if (current.generation !== admitted.generation) { noteGuardRejection("recheck", "SOURCE_GENERATION_CHANGED"); throw unavailable(); }
-    if (current.session_stamp !== admitted.session_stamp) { noteGuardRejection("recheck", "SESSION_CONTEXT_CHANGED"); throw unavailable(); }
+  let state: SourceBindingState | undefined;
+  const guard = async () => {
+    if (state) state.checking++;
+    try {
+      const current = await read("recheck");
+      if (current.generation !== (state ? state.generation : admitted.generation)) { noteGuardRejection("recheck", "SOURCE_GENERATION_CHANGED"); throw unavailable(); }
+      if (current.session_stamp !== (state ? state.sessionStamp : admitted.session_stamp)) { noteGuardRejection("recheck", "SESSION_CONTEXT_CHANGED"); throw unavailable(); }
+      if (state) {
+        const observed = observations.get(current);
+        if (!observed) throw unavailable();
+        narrowSourceBinding(state, observed.value, observed.sequence);
+      }
+    } catch (error) {
+      if (state) state.failed = true;
+      throw error;
+    } finally { if (state) state.checking--; }
   };
+  if (!binding) return { guard };
+  const observed = observations.get(admitted);
+  if (!observed) throw unavailable();
+  state = { auth, guard, sessionID: sessionID ?? null, generation: observed.value.generation,
+    sessionStamp: observed.value.sessionStamp, sessionExpiresAt: observed.value.sessionExpiresAt,
+    sourceExpiresAt: observed.value.sourceExpiresAt, personIDs: new Set(observed.value.personIDs),
+    latestSourceDefined: observed.value.sourceExpiresAt !== null, latestSequence: observed.sequence, checking: 0, failed: false };
+  const source = Object.freeze({}) as HarnessRunSourceHandle;
+  sourceBindings.set(source, state);
+  return { guard, source };
 }

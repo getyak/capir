@@ -22,12 +22,14 @@ objects preserve intent; withheld originals and private derivations are excluded
 ## Current milestone: compatible foundation before runtime publication
 
 Main `ac4fdce93a7260532342e5f382515659c3c39877` has 117 frozen migrations.
-Draft #536 foundation `7ee02f744635d9810a61d78198d7bf0b8ce9c911`
-has not reached Main or the resident service. Its Hosted PostgreSQL run
-42487231340 passed the original populated upgrade (12), owner target (5), and
-tracked recall (7). Default backend tests passed 2141 with 1069 configured skips.
-The new runtime suite still failed 11 of 15; subsequent stages were skipped.
-These results do not establish the whole capability or resident acceptance.
+Draft #536 foundation `8799ee1a77cceccac7315ef28217b45d03dcbede`
+has not reached Main or the resident service. Hosted run42494456426 passed
+typecheck/build, default backend2167 (1140 configured skips), existing durablePG50,
+populated upgrade12, owner target5 and tracked recall7. Its four new historical
+upgrade tests also passed through the normal migrator with all old rows/schema
+preserved. Runtime15 still failed11 with4 passes; the following discovery6 step
+was skipped. These results do not establish the whole capability or resident
+acceptance.
 
 A read-only resident schema check found a real historical
 `099_saved_memory_chat_lineage` table named `agent_task_memory_dependencies`.
@@ -49,12 +51,38 @@ separate, empty loopback database. It executes the complete historical099 Git
 SQL, retains synthetic UUID and text task rows, runs the normal migrator through
 114/115, checks the old table and rows byte for byte, rejects synthetic conversion
 into new proofs, repeats migration without changed receipts, and verifies an
-already-applied checksum mismatch still fails. This fixture matches the observed
-old table shape; its full SQL has not been asserted identical to the resident's
-stored099 checksum. Existing upgrade12 and runtime15 case bodies and timeouts
-remain intact. These four contracts are source-only until their Hosted step
-actually passes. The same batch maps physical Self subjects to semantic null
+already-applied checksum mismatch still fails. A subsequent read-only query confirmed the resident's stored099 checksum
+is exactly the full fixture SQL SHA256, with stable container identity and a
+rolled-back read-only transaction. That confirms this one historical SQL version,
+not the compatibility of all five extra resident migrations or deployment
+capacity. Existing upgrade12 and runtime15 case bodies and timeouts remain
+intact. All four historical contracts actually passed in run42494456426. The same batch maps physical Self subjects to semantic null
 inside the original discovery SELECT, while retaining strict owner predicates.
+
+## Active source-owner seam
+
+The optional `createHarnessSourceGuardWithBinding` returns a guard and an opaque
+in-process source handle from the actual admission owner. Its parameter facts
+capture generation, Session stamp, original six-digit Session expiry and source
+floor in the same SELECT. Floors only narrow, observed people accumulate, an
+undefined source remains pending, concurrent checks prevent unpacking, and any
+failed recheck retires the handle. Clones, mismatched guards and changed
+account/actor/login/kind cannot replace that private identity. The existing
+nonbinding guard SQL, parameter order, independent Lab probe, five-second budget
+and rejection diagnostics remain unchanged.
+
+These are source parameters, never a current read grant. The existing callbacks
+can initially be undefined while a scoped source loads. A temporary seven-day
+value from the existing unscoped owner is only an observed source parameter;
+it is not a new Run, credential, query or retained-result deadline. Complete
+image/identity qualification and current credential/Lab/source/Memory/query
+checks still belong to the future fixed, fresh owner-joined SQL. No tool,
+producer, LegacyAuth or canonical completion is activated by this seam.
+
+Nine pure and three real PostgreSQL regressions are new source-only checks until
+Hosted execution. The three PG cases use real password/Task/Session and contact
+capture paths, original microsecond expiry, source updates and identity expiry.
+Their required serialized CI selector runs before the still-mandatory runtime15.
 
 ## Following milestones and protected boundaries
 
