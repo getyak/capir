@@ -18,7 +18,6 @@ type CaseName = typeof cases[number];
 type Status = "not_started" | "running" | "passed" | "failed";
 const unicode = "😀".repeat(499) + "🚀";
 const directory = (query: string) => "/workspace/people?query=" + encodeURIComponent(query);
-const fieldValue = (selector: string) => `document.querySelector(${JSON.stringify(selector)})?.value`;
 type LoginCheckpoint = "directory_navigation" | "login_form" | "login_network_settlement" | "login_callback_binding"
   | "fill_identifier" | "fill_password" | "credentials_readback" | "submit_password"
   | "onboarding_form" | "onboarding_network_settlement" | "onboarding_callback_binding"
@@ -135,12 +134,12 @@ async function login(page: DirectoryProtocolPage, fixture: DirectoryFixture, que
   note("login_callback_binding");
   const loginUrl = new URL(await page.url());
   requireProtocol(loginUrl.pathname === "/login" && loginUrl.searchParams.get("callbackUrl") === directory(query), "LOGIN_FULL_CALLBACK");
-  requireProtocol(await page.evaluate<string>(fieldValue('input[name="redirectTo"]')) === directory(query), "LOGIN_HIDDEN_CALLBACK");
+  requireProtocol(await page.pageFunction<string>('function(selector) { return document.querySelector(selector)?.value; }', ['input[name="redirectTo"]']) === directory(query), "LOGIN_HIDDEN_CALLBACK");
   note("fill_identifier"); await page.fill("#account-email", fixture.email);
   note("fill_password"); await page.fill("#account-password", fixture.password);
   const fields = {
-    identifierEqual: await page.evaluate<boolean>(`${fieldValue("#account-email")}===${JSON.stringify(fixture.email)}`),
-    passwordEqual: await page.evaluate<boolean>(`${fieldValue("#account-password")}===${JSON.stringify(fixture.password)}`),
+    identifierEqual: await page.pageFunction<boolean>('function(selector,expected) { return document.querySelector(selector)?.value===expected; }', ["#account-email", fixture.email]),
+    passwordEqual: await page.pageFunction<boolean>('function(selector,expected) { return document.querySelector(selector)?.value===expected; }', ["#account-password", fixture.password]),
   };
   note("credentials_readback", fields);
   requireProtocol(fields.identifierEqual && fields.passwordEqual, "LOGIN_FIELDS_NOT_FILLED");
@@ -255,7 +254,7 @@ async function main() {
     });
     await run("long_tail_database_search", async () => {
       await search(ordinary, data, data.tailA);
-      requireProtocol(await ordinary.evaluate<boolean>(`!!document.getElementById(${JSON.stringify("person-" + data.personA)}) && !document.getElementById(${JSON.stringify("person-" + data.personB)})`), "DATABASE_TAIL_DISTINCTION");
+      requireProtocol(await ordinary.pageFunction<boolean>(`function(included,excluded) { return !!document.getElementById(included) && !document.getElementById(excluded); }`, ["person-" + data.personA, "person-" + data.personB]), "DATABASE_TAIL_DISTINCTION");
       await ordinary.health();
     });
     const long = await DirectoryProtocolPage.create(cdp, origin); pages.push(long);
@@ -279,7 +278,7 @@ async function main() {
       requireProtocol(await long.value() === rejected, "PASTE_RAW_DRAFT");
       await long.key("Enter", "Enter", 13); await long.quiet();
       requireProtocol(data.observationCount() === searches && await long.url() === priorUrl && await long.value() === rejected, "EXPLICIT_REFUSAL_NO_SEARCH");
-      requireProtocol(await long.evaluate<boolean>(`(() => { const e=document.querySelector(${JSON.stringify(directoryInput)});return e?.getAttribute("aria-invalid")==="true" && e.selectionStart===${rejected.length} && e.selectionEnd===${rejected.length} && document.activeElement===e && !!document.querySelector('[role="alert"]') && window.__get452Events.paste>0;})()`), "PASTE_TRUSTED_REFUSAL_CARET");
+      requireProtocol(await long.pageFunction<boolean>(`function(selector,length) { const e=document.querySelector(selector);return e?.getAttribute("aria-invalid")==="true" && e.selectionStart===length && e.selectionEnd===length && document.activeElement===e && !!document.querySelector('[role="alert"]') && window.__get452Events.paste>0;}`, [directoryInput, rejected.length]), "PASTE_TRUSTED_REFUSAL_CARET");
       await long.paste(data.tailB); await long.submit(); await currentDirectory(long, data.tailB);
       requireProtocol(data.seen(data.tailB), "TRUSTED_PASTE_FULL_DELIVERY"); await long.health();
     });
@@ -289,8 +288,8 @@ async function main() {
       // Chromium queues the real IME compositionend through DispatchScopedEvent,
       // which leaves isTrusted false. Keep trusted start/input prerequisites and
       // observe the actual end on this exact input; never synthesize an event.
-      const observing = await long.evaluate<boolean>(`(() => {
-        const input=document.querySelector(${JSON.stringify(directoryInput)});
+      const observing = await long.pageFunction<boolean>(`function(selector,committed) {
+        const input=document.querySelector(selector);
         if(!(input instanceof HTMLInputElement))return false;
         const controller=new AbortController(),state={input,started:false,composingInput:false,ended:0,saturated:false,dataEqual:false,trusted:null,close:()=>controller.abort()};
         Object.defineProperty(window,"__get452ImeCommit",{value:state});
@@ -304,11 +303,11 @@ async function main() {
         document.addEventListener("compositionend",event=>{
           if(event.target!==input || !state.started || !state.composingInput || !(event instanceof CompositionEvent))return;
           if(state.ended<1024)state.ended++;else state.saturated=true;
-          state.trusted=event.isTrusted;state.dataEqual=event.data===${JSON.stringify(committed)};
+          state.trusted=event.isTrusted;state.dataEqual=event.data===committed;
           controller.abort();
         },options);
         return true;
-      })()`);
+      }`, [directoryInput, committed]);
       requireProtocol(observing, "IME_CYCLE_OBSERVER");
       let completed = false;
       try {
@@ -320,8 +319,8 @@ async function main() {
         await until(async () => {
           // Capture only the last original poll; no extra CDP command or input.
           // Require the real cycle's matching end, plus the original enabled gate.
-          const diagnostic = await long.evaluate<ImeCommitDiagnostic>(`(() => {
-            const events=window.__get452Events,cycle=window.__get452ImeCommit,input=document.querySelector(${JSON.stringify(directoryInput)}),
+          const diagnostic = await long.pageFunction<ImeCommitDiagnostic>(`function(selector,committed) {
+            const events=window.__get452Events,cycle=window.__get452ImeCommit,input=document.querySelector(selector),
               submit=document.querySelector('main#main-content form[action="/workspace/people"] button[type="submit"]'),
               count=Number.isSafeInteger(cycle?.ended)&&cycle.ended>=0?cycle.ended:null,
               valueLength=input instanceof HTMLInputElement?input.value.length:null;
@@ -332,11 +331,11 @@ async function main() {
               trustedCompositionEndObserved:events.composed>0,submitEnabled:!submit?.disabled,
               inputFound:input instanceof HTMLInputElement,submitFound:submit instanceof HTMLButtonElement,
               focus:input instanceof HTMLInputElement&&document.activeElement===input?"directory":document.activeElement===document.body?"body":"other",
-              expectedValueEqual:input instanceof HTMLInputElement?input.value===${JSON.stringify(committed)}:null,
+              expectedValueEqual:input instanceof HTMLInputElement?input.value===committed:null,
               inputCodeUnitsUpTo4096:valueLength===null?null:Math.min(valueLength,4096),inputCodeUnitsSaturated:valueLength!==null&&valueLength>4096,
               predicate:input===cycle?.input && cycle?.started===true && cycle?.composingInput===true && cycle?.ended>0 && cycle?.dataEqual===true && !document.querySelector('main#main-content form[action="/workspace/people"] button[type="submit"]')?.disabled
             };
-          })()`);
+          }`, [directoryInput, committed]);
           receipt.imeCommitDiagnostic = diagnostic;
           return diagnostic.predicate;
         }, "GET452 trusted composition commit");
@@ -358,7 +357,7 @@ async function main() {
     });
     await run("clear_focus", async () => {
       await long.click('main#main-content form[action="/workspace/people"] a');
-      await until(() => long.evaluate<boolean>(`location.pathname==="/workspace/people" && !new URL(location.href).searchParams.has("query") && document.querySelector(${JSON.stringify(directoryInput)})?.value==="" && document.activeElement===document.querySelector(${JSON.stringify(directoryInput)})`), "GET452 clear readback focus");
+      await until(() => long.pageFunction<boolean>(`function(selector) { return location.pathname==="/workspace/people" && !new URL(location.href).searchParams.has("query") && document.querySelector(selector)?.value==="" && document.activeElement===document.querySelector(selector); }`, [directoryInput]), "GET452 clear readback focus");
       await long.health();
     });
     await run("mobile375_geometry", async () => {

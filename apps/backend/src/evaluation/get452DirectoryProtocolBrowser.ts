@@ -47,10 +47,61 @@ function clickProbe(value: unknown, target: string): Record<string, unknown> {
 type IconLifetime = { id:string; ordinal:number; requestOrder:number; mainDocumentReceiveCountAtRequest:number; reportedDocumentRoute:string;
   reportedFrameRelation:"main"|"other"|"unobserved"; ambiguous:boolean; responseStatus:number|null; responseOrder:number|null;
   finished:number; failed:number; terminalOrder:number|null; canceled:boolean|null; failure:"aborted"|"failed"|"connection_closed"|"other"|"unobserved" };
+type DefaultContextBinding = Readonly<{ frame: string; unique: string; revision: number }>;
+/** Runtime owns world lifetime; Page owns which frame is the root. Keeping
+ * these separately does not assume Created/FrameNavigated event ordering. */
+class DirectoryDefaultContext {
+  private frame = "";
+  private frameEventObserved = false;
+  private revision = 0;
+  private invalid = false;
+  private worlds = new Map<string, string>();
+  bootstrap(value: Record<string, unknown>) {
+    if (this.frameEventObserved) return; // A later main-frame event outranks the snapshot.
+    const frame = (value.frameTree as { frame?: { id?: unknown } } | undefined)?.frame;
+    this.frame = typeof frame?.id === "string" ? frame.id : "";
+  }
+  navigated(value: Record<string, unknown>) {
+    const frame = value.frame as { id?: unknown; parentId?: unknown } | undefined;
+    if (!frame || frame.parentId) return;
+    this.frameEventObserved = true;
+    this.frame = typeof frame.id === "string" ? frame.id : "";
+    this.revision++;
+  }
+  created(value: Record<string, unknown>) {
+    const context = value.context as { uniqueId?: unknown; auxData?: { isDefault?: unknown; frameId?: unknown } } | undefined;
+    if (context?.auxData?.isDefault !== true) return;
+    const frame = context.auxData.frameId, unique = context.uniqueId;
+    if (typeof frame !== "string" || !frame || frame.length > 256
+      || typeof unique !== "string" || !unique || unique.length > 256) {
+      this.worlds.clear(); return;
+    }
+    if (this.worlds.size >= 16 && !this.worlds.has(frame)) {
+      this.invalid = true; this.worlds.clear(); return;
+    }
+    this.worlds.set(frame, unique);
+  }
+  destroyed(value: Record<string, unknown>) {
+    const unique = value.executionContextUniqueId;
+    if (typeof unique !== "string") { this.worlds.clear(); return; }
+    for (const [frame, current] of this.worlds) if (current === unique) this.worlds.delete(frame);
+  }
+  cleared() { this.worlds.clear(); }
+  current(): DefaultContextBinding | null {
+    const unique = this.worlds.get(this.frame);
+    return !this.invalid && unique ? Object.freeze({ frame: this.frame, unique, revision: this.revision }) : null;
+  }
+  isCurrent(binding: DefaultContextBinding) {
+    return !this.invalid && this.frame === binding.frame && this.revision === binding.revision
+      && this.worlds.get(binding.frame) === binding.unique;
+  }
+  close() { this.invalid = true; this.worlds.clear(); this.frame = ""; }
+}
 export class DirectoryProtocolPage {
   readonly observed = { blockedExternal: 0, runtimeErrors: 0, consoleErrors: 0, cookieBlocks: {} as Record<string, number>, maxRequestTargetBytes: 0,
     lastDocumentStatus: null as number | null, lastDocumentRoute: "unobserved", httpErrors: {} as Record<string, number> };
   private disposers: Array<() => void> = [];
+  private executionContexts = new DirectoryDefaultContext();
   private active = new Set<string>();
   // Network settlement belongs to the committed document. Keep the global
   // transport ledger above intact: a replaced document's request may never
@@ -266,7 +317,14 @@ export class DirectoryProtocolPage {
       current.disposers.push(cdp.on(sessionId,"Network.responseReceived",value=>current.noteIconResponse(value)));
       current.disposers.push(cdp.on(sessionId,"Network.loadingFinished",value=>current.noteIconTerminal(value,false)));
       current.disposers.push(cdp.on(sessionId,"Network.loadingFailed",value=>current.noteIconTerminal(value,true)));
-      for (const method of ["Page.enable", "Runtime.enable", "Network.enable"]) await current.call(method);
+      current.disposers.push(cdp.on(sessionId, "Page.frameNavigated", value => current.executionContexts.navigated(value)));
+      current.disposers.push(cdp.on(sessionId, "Runtime.executionContextCreated", value => current.executionContexts.created(value)));
+      current.disposers.push(cdp.on(sessionId, "Runtime.executionContextDestroyed", value => current.executionContexts.destroyed(value)));
+      current.disposers.push(cdp.on(sessionId, "Runtime.executionContextsCleared", () => current.executionContexts.cleared()));
+      for (const method of ["Page.enable", "Runtime.enable", "Network.enable"]) {
+        await current.call(method);
+        if (method === "Page.enable") current.executionContexts.bootstrap(await current.call("Page.getFrameTree"));
+      }
       await current.call("Network.setCacheDisabled", { cacheDisabled: true });
       await current.call("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
       await current.call("Page.addScriptToEvaluateOnNewDocument", { source: observer });
@@ -281,6 +339,15 @@ export class DirectoryProtocolPage {
   async evaluate<T>(expression: string): Promise<T> {
     const result = await this.call<{ result: { value?: T }; exceptionDetails?: unknown }>("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     requireProtocol(!result.exceptionDetails, "BROWSER_EVALUATION"); return result.result.value as T;
+  }
+  async pageFunction<T>(functionDeclaration: string, values: readonly (string | number | boolean | null)[]): Promise<T> {
+    const binding = this.executionContexts.current();
+    requireProtocol(binding, "BROWSER_EXECUTION_CONTEXT");
+    const result = await this.call<{ result: { value?: T }; exceptionDetails?: unknown }>("Runtime.callFunctionOn", {
+      uniqueContextId: binding.unique, functionDeclaration, arguments: values.map(value => ({ value })),
+      awaitPromise: true, returnByValue: true });
+    requireProtocol(!result.exceptionDetails && this.executionContexts.isCurrent(binding), "BROWSER_EVALUATION");
+    return result.result.value as T;
   }
   async navigate(path: string) {
     const url = new URL(path, this.origin); requireProtocol(url.origin === this.origin, "BROWSER_ORIGIN");
@@ -298,7 +365,8 @@ export class DirectoryProtocolPage {
       // One poll evaluation observes all original readiness/identity predicates.
       // Clear first: a replaced/failed context cannot retain an older sample.
       this.lastReadyProbe = null;
-      const probe = readyProbe(await this.evaluate<unknown>(`(() => ({readyStateNotLoading:document.readyState!=="loading",selectorPresent:!!document.querySelector(${JSON.stringify(selector)}),titleNonempty:document.title.length>0,mainPresent:!!document.querySelector("main"),noNextjsPortal:!document.querySelector("nextjs-portal")}))()`));
+      if (!this.executionContexts.current()) return false;
+      const probe = readyProbe(await this.pageFunction<unknown>(`function(selector) { return ({readyStateNotLoading:document.readyState!=="loading",selectorPresent:!!document.querySelector(selector),titleNonempty:document.title.length>0,mainPresent:!!document.querySelector("main"),noNextjsPortal:!document.querySelector("nextjs-portal")}); }`, [selector]));
       this.lastReadyProbe = probe;
       return probe.readyStateNotLoading === true && probe.selectorPresent === true
         && probe.titleNonempty === true && probe.mainPresent === true && probe.noNextjsPortal === true;
@@ -308,7 +376,7 @@ export class DirectoryProtocolPage {
   }
   async click(selector: string) {
     this.lastClickProbe = null;
-    const rect = await this.evaluate<{ x: number; y: number; visible: boolean; probe: unknown } | null>(`(() => { const e=document.querySelector(${JSON.stringify(selector)});if(!(e instanceof HTMLElement))return null;e.scrollIntoView({block:"center",behavior:"instant"});const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),visible=r.width>0&&r.height>0&&!e.hasAttribute("disabled")&&hit?.closest(${JSON.stringify(selector)})===e;return{x:r.x+r.width/2,y:r.y+r.height/2,visible,probe:{found:true,disabled:e.hasAttribute("disabled"),connected:e.isConnected,active:document.activeElement===e,targetTag:e.tagName,hitTag:hit?.tagName??"NONE",hitRelation:!hit?"none":hit===e?"self":e.contains(hit)?"descendant":hit.contains(e)?"ancestor":"other",left:r.left,top:r.top,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight,scrollY,scrollBehavior:getComputedStyle(document.documentElement).scrollBehavior}};})()`);
+    const rect = await this.pageFunction<{ x: number; y: number; visible: boolean; probe: unknown } | null>(`function(selector) { const e=document.querySelector(selector);if(!(e instanceof HTMLElement))return null;e.scrollIntoView({block:"center",behavior:"instant"});const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),visible=r.width>0&&r.height>0&&!e.hasAttribute("disabled")&&hit?.closest(selector)===e;return{x:r.x+r.width/2,y:r.y+r.height/2,visible,probe:{found:true,disabled:e.hasAttribute("disabled"),connected:e.isConnected,active:document.activeElement===e,targetTag:e.tagName,hitTag:hit?.tagName??"NONE",hitRelation:!hit?"none":hit===e?"self":e.contains(hit)?"descendant":hit.contains(e)?"ancestor":"other",left:r.left,top:r.top,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight,scrollY,scrollBehavior:getComputedStyle(document.documentElement).scrollBehavior}};}`, [selector]);
     const target = selector === "#account-email" ? "identifier" : selector === "#account-password" ? "password"
       : selector === directoryInput ? "directory_query" : selector === 'form:has(#account-email) button[type="submit"]' ? "login_submit"
         : selector === 'main#main-content form[action="/workspace/people"] button[type="submit"]' ? "directory_submit" : "other";
@@ -330,10 +398,10 @@ export class DirectoryProtocolPage {
   }
   async paste(text: string) {
     await this.click(directoryInput); await this.key("a", "KeyA", 65, 2); await this.key("Backspace", "Backspace", 8);
-    await this.evaluate(`navigator.clipboard.writeText(${JSON.stringify(text)}).then(()=>true)`);
+    await this.pageFunction(`function(text) { return navigator.clipboard.writeText(text).then(()=>true); }`, [text]);
     await this.key("v", "KeyV", 86, 2);
   }
-  value() { return this.evaluate<string>(`document.querySelector(${JSON.stringify(directoryInput)})?.value ?? ""`); }
+  value() { return this.pageFunction<string>(`function(selector) { return document.querySelector(selector)?.value ?? ""; }`, [directoryInput]); }
   async submit() { await this.click('main#main-content form[action="/workspace/people"] button[type="submit"]'); }
   async historyEntry() {
     const history = await this.call<{ currentIndex: number; entries: Array<{ id: number }> }>("Page.getNavigationHistory");
@@ -389,9 +457,9 @@ export class DirectoryProtocolPage {
   }
   async directoryFailureState(expectedQuery: string) {
     // Called once only after a fixed failure. Raw values stay in this read-only expression.
-    const value = await this.evaluate<Record<string, unknown>>(`(() => {
-      const expected=${JSON.stringify(expectedQuery)},url=new URL(location.href),query=url.searchParams.get("query"),
-        input=document.querySelector(${JSON.stringify(directoryInput)}),submit=document.querySelector('main#main-content form[action="/workspace/people"] button[type="submit"]'),
+    const value = await this.pageFunction<Record<string, unknown>>(`function(selector,expectedQuery) {
+      const expected=expectedQuery,url=new URL(location.href),query=url.searchParams.get("query"),
+        input=document.querySelector(selector),submit=document.querySelector('main#main-content form[action="/workspace/people"] button[type="submit"]'),
         active=document.activeElement,alerts=Math.min(501,document.querySelectorAll('[role="alert"]').length);
       const chars=value=>{if(typeof value!=="string")return null;let n=0;for(const _ of value){if(++n===501)break;}return n;};
       return {urlDirectoryMatch:url.pathname==="/workspace/people",urlQueryMatch:query===expected,urlQueryChars:chars(query),
@@ -400,7 +468,7 @@ export class DirectoryProtocolPage {
         focus:!active?"none":active===input?"directory_query":active===submit?"directory_submit":
           active===document.querySelector("#account-email")?"identifier":active===document.querySelector("#account-password")?"password":"other",
         busy:submit?.getAttribute("aria-busy")==="true",invalid:input?.getAttribute("aria-invalid")==="true",hasAlert:alerts>0,alerts};
-    })()`);
+    }`, [directoryInput, expectedQuery]);
     const row = value && typeof value === "object" ? value : {};
     const flag = (key: string) => typeof row[key] === "boolean" ? row[key] as boolean : null;
     const count = (key: string) => typeof row[key] === "number" && Number.isSafeInteger(row[key]) && (row[key] as number) >= 0
@@ -412,9 +480,9 @@ export class DirectoryProtocolPage {
   }
   async surface() {
     // Presence only. Never return text, field values, HTML, attributes, URLs or error messages.
-    const value = await this.evaluate<Record<string, unknown>>(`(() => {
+    const value = await this.pageFunction<Record<string, unknown>>(`function(selector) {
       const identifier=document.querySelector("#account-email"),password=document.querySelector("#account-password"),
-        directory=document.querySelector(${JSON.stringify(directoryInput)}),submit=document.querySelector('form:has(#account-email) button[type="submit"]');
+        directory=document.querySelector(selector),submit=document.querySelector('form:has(#account-email) button[type="submit"]');
       return {identifier:!!identifier,password:!!password,submit:!!submit,directory:!!directory,
         identifierDisabled:identifier instanceof HTMLInputElement?identifier.disabled:null,
         passwordDisabled:password instanceof HTMLInputElement?password.disabled:null,
@@ -422,7 +490,7 @@ export class DirectoryProtocolPage {
         onboarding:!!document.querySelector("#onboarding-title"),main:!!document.querySelector("main"),
         overlay:!!document.querySelector("nextjs-portal"),alerts:document.querySelectorAll('[role="alert"]').length,
         active:identifier&&document.activeElement===identifier?"identifier":password&&document.activeElement===password?"password":directory&&document.activeElement===directory?"directory":submit&&document.activeElement===submit?"submit":"other"};
-    })()`);
+    }`, [directoryInput]);
     const bool = (key: string) => typeof value[key] === "boolean" ? value[key] : null;
     return { identifier: bool("identifier"), password: bool("password"), submit: bool("submit"), directory: bool("directory"),
       identifierDisabled: bool("identifierDisabled"), passwordDisabled: bool("passwordDisabled"), submitDisabled: bool("submitDisabled"),
@@ -431,6 +499,7 @@ export class DirectoryProtocolPage {
       active: typeof value.active === "string" && ["identifier", "password", "directory", "submit", "other"].includes(value.active) ? value.active : "unobserved" };
   }
   async close() {
+    this.executionContexts.close();
     for (const dispose of this.disposers) dispose();
     await this.cdp.call("Target.disposeBrowserContext", { browserContextId: this.context });
   }
