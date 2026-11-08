@@ -24,7 +24,7 @@ export type LiteralCommitMode = Binding & { kind: "commit"; request: MemoryCommi
   captured: Readonly<LiteralCommitRequest>; scopeID: string };
 type OpenMode = Binding & { kind: "open"; proposalID: string };
 const tickets = new WeakMap<object, StageMode | LiteralCommitMode | OpenMode>();
-function ticket<T extends StageMode | LiteralCommitMode | OpenMode>(mode: T): LiteralWriterTicket {
+function ticket(mode: StageMode | LiteralCommitMode | OpenMode): LiteralWriterTicket {
   const key = Object.freeze({}) as LiteralWriterTicket; tickets.set(key, Object.freeze(mode)); return key;
 }
 function take(key: LiteralWriterTicket, client: DatabaseClient, auth: AuthContext) {

@@ -253,7 +253,7 @@ export async function commitMemoryReview(
 /** The caller owns BEGIN/COMMIT and the original credential publication fence.
  * A private literal ticket changes representation, never authorization. */
 export async function commitMemoryReviewOnClient(
-  client: DatabaseClient, auth: AuthContext, reviewScopeId: string, credential: string | null,
+  client: PoolClient, auth: AuthContext, reviewScopeId: string, credential: string | null,
   request: MemoryCommitRequest, mode: "batch" | "item" = "batch",
   itemExpectation?: { id: string; addedRevision: number }, literalTicket?: LiteralWriterTicket,
 ): Promise<MemoryCommitResult> {
