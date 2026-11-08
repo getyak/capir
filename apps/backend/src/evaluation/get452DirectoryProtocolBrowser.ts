@@ -31,8 +31,14 @@ export class DirectoryProtocolPage {
     lastDocumentStatus: null as number | null, lastDocumentRoute: "unobserved", httpErrors: {} as Record<string, number> };
   private disposers: Array<() => void> = [];
   private active = new Set<string>();
+  // Network settlement belongs to the committed document. Keep the global
+  // transport ledger above intact: a replaced document's request may never
+  // report a terminal event, and replacement does not prove it finished.
+  private documentActive = new Set<string>();
+  private documentCommitted = false;
+  private replacedDocumentRequests = 0;
   private activeKinds = new Map<string, { route: string; method: string; type: string; scheme: string; metadata: string; initiator: string; responseSeen: boolean; responseType: string; fetch: FetchObservation | null;
-    singleHop: boolean; loaderId: string; requestExtra: ExtraObservation; responseExtra: ExtraObservation; extraStatus: number | null; dataSeen: boolean }>();
+    singleHop: boolean; loaderId: string; frameId: string; requestExtra: ExtraObservation; responseExtra: ExtraObservation; extraStatus: number | null; dataSeen: boolean }>();
   private unmatchedFetchPausesUpTo1024 = 0;
   private httpStatuses = new Map<string, number>();
   private changedAt = Date.now();
@@ -110,8 +116,25 @@ export class DirectoryProtocolPage {
       current.iconRouteAudit=cdp.watchTerminalRoutes(sessionId,current.iconIds);
       current.disposers.push(current.iconRouteAudit.dispose);
       current.disposers.push(cdp.on(sessionId, "Page.frameNavigated", value => {
-        const frame = value.frame as { parentId?: unknown; loaderId?: unknown } | undefined;
-        if (frame && !frame.parentId && typeof frame.loaderId === "string") current.mainLoaderId = frame.loaderId;
+        const frame = value.frame as { parentId?: unknown; id?: unknown; loaderId?: unknown } | undefined;
+        if (!frame || frame.parentId) return;
+        if (typeof frame.id !== "string" || !frame.id || typeof frame.loaderId !== "string" || !frame.loaderId) {
+          current.documentCommitted = false; current.changedAt = Date.now(); return;
+        }
+        if (current.documentCommitted && current.mainFrame === frame.id && current.mainLoaderId === frame.loaderId) return;
+        current.mainLoaderId = frame.loaderId;
+        // Use Playwright's committed-document boundary, retaining every known
+        // current-loader request, including navigation and early subresources.
+        // Unknown-loader/other-frame requests remain blockers. No resource type or
+        // pathname (including icons) is exempted from the current document.
+        for (const id of current.documentActive) {
+          const request = current.activeKinds.get(id);
+          if (!request || request.frameId !== frame.id || !request.loaderId || request.loaderId === frame.loaderId) continue;
+          current.documentActive.delete(id);
+          current.replacedDocumentRequests = Math.min(4096, current.replacedDocumentRequests + 1);
+        }
+        current.documentCommitted = true;
+        current.changedAt = Date.now();
       }));
       current.disposers.push(cdp.on(sessionId, "Fetch.requestPaused", value => {
         let observation: FetchObservation | undefined;
@@ -143,12 +166,13 @@ export class DirectoryProtocolPage {
           const firstObservation = current.firstTransportObservation(String(value.requestId));
           const singleHop = firstObservation && !current.activeKinds.has(String(value.requestId)) && !value.redirectResponse;
           current.active.add(String(value.requestId)); current.changedAt = Date.now();
+          current.documentActive.add(String(value.requestId));
           current.activeKinds.set(String(value.requestId), { route: routeKind(url.pathname),
             method: ["GET", "POST"].includes(request.method) ? request.method : "OTHER",
             type: typeof value.type === "string" && resourceKinds.has(value.type) ? value.type : "Other",
             scheme: schemeKinds.get(url.protocol) ?? "other", metadata: url.origin === origin ? metadataKind(url.pathname) : "none",
             initiator: typeof initiator?.type === "string" && initiatorKinds.has(initiator.type) ? initiator.type : "UNOBSERVED", responseSeen: false, responseType: "UNOBSERVED", fetch: null,
-            singleHop, loaderId: typeof value.loaderId === "string" ? value.loaderId : "",
+            singleHop, loaderId: typeof value.loaderId === "string" ? value.loaderId : "", frameId: typeof value.frameId === "string" ? value.frameId : "",
             requestExtra: singleHop ? "unobserved" : "ambiguous", responseExtra: singleHop ? "unobserved" : "ambiguous", extraStatus: null, dataSeen: false });
         } catch { current.observerFailed = true; }
       }));
@@ -170,6 +194,7 @@ export class DirectoryProtocolPage {
       for (const event of ["Network.loadingFinished", "Network.loadingFailed"]) current.disposers.push(cdp.on(sessionId, event, value => {
         current.firstTransportObservation(String(value.requestId));
         current.active.delete(String(value.requestId)); current.activeKinds.delete(String(value.requestId)); current.changedAt = Date.now();
+        current.documentActive.delete(String(value.requestId));
       }));
       current.disposers.push(cdp.on(sessionId, "Network.responseReceived", value => {
         try {
@@ -241,7 +266,7 @@ export class DirectoryProtocolPage {
   }
   url() { return this.evaluate<string>("location.href"); }
   async quiet() {
-    await until(async () => !this.active.size && Date.now() - this.changedAt >= 250, "GET452 network settlement");
+    await until(async () => this.documentCommitted && !this.documentActive.size && Date.now() - this.changedAt >= 250, "GET452 network settlement");
     requireProtocol(!this.observerFailed, "BROWSER_OBSERVER");
   }
   async ready(selector: string) {
@@ -303,6 +328,9 @@ export class DirectoryProtocolPage {
     }
     return { ...this.observed, cookieBlocks: { ...this.observed.cookieBlocks }, httpErrors: { ...this.observed.httpErrors },
       observerFailed: this.observerFailed, activeRequests: this.active.size,
+      settlementVersion: 1, settlement: { basis: "committed_main_document", documentCommitted: this.documentCommitted,
+        activeRequests: this.documentActive.size, replacedDocumentRequests: this.replacedDocumentRequests,
+        unterminatedPriorDocumentRequests: [...this.active].filter(id => !this.documentActive.has(id)).length },
       pendingKinds: Object.fromEntries([...pending].sort(([a], [b]) => a.localeCompare(b))),
       pendingMetadataVersion: 1, pendingMetadata: Object.fromEntries([...metadata].sort(([a], [b]) => a.localeCompare(b))),
       pendingFetchVersion: 1, pendingFetch: Object.fromEntries([...fetch].sort(([a], [b]) => a.localeCompare(b))),
