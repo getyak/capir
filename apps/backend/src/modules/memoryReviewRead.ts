@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { captureMemoryReviewContent, type PreparedMemoryReviewContent } from "./memoryContentFinalFence.js";
 
 import {
   CONTRACT_VERSION,
@@ -12,7 +13,7 @@ import {
   type MemoryReviewView,
   type MemorySurface,
 } from "@talent-signal/contracts";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
@@ -522,29 +523,49 @@ export async function openMemoryReview(
   });
 }
 
+export async function readMemoryReviewOnClient(
+  client: DatabaseClient,
+  auth: AuthContext,
+  reviewScopeId: string,
+  credential: string | null,
+): Promise<MemoryReviewResponse> {
+  const scope = await loadReviewScope(client, auth.accountId, reviewScopeId);
+  if (!scope || scope.reader_user_id !== auth.userId) {
+    throw new ApiError(404, "MEMORY_NOT_FOUND", "The requested Memory review was not found.");
+  }
+  await assertReviewCredential(client, scope, credential);
+  await revalidateScopePursuit(client, auth, scope, false);
+  const proposal = await loadProposal(client, auth.accountId, scope.proposal_id);
+  if (!proposal) {
+    throw new ApiError(404, "MEMORY_NOT_FOUND", "The reviewed proposal was not found.");
+  }
+  return {
+    contract_version: CONTRACT_VERSION,
+    review_credential: null,
+    review: await buildReviewView(client, auth, scope, proposal),
+  };
+}
+
 export async function readMemoryReview(
   pool: Pool,
   auth: AuthContext,
   reviewScopeId: string,
   credential: string | null,
 ): Promise<MemoryReviewResponse> {
-  return inTransaction(pool, async (client) => {
-    const scope = await loadReviewScope(client, auth.accountId, reviewScopeId);
-    if (!scope || scope.reader_user_id !== auth.userId) {
-      throw new ApiError(404, "MEMORY_NOT_FOUND", "The requested Memory review was not found.");
-    }
-    await assertReviewCredential(client, scope, credential);
-    await revalidateScopePursuit(client, auth, scope, false);
-    const proposal = await loadProposal(client, auth.accountId, scope.proposal_id);
-    if (!proposal) {
-      throw new ApiError(404, "MEMORY_NOT_FOUND", "The reviewed proposal was not found.");
-    }
-    return {
-      contract_version: CONTRACT_VERSION,
-      review_credential: null,
-      review: await buildReviewView(client, auth, scope, proposal),
-    };
-  });
+  return inTransaction(pool, client => readMemoryReviewOnClient(client, auth, reviewScopeId, credential));
+}
+
+/** Actual Review owner: retain the same credential/scope/source verifier and
+ * legacy body. The new factory publishes only this opaque same-client result;
+ * callers cannot construct a content fence or submit arbitrary SQL. */
+export async function prepareMemoryReviewContent(
+  client: PoolClient, auth: AuthContext, reviewScopeId: string, credential: string,
+): Promise<PreparedMemoryReviewContent> {
+  if (typeof credential !== "string" || !credential) {
+    throw new ApiError(403, "MEMORY_REVIEW_CREDENTIAL_INVALID", "This Memory review scope needs its rendered credential.");
+  }
+  const capturedAuth = Object.freeze({ ...auth });
+  return captureMemoryReviewContent(client, capturedAuth, reviewScopeId, credential);
 }
 
 /**
