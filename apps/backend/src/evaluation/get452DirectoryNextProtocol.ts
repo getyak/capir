@@ -3,12 +3,13 @@ import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import type { ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { get as getHttp, type ClientRequest, type IncomingMessage } from "node:http";
 import { ProtocolCdp, until } from "./get350NextProtocolCdp.js";
 import { DirectoryProtocolPage, directoryInput } from "./get452DirectoryProtocolBrowser.js";
 import { createDirectoryFixture, type DirectoryFixture } from "./get452DirectoryProtocolFixture.js";
 import { bindDirectorySource } from "./get452DirectoryProtocolSource.js";
+import { observeDirectoryIconServer } from "./get452IconServerObservation.js";
 import { childOwnsListeningPort, chromeAnnouncement, DirectoryProtocolFailure, ownedChild, rememberChild, requireProtocol, reservePort, stopChild } from "./get452DirectoryProtocolHost.js";
 
 const cases = ["ordinary_login_onboarding", "long_tail_database_search", "unicode_login_callback", "backend_session_recovery",
@@ -133,15 +134,16 @@ async function main() {
   const receipt: { schema: string; status: "failed" | "passed"; phase: string; failure: string | null; cleanup: boolean;
     source: unknown; chrome: string | null; cases: Record<CaseName, Status>; observations: unknown[]; backend: unknown;
     diagnosticVersion: 1; checkpoint: LoginCheckpoint | null; loginFields: LoginFields | null; failureSurfaces: unknown[];
-    iconServerProbe: IconServerProbe } = {
+    iconServerProbe: IconServerProbe; iconServerBeforeFailure: ReturnType<ReturnType<typeof observeDirectoryIconServer>["snapshot"]> | null } = {
     schema: "get452-directory-next.v1", status: "failed", phase: "source", failure: null, cleanup: false,
     source: null, chrome: null, cases: Object.fromEntries(cases.map(name => [name, "not_started"])) as Record<CaseName, Status>, observations: [], backend: null,
-    diagnosticVersion: 1, checkpoint: null, loginFields: null, failureSurfaces: [],
+    diagnosticVersion: 1, checkpoint: null, loginFields: null, failureSurfaces: [], iconServerBeforeFailure: null,
     iconServerProbe: { attempted: false, outcome: "not_attempted", status: null, mime: "unobserved", eof: false, withinBodyLimit: false, pngSignature: false },
   };
   let next: ChildProcess | undefined, chrome: ChildProcess | undefined, cdp: ProtocolCdp | undefined;
   let fixture: DirectoryFixture | undefined;
   let readyPort: number | undefined;
+  let iconObserver: ReturnType<typeof observeDirectoryIconServer> | undefined;
   const pages: DirectoryProtocolPage[] = [];
   const run = async (name: CaseName, operation: () => Promise<void>) => {
     receipt.phase = name; receipt.cases[name] = "running"; receipt.checkpoint = null; receipt.loginFields = null;
@@ -165,9 +167,10 @@ async function main() {
     const nextEnv: NodeJS.ProcessEnv = { ...env, NODE_ENV: "production", AUTH_SECRET: randomBytes(48).toString("base64url"), AUTH_URL: origin,
       AUTH_TRUST_HOST: "true", TALENT_SIGNAL_ALLOW_LAN_HTTP: "true", TALENT_SIGNAL_BACKEND_URL: data.backend,
       TALENT_SIGNAL_INTEGRATION_MODE: "true", TALENT_SIGNAL_PASSWORD_AUTH_ENABLED: "true", TALENT_SIGNAL_PASSWORD_REGISTRATION_ENABLED: "false",
-      NEXT_TELEMETRY_DISABLED: "1" };
+      NEXT_TELEMETRY_DISABLED: "1", GITHUB_ACTIONS: "true", GET452_ICON_OBSERVER: "1", GET452_ICON_OBSERVER_PORT: String(port) };
     receipt.phase = "full_next_start";
-    next = ownedChild(process.execPath, [source.next, "start", source.web, "--hostname", "127.0.0.1", "--port", String(port)], source.web, nextEnv);
+    next = ownedChild(process.execPath, ["--import", pathToFileURL(join(source.repo, "apps/backend/src/evaluation/get452IconServerObserver.mjs")).href, source.next, "start", source.web, "--hostname", "127.0.0.1", "--port", String(port)], source.web, nextEnv, false, true);
+    iconObserver = observeDirectoryIconServer(next);
     await until(async () => {
       requireProtocol(next?.pid && next.exitCode === null && next.signalCode === null, "NEXT_CHILD_EXIT");
       try { return childOwnsListeningPort(next, port) && (await fetch(origin + "/login", { redirect: "error", signal: AbortSignal.timeout(1000) })).ok; } catch { return false; }
@@ -262,6 +265,9 @@ async function main() {
   } catch (error) {
     receipt.status = "failed";
     receipt.failure = error instanceof DirectoryProtocolFailure ? error.code : "UNCLASSIFIED_PROTOCOL_FAILURE";
+    // Fix both passive observations before surface reads or the separate Node probe.
+    // Server counts describe this owned listener, not a guessed CDP hop or browser EOF.
+    receipt.iconServerBeforeFailure = iconObserver?.snapshot() ?? null;
     // Capture pending/counter facts before an asynchronous diagnostic can settle them.
     receipt.observations = pages.map(page => page.diagnostics()); receipt.backend = fixture?.counters() ?? null;
     for (const [pageIndex, page] of pages.entries()) {

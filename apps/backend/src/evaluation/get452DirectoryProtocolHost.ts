@@ -41,8 +41,8 @@ function members(group: Group) {
   }
   return rows;
 }
-export function ownedChild(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, stderr = false): ChildProcess {
-  const child = spawn(command, args, { cwd, env, detached: true, stdio: ["ignore", "ignore", stderr ? "pipe" : "ignore"] });
+export function ownedChild(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, stderr = false, diagnosticPipe = false): ChildProcess {
+  const child = spawn(command, args, { cwd, env, detached: true, stdio: ["ignore", "ignore", stderr ? "pipe" : "ignore", ...(diagnosticPipe ? ["pipe" as const] : [])] });
   child.on("error", () => {}); // Readiness fails; cleanup still owns any successfully created group.
   if (child.pid) {
     const row = identity(child.pid);
