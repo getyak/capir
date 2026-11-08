@@ -28,6 +28,10 @@ function notice(value: ProcessNotice): void {
   // Do not send auth, keys, request/response bodies, errors, SQL, IDs or proofs.
   if (process.connected) process.send?.(value);
 }
+function disconnect(): void {
+  if (!process.disconnect) return fail();
+  process.disconnect();
+}
 const never = () => new Promise<never>(() => {});
 
 async function main(): Promise<void> {
@@ -110,8 +114,8 @@ async function main(): Promise<void> {
       closing = true;
       void app.close().then(() => actualPool.end()).then(() => {
         notice({ state: "closed", calls });
-        process.disconnect();
-      }).catch(() => { notice({ state: "fixture_error" }); process.exitCode = 1; process.disconnect(); });
+        disconnect();
+      }).catch(() => { notice({ state: "fixture_error" }); process.exitCode = 1; disconnect(); });
     }
   });
 }

@@ -104,6 +104,11 @@ the reviewed frozen count/digest to116, after verifying all115 old SQL files
 are byte-identical to main. Independent source review closed both repairs;
 fresh Hosted results, rather than the earlier selected typecheck, must prove
 the package build and actual runtime.
+At45811d79 the repository-policy repair passed, but Hosted typechecking stopped
+before PG on two optional Node process.disconnect typings in the new fixture.
+The fixture now uses one explicit checked disconnect helper: missing IPC remains
+a static failure, never an optional skip. Independent source review closed that
+delta; current full typecheck/PG still require a fresh Hosted run.
 No local database, dependency installation, Simulator, resident service change,
 native build, real paid provider or release was used for this implementation.
 
