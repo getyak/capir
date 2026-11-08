@@ -10,7 +10,7 @@ import { labWorkspaceSessionActiveSQL, labWorkspaceSessionActiveAtTickSQL, opera
 import { readLegacyChatSnapshotRecord, snapshotLegacyChatAuth, validateLegacyChatOriginalProof,
   type LegacyChatOriginalProof, type LegacyChatLabBinding } from "./legacyChatOriginalProof.js";
 import { readHarnessRunSourceBinding, type HarnessRunSourceHandle } from "./harnessSourceGuard.js";
-import { SavedMemoryReadSet, captureSavedMemoryReadProof, savedMemoryOwnRecord, savedMemoryUUID,
+import { SAVED_MEMORY_READ_LIMIT, SavedMemoryReadSet, captureSavedMemoryReadProof, savedMemoryOwnRecord, savedMemoryUUID,
   savedMemoryBudgetLimited, type SavedMemoryAuthority, type SavedMemoryReadProof } from "./savedMemoryLineage.js";
 import type { SavedMemoryFinalReadDomain } from "./savedMemoryDiscovery.js";
 import { assertLegacySavedMemoryProofSuperset, captureLegacySavedMemoryDomain, captureLegacySavedMemoryEnvelope,
@@ -18,6 +18,9 @@ import { assertLegacySavedMemoryProofSuperset, captureLegacySavedMemoryDomain, c
   type LegacySavedMemoryReadEnvelope } from "./legacySavedMemoryDomain.js";
 import { captureSavedMemoryDurableProof, savedMemoryDurableProofDigest,
   type SavedMemoryDurableProofV2 } from "./savedMemoryDurableLineage.js";
+import { consumeSessionHistoryReceipt, isForeignSessionHistoryReceipt, isForeignSessionHistoryReceiptError,
+  sessionHistoryReceiptUsesDatabase, type SavedMemorySessionHistoryFacts,
+  type SavedMemorySessionHistoryReceipt } from "./savedMemorySessionHistory.js";
 
 type LegacyChatFailureCode = "LEGACY_CHAT_AUTHORITY_UNAVAILABLE" | "CHAT_COMPLETION_SOURCE_CHANGED";
 export class LegacyChatTerminated extends ApiError {
@@ -55,6 +58,49 @@ const authoritySQL = `FROM sessions
 // Only the new joint path uses the equivalent closed tick variant. The original
 // Legacy predicate and its slot layout stay byte-for-byte unchanged above.
 const memoryAuthoritySQL = authoritySQL.replace(labWorkspaceSessionActiveSQL, labWorkspaceSessionActiveAtTickSQL);
+
+type SavedMemoryHistoryAncestor = Readonly<{
+  taskID: string; completionID: string; bodyDigest: string; proofDigest: string;
+  proof: Readonly<SavedMemoryDurableProofV2>; sourceTaskExpiresAt: string | null;
+}>;
+// Append-only original history domains, never old Run/query/login proofs. The
+// canonical body, complete original V2 and dependencies must still agree at
+// this command's tick, including explicit zero-dependency V2 ancestors.
+const legacySavedMemoryHistorySQL = `NOT EXISTS (
+  SELECT 1 FROM jsonb_array_elements($12::jsonb->'history') ancestor WHERE NOT EXISTS (
+    SELECT 1 FROM agent_task_memory_lineage historical
+    JOIN idempotency_records canonical ON canonical.id=historical.completion_idempotency_id
+    LEFT JOIN agent_session_chat_tasks retained ON retained.account_id=historical.account_id
+      AND retained.task_id=historical.task_id::text
+    WHERE historical.account_id=$6 AND historical.reader_actor_id=$7
+      AND historical.task_id=(ancestor->>'taskID')::uuid AND historical.format_version=2
+      AND historical.completion_idempotency_id=(ancestor->>'completionID')::uuid
+      AND historical.proof_digest=ancestor->>'proofDigest'
+      AND historical.retention_kind=ancestor->'proof'->>'retention_kind'
+      AND historical.source_origin_session_id IS NOT DISTINCT FROM (ancestor->'proof'->>'source_origin_session_id')::uuid
+      AND historical.expires_at IS NOT DISTINCT FROM (ancestor->'proof'->>'expires_at')::timestamptz
+      AND historical.dependency_count=jsonb_array_length(ancestor->'proof'->'stamps')
+      AND canonical.account_id=$6 AND canonical.actor_user_id=$7
+      AND canonical.operation_scope='create_unscoped_chat_task' AND canonical.status='completed'
+      AND canonical.response_status=201 AND canonical.saved_memory_lineage_required
+      AND canonical.response_body->>'task_id'=historical.task_id::text
+      AND encode(sha256(convert_to(canonical.response_body::text,'UTF8')),'hex')=ancestor->>'bodyDigest'
+      AND retained.expires_at IS NOT DISTINCT FROM (ancestor->>'sourceTaskExpiresAt')::timestamptz
+      AND ((historical.retention_kind='canonical_no_session' AND retained.task_id IS NULL)
+        OR (historical.retention_kind='session_bound' AND retained.actor_user_id=$7
+          AND retained.origin_session_id=historical.source_origin_session_id AND retained.expires_at=historical.expires_at))
+      AND COALESCE((SELECT jsonb_agg(jsonb_build_object('item_id',d.memory_item_id::text,'item_version',d.item_version,
+        'lineage_epoch',d.lineage_epoch::text,'memory_owner_id',d.memory_owner_id::text,'scope',d.scope,
+        'subject_id',d.subject_id::text,'relationship_context_id',d.relationship_context_id::text) ORDER BY d.memory_item_id)
+        FROM agent_task_saved_memory_dependencies d WHERE d.account_id=$6 AND d.task_id=historical.task_id),'[]'::jsonb)
+          =ancestor->'proof'->'stamps'
+      AND agent_session_chat_sources_available($6,historical.task_id::text)
+      AND saved_memory_task_current($6,historical.task_id,$7,tick.checked_at)))`;
+const legacySavedMemoryHistoryDeadlineSQL = `,
+                COALESCE((SELECT min((h->'proof'->>'expires_at')::timestamptz)
+                  FROM jsonb_array_elements($12::jsonb->'history') h),'infinity'::timestamptz),
+                COALESCE((SELECT min((h->>'sourceTaskExpiresAt')::timestamptz)
+                  FROM jsonb_array_elements($12::jsonb->'history') h),'infinity'::timestamptz)`;
 
 export interface LegacyChatAuthority {
   readonly signal: AbortSignal;
@@ -96,6 +142,12 @@ export interface LegacySavedMemoryRunAccess {
   throwIfTerminated(): void;
   terminate(error: unknown): never;
 }
+export interface LegacySavedMemoryHistoryFrame {
+  readonly envelope: Readonly<LegacySavedMemoryReadEnvelope>;
+  /** Exact selected inline messages; the owning bridge must charge its shared
+   * context budget before exposure and terminate on a failed charge. */
+  readonly messages: SavedMemorySessionHistoryFacts["messages"];
+}
 type MemoryBinder = {
   bind(input: LegacySavedMemoryRunInput): Promise<LegacySavedMemoryRunHandle>;
   terminate(error: unknown): never;
@@ -103,7 +155,22 @@ type MemoryBinder = {
 };
 const memoryBinders = new WeakMap<object, MemoryBinder>();
 const memoryRuns = new WeakMap<object, { owner: LegacyChatAuthority; auth: Readonly<AuthContext>;
-  access: LegacySavedMemoryRunAccess; seal(): Promise<Readonly<SavedMemoryReadProof>> }>();
+  access: LegacySavedMemoryRunAccess; seal(): Promise<Readonly<SavedMemoryReadProof>>;
+  inheritHistory(receipt: SavedMemorySessionHistoryReceipt): Promise<Readonly<LegacySavedMemoryHistoryFrame>> }>();
+const foreignHistoryErrors = new WeakSet<object>();
+function foreignHistoryStop(): never {
+  const stop = new LegacyChatTerminated(); foreignHistoryErrors.add(stop); throw stop;
+}
+/** Reject-only identity, never permission or a callback into a caller owner.
+ * Keep this before bridge/Core phase and clock checks for genuine foreigners. */
+export function assertLegacySavedMemoryHistoryReceiptOwner(receipt: SavedMemorySessionHistoryReceipt,
+  owner: LegacyChatAuthority): void {
+  if (isForeignSessionHistoryReceipt(receipt, owner)) foreignHistoryStop();
+}
+/** Private origin survives bridge/Core catches without exposing payloads. */
+export function isForeignLegacySavedMemoryHistoryError(error: unknown): boolean {
+  return error !== null && typeof error === "object" && foreignHistoryErrors.has(error);
+}
 
 /** Only an actually minted Legacy credential owner can bind this capability. */
 export function bindLegacySavedMemoryRun(owner: LegacyChatAuthority, input: LegacySavedMemoryRunInput): Promise<LegacySavedMemoryRunHandle> {
@@ -138,6 +205,16 @@ export async function sealLegacySavedMemoryRun(handle: LegacySavedMemoryRunHandl
   auth: AuthContext): Promise<Readonly<SavedMemoryReadProof>> {
   accessLegacySavedMemoryRun(handle, owner, auth);
   return memoryRuns.get(handle)!.seal();
+}
+/** A real private Run consumes the exact inline Session receipt. JSON proofs,
+ * callbacks, restored readers and structural owners cannot mint inheritance. */
+export async function inheritLegacySavedMemoryHistory(handle: LegacySavedMemoryRunHandle, owner: LegacyChatAuthority,
+  auth: AuthContext, receipt: SavedMemorySessionHistoryReceipt): Promise<Readonly<LegacySavedMemoryHistoryFrame>> {
+  assertLegacySavedMemoryHistoryReceiptOwner(receipt, owner);
+  const entry = memoryRuns.get(handle);
+  if (entry && entry.owner !== owner) foreignHistoryStop();
+  accessLegacySavedMemoryRun(handle, owner, auth);
+  return memoryRuns.get(handle)!.inheritHistory(receipt);
 }
 /** Fresh current-reader admission only. Missing lineage and old v1 are refusals;
  * the route must explicitly select any authorized legacy compatibility path. */
@@ -544,21 +621,27 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         taskID, expiresAt: initial.read_until, assertCurrent: () => owner.assertCurrent() });
       const reads = new SavedMemoryReadSet(authority);
       const domains: Readonly<SavedMemoryFinalReadDomain>[] = [];
+      const history: SavedMemoryHistoryAncestor[] = [];
       let tail: Promise<unknown> = Promise.resolve();
       let sealing = false;
       let sealedProof: Readonly<SavedMemoryReadProof> | null = null;
       let sealPromise: Promise<Readonly<SavedMemoryReadProof>> | null = null;
       const runAlive = () => { alive(); if (performance.now() >= runDeadline) return fail(); };
-      const finalize = (value?: SavedMemoryReadProof, query?: SavedMemoryFinalReadDomain, finalClient?: DatabaseClient) => {
+      const finalize = (value?: SavedMemoryReadProof, query?: SavedMemoryFinalReadDomain, finalClient?: DatabaseClient,
+        inheritance?: readonly SavedMemoryHistoryAncestor[], historyLease?: Readonly<{ lease: object; database: DatabaseClient }>) => {
         let captured: Readonly<SavedMemoryReadProof> | undefined, domain: Readonly<SavedMemoryFinalReadDomain> | undefined;
         const lease = finalClient ? activeLease : null;
         const heldAlive = () => {
           if (finalClient && (!memorySealed || !sealedProof || !lease || activeLease !== lease || !active
             || (finalClient !== active && finalClient !== activeGuarded))) return terminateMemory(null);
         };
+        const historyAlive = () => {
+          if (historyLease && (activeLease !== historyLease.lease || activeGuarded !== historyLease.database || !active))
+            return terminateMemory(null);
+        };
         try {
-          runAlive();
-          if (sealing && (value !== undefined || query !== undefined)) return terminateMemory(null);
+          runAlive(); historyAlive();
+          if (sealing && (value !== undefined || query !== undefined || inheritance !== undefined)) return terminateMemory(null);
           heldAlive();
           captured = value === undefined ? undefined : captureSavedMemoryReadProof(value);
           domain = query === undefined ? undefined : captureLegacySavedMemoryDomain(query);
@@ -566,8 +649,27 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         } catch (error) { return terminateMemory(error); }
         const operation = tail.then(async () => {
           try {
-            runAlive(); heldAlive();
-            const next = captured ?? sealedProof ?? reads.snapshot();
+            runAlive(); heldAlive(); historyAlive();
+            let next = captured ?? sealedProof ?? reads.snapshot();
+            const byTask = new Map(history.map(ancestor => [ancestor.taskID, ancestor]));
+            for (const ancestor of inheritance ?? []) {
+              const before = byTask.get(ancestor.taskID);
+              if (before && JSON.stringify(before) !== JSON.stringify(ancestor)) return terminateMemory(null);
+              byTask.set(ancestor.taskID, ancestor);
+            }
+            const allHistory = [...byTask.values()].sort((a, b) => a.taskID < b.taskID ? -1 : a.taskID > b.taskID ? 1 : 0);
+            if (allHistory.length > 64 || Buffer.byteLength(JSON.stringify(allHistory), "utf8") > 256 * 1024) savedMemoryBudgetLimited();
+            if (inheritance !== undefined) {
+              const merged = new Map(next.stamps.map(stamp => [stamp.item_id, stamp]));
+              for (const ancestor of inheritance) for (const stamp of ancestor.proof.stamps) {
+                const before = merged.get(stamp.item_id);
+                if (before && JSON.stringify(before) !== JSON.stringify(stamp)) return terminateMemory(null);
+                merged.set(stamp.item_id, stamp);
+              }
+              if (merged.size > SAVED_MEMORY_READ_LIMIT) savedMemoryBudgetLimited();
+              next = captureSavedMemoryReadProof({ ...next,
+                stamps: [...merged.values()].sort((a, b) => a.item_id < b.item_id ? -1 : a.item_id > b.item_id ? 1 : 0) });
+            }
             assertLegacySavedMemoryProofSuperset(reads.snapshot(), next);
             const allDomains = domain ? [...domains, domain] : [...domains];
             if (allDomains.length > 64 || Buffer.byteLength(JSON.stringify(allDomains), "utf8") > 256 * 1024) savedMemoryBudgetLimited();
@@ -575,9 +677,10 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
             runAlive();
             const actualSource = readHarnessRunSourceBinding(sourceHandle, guard, actor);
             const started = performance.now();
-            const metadata = JSON.stringify({ source: actualSource, proof: next, domains: allDomains });
+            const metadata = JSON.stringify({ source: actualSource, proof: next, domains: allDomains,
+              ...(allHistory.length ? { history: allHistory } : {}) });
             if (Buffer.byteLength(metadata, "utf8") > 512 * 1024) savedMemoryBudgetLimited();
-            heldAlive(); // Recheck after every source await, before touching a held connection.
+            heldAlive(); historyAlive(); // Recheck after every source await, before touching a held connection.
             // All original credential slots stay inside this owner. One fresh
             // statement snapshot and one MATERIALIZED tick govern every domain.
             // https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED
@@ -595,10 +698,10 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
                 COALESCE((SELECT min((d->>'query_expires_at')::timestamptz)
                   FROM jsonb_array_elements($12::jsonb->'domains') d),'infinity'::timestamptz),
                 COALESCE((SELECT t.expires_at FROM agent_task_memory_lineage t WHERE t.account_id=$6 AND t.task_id=$13::uuid),
-                  'infinity'::timestamptz)) AS read_deadline
+                  'infinity'::timestamptz)${allHistory.length ? legacySavedMemoryHistoryDeadlineSQL : ""}) AS read_deadline
                 ${memoryAuthoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10 AND users.kind<>'lab_human'
                 AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb
-                AND ${legacySavedMemorySourceSQL} AND ${legacySavedMemoryProofSQL}
+                AND ${legacySavedMemorySourceSQL} AND ${legacySavedMemoryProofSQL}${allHistory.length ? ` AND ${legacySavedMemoryHistorySQL}` : ""}
                 AND agent_session_chat_sources_available($6,$13::text)
                 AND NOT EXISTS (SELECT 1 FROM agent_session_chat_tasks c WHERE c.account_id=$6 AND c.task_id=$13::text AND c.actor_user_id<>$7)
                 AND EXISTS (SELECT 1 FROM agent_task_memory_lineage t CROSS JOIN dependencies d
@@ -609,20 +712,20 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
               SELECT true AS available,to_char(tick.checked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at,
                 to_char(admitted.read_deadline AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS read_until
               FROM tick,admitted WHERE admitted.read_deadline>tick.checked_at`, [...proof, metadata, taskID])
-              : await pool.query(`WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at),
+              : await pool.query(`WITH tick AS MATERIALIZED (SELECT ${allHistory.length ? "statement_timestamp()" : "clock_timestamp()"} AS checked_at),
               admitted AS MATERIALIZED (SELECT LEAST($9::timestamptz,(${acceptedDeadlineSQL}),sessions.expires_at,
                 ($12::jsonb->'proof'->>'expires_at')::timestamptz,
                 ($12::jsonb->'source'->>'sourceExpiresAt')::timestamptz,
                 COALESCE(($12::jsonb->'source'->>'sessionExpiresAt')::timestamptz,'infinity'::timestamptz),
                 COALESCE((SELECT min((d->>'query_expires_at')::timestamptz)
-                  FROM jsonb_array_elements($12::jsonb->'domains') d),'infinity'::timestamptz)) AS read_deadline
+                  FROM jsonb_array_elements($12::jsonb->'domains') d),'infinity'::timestamptz)${allHistory.length ? legacySavedMemoryHistoryDeadlineSQL : ""}) AS read_deadline
                 ${memoryAuthoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10 AND users.kind<>'lab_human'
                 AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb
-                AND ${legacySavedMemorySourceSQL} AND ${legacySavedMemoryProofSQL})
+                AND ${legacySavedMemorySourceSQL} AND ${legacySavedMemoryProofSQL}${allHistory.length ? ` AND ${legacySavedMemoryHistorySQL}` : ""})
               SELECT true AS available,to_char(tick.checked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at,
                 to_char(admitted.read_deadline AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS read_until
               FROM tick,admitted WHERE admitted.read_deadline>tick.checked_at`, [...proof, metadata]);
-            heldAlive(); // A delayed ACK cannot outlive or switch this connection lease.
+            heldAlive(); historyAlive(); // A delayed ACK cannot outlive or switch this connection lease.
             if (result.rows.length !== 1) return fail();
             const envelope = captureLegacySavedMemoryEnvelope(result.rows[0]);
             if (envelope.read_until > authority.expiresAt) return fail();
@@ -633,6 +736,13 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
             if (timer) clearTimeout(timer);
             arm();
             runAlive();
+            if (inheritance !== undefined) {
+              // Only a successful joint can admit the complete original tuple.
+              // Concurrent metadata additions cannot be silently omitted.
+              assertLegacySavedMemoryProofSuperset(reads.snapshot(), next);
+              reads.admit(next.stamps);
+              history.splice(0, history.length, ...allHistory);
+            }
             if (domain) domains.push(domain);
             return envelope;
           } catch (error) { return terminateMemory(error); }
@@ -648,6 +758,50 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         finalizeProof: (value: SavedMemoryReadProof) => finalize(value),
         assertCurrent: async () => { await finalize(); }, throwIfTerminated: runAlive, terminate: terminateMemory });
       const handle = Object.freeze({}) as LegacySavedMemoryRunHandle;
+      const inheritHistory = (receipt: SavedMemorySessionHistoryReceipt) => {
+        try {
+          // A known foreign receipt must not poison either real owner, even
+          // when this Run is closing or has no Session source of its own.
+          const fact = consumeSessionHistoryReceipt(receipt, owner, actor, sourceBinding.sessionID ?? "", runID, taskID);
+          let historyLease: Readonly<{ lease: object; database: DatabaseClient }> | undefined;
+          if (!sessionHistoryReceiptUsesDatabase(receipt, owner, pool)) {
+            // withClient creates a NEW guarded Proxy for EACH private lease;
+            // its query closure permanently closes in finally. Raw clients
+            // and forwarding wrappers carry no such issuance identity.
+            if (!activeGuarded || !activeLease || !sessionHistoryReceiptUsesDatabase(receipt, owner, activeGuarded))
+              return terminateMemory(null);
+            historyLease = Object.freeze({ lease: activeLease, database: activeGuarded });
+          }
+          runAlive();
+          if (sealing || sourceBinding.sessionID === null) return terminateMemory(null);
+          const currentSource = readHarnessRunSourceBinding(sourceHandle, guard, actor);
+          if (fact.accountId !== actor.accountId || fact.userId !== actor.userId || fact.sessionID !== sourceBinding.sessionID
+            || fact.runID !== runID || fact.taskID !== taskID
+            || fact.unavailableAssistantTaskIDs.length !== 0
+            || JSON.stringify(fact.source) !== JSON.stringify(currentSource)) return terminateMemory(null);
+          const ancestors: SavedMemoryHistoryAncestor[] = fact.ancestors.map(ancestor => {
+            const retained = captureSavedMemoryDurableProof(ancestor.proof);
+            if (retained.account_id !== actor.accountId || retained.reader_actor_id !== actor.userId
+              || retained.task_id !== ancestor.taskID || retained.task_id === taskID
+              || retained.completion_idempotency_id !== ancestor.completionID
+              || typeof ancestor.bodyDigest !== "string" || !/^[a-f0-9]{64}$/.test(ancestor.bodyDigest)
+              || ancestor.proofDigest !== savedMemoryDurableProofDigest(retained)
+              || ancestor.sourceTaskExpiresAt !== retained.expires_at) return terminateMemory(null);
+            return Object.freeze({ taskID: savedMemoryUUID(ancestor.taskID), completionID: savedMemoryUUID(ancestor.completionID),
+              bodyDigest: ancestor.bodyDigest, proofDigest: ancestor.proofDigest, proof: retained,
+              sourceTaskExpiresAt: ancestor.sourceTaskExpiresAt });
+          });
+          return finalize(undefined, undefined, undefined, Object.freeze(ancestors), historyLease).then(envelope => {
+            runAlive();
+            if (historyLease && (activeLease !== historyLease.lease || activeGuarded !== historyLease.database || !active))
+              return terminateMemory(null);
+            return Object.freeze({ envelope, messages: fact.messages });
+          });
+        } catch (error) {
+          if (isForeignSessionHistoryReceiptError(error)) foreignHistoryStop();
+          return terminateMemory(error);
+        }
+      };
       const seal = (): Promise<Readonly<SavedMemoryReadProof>> => {
         try {
           runAlive();
@@ -671,7 +825,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         } catch (error) { return terminateMemory(error); }
       };
       memoryFinalCurrent = async client => { await finalize(undefined, undefined, client); };
-      memoryRuns.set(handle, { owner, auth: actor, access, seal });
+      memoryRuns.set(handle, { owner, auth: actor, access, seal, inheritHistory });
       memoryRun = access; memoryDeadline = runDeadline; memoryBindingPending = false;
       if (timer) clearTimeout(timer);
       arm();

@@ -2,12 +2,13 @@ import { conversationRunDiagnostics } from "./conversationRunDiagnostics.js";
 import { recordProductEvent } from "@talent-signal/agent";
 import { calendarDraftContextForRequest } from "./calendarDraftContext.js";
 import { createHarnessSourceGuard, createHarnessSourceGuardWithBinding } from "./harnessSourceGuard.js";
-import { LegacyChatTerminated, terminateLegacySavedMemoryRun, readLegacySavedMemoryPublication,
+import { LegacyChatTerminated, terminateLegacySavedMemoryRun, readLegacySavedMemoryPublication, isForeignLegacySavedMemoryHistoryError,
   type LegacyChatAuthority } from "./legacyChatAuthority.js";
 import { snapshotLegacyChatAuth } from "./legacyChatOriginalProof.js";
 import { sealWorkspaceSavedMemoryRun, consumeWorkspaceSavedMemoryCompletion,
   type WorkspaceSavedMemoryAdmission, type WorkspaceSavedMemoryCompletionHandle } from "./workspaceSavedMemoryRun.js";
 import { registerSavedMemoryDurableLineage } from "./savedMemoryDurableLineage.js";
+import { readSavedMemorySessionHistory } from "./savedMemorySessionHistory.js";
 import { inSavedMemoryCanonicalTransaction } from "./savedMemoryCanonicalTransaction.js";
 import type { SessionChatRetentionReceipt } from "./agentSessionSources.js";
 import { guardLegacyProvider } from "./legacyChatProviderGuard.js";
@@ -182,6 +183,8 @@ export async function executeUnscopedChatTask(input: {
   steering?: import("@talent-signal/agent").HarnessSteeringFeed;
   onToolCompletion?: (receipt: import("@talent-signal/agent").HarnessToolCompletion) => void;
 }): Promise<UnscopedChatExecution> {
+  if (input.memoryPublicationClaimID)
+    input = { ...input, request: Object.freeze({ ...input.request }) };
   const taskID = input.taskID ?? randomUUID();
   if (input.memoryDraftTarget && (!input.provider || !input.database || !input.auth
     || !isWorkspaceConversationAgentProvider(input.provider))) {
@@ -205,20 +208,22 @@ export async function executeUnscopedChatTask(input: {
       historyExpiresAt?.valueOf() ?? Infinity)),
       personIDs: [...new Set([...sourcePeople, ...(refs?.kind === "product" ? refs.person_ids : [])])] };
   };
-  // The first canonical integration is the real password-owned text-only
-  // no-Session atomic entry. Other issuers retain their existing path pending
-  // their original claim/image/history qualifications and retained lineage.
+  // Bind the real password-owned text-only atomic entry. Session admission
+  // here is inline, known non-SDK only; complete-history/queue/Lab issuers keep
+  // their existing paths until their actual qualifications are connected.
   const memoryEntry = input.memoryPublicationClaimID && input.legacyAuthority
     && input.database && "release" in input.database && input.probePool && input.auth?.userKind === "password_human"
     && input.provider && isWorkspaceConversationAgentProvider(input.provider)
-    && !input.request.session_id && !input.hostAuthority && !input.memoryDraftTarget
+    && (!input.request.session_id || input.provider.providerId !== "claude-agent-sdk")
+    && !input.hostAuthority && !input.memoryDraftTarget
     && !input.legacySourceCurrent && !input.images?.length
     ? Object.freeze({ claimID: input.memoryPublicationClaimID, owner: input.legacyAuthority,
-      database: input.database, pool: input.probePool, auth: snapshotLegacyChatAuth(input.auth) }) : null;
+      database: input.database, pool: input.probePool, auth: snapshotLegacyChatAuth(input.auth),
+      sessionID: input.request.session_id ?? null, messageID: input.request.message_id ?? null }) : null;
   const memorySource = memoryEntry
     ? await memoryEntry.owner.source(() => createHarnessSourceGuardWithBinding(memoryEntry.database, memoryEntry.auth,
-      undefined, sources, memoryEntry.pool)) : null;
-  const savedMemoryAdmission: WorkspaceSavedMemoryAdmission | null = memorySource && memoryEntry
+      memoryEntry.sessionID ?? undefined, sources, memoryEntry.pool)) : null;
+  let savedMemoryAdmission: WorkspaceSavedMemoryAdmission | null = memorySource && memoryEntry
     ? Object.freeze({ pool: memoryEntry.pool, auth: memoryEntry.auth, owner: memoryEntry.owner,
       taskID, source: memorySource.source, guard: memorySource.guard }) : null;
   let savedMemoryCompletion: WorkspaceSavedMemoryCompletionHandle | null = null;
@@ -284,6 +289,20 @@ export async function executeUnscopedChatTask(input: {
     "unscoped_conversation", { sessionID: input.request.session_id,
       screenshotTaskIDs: conversationSources.map(source => source.taskID) }) : undefined;
   if (historyExpiresAt) narrowHistoryExpiry(historyExpiresAt);
+  if (savedMemoryAdmission && memoryEntry && memorySource && memoryEntry.sessionID !== null) {
+    const entry = memoryEntry, sessionID = memoryEntry.sessionID;
+    // The observation has now narrowed the original source lifetime. Refresh
+    // that same private binding before minting its exact history facts.
+    await entry.owner.source(memorySource.guard);
+    const history = await entry.owner.source(() => readSavedMemorySessionHistory({
+      database: entry.database, owner: entry.owner, auth: entry.auth, sessionID,
+      runID: taskID, taskID, source: memorySource.source, guard: memorySource.guard,
+      ...(entry.messageID ? { currentMessageID: entry.messageID } : {}),
+    }));
+    // The Core consumes this exact frame through the private joint before any
+    // model context; the old raw history is never its Memory admission grant.
+    savedMemoryAdmission = Object.freeze({ ...savedMemoryAdmission, history });
+  }
   if (sessionConversation.unavailableScreenshotContext && !sessionConversation.sources?.length)
     throw new ApiError(409, "AGENT_SESSION_CONTEXT_UNAVAILABLE", "The screenshot summary is not currently available. Review its current task before continuing from it.");
   const continuation = !input.memoryDraftTarget && input.provider?.providerId === "claude-agent-sdk" && observation?.source_refs?.kind === "product"
@@ -424,6 +443,7 @@ export async function executeUnscopedChatTask(input: {
         remoteStatus = "completed";
       }
     } catch (error) {
+      if (isForeignLegacySavedMemoryHistoryError(error)) throw error;
       if (savedMemoryAdmission) return terminateLegacySavedMemoryRun(savedMemoryAdmission.owner, error);
       if (error instanceof LegacyChatTerminated) throw error;
       if (input.legacyAuthority) {
@@ -560,7 +580,9 @@ async function createUnscopedChatTaskInternal(
   // Bound acquisition only for the new known-provider entry. Existing issuers
   // retain their ordinary borrow; governed replay ACK policy is provider-agnostic.
   const memoryAtomicEntry = Boolean(legacyAuthority && auth.userKind === "password_human"
-    && !request.session_id && !selectRemoteProvider && provider && isWorkspaceConversationAgentProvider(provider));
+    && !selectRemoteProvider && provider && isWorkspaceConversationAgentProvider(provider)
+    && (!request.session_id || provider.providerId !== "claude-agent-sdk"));
+  if (memoryAtomicEntry) request = Object.freeze({ ...request });
   if (request.session_id) await purgeUnavailableSessionChatSources(pool, auth);
   const execute = async (client: PoolClient): Promise<UnscopedChatTaskMutationResult | LegacyChatAdmission | LegacyChatWaiter> => {
     if (request.session_id) await assertSessionForChat(client, auth, request.session_id);

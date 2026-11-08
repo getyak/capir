@@ -511,6 +511,24 @@ jobs:
           GET_455_CANONICAL_ACK_TEST_REQUIRED: '1'
         run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/savedMemoryCanonicalAck.integration.test.ts
 
+      - name: Verify actual selected Session history receipts with PostgreSQL
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          GET_455_SESSION_HISTORY_READER_TEST_REQUIRED: '1'
+        run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/savedMemorySessionHistory.integration.test.ts
+
+      - name: Verify private inherited Session Memory domains with PostgreSQL
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          GET_455_LEGACY_MEMORY_HISTORY_TEST_REQUIRED: '1'
+        run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/legacySavedMemoryHistory.integration.test.ts
+
+      - name: Verify public Session Memory context and source deadlines with PostgreSQL
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          GET_455_SESSION_MEMORY_RUNTIME_TEST_REQUIRED: '1'
+        run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/savedMemorySessionRuntime.integration.test.ts
+
       - name: Verify sealed Memory completion and current-reader replay with PostgreSQL
         env:
           CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci

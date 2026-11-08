@@ -140,3 +140,39 @@ The narrow adapter preserves ordinary acquisition and database diagnostics for o
 The exact ec0 Hosted run passed Agent708/24 configured skips and Backend2203/1149 configured skips, including the new Legacy15 and Core12 pure checks. The original LegacyPG6 was4PASS/2FAIL: its immediate renewal did not actually rotate the already healthy generation, and its query-expiry setup violated the real lifetime constraint. The next fixture-only repair proves a normal generation increment and both credential branches before expiring the previous branch; it also reads back a legally expired original query row. All six cases and15s budgets remain.
 
 Independent source reviews closed the private Legacy completion/current-reader V6, opaque bridge handoff, narrow adapter V3, actual no-Session wiring V2 and marker SQL/digest. The required serialized ACK2, completion4 and marker3 PostgreSQL steps are added before the existing mandatory runtime15/discovery6. ACK source cases change only delivery of a real successful driver COMMIT; they require actual HTTP canonical201/V2/marker visibility, no model rerun, and current-reader replay. No new source-case or complete C03 pass is claimed before exact-head Hosted execution.
+
+
+## Actual completion evidence and the selected Session source batch
+
+At 8e9df614 Hosted backend types/build and Agent708/24 configured skips passed;
+Backend2264/1158 configured skips passed. Original LegacyPG6 and canonicalACK2
+passed. CompletionPG4 is3PASS/1FAIL: the Session case lacks the actual prepared
+history/ancestor path. Marker3, Runtime15 and Discovery6 were not reached. The
+legal query-expiry fixture repair remains separate from this missing behavior.
+
+The next batch supplies the original inline six-turn/last12-message selection
+as a private same-SELECT body, source stamp, canonical digest and original V2
+ancestor receipt. A real owner verifies private pool or its unique current
+per-lease guarded client, then joins current credentials/source/read-set/query
+and all retained ancestors before exposing text. Foreign receipts are rejected
+before recipient phase/clock changes. Clones, raw clients and forwarding wrappers
+cannot supply reader provenance; lease identity is rechecked through ACK and
+frame return. Ancestors retain original nullable task deadlines and original
+Memory tuples, never an expired query/login lifetime or a refreshed grant.
+
+The actual known non-SDK, password-owned inline Session atomic entry now creates
+its observation, narrows its original source guard, and reads that exact frame
+on the existing held guarded client before Core admission. Core consumes it
+before model exposure; history, automatic Self, recall and search share the
+same24k budget and read-set. The old unfenced complete-history tool does not
+bypass that admission. The existing completion201, retention receipt, typed
+registration, held-final and COMMIT/ACK ordering remain. SDK Session, queue,
+scoped, Lab, images and other issuers still need their own actual qualifications.
+
+ReaderPG6, Legacy historyPG8 and public HTTP2 source contracts receive required
+serialized CI selectors before the unchanged CompletionPG4/Marker3/Runtime15/
+Discovery6 gates. The public cases require an actual short-lived Session to
+continue with selected history and V2 provenance, and a shared history/Self
+budget refusal before model entry without changing the saved Session. Source
+reviews and test fixture repairs do not establish typecheck, SQL execution,
+current-head CI, resident deployment or full C03 acceptance. Those remain open.

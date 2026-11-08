@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { boundInlineAgentSessionMessages } from "./savedMemorySessionHistory.js";
 import { SESSION_HISTORY_MAX_TURNS, assertSessionHistoryTextBudget, readSessionHistoryBodies, readSessionHistorySources,
   readSessionHistoryScreenshots, sessionHistorySnapshotUnavailable } from "./sessionHistorySnapshot.js";
 
@@ -1433,17 +1434,8 @@ export async function readAgentSessionConversation(
     if (text && inheritedSources.length)
       sourcesByMessage.set(turn.response.taskID, inheritedSources);
   }
-  let remaining = 12000;
   if (options.complete) assertSessionHistoryTextBudget(messages);
-  const boundedMessages = options.complete ? messages : messages
-    .reverse()
-    .map((message) => {
-      const text = message.text.slice(0, remaining);
-      remaining -= text.length;
-      return { ...message, text };
-    })
-    .filter((message) => message.text.length > 0)
-    .reverse();
+  const boundedMessages = options.complete ? messages : boundInlineAgentSessionMessages(messages);
   const sources = [
     ...new Map(
       boundedMessages

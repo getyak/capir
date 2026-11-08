@@ -7,12 +7,14 @@ import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
 import { snapshotLegacyChatAuth } from "./legacyChatOriginalProof.js";
 import type { HarnessRunSourceHandle } from "./harnessSourceGuard.js";
-import { accessLegacySavedMemoryRun, bindLegacySavedMemoryRun, sealLegacySavedMemoryRun, LegacyChatTerminated,
+import { accessLegacySavedMemoryRun, bindLegacySavedMemoryRun, sealLegacySavedMemoryRun, inheritLegacySavedMemoryHistory, isForeignLegacySavedMemoryHistoryError, assertLegacySavedMemoryHistoryReceiptOwner, LegacyChatTerminated,
   terminateLegacySavedMemoryRun, type LegacyChatAuthority } from "./legacyChatAuthority.js";
 import { SavedMemoryReadSet, captureSavedMemoryReadProof, captureSavedMemoryStamp, savedMemoryBudgetLimited, savedMemoryDeadline,
   savedMemoryOwnArray, savedMemoryOwnRecord, savedMemoryUnavailable, savedMemoryUUID, SAVED_MEMORY_READ_LIMIT,
   type SavedMemoryReadProof, type SavedMemoryStamp } from "./savedMemoryLineage.js";
 import { searchSavedMemory, SAVED_MEMORY_PAGE_MAX_JSON_BYTES, SAVED_MEMORY_RUN_CONTEXT_MAX } from "./savedMemoryDiscovery.js";
+
+import type { SavedMemorySessionHistoryReceipt } from "./savedMemorySessionHistory.js";
 
 export interface WorkspaceSavedMemoryAdmission {
   readonly pool: Pool;
@@ -21,6 +23,8 @@ export interface WorkspaceSavedMemoryAdmission {
   readonly taskID: string;
   readonly source: HarnessRunSourceHandle;
   readonly guard: () => Promise<void>;
+  /** Actual selected Session frame; consumed only through the private joint. */
+  readonly history?: SavedMemorySessionHistoryReceipt;
 }
 export interface WorkspaceTrackedMemoryPage {
   readonly page: AgentMemoryPage;
@@ -129,7 +133,7 @@ export async function createWorkspaceSavedMemoryRun(admission: WorkspaceSavedMem
     if (!Number.isSafeInteger(characters) || characters < 0 || characters > remaining) return false;
     remaining -= characters; return true;
   };
-  // All three producers share this queue, read set and context counter. A
+  // All Memory producers and selected history share this queue, read set and context counter. A
   // concurrent tool cannot reset the budget or overwrite a prospective proof.
   const serial = <T>(operation: () => Promise<T>, producer = true): Promise<T> => {
     try { if (producer && state.phase !== "open") return access.terminate(null); }
@@ -138,6 +142,7 @@ export async function createWorkspaceSavedMemoryRun(admission: WorkspaceSavedMem
       access.throwIfTerminated();
       try { return await operation(); }
       catch (error) {
+        if (isForeignLegacySavedMemoryHistoryError(error)) throw error;
         if (error instanceof ApiError && error.statusCode === 400 && error.code === "SAVED_MEMORY_QUERY_INVALID") throw error;
         return access.terminate(error);
       }
@@ -189,6 +194,32 @@ export async function createWorkspaceSavedMemoryRun(admission: WorkspaceSavedMem
     assertCurrent: () => serial(() => access.assertCurrent(), false),
     throwIfTerminated: () => access.throwIfTerminated(),
     terminate: (error: unknown): never => access.terminate(error),
+    history: (receipt: SavedMemorySessionHistoryReceipt) => {
+      // Refuse a known foreign capability before touching this Run's phase,
+      // clock or terminal latch. This preflight grants no history access.
+      try { assertLegacySavedMemoryHistoryReceiptOwner(receipt, owner); }
+      catch (error) { return Promise.reject(error); }
+      return serial(async () => {
+        // The Legacy joint alone consumes the real selected frame and inherits
+        // its original V2 tuples. No body is exposed before that current joint.
+        const started = process.hrtime.bigint();
+        const frame = await inheritLegacySavedMemoryHistory(handle, owner, auth, receipt);
+        const row = savedMemoryOwnRecord(frame.envelope, ["available", "checked_at", "read_until"]);
+        const checked = savedMemoryDeadline(row.checked_at), until = savedMemoryDeadline(row.read_until);
+        if (row.available !== true || until > access.authority.expiresAt) return savedMemoryUnavailable();
+        const lifetime = microseconds(until) - microseconds(checked);
+        if (lifetime <= 0n) return savedMemoryUnavailable();
+        const deadline = started + lifetime * 1000n;
+        const output = freezeFrame(JSON.parse(JSON.stringify(frame.messages)) as typeof frame.messages);
+        const json = JSON.stringify(output);
+        if (Buffer.byteLength(json, "utf8") > SAVED_MEMORY_PAGE_MAX_JSON_BYTES || !charge(json.length))
+          return savedMemoryBudgetLimited();
+        // Every await and output copy is charged to the original owner clock.
+        access.throwIfTerminated();
+        if (process.hrtime.bigint() >= deadline) return savedMemoryUnavailable();
+        return output;
+      });
+    },
     self: (tracked: WorkspaceTrackedMemoryPage) => serial(async () => {
       // Compile once under the existing whole-item 24k policy. Only actually
       // exposed core items enter lineage, not every fetched bootstrap row.
