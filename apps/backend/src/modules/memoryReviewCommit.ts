@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { literalAcceptedMetadata, refuseLiteralDowngrade, takeLiteralCommit, validateLiteralCommit,
+  type LiteralWriterTicket } from "./memoryLiteralWriterProtocol.js";
 
 import {
   CONTRACT_VERSION,
@@ -82,6 +84,7 @@ export async function assertScopePursuitCurrent(
 import { verifyPendingSourceAuthority } from "./memorySourceVerification.js";
 import {
   MEMORY_EVIDENCE_AVAILABLE_SQL,
+  assertLegacyMemoryRepresentation,
   contactExternalRef,
   enqueueProjectionJob,
   invalidateDerivedKnowledge,
@@ -241,21 +244,28 @@ export function skippedVisibleItemIds<T extends { id: string }>(
  * here, for an authenticated human decision.
  */
 export async function commitMemoryReview(
-  pool: Pool,
-  auth: AuthContext,
-  reviewScopeId: string,
-  credential: string | null,
-  request: MemoryCommitRequest,
-  mode: "batch" | "item" = "batch",
+  pool: Pool, auth: AuthContext, reviewScopeId: string, credential: string | null,
+  request: MemoryCommitRequest, mode: "batch" | "item" = "batch",
   itemExpectation?: { id: string; addedRevision: number },
 ): Promise<MemoryCommitResult> {
-  return inTransaction(pool, async (client) => {
+  return inTransaction(pool, client => commitMemoryReviewOnClient(client, auth, reviewScopeId, credential, request, mode, itemExpectation));
+}
+
+/** The caller owns BEGIN/COMMIT and the original credential publication fence.
+ * A private literal ticket changes representation, never authorization. */
+export async function commitMemoryReviewOnClient(
+  client: PoolClient, auth: AuthContext, reviewScopeId: string, credential: string | null,
+  request: MemoryCommitRequest, mode: "batch" | "item" = "batch",
+  itemExpectation?: { id: string; addedRevision: number }, literalTicket?: LiteralWriterTicket,
+): Promise<MemoryCommitResult> {
+  const literal = literalTicket ? takeLiteralCommit(literalTicket, client, auth, reviewScopeId, request) : null;
+  {
     const idempotency = await claimIdempotency(
       client,
       { accountId: auth.accountId, actorUserId: auth.userId },
       mode === "item" ? "commit_memory_review_item" : "commit_memory_review",
       request.idempotency_key,
-      { review_scope_id: reviewScopeId, ...request },
+      { review_scope_id: reviewScopeId, ...(literal ? literal.captured : request) },
     );
     if (idempotency.replay) {
       const replayScope = await loadReviewScope(client, auth.accountId, reviewScopeId);
@@ -352,6 +362,7 @@ export async function commitMemoryReview(
     }
 
     const items = await loadProposalItems(client, auth.accountId, proposal.id, true);
+    if (!literal) refuseLiteralDowngrade(items);
     const visible = await visibleReviewItems(client, auth, scope, proposal, items);
     if (mode === "item" && itemExpectation) {
       const target = visible.find((item) => item.id === itemExpectation.id);
@@ -521,6 +532,8 @@ export async function commitMemoryReview(
       }
     }
 
+    if (literal) await validateLiteralCommit(literal, auth, scope, proposal, selected);
+
     const previousById = new Map<string, MemoryItemRow>();
     for (const item of selected) {
       const decision = request.item_decisions[item.id] ?? "accept";
@@ -639,8 +652,8 @@ export async function commitMemoryReview(
         decision === "accept_new" ? "update"
         : decision === "retain_conflict" ? "contest"
         : item.operation;
-      const edited = request.edited_text[item.id]?.trim();
-      const displayText = edited && edited.length > 0
+      const edited = literal ? request.edited_text[item.id] : request.edited_text[item.id]?.trim();
+      const displayText = literal ? edited! : edited && edited.length > 0
         ? edited.slice(0, 1_000)
         : item.display_text;
       // The contact-reference invariant runs on edited text too: an
@@ -673,6 +686,8 @@ export async function commitMemoryReview(
       );
       const previous = previousById.get(item.id) ?? null;
       const memoryItemId = randomUUID();
+      const evidenceId = randomUUID();
+      const literalMetadata = literal ? await literalAcceptedMetadata(item, displayText, evidenceId) : null;
       const conflictGroupId =
         effectiveOperation === "contest"
           ? previous?.conflict_group_id ?? randomUUID()
@@ -685,10 +700,10 @@ export async function commitMemoryReview(
            display_text, original_display_text, statement_kind, speaker, reporter,
            valid_time, observed_time, time_status, sensitivity, version, status,
            supersedes_id, conflict_group_id, source_proposal_id,
-           source_proposal_item_id, created_by_user_id
+           source_proposal_item_id, created_by_user_id, content_protocol, content_manifest, content_manifest_digest
          )
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'active',
-                 $17,$18,$19,$20,$21)`,
+                 $17,$18,$19,$20,$21,$22,$23::jsonb,$24)`,
         [
           memoryItemId,
           auth.accountId,
@@ -711,6 +726,9 @@ export async function commitMemoryReview(
           proposal.id,
           item.id,
           auth.userId,
+          literalMetadata?.accepted.content_protocol ?? "legacy-v1",
+          literalMetadata ? JSON.stringify(literalMetadata.accepted.content_manifest) : null,
+          literalMetadata?.accepted.content_manifest_digest ?? null,
         ],
       );
       if (previous && effectiveOperation === "update") {
@@ -735,11 +753,11 @@ export async function commitMemoryReview(
            id, account_id, memory_item_id, capture_id, source_resource_id,
            evidence_fragment_id, source_session_id, source_message_id,
            source_task_id, source_artifact_id, locator, excerpt, content_hash,
-           source_capture_version, status
+           source_capture_version, status, content_protocol, content_version, content_manifest, content_manifest_digest
          )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,'active')`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,'active',$15,1,$16::jsonb,$17)`,
         [
-          randomUUID(),
+          evidenceId,
           auth.accountId,
           memoryItemId,
           item.capture_id,
@@ -753,6 +771,9 @@ export async function commitMemoryReview(
           item.source_excerpt,
           sha256(item.source_excerpt),
           item.source_capture_version,
+          literalMetadata?.evidence.content_protocol ?? "legacy-v1",
+          literalMetadata ? JSON.stringify(literalMetadata.evidence.content_manifest) : null,
+          literalMetadata?.evidence.content_manifest_digest ?? null,
         ],
       );
       await client.query(
@@ -771,6 +792,7 @@ export async function commitMemoryReview(
         version,
         edited_by_user: itemEdited,
         previous_memory_item_id: previous?.id ?? null,
+        ...(literalMetadata ? { accepted_content: literalMetadata.facts } : {}),
       });
     }
 
@@ -931,10 +953,11 @@ export async function commitMemoryReview(
       contract_version: CONTRACT_VERSION,
       replayed: false,
       receipt,
+      ...(literal ? { content_protocol: "literal-v2" } : {}),
     };
     await completeIdempotency(client, idempotency, 201, body);
     return { body, replayed: false, status: 201 };
-  });
+  }
 }
 
 export async function receiptSourceAvailable(
@@ -1524,6 +1547,7 @@ export async function mutateMemoryItem(
           relationshipContextId: entry.relationship_context_id ?? null, captureId: entry.pursuit_capture_id, captureVersion: entry.pursuit_capture_version }, { lock: true });
       }
     }
+    if (request.operation === "correct") assertLegacyMemoryRepresentation(row.content_protocol);
     if (idempotency.replay) return { ...(idempotency.replay.body as MemoryItemMutationResponse), replayed: true };
     if (row.status !== "active") {
       throw new ApiError(409, "MEMORY_ITEM_NOT_ACTIVE", "This memory is no longer active.");

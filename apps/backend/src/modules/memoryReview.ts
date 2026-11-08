@@ -4,6 +4,8 @@
  * proposal), read (purpose-bound review), commit (atomic receipt/undo), and
  * recall (authorization-first reads + lifecycle propagation).
  */
+export { captureMemoryLiteralStageRequest, captureMemoryLiteralCommitRequest, stageMemoryLiteralProposalOnClient,
+  openMemoryLiteralReviewOnClient, commitMemoryLiteralReviewOnClient } from "./memoryLiteralWriter.js";
 export {
   MEMORY_PROPOSAL_TTL_MS,
   MEMORY_REVIEW_SCOPE_TTL_MS,
