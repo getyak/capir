@@ -9,7 +9,12 @@ const observer = `(() => {
     document.addEventListener(type,event=>{if(event.isTrusted && event.target instanceof HTMLInputElement && event.target.name==="query")state[key]++;},true);
 })()`;
 const cookieReasons = new Set(["NameValuePairExceedsMaxSize", "DisallowedCharacter", "SameSiteNoneInsecure", "SecureOnly", "SyntaxError"]);
-const resourceKinds = new Set(["Document", "Stylesheet", "Image", "Font", "Script", "XHR", "Fetch", "EventSource", "WebSocket", "Other"]);
+const resourceKinds = new Set(["Document", "Stylesheet", "Image", "Media", "Font", "Script", "TextTrack", "XHR", "Fetch", "Prefetch", "EventSource", "WebSocket", "Manifest", "SignedExchange", "Ping", "CSPViolationReport", "Preflight", "FedCM", "Other"]);
+const schemeKinds = new Map([["http:", "http"], ["https:", "https"], ["data:", "data"], ["about:", "about"], ["blob:", "blob"]]);
+const initiatorKinds = new Set(["parser", "script", "preload", "SignedExchange", "preflight", "FedCM", "other"]);
+function metadataKind(path: string): string {
+  return path === "/favicon.ico" ? "favicon" : path === "/manifest.webmanifest" ? "manifest" : path === "/icon" ? "icon" : "none";
+}
 function routeKind(path: string): string {
   return path === "/login" ? "login" : path === "/onboarding" ? "onboarding" : path === "/workspace/people" ? "directory"
     : path === "/api/auth/persistent" ? "auth_persistent" : path === "/api/auth/session" ? "auth_session"
@@ -21,7 +26,7 @@ export class DirectoryProtocolPage {
     lastDocumentStatus: null as number | null, lastDocumentRoute: "unobserved", httpErrors: {} as Record<string, number> };
   private disposers: Array<() => void> = [];
   private active = new Set<string>();
-  private activeKinds = new Map<string, { route: string; method: string; type: string }>();
+  private activeKinds = new Map<string, { route: string; method: string; type: string; scheme: string; metadata: string; initiator: string; responseSeen: boolean; responseType: string }>();
   private httpStatuses = new Map<string, number>();
   private changedAt = Date.now();
   private observerFailed = false;
@@ -46,12 +51,15 @@ export class DirectoryProtocolPage {
       current.disposers.push(cdp.on(sessionId, "Network.requestWillBeSent", value => {
         try {
           const request = value.request as { url: string; method: string }, url = new URL(request.url);
+          const initiator = value.initiator as { type?: unknown } | undefined;
           if (url.origin === origin) current.observed.maxRequestTargetBytes = Math.max(current.observed.maxRequestTargetBytes, Buffer.byteLength(url.pathname + url.search));
           requireProtocol(current.active.size < 1024, "BROWSER_REQUEST_BUDGET");
           current.active.add(String(value.requestId)); current.changedAt = Date.now();
           current.activeKinds.set(String(value.requestId), { route: routeKind(url.pathname),
             method: ["GET", "POST"].includes(request.method) ? request.method : "OTHER",
-            type: typeof value.type === "string" && resourceKinds.has(value.type) ? value.type : "Other" });
+            type: typeof value.type === "string" && resourceKinds.has(value.type) ? value.type : "Other",
+            scheme: schemeKinds.get(url.protocol) ?? "other", metadata: url.origin === origin ? metadataKind(url.pathname) : "none",
+            initiator: typeof initiator?.type === "string" && initiatorKinds.has(initiator.type) ? initiator.type : "UNOBSERVED", responseSeen: false, responseType: "UNOBSERVED" });
         } catch { current.observerFailed = true; }
       }));
       for (const event of ["Network.loadingFinished", "Network.loadingFailed"]) current.disposers.push(cdp.on(sessionId, event, value => {
@@ -64,6 +72,10 @@ export class DirectoryProtocolPage {
             : path.startsWith("/api/auth/") ? "auth" : path.startsWith("/_next/") ? "asset" : "other";
           requireProtocol(Number.isInteger(response.status) && response.status >= 100 && response.status <= 599, "BROWSER_HTTP_STATUS");
           const requestKind = current.activeKinds.get(String(value.requestId));
+          if (requestKind) {
+            requestKind.responseSeen = true;
+            requestKind.responseType = typeof value.type === "string" && resourceKinds.has(value.type) ? value.type : "Other";
+          }
           const statusKey = `${routeKind(path)}:${requestKind?.method ?? "UNOBSERVED"}:${requestKind?.type ?? "Other"}:${response.status}`;
           current.httpStatuses.set(statusKey, (current.httpStatuses.get(statusKey) ?? 0) + 1);
           if (value.type === "Document") { current.observed.lastDocumentStatus = response.status; current.observed.lastDocumentRoute = route; }
@@ -156,13 +168,17 @@ export class DirectoryProtocolPage {
     await this.quiet(); this.assertHealthy();
   }
   diagnostics() {
-    const pending = new Map<string, number>();
+    const pending = new Map<string, number>(), metadata = new Map<string, number>();
     for (const entry of this.activeKinds.values()) {
       const key = `${entry.route}:${entry.method}:${entry.type}`; pending.set(key, (pending.get(key) ?? 0) + 1);
+      // Every segment is a closed category. No URL/path/query, initiator URL/stack or request ID is serialized.
+      const detail = `${entry.scheme}:${entry.metadata}:${entry.route}:${entry.method}:${entry.type}:${entry.responseType}:${entry.initiator}:${entry.responseSeen ? "response_seen" : "awaiting_response"}`;
+      metadata.set(detail, (metadata.get(detail) ?? 0) + 1);
     }
     return { ...this.observed, cookieBlocks: { ...this.observed.cookieBlocks }, httpErrors: { ...this.observed.httpErrors },
       observerFailed: this.observerFailed, activeRequests: this.active.size,
       pendingKinds: Object.fromEntries([...pending].sort(([a], [b]) => a.localeCompare(b))),
+      pendingMetadataVersion: 1, pendingMetadata: Object.fromEntries([...metadata].sort(([a], [b]) => a.localeCompare(b))),
       httpStatuses: Object.fromEntries([...this.httpStatuses].sort(([a], [b]) => a.localeCompare(b))) };
   }
   async surface() {
