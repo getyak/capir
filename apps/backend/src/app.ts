@@ -263,6 +263,9 @@ import { decideAssertion } from "./modules/decisions.js";
 import { createLegacyChatTask, getChatTaskReadback } from "./modules/chat.js";
 import { createLegacyUnscopedChatTask } from "./modules/unscopedChat.js";
 import { admitLegacyChatAuthority } from "./modules/legacyChatAuthority.js";
+import { bindLegacyChatTransport } from "./modules/legacyChatTransport.js";
+import { sweepLegacyChatExecutions } from "./modules/legacyChatRetirement.js";
+import { registerLegacyChatRecoveryRoutes } from "./modules/legacyChatRecoveryRoutes.js";
 import {
   createEnvironmentPersonResearchAgentClient,
   type PersonResearchAgentProviding,
@@ -2428,6 +2431,7 @@ export async function buildApp(
       ),
   );
 
+  registerLegacyChatRecoveryRoutes(app,pool,config,authenticate,deploymentExposure?.workspaceIds);
   app.post<{ Body: UnscopedChatTaskRequest }>(
     "/v1/chat/unscoped-tasks",
     {
@@ -2445,11 +2449,16 @@ export async function buildApp(
     async (request, reply) => {
       const trial = config.internalLabEnabled ? labTrials.taskContext(request.auth, "unscoped_chat", request.body.idempotency_key) : null;
       let productOutcome: "accepted" | "fallback" | "product_failed" | "unverified" = "product_failed";
-      const originalAuthority = await admitLegacyChatAuthority(pool, request.auth, request.headers.authorization,
-        config, deploymentExposure?.workspaceIds);
-      const result = await createLegacyUnscopedChatTask(
-        originalAuthority, pool, request.auth, request.body, remoteChatProvider, trial?.select, dependencies.chatReferenceClock?.(),
-      ).then((result) => { productOutcome = result.labProductOutcome ?? "unverified"; return result; }).finally(async () => {
+      const transport = bindLegacyChatTransport(request.raw,reply.raw);
+      const result = await (async () => {
+        const originalAuthority = await admitLegacyChatAuthority(pool, request.auth, request.headers.authorization,
+          config, deploymentExposure?.workspaceIds);
+        return createLegacyUnscopedChatTask(
+          originalAuthority, pool, request.auth, request.body, remoteChatProvider, trial?.select, dependencies.chatReferenceClock?.(),
+          { signal: transport.signal },
+        ).then((result) => { productOutcome = result.labProductOutcome ?? "unverified"; return result; });
+      })().finally(async () => {
+        transport.dispose();
         const persisted = await trial?.finish(productOutcome);
         if (persisted != null) reply.header("lab-observation-persisted", String(persisted));
       });
@@ -3147,6 +3156,19 @@ export async function buildApp(
     name: "contact-task-retention-sweep",
     intervalMs: config.retentionSweepIntervalMs,
     run: () => expireScreenshotContactTasks(pool, chatMediaStorage),
+  });
+  let legacyRetirement: Promise<number> | undefined;
+  const retireLegacyAttempts = () => legacyRetirement ??= sweepLegacyChatExecutions(pool)
+    .finally(() => { legacyRetirement = undefined; });
+  app.addHook("onReady",async () => {
+    await retireLegacyAttempts().catch(() => {
+      app.log.error({ code: "LEGACY_CHAT_RETIREMENT_PENDING" },"Legacy Chat retirement is pending and will retry.");
+    });
+  });
+  registerRecurringJob(app, {
+    name: "legacy-chat-execution-retirement",
+    intervalMs: config.retentionSweepIntervalMs,
+    run: async () => { await retireLegacyAttempts(); },
   });
   registerRecurringJob(app, {
     name: "source-lifecycle-sweep",

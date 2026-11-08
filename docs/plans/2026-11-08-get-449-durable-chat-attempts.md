@@ -1,8 +1,9 @@
 # Release the database connection during answer-only legacy Chat
 
-Tracking: GET-449, GitHub issue523, parent GET-439. This continuation is stacked
-on the original-credential guard at965805a0. PR525 has not merged at this
-starting point. Full C02, resident deployment and native recovery remain open.
+Tracking: GET-449, GitHub issue523, parent GET-439, PR529. The original-credential
+guard from PR525 merged as3dc908f3. This continuation implements the first
+answer-only durable slice. Full C02, resident deployment and native recovery
+remain open; a guard merge or a source-only checkpoint is not full delivery.
 
 ## First observable regression
 
@@ -16,10 +17,12 @@ require the original201/body and exactly one call for this held intent.
 
 The independent setup Pool must never serve that heartbeat. No product Session,
 Agent run capability, host claim, private source or real provider is fabricated.
-The new regression is source-indicated, not yet executed against PostgreSQL.
-Its normal pure lane skips it; only the explicit Hosted PG lane supplies proof.
-The fresh isolated branch baseline passed145 affected pure tests. No local
-database, dependency installation, Simulator, service or native build is used.
+The first actual Hosted PostgreSQL run at3818 reproduced the failure: the old
+implementation timed out acquiring the heartbeat connection while the answer
+was held. Its normal first201, eventual201/body and provider-call observations
+passed. The independent setup Pool did not serve that heartbeat. The original14
+authority cases passed in that run. This is the observed red, not evidence that
+the replacement runtime already passes PostgreSQL.
 
 ## Complete first slice and protected boundaries
 
@@ -46,15 +49,53 @@ by cancellation, never renew execution. Cleanup must still erase expired
 checkpoints after the original credential dies, while retaining the key's
 no-redispatch tombstone.
 
-No migration has been allocated. The manifest had115 identities/highest111;
-112 is only a candidate pending a fresh full remote/concurrent check. A new
-account-scoped table must join the exact Lab manifest/write guard/cleanup and
-real startup/periodic retirement owners. Existing migration bytes stay frozen.
+Migration112 now adds one account-scoped execution row per canonical intent,
+with an immutable attempt, owner generation/nonce, fixed original deadline,
+frozen answer-only descriptor and a private bounded checkpoint. It joins the
+Lab manifest/write guard and cleanup owners. The descriptor uses SQL NULL for
+the disabled branch, never JSON null. Existing migration bytes stay frozen.
+The manifest identity was checked against current remote main and concurrent
+work;113 is reserved separately for GET-451.
+
+## Implemented candidate and current evidence
+
+All advancing transactions restore the original credential and source proof,
+then check account, source, current reader/Lab, canonical parent and execution
+in that order. Provider waiting holds no connection. A committed dispatch
+marker precedes the actual frozen answer method; final completion, canonical
+reply/audit and checkpoint scrubbing share one transaction. Unknown dispatch
+never re-dispatches. Lost final-commit acknowledgement reads the legal canonical
+result. A different resolver must still pass its own current-reader envelope
+before receiving that result.
+
+The owner serializes database checks and drains a running check before result,
+rejection or abort handling. Pool borrowing and SQL/lock waits are bounded;
+late-acquired clients are released without SQL. Retirement remains bounded
+after the original credential expires. MCP deletion bumps the same source
+generation and erases affected active private backfill while preserving the
+canonical key/attempt and truthful completed facts. Empty unrelated Sessions
+do not bump the source generation. Ready checkpoints may survive owner-lease
+loss for same-attempt adoption, but never their original fixed deadline.
+
+Independent source reviews closed the MCP future-backfill, resolver-reader,
+retirement-query bound and disabled SQL-NULL findings. Separate review covers
+the original-proof/source codec and the JSONB-safe canonical checkpoint codec.
+Current host evidence is217 passing affected tests plus the separately passing
+disabled-descriptor regression;15 PostgreSQL cases were skipped in that host
+run. The new disabled-branch PG case brings the current authored PG selection
+to16, all pending execution against the replacement runtime. Actual TypeScript
+6.0.3 with pinned SDK0.3.312 declarations reports zero diagnostics for18 selected
+roots, including app wiring. This is selected-source evidence, not a full build.
+
+New Lab-stop/grant-withdrawal and owned-child process-death fixtures are being
+reviewed separately. They are not included in this candidate's executed counts.
+No local database, dependency installation, Simulator, resident service change,
+native build, real paid provider or release was used for this implementation.
 
 ## Required evidence before delivery
 
-First reproduce the real one-client red, then implement and independently
-review the bounded ledger/DTO/lock protocol. Prove same-pool heartbeat and
+The real one-client red and independent protocol review are recorded above.
+Next prove the replacement runtime's same-pool heartbeat and
 duplicate waiting, real owner-versus-waiter TCP disconnect, child-process
 crash before/after dispatch and checkpoint, commit-ack ambiguity, same-key
 readback under current ownership, expiry/revocation/rotation/Lab/account races,
@@ -62,3 +103,7 @@ and exact cleanup with actual PostgreSQL. Preserve original14 authority and42
 feedback regressions. Full current gates, clean resident deployment/live
 revision and changed behavior, and native recovery evidence remain separate
 requirements; the first regression or guard merge is not full C02 completion.
+Session/tool-capable/Agent/operator-principal phase3 flows remain outside this
+first answer-only slice. Resident rollout must drain old unledgered work;
+existing processing records without a ledger cannot be treated as recoverable
+or as permission to call the provider again.

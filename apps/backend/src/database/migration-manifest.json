@@ -115,6 +115,7 @@
     "108_capir_persistent_login",
     "109_mcp_tool_result_images",
     "110_chat_media_upload_attempts",
-    "111_conversation_memory_draft_target"
+    "111_conversation_memory_draft_target",
+    "112_legacy_chat_executions"
   ]
 }

@@ -6,6 +6,8 @@ import { sha256 } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
 import { labWorkspaceSessionActiveSQL, operatorLabDeploymentActiveSQL,
   operatorTestDeployment } from "./labWorkspaceAccess.js";
+import { readLegacyChatSnapshotRecord, snapshotLegacyChatAuth, validateLegacyChatOriginalProof,
+  type LegacyChatOriginalProof, type LegacyChatLabBinding } from "./legacyChatOriginalProof.js";
 
 type LegacyChatFailureCode = "LEGACY_CHAT_AUTHORITY_UNAVAILABLE" | "CHAT_COMPLETION_SOURCE_CHANGED";
 export class LegacyChatTerminated extends ApiError {
@@ -16,9 +18,7 @@ export class LegacyChatTerminated extends ApiError {
   }
 }
 
-type LabBinding = { entry: string; workspace: string; parent: string | null;
-  principal: string | null; generation: number | null; ownerAccount: string | null;
-  ownerUser: string | null; grant: string | null; entitlementGeneration: number | null; run: string | null };
+type LabBinding = LegacyChatLabBinding;
 type Admission = { original_deadline: string; remaining_ms: string; user_kind: string;
   token_branch: "current" | "previous"; lab_binding: LabBinding | null };
 
@@ -45,6 +45,8 @@ const authoritySQL = `FROM sessions
 
 export interface LegacyChatAuthority {
   readonly signal: AbortSignal;
+  /** Server-only immutable admission metadata, never a request credential. */
+  snapshotOriginal(): Readonly<LegacyChatOriginalProof>;
   assertCurrent(): Promise<void>;
   /** Account locks precede the existing final source locks. No provider await follows. */
   lockAccountsForFinalization(client: DatabaseClient): Promise<void>;
@@ -69,9 +71,7 @@ export async function admitLegacyChatAuthority(pool: Pool, auth: AuthContext,
   audience?: readonly string[],
   sourceFailureCode: LegacyChatFailureCode = "LEGACY_CHAT_AUTHORITY_UNAVAILABLE"): Promise<LegacyChatAuthority> {
   const stop = new LegacyChatTerminated();
-  // A route-owned public code does not change the terminal authority fence.
-  // Only a known source-owner rejection can select it; never copy error prose.
-  const sourceStop = new LegacyChatTerminated(sourceFailureCode);
+  try { auth = snapshotLegacyChatAuth(auth); } catch { throw stop; }
   if (!authorization?.startsWith("Bearer ") || !authorization.slice(7)
     || (audience && !audience.includes(auth.accountId))) throw stop;
   const deployment = operatorTestDeployment(config);
@@ -81,22 +81,75 @@ export async function admitLegacyChatAuthority(pool: Pool, auth: AuthContext,
   const started = performance.now();
   let admitted: Admission | undefined;
   try {
-    admitted = (await pool.query<Admission>(`WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at)
+    const row = (await pool.query<Admission>(`WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at)
       SELECT to_char((${acceptedDeadlineSQL}) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS original_deadline,
         floor(extract(epoch FROM ((${acceptedDeadlineSQL})-tick.checked_at))*1000)::text AS remaining_ms,
         users.kind AS user_kind, CASE WHEN sessions.token_hash=$1 THEN 'current' ELSE 'previous' END AS token_branch,
         ${labBindingSQL} AS lab_binding ${authoritySQL}`, params)).rows[0];
+    if (row) admitted = readLegacyChatSnapshotRecord(row, ["original_deadline", "remaining_ms", "user_kind", "token_branch", "lab_binding"]) as Admission;
   } catch { throw stop; }
   if (!admitted || admitted.user_kind !== auth.userKind
+    || typeof admitted.original_deadline !== "string" || typeof admitted.remaining_ms !== "string"
     || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/u.test(admitted.original_deadline)
     || !["current", "previous"].includes(admitted.token_branch)
     || !/^\d+$/u.test(admitted.remaining_ms)
     || (admitted.user_kind === "lab_human" && !admitted.lab_binding)) throw stop;
-  const proof = [...params, admitted.original_deadline, admitted.user_kind,
-    admitted.lab_binding === null ? null : JSON.stringify(admitted.lab_binding)];
-  const binding = admitted.lab_binding;
-  const deadline = performance.now() + Number(admitted.remaining_ms) - Math.ceil(performance.now() - started);
-  if (!Number.isSafeInteger(Number(admitted.remaining_ms))) throw stop;
+  let original: Readonly<LegacyChatOriginalProof>;
+  try {
+    original = validateLegacyChatOriginalProof({ version: 1, tokenHash: params[0], accountId: auth.accountId, userId: auth.userId,
+      sessionId: auth.sessionId, userKind: admitted.user_kind, tokenBranch: admitted.token_branch, originalDeadline: admitted.original_deadline,
+      deployment: { enabled: deployment.enabled, userAuthEnabled: deployment.userAuthEnabled === true,
+        webOrigin: deployment.webOrigin, backendOrigin: deployment.backendOrigin }, labBinding: admitted.lab_binding });
+  } catch { throw stop; }
+  return buildLegacyChatAuthority(pool, original, admitted.remaining_ms, started, sourceFailureCode);
+}
+
+/** Only a trusted owner-joined execution row may supply `value`. The current
+ * reader authenticates the resolve operation, not a replacement execution
+ * credential. Original slot provenance is retained, while real slot rotation
+ * continues to use the unchanged current-or-live-previous SQL predicate. */
+export async function restoreLegacyChatAuthority(pool: Pool, currentAuth: AuthContext, value: unknown, config: BackendConfig,
+  sourceFailureCode: LegacyChatFailureCode = "LEGACY_CHAT_AUTHORITY_UNAVAILABLE"): Promise<LegacyChatAuthority> {
+  const stop = new LegacyChatTerminated();
+  let original: Readonly<LegacyChatOriginalProof>;
+  try {
+    original = validateLegacyChatOriginalProof(value);
+    currentAuth = snapshotLegacyChatAuth(currentAuth);
+  } catch { throw stop; }
+  const deployment = operatorTestDeployment(config);
+  if (currentAuth.accountId !== original.accountId || currentAuth.userId !== original.userId
+    || deployment.enabled !== original.deployment.enabled || (deployment.userAuthEnabled === true) !== original.deployment.userAuthEnabled
+    || deployment.webOrigin !== original.deployment.webOrigin || deployment.backendOrigin !== original.deployment.backendOrigin) throw stop;
+  const params = originalProofParameters(original);
+  const started = performance.now();
+  let remaining: unknown;
+  try {
+    const row = (await pool.query<{ remaining_ms: string }>(`WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at)
+      SELECT floor(extract(epoch FROM (LEAST($9::timestamptz,(${acceptedDeadlineSQL}))-tick.checked_at))*1000)::text AS remaining_ms
+      ${authoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10
+        AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb`, params)).rows[0];
+    if (row) remaining = readLegacyChatSnapshotRecord(row, ["remaining_ms"]).remaining_ms;
+  } catch { throw stop; }
+  if (typeof remaining !== "string" || !/^\d+$/u.test(remaining)) throw stop;
+  const restored = buildLegacyChatAuthority(pool, original, remaining, started, sourceFailureCode);
+  try { restored.throwIfTerminated(); } catch (error) { restored.dispose(); throw error; }
+  return restored;
+}
+
+function originalProofParameters(original: Readonly<LegacyChatOriginalProof>): unknown[] {
+  return [original.tokenHash, original.deployment.enabled, original.deployment.webOrigin, original.deployment.backendOrigin,
+    original.deployment.userAuthEnabled, original.accountId, original.userId, original.sessionId, original.originalDeadline,
+    original.userKind, original.labBinding === null ? null : JSON.stringify(original.labBinding)];
+}
+function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOriginalProof>, remaining: string, started: number,
+  sourceFailureCode: LegacyChatFailureCode): LegacyChatAuthority {
+  const stop = new LegacyChatTerminated();
+  // Only the route-owned exact source rejection selects this public code.
+  const sourceStop = new LegacyChatTerminated(sourceFailureCode);
+  const auth = original;
+  const proof = originalProofParameters(original), binding = original.labBinding;
+  const deadline = performance.now() + Number(remaining) - Math.ceil(performance.now() - started);
+  if (!Number.isSafeInteger(Number(remaining))) throw stop;
   const controller = new AbortController();
   let terminated = false, disposed = false;
   let terminalFailure = stop;
@@ -109,7 +162,9 @@ export async function admitLegacyChatAuthority(pool: Pool, auth: AuthContext,
     if (!controller.signal.aborted) controller.abort(terminalFailure);
     throw terminalFailure;
   };
-  const alive = () => { if (terminated || disposed) fail(); };
+  // Timers request cancellation, but a delayed timer task cannot extend the
+  // conservative monotonic bound established by the original DB clock read.
+  const alive = () => { if (terminated || disposed || performance.now() >= deadline) fail(); };
   const arm = () => {
     const remaining = deadline - performance.now();
     if (remaining <= 0) { terminated = true; controller.abort(stop); return; }
@@ -159,6 +214,7 @@ export async function admitLegacyChatAuthority(pool: Pool, auth: AuthContext,
   };
   return {
     signal: controller.signal, throwIfTerminated: alive,
+    snapshotOriginal: () => { alive(); return original; },
     assertCurrent: () => check(active ?? pool), source,
     observeSource: current => { alive(); sourceChecks.add(current); },
     assertFinalCurrent: async client => {

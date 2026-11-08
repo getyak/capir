@@ -10,8 +10,10 @@ import { encodePasswordCredential } from "./passwordCredential.js";
 
 const database = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
 if (database) {
-  const parsed = new URL(database);
-  if (!["localhost", "127.0.0.1"].includes(parsed.hostname) || parsed.pathname !== "/lab_regression_ci") {
+  let parsed: URL;
+  try { parsed = new URL(database); } catch { throw new Error("Use only the owned disposable loopback lab_regression_ci database."); }
+  if (!["postgres:", "postgresql:"].includes(parsed.protocol) || parsed.search || parsed.hash
+    || !["localhost", "127.0.0.1"].includes(parsed.hostname) || parsed.pathname !== "/lab_regression_ci") {
     throw new Error("Use only the owned disposable loopback lab_regression_ci database.");
   }
 }
@@ -23,7 +25,7 @@ function barrier() {
 }
 
 describe.skipIf(!database)("legacy answer-only lifecycle over real HTTP handlers and PostgreSQL", () => {
-  it("releases its only product connection while the actual answer-only provider awaits", async () => {
+  it.each([false,true])("releases its only product connection while the actual answer-only provider awaits (internalLab=%s)", async internalLabEnabled => {
     const pool = new Pool({ connectionString: database!, max: 1, connectionTimeoutMillis: 2_000,
       statement_timeout: 5_000, query_timeout: 6_000 });
     const control = new Pool({ connectionString: database!, max: 1, connectionTimeoutMillis: 2_000,
@@ -62,7 +64,7 @@ describe.skipIf(!database)("legacy answer-only lifecycle over real HTTP handlers
       app = await buildApp({ pool, config: { databaseUrl: database!, host: "127.0.0.1", port: 0,
         allowedOrigins: [], appleSignInAudiences: [], appleSignInEnabled: false,
         passwordAuthEnabled: true, passwordRegistrationEnabled: false, simulatedAuthEnabled: false,
-        internalLabEnabled: false, retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3_600 },
+        internalLabEnabled, retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3_600 },
       remoteChatProvider: provider, personResearchProvider: null, privateConversationProvider: null,
       labProviders: new Map(), labJobWorkerEnabled: false, conversationQueueWorkerEnabled: false,
       labCIVerifier: null, screenshotContact: null });
