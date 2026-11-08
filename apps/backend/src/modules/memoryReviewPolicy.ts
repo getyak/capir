@@ -1,3 +1,4 @@
+import { requireMemoryLiteral } from "@talent-signal/contracts";
 import type {
   MemoryAdmission,
   MemoryContactDecision,
@@ -211,6 +212,8 @@ export interface AdmissionContext {
    * these must not stay an independent self memory.
    */
   contactReferences?: readonly string[];
+  /** Representation only; source admission and dependence remain mandatory. */
+  contentProtocol?: "literal-v2";
 }
 
 function referencesContact(
@@ -236,7 +239,17 @@ export function classifyMemoryAdmission(
       reason: dependence.reason ?? "The statement dependence is invalid.",
     };
   }
-  if (!isIndependentlyUnderstandable(candidate.display_text)) {
+  const literal = context.contentProtocol === "literal-v2";
+  if (literal) {
+    requireMemoryLiteral(candidate.display_text, "statement");
+    requireMemoryLiteral(candidate.source_excerpt, "excerpt");
+  }
+  const understandable = literal
+    ? candidate.display_text.trim().length >= 2
+      && !(/^(?:他|她|它|他们|她们|这个|那个|这|那|其|此|he|she|it|they|this|that)\b/iu.test(candidate.display_text.trim())
+        && candidate.display_text.trim().replace(/[\p{P}\p{Z}]/gu, "").length <= 4)
+    : isIndependentlyUnderstandable(candidate.display_text);
+  if (!understandable) {
     return {
       status: "ineligible",
       judgment: "ordinary",
@@ -251,7 +264,8 @@ export function classifyMemoryAdmission(
     };
   }
   const isImageLocator = candidate.source_locator.kind === "image_region";
-  if (!isImageLocator && !isGroundedExcerpt(candidate.source_excerpt, context.sourceText)) {
+  if (!isImageLocator && !(literal ? context.sourceText?.includes(candidate.source_excerpt)
+    : isGroundedExcerpt(candidate.source_excerpt, context.sourceText))) {
     return {
       status: "ineligible",
       judgment: "ordinary",
@@ -299,7 +313,8 @@ export function classifyMemoryAdmission(
       reason: "An inferred trait cannot become a user-owned memory.",
     };
   }
-  if (isExactDuplicate(candidate.display_text, context.existingDisplayTexts)) {
+  if (literal ? context.existingDisplayTexts.includes(candidate.display_text)
+    : isExactDuplicate(candidate.display_text, context.existingDisplayTexts)) {
     return {
       status: "ineligible",
       judgment: "ordinary",

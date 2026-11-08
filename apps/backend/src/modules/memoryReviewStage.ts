@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { MemoryContentError } from "@talent-signal/contracts";
+import { refuseLiteralDowngrade, takeLiteralStage, type LiteralWriterTicket } from "./memoryLiteralWriterProtocol.js";
 import type {
   MemoryDecision,
   MemoryProposalCandidate,
@@ -204,7 +206,9 @@ export async function stageMemoryProposal(
   auth: AuthContext,
   request: MemoryProposalStageRequest,
   authority: MemorySourceAuthority,
+  literalTicket?: LiteralWriterTicket,
 ): Promise<StagedProposal | null> {
+  const literal = literalTicket ? takeLiteralStage(literalTicket, client, auth, request, authority) : null;
   const now = new Date();
   const contactDecision = request.contact_decision;
   const newContactLabel = request.new_contact?.display_label?.trim() ?? null;
@@ -340,7 +344,7 @@ export async function stageMemoryProposal(
   );
   const knownTexts = new Set(
     existingTexts.rows.map((row) =>
-      row.display_text.normalize("NFKC").trim().toLocaleLowerCase(),
+      literal ? row.display_text : row.display_text.normalize("NFKC").trim().toLocaleLowerCase(),
     ),
   );
   const suppressedHashes = new Set(suppressed.rows.map((row) => row.content_hash));
@@ -381,16 +385,20 @@ export async function stageMemoryProposal(
     sourceMessageId: string | null;
     sourceRevisionHash: string;
     sourceCaptureVersion: number | null;
+    literalMetadata: NonNullable<typeof literal>["items"][number] | null;
   }
 
   const prepared: PreparedItem[] = [];
-  for (const candidate of request.items) {
+  for (const [candidateIndex, candidate] of request.items.entries()) {
     if (candidate.scope !== "self" && contactDecision === "none") continue;
     const dependence = dependenceFor(candidate, binding);
-    const displayText = candidate.display_text.normalize("NFKC").trim();
+    const displayText = literal ? candidate.display_text : candidate.display_text.normalize("NFKC").trim();
     if (!displayText) continue;
-    const normalized = displayText.toLocaleLowerCase();
-    if (knownTexts.has(normalized)) continue;
+    const normalized = literal ? displayText : displayText.toLocaleLowerCase();
+    if (knownTexts.has(normalized)) {
+      if (literal) throw new MemoryContentError("MEMORY_CONTENT_INVALID");
+      continue;
+    }
     const artifact = artifactForLocator(authority, candidate.source_locator);
     if (!authority.sessionId && !artifact) continue;
     const contentHash = sha256(
@@ -401,7 +409,10 @@ export async function stageMemoryProposal(
         normalized,
       ].join("|"),
     );
-    if (suppressedHashes.has(contentHash)) continue;
+    if (suppressedHashes.has(contentHash)) {
+      if (literal) throw new MemoryContentError("MEMORY_CONTENT_INVALID");
+      continue;
+    }
     const previous = await loadPreviousTarget(client, auth, candidate, dependence);
     const relation = classifyTemporalRelation(
       previous.row
@@ -430,9 +441,13 @@ export async function stageMemoryProposal(
         dependence,
         previousTargetStatus: previous.status,
         contactReferences,
+        ...(literal ? { contentProtocol: "literal-v2" as const } : {}),
       },
     );
-    if (admission.status === "ineligible") continue;
+    if (admission.status === "ineligible") {
+      if (literal) throw new MemoryContentError("MEMORY_CONTENT_INVALID");
+      continue;
+    }
     knownTexts.add(normalized);
     suppressedHashes.add(contentHash);
     prepared.push({
@@ -475,6 +490,7 @@ export async function stageMemoryProposal(
       sourceMessageId: artifact?.messageId ?? effectiveMessageId,
       sourceRevisionHash: sourceRevision,
       sourceCaptureVersion: artifact?.captureVersion ?? null,
+      literalMetadata: literal?.items[candidateIndex] ?? null,
     });
   }
 
@@ -537,11 +553,11 @@ export async function stageMemoryProposal(
          source_resource_id, evidence_fragment_id, source_artifact_id,
          source_session_id, source_message_id, source_revision_hash,
          source_capture_version,
-         content_hash, added_revision, status
+         content_hash, added_revision, status, content_protocol, content_manifest, content_manifest_digest
        )
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
                $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::jsonb,$31,$32,
-               $33,$34,$35,$36,$37,$38,$39,1,'pending')`,
+               $33,$34,$35,$36,$37,$38,$39,1,'pending',$40,$41::jsonb,$42)`,
       [
         randomUUID(),
         auth.accountId,
@@ -582,6 +598,9 @@ export async function stageMemoryProposal(
         item.sourceRevisionHash,
         item.sourceCaptureVersion,
         item.contentHash,
+        item.literalMetadata?.content_protocol ?? "legacy-v1",
+        item.literalMetadata ? JSON.stringify(item.literalMetadata.content_manifest) : null,
+        item.literalMetadata?.content_manifest_digest ?? null,
       ],
     );
   }
@@ -687,6 +706,7 @@ export async function rebaseMemoryProposal(
   if (!proposal || proposal.created_by_user_id !== auth.userId) {
     throw new ApiError(404, "MEMORY_NOT_FOUND", "The requested Memory proposal was not found.");
   }
+  refuseLiteralDowngrade(await loadProposalItems(client, auth.accountId, proposal.id));
   if (proposal.status !== "open" && proposal.status !== "partially_committed") {
     throw new ApiError(409, "MEMORY_PROPOSAL_CLOSED", "This Memory proposal is no longer open.");
   }
@@ -884,6 +904,7 @@ export async function regenerateMemoryProposal(
       throw new ApiError(409, "MEMORY_REVIEW_REBASE_REQUIRED", "The proposal changed before this rebase.");
     }
     const items = await loadPendingAndSkippedItems(client, auth.accountId, proposalId);
+    refuseLiteralDowngrade(items);
     const sourceCheck = await verifyPendingSourceAuthority(
       client,
       auth,
