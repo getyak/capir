@@ -148,11 +148,16 @@ describe.skipIf(!savedMemoryDatabase)("actual stored Session inline history and 
         .rejects.toMatchObject({ code: "SAVED_MEMORY_SESSION_HISTORY_UNAVAILABLE" });
       const current = await createHarnessSourceGuardWithBinding(r.f.pool, r.auth, r.input.sessionID,
         () => ({ expiresAt: new Date(Date.now() + 60_000), personIDs: [] }));
-      const changed = await r.f.request({ method: "PUT", url: `/v1/agent-sessions/${r.input.sessionID}`, payload: {
-        idempotency_key: randomUUID(), expected_revision: r.saved.revision,
-        payload: { ...r.saved.payload!, turns: r.saved.payload!.turns.map(turn => ({ ...turn, objective: "Actual synthetic changed human text." })) },
-      } });
-      expect(changed.statusCode).toBe(200);
+      // Existing message text is immutable at the public Session API. Append
+      // a real newly completed turn instead of fabricating a permitted edit.
+      const objective = "Another actual synthetic question changes this Session's selected frame.";
+      const appended = await r.f.post({ idempotency_key: randomUUID(), objective });
+      expect(appended.statusCode).toBe(201);
+      const changed = await r.f.saveAnswer(r.input.sessionID, objective, appended.json<UnscopedChatTaskResponse>(),
+        { expectedRevision: r.saved.revision, priorTurns: r.saved.payload!.turns });
+      expect(changed.revision).toBe(r.saved.revision + 1);
+      expect(changed.payload!.turns).toHaveLength(r.saved.payload!.turns.length + 1);
+      expect(changed.payload!.turns.at(-1)?.objective).toBe(objective);
       await expect(readSavedMemorySessionHistory({ ...r.input, source: current.source, guard: current.guard }))
         .rejects.toMatchObject({ code: "SAVED_MEMORY_SESSION_HISTORY_UNAVAILABLE" });
     });
