@@ -96,9 +96,16 @@ it("explains missing authored text and attached images while retaining the remov
 });
 it("preserves a newer same-text target selected while an earlier ordinary image send waits for durable storage", async () => {
   await chooseReference(); await type(input().value + "authored note"); await addImage();
+  // File preparation is asynchronous. Click only after the real composer can
+  // send, then observe entry into the held durable write before changing intent.
+  await vi.waitFor(async () => {
+    await act(async () => { await Promise.resolve(); });
+    expect(send().disabled).toBe(false);
+  });
+  let putStarted = false;
   const originalPut = put; let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  put = async (...args) => { if (!args[0].endsWith(CONVERSATION_IMAGE_DRAFT)) await held; return originalPut(...args); };
+  put = async (...args) => { if (!args[0].endsWith(CONVERSATION_IMAGE_DRAFT)) { putStarted = true; await held; } return originalPut(...args); };
   const originalRead = readImages; let releaseRead!: () => void; let readStarted = false;
   const heldRead = new Promise<void>(resolve => { releaseRead = resolve; });
   readImages = async key => {
@@ -106,9 +113,10 @@ it("preserves a newer same-text target selected while an earlier ordinary image 
     return originalRead(key);
   };
   const exactText = input().value;
-  await act(async () => send().click());
-  await chooseTarget(); expect(selection()).not.toBeNull();
   try {
+    await act(async () => send().click());
+    await vi.waitFor(() => expect(putStarted).toBe(true));
+    await chooseTarget(); expect(selection()).not.toBeNull();
     await act(async () => release()); await flush();
     await vi.waitFor(async () => {
       await act(async () => { await Promise.resolve(); });
@@ -125,7 +133,7 @@ it("preserves a newer same-text target selected while an earlier ordinary image 
     expect(JSON.parse(posts()[0][1].body)).not.toHaveProperty("memory_draft_target");
     expect(send().disabled).toBe(false);
   } finally {
-    await act(async () => releaseRead()); await flush();
+    await act(async () => { release(); releaseRead(); }); await flush();
   }
 });
 
