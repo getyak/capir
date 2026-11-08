@@ -5,7 +5,7 @@ import { isAbsolute, join, relative } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { get as getHttp, type ClientRequest, type IncomingMessage } from "node:http";
-import { ProtocolCdp, until } from "./get350NextProtocolCdp.js";
+import { ProtocolCdp, until, cdpCommandErrorObservation } from "./get350NextProtocolCdp.js";
 import { DirectoryProtocolPage, directoryInput } from "./get452DirectoryProtocolBrowser.js";
 import { createDirectoryFixture, type DirectoryFixture } from "./get452DirectoryProtocolFixture.js";
 import { bindDirectorySource } from "./get452DirectoryProtocolSource.js";
@@ -25,6 +25,39 @@ type LoginCheckpoint = "directory_navigation" | "login_form" | "login_network_se
   | "submit_onboarding_skip" | "onboarding_readback" | "directory_readback" | "auth_cookie_presence"
   | "backend_login_search_receipt" | "recovery_login_form";
 type LoginFields = { identifierEqual: boolean; passwordEqual: boolean };
+type SearchCheckpoint = "fill" | "submit" | "directory_url" | "directory_field" | "directory_ready" | "directory_quiet" | "backend" | "complete";
+type SearchContext = { page: DirectoryProtocolPage; expectedQuery: string; checkpoint: SearchCheckpoint;
+  urlDirectoryMatch: boolean | null; urlQueryMatch: boolean | null; inputMatch: boolean | null };
+type SearchDiagnostic = Pick<SearchContext, "checkpoint" | "urlDirectoryMatch" | "urlQueryMatch" | "inputMatch"> & {
+  state: Awaited<ReturnType<DirectoryProtocolPage["directoryFailureState"]>> | null };
+let activeSearch: SearchContext | null = null;
+function searchCheckpoint(page: DirectoryProtocolPage, query: string, checkpoint: SearchCheckpoint) {
+  let state = activeSearch;
+  if (!state || state.page !== page || state.expectedQuery !== query) {
+    state = { page, expectedQuery: query, checkpoint, urlDirectoryMatch: null, urlQueryMatch: null, inputMatch: null };
+    activeSearch = state;
+  }
+  state.checkpoint = checkpoint; return state;
+}
+type UntilFailure = "DIRECTORY_QUERY_TIMEOUT" | "DIRECTORY_DOM_TIMEOUT" | "DIRECTORY_NETWORK_TIMEOUT" | "ONBOARDING_RECEIPT_TIMEOUT"
+  | "NEXT_STARTUP_TIMEOUT" | "CHROME_ANNOUNCEMENT_TIMEOUT" | "COMPOSITION_START_TIMEOUT" | "COMPOSITION_COMMIT_TIMEOUT" | "CLEAR_READBACK_TIMEOUT";
+const untilFailures = new Map<string, UntilFailure>([
+  ["Protocol condition timed out: GET452 exact directory query", "DIRECTORY_QUERY_TIMEOUT"],
+  ["Protocol condition timed out: GET452 production DOM", "DIRECTORY_DOM_TIMEOUT"],
+  ["Protocol condition timed out: GET452 network settlement", "DIRECTORY_NETWORK_TIMEOUT"],
+  ["Protocol condition timed out: GET452 canonical onboarding receipt", "ONBOARDING_RECEIPT_TIMEOUT"],
+  ["Protocol condition timed out: GET452 full Next startup", "NEXT_STARTUP_TIMEOUT"],
+  ["Protocol condition timed out: GET452 owned Chrome announcement", "CHROME_ANNOUNCEMENT_TIMEOUT"],
+  ["Protocol condition timed out: GET452 trusted composition start", "COMPOSITION_START_TIMEOUT"],
+  ["Protocol condition timed out: GET452 trusted composition commit", "COMPOSITION_COMMIT_TIMEOUT"],
+  ["Protocol condition timed out: GET452 clear readback focus", "CLEAR_READBACK_TIMEOUT"],
+]);
+function untilFailure(error: unknown): UntilFailure | null {
+  try {
+    const message = error instanceof Error ? Object.getOwnPropertyDescriptor(error, "message") : undefined;
+    return message && "value" in message && typeof message.value === "string" ? untilFailures.get(message.value) ?? null : null;
+  } catch { return null; }
+}
 type IconServerProbe = { attempted: boolean; outcome: "not_attempted" | "eof" | "timeout" | "body_limit" | "request_failed" | "read_failed" | "redirect_refused";
   status: number | null; mime: "image/png" | "other" | "unobserved"; eof: boolean; withinBodyLimit: boolean; pngSignature: boolean };
 function probeIconServer(port: number): Promise<IconServerProbe> {
@@ -72,11 +105,19 @@ function probeIconServer(port: number): Promise<IconServerProbe> {
   });
 }
 async function currentDirectory(page: DirectoryProtocolPage, query: string) {
+  const state = searchCheckpoint(page, query, "directory_url");
   await until(async () => {
+    state.checkpoint = "directory_url"; state.urlDirectoryMatch = null; state.urlQueryMatch = null; state.inputMatch = null;
     const url = new URL(await page.url());
-    return url.pathname === "/workspace/people" && url.searchParams.get("query") === query && await page.value() === query;
+    state.urlDirectoryMatch = url.pathname === "/workspace/people"; state.urlQueryMatch = url.searchParams.get("query") === query;
+    if (state.urlDirectoryMatch && state.urlQueryMatch) state.checkpoint = "directory_field";
+    const matched = url.pathname === "/workspace/people" && url.searchParams.get("query") === query && await page.value() === query;
+    if (state.urlDirectoryMatch && state.urlQueryMatch) state.inputMatch = matched;
+    return matched;
   }, "GET452 exact directory query");
-  await page.ready(directoryInput); await page.quiet();
+  state.checkpoint = "directory_ready"; await page.ready(directoryInput);
+  state.checkpoint = "directory_quiet"; await page.quiet();
+  state.checkpoint = "complete";
 }
 async function login(page: DirectoryProtocolPage, fixture: DirectoryFixture, query: string, first: boolean,
   note: (checkpoint: LoginCheckpoint, fields?: LoginFields) => void) {
@@ -116,8 +157,13 @@ async function login(page: DirectoryProtocolPage, fixture: DirectoryFixture, que
 }
 async function search(page: DirectoryProtocolPage, fixture: DirectoryFixture, query: string) {
   const before = fixture.observationCount();
-  await page.fill(directoryInput, query); await page.submit(); await currentDirectory(page, query);
+  const state = searchCheckpoint(page, query, "fill");
+  state.urlDirectoryMatch = null; state.urlQueryMatch = null; state.inputMatch = null;
+  await page.fill(directoryInput, query); state.checkpoint = "submit";
+  await page.submit(); await currentDirectory(page, query);
+  state.checkpoint = "backend";
   requireProtocol(fixture.seen(query, before), "FULL_QUERY_BACKEND_DELIVERY");
+  state.checkpoint = "complete";
 }
 
 async function main() {
@@ -134,10 +180,12 @@ async function main() {
   const receipt: { schema: string; status: "failed" | "passed"; phase: string; failure: string | null; cleanup: boolean;
     source: unknown; chrome: string | null; cases: Record<CaseName, Status>; observations: unknown[]; backend: unknown;
     diagnosticVersion: 1; checkpoint: LoginCheckpoint | null; loginFields: LoginFields | null; failureSurfaces: unknown[];
+    searchDiagnosticVersion: 1; searchDiagnostic: SearchDiagnostic | null; commandError: ReturnType<typeof cdpCommandErrorObservation>;
     iconServerProbe: IconServerProbe; iconServerBeforeFailure: ReturnType<ReturnType<typeof observeDirectoryIconServer>["snapshot"]> | null } = {
     schema: "get452-directory-next.v1", status: "failed", phase: "source", failure: null, cleanup: false,
     source: null, chrome: null, cases: Object.fromEntries(cases.map(name => [name, "not_started"])) as Record<CaseName, Status>, observations: [], backend: null,
     diagnosticVersion: 1, checkpoint: null, loginFields: null, failureSurfaces: [], iconServerBeforeFailure: null,
+    searchDiagnosticVersion: 1, searchDiagnostic: null, commandError: null,
     iconServerProbe: { attempted: false, outcome: "not_attempted", status: null, mime: "unobserved", eof: false, withinBodyLimit: false, pngSignature: false },
   };
   let next: ChildProcess | undefined, chrome: ChildProcess | undefined, cdp: ProtocolCdp | undefined;
@@ -146,6 +194,7 @@ async function main() {
   let iconObserver: ReturnType<typeof observeDirectoryIconServer> | undefined;
   const pages: DirectoryProtocolPage[] = [];
   const run = async (name: CaseName, operation: () => Promise<void>) => {
+    activeSearch = null;
     receipt.phase = name; receipt.cases[name] = "running"; receipt.checkpoint = null; receipt.loginFields = null;
     try { await operation(); receipt.cases[name] = "passed"; } catch (error) { receipt.cases[name] = "failed"; throw error; }
   };
@@ -264,12 +313,21 @@ async function main() {
     receipt.status = "passed";
   } catch (error) {
     receipt.status = "failed";
-    receipt.failure = error instanceof DirectoryProtocolFailure ? error.code : "UNCLASSIFIED_PROTOCOL_FAILURE";
+    receipt.failure = error instanceof DirectoryProtocolFailure ? error.code : untilFailure(error) ?? "UNCLASSIFIED_PROTOCOL_FAILURE";
+    try { receipt.commandError = cdpCommandErrorObservation(error); } catch { receipt.commandError = null; }
     // Fix both passive observations before surface reads or the separate Node probe.
     // Server counts describe this owned listener, not a guessed CDP hop or browser EOF.
     receipt.iconServerBeforeFailure = iconObserver?.snapshot() ?? null;
     // Capture pending/counter facts before an asynchronous diagnostic can settle them.
     receipt.observations = pages.map(page => page.diagnostics()); receipt.backend = fixture?.counters() ?? null;
+    const search = activeSearch;
+    if (search) {
+      receipt.searchDiagnostic = { checkpoint: search.checkpoint, urlDirectoryMatch: search.urlDirectoryMatch,
+        urlQueryMatch: search.urlQueryMatch, inputMatch: search.inputMatch, state: null };
+      // One read after the original failure/passive facts are fixed, never a retry or gate.
+      try { receipt.searchDiagnostic.state = await search.page.directoryFailureState(search.expectedQuery); }
+      catch { /* Keep the original failure and explicit null diagnostic. */ }
+    }
     for (const [pageIndex, page] of pages.entries()) {
       try { receipt.failureSurfaces.push({ pageIndex, available: true, surface: await page.surface() }); }
       catch { receipt.failureSurfaces.push({ pageIndex, available: false }); }

@@ -368,6 +368,29 @@ export class DirectoryProtocolPage {
       unmatchedFetchPausesUpTo1024: this.unmatchedFetchPausesUpTo1024,
       httpStatuses: Object.fromEntries([...this.httpStatuses].sort(([a], [b]) => a.localeCompare(b))) };
   }
+  async directoryFailureState(expectedQuery: string) {
+    // Called once only after a fixed failure. Raw values stay in this read-only expression.
+    const value = await this.evaluate<Record<string, unknown>>(`(() => {
+      const expected=${JSON.stringify(expectedQuery)},url=new URL(location.href),query=url.searchParams.get("query"),
+        input=document.querySelector(${JSON.stringify(directoryInput)}),submit=document.querySelector('form[action="/workspace/people"] button[type="submit"]'),
+        active=document.activeElement,alerts=Math.min(501,document.querySelectorAll('[role="alert"]').length);
+      const chars=value=>{if(typeof value!=="string")return null;let n=0;for(const _ of value){if(++n===501)break;}return n;};
+      return {urlDirectoryMatch:url.pathname==="/workspace/people",urlQueryMatch:query===expected,urlQueryChars:chars(query),
+        inputFound:input instanceof HTMLInputElement,inputMatch:input instanceof HTMLInputElement&&input.value===expected,
+        inputChars:input instanceof HTMLInputElement?chars(input.value):null,
+        focus:!active?"none":active===input?"directory_query":active===submit?"directory_submit":
+          active===document.querySelector("#account-email")?"identifier":active===document.querySelector("#account-password")?"password":"other",
+        busy:submit?.getAttribute("aria-busy")==="true",invalid:input?.getAttribute("aria-invalid")==="true",hasAlert:alerts>0,alerts};
+    })()`);
+    const row = value && typeof value === "object" ? value : {};
+    const flag = (key: string) => typeof row[key] === "boolean" ? row[key] as boolean : null;
+    const count = (key: string) => typeof row[key] === "number" && Number.isSafeInteger(row[key]) && (row[key] as number) >= 0
+      ? Math.min(501, row[key] as number) : null;
+    return { urlDirectoryMatch: flag("urlDirectoryMatch"), urlQueryMatch: flag("urlQueryMatch"), urlQueryChars: count("urlQueryChars"),
+      inputFound: flag("inputFound"), inputMatch: flag("inputMatch"), inputChars: count("inputChars"),
+      focus: ["none", "directory_query", "directory_submit", "identifier", "password", "other"].includes(row.focus as string) ? row.focus : "unobserved",
+      busy: flag("busy"), invalid: flag("invalid"), hasAlert: flag("hasAlert"), alerts: count("alerts") };
+  }
   async surface() {
     // Presence only. Never return text, field values, HTML, attributes, URLs or error messages.
     const value = await this.evaluate<Record<string, unknown>>(`(() => {
