@@ -12,7 +12,7 @@ function fixture() {
     return { rows: [{ value: sql }], rowCount: 1 };
   }, release: () => { open = false; releases++; } } as unknown as PoolClient;
   const pool = { connect: async () => { if (open) throw new Error("only product client already borrowed"); open = true; borrows++; return client; } } as unknown as Pool;
-  const authority = { assertCurrent: async () => {}, withClient: async <T>(value: PoolClient, work: (guarded: PoolClient) => Promise<T>) => {
+  const authority = { throwIfTerminated: () => {}, assertCurrent: async () => {}, withClient: async <T>(value: PoolClient, work: (guarded: PoolClient) => Promise<T>) => {
     let live = true;
     const guarded = new Proxy(value, { get(target, key) {
       if (key !== "query") return Reflect.get(target, key, target);
