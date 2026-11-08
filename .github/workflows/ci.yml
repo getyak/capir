@@ -485,6 +485,15 @@ jobs:
           CHAT_MEDIA_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
         run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/chatMediaLifecycle.integration.test.ts
 
+      - name: Verify Memory proposal HTTP commit ordering with PostgreSQL
+        # Keep this independent proof observable after another regression fails;
+        # any failed step still keeps Backend required red.
+        if: ${{ !cancelled() }}
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          GET_457_STAGE_HTTP_ACK_TEST_REQUIRED: '1'
+        run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryProposalCommitOrder.integration.test.ts
+
       - name: Verify account authority and isolated workspace cleanup
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
