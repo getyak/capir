@@ -465,6 +465,22 @@ jobs:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
         run: pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('DROP DATABASE talent_signal_get455_upgrade_ci'); } finally { await pool.end(); }"
 
+      - name: Verify retained historical Saved Memory rows through the normal migrator
+        id: saved_memory_legacy_upgrade
+        env:
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          GET_455_MEMORY_LEGACY_UPGRADE_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/talent_signal_get455_legacy_upgrade_ci
+          GET_455_MEMORY_LEGACY_UPGRADE_SQL_REQUIRED: '1'
+        run: |
+          pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; import { appendFileSync } from 'node:fs'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('CREATE DATABASE talent_signal_get455_legacy_upgrade_ci'); appendFileSync(process.env.GITHUB_OUTPUT, 'created=true\n'); } finally { await pool.end(); }"
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/savedMemoryLegacyUpgrade.integration.test.ts
+
+      - name: Remove only the historical Memory upgrade database created by this job
+        if: always() && steps.saved_memory_legacy_upgrade.outputs.created == 'true'
+        env:
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+        run: pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('DROP DATABASE talent_signal_get455_legacy_upgrade_ci'); } finally { await pool.end(); }"
+
       - name: Verify canonical self Memory update targets with PostgreSQL
         env:
           CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci

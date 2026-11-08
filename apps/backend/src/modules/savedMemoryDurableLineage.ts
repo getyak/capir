@@ -134,7 +134,7 @@ export async function readSavedMemoryRetainedLineage(database: DatabaseClient,
        SELECT COALESCE(jsonb_agg(jsonb_build_object('item_id',d.memory_item_id::text,'item_version',d.item_version,
          'lineage_epoch',d.lineage_epoch::text,'memory_owner_id',d.memory_owner_id::text,'scope',d.scope,
          'subject_id',d.subject_id::text,'relationship_context_id',d.relationship_context_id::text) ORDER BY d.memory_item_id),'[]'::jsonb) AS stamps
-       FROM agent_task_memory_dependencies d WHERE d.account_id=$1 AND d.task_id=$3
+       FROM agent_task_saved_memory_dependencies d WHERE d.account_id=$1 AND d.task_id=$3
      ) SELECT t.proof_digest,CASE t.format_version
        WHEN 1 THEN jsonb_build_object('version',1,'account_id',t.account_id::text,'reader_actor_id',t.reader_actor_id::text,
          'task_id',t.task_id::text,'expires_at',to_char(t.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'stamps',d.stamps)

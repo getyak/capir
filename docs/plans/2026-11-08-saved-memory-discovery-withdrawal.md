@@ -19,60 +19,68 @@ authority, semantic index, deployment secret or provider permission. Historical
 untracked dependencies remain unknown. The three approved public archive source
 objects preserve intent; withheld originals and private derivations are excluded.
 
-## Current milestone: tests first, durability before capability
+## Current milestone: compatible foundation before runtime publication
 
-Base: `de9a8db047f60cc31d394b58be21a2cb3b8f6983`, including merged GET449 parent.
-New `savedMemoryDiscovery.integration.test.ts` and the task-only fixture exercise
-six source-only initial cases through actual password authentication, HTTP Chat,
-canonical Session save, Memory source resolution/stage/open/commit and actual
-Memory/source mutations. The only double is the remote provider: an existing
-tool-capable ScriptedAgentProvider, with zero real model or network requests.
-No successful result, accepted Memory, dependency row or source grant is inserted
-by the test. Only synthetic account/password setup uses SQL.
+Main `ac4fdce93a7260532342e5f382515659c3c39877` has 117 frozen migrations.
+Draft #536 foundation `7ee02f744635d9810a61d78198d7bf0b8ce9c911`
+has not reached Main or the resident service. Its Hosted PostgreSQL run
+42487231340 passed the original populated upgrade (12), owner target (5), and
+tracked recall (7). Default backend tests passed 2141 with 1069 configured skips.
+The new runtime suite still failed 11 of 15; subsequent stages were skipped.
+These results do not establish the whole capability or resident acceptance.
 
-- Completed no-product-Session replay after delete, correction or explicit raw
-  source deletion: the derived body must be unavailable with zero new provider
-  calls, while a pre-Memory independent completed reply and current login remain
-  lawful. Positive replay is verified before withdrawal.
-- Inline and complete production history must omit withdrawn assistant text,
-  retain its still-authorized original human objective and make no provider call.
-- Actual tool dispatch must find an older accepted literal clue, preserving `%`,
-  `_` and backslash as literals and returning explicit literal matching coverage.
+A read-only resident schema check found a real historical
+`099_saved_memory_chat_lineage` table named `agent_task_memory_dependencies`.
+Its text task IDs and old version/owner fields cannot stand in for new UUID,
+epoch and scope proofs. The unmerged draft114 used the same physical name and
+would fail before draft115. Keep the old table, constraints, triggers and rows.
+The new C03 table is `agent_task_saved_memory_dependencies`; its SQL and all
+C03 consumers use that distinct name. Never infer a new proof from an old row.
 
-These are **new-feature initial regression sources, not observed red tests**.
-Local tests, TypeScript compilation, PostgreSQL, builds, browser/services,
-installation and provider probes are prohibited in the current resource window.
-Root owns independent review, the explicit Hosted PostgreSQL selector and actual
-first-red classification. Missing DB is an ordinary-suite skip; the owning
-Hosted PG run must collect all six with zero skips. Setup/type failures must not
-be reported as the intended semantic red.
+This explicitly supersedes the earlier draft114/115 review snapshots. Their
+previous SQL remains in Git history and operational evidence. All 117 Main
+migration names, order and SQL bytes stay exact; only these unmerged drafts are
+corrected and the reviewed 119-entry digest is repinned. The normal migrator's
+already-applied checksum refusal is unchanged. An unknown environment that has
+applied an older draft must still stop at that refusal, not rewrite history.
 
-## Following milestones and protected owners
+The active verification batch adds four required PostgreSQL contracts in a
+separate, empty loopback database. It executes the complete historical099 Git
+SQL, retains synthetic UUID and text task rows, runs the normal migrator through
+114/115, checks the old table and rows byte for byte, rejects synthetic conversion
+into new proofs, repeats migration without changed receipts, and verifies an
+already-applied checksum mismatch still fails. This fixture matches the observed
+old table shape; its full SQL has not been asserted identical to the resident's
+stored099 checksum. Existing upgrade12 and runtime15 case bodies and timeouts
+remain intact. These four contracts are source-only until their Hosted step
+actually passes. The same batch maps physical Self subjects to semantic null
+inside the original discovery SELECT, while retaining strict owner predicates.
 
-Root reserved fresh `114_saved_memory_lineage.sql`; it must be appended after the
-existing manifest order, including 113 before 112, after a fresh collision check.
-No old migration or deployed function is replaced wholesale. New query metadata,
-per-item monotonic epoch and per-task immutable dependency metadata require
-independent SQL/crypto/retention review. No Memory prose belongs in the query or
-lineage stores.
+## Following milestones and protected boundaries
 
-Production work follows the accepted finite search/continuation/read-set and
-bounded cleanup design. First enumerate each exact existing writer/reader hook
-before editing: Memory mutation/source owners, recall/self core, queue atomic
-result publication and recovery, shared source availability and SDK cutover.
-Do not edit the concurrently owned `agentSessions.ts`, `legacyChat*`,
-`unscopedChat*`, C05 protocols/codecs/SQL113/read-authority/final-envelope/clock
-owners, GET452 or existing auth/claim guards. A proposed shared readback bridge
-in `agentSessionSources.ts` must be reported before implementation.
+1. Pass fresh and historical upgrades, tracked/owner tests, source checks and
+   independent review at the current head. Preserve failures and configured skips.
+2. Wire the three actual producers (automatic Self, governed recall and literal
+   search) to one private Run/source owner. Admit only actual exposed compiler
+   items with original tuples and one shared budget. A callback alone is not a
+   current authorization or source capability.
+3. Join current credentials, source and Memory/query membership in the same SQL
+   snapshot before exposure and publication. Preserve terminal revocation errors
+   through fallback paths. Register completed lineage on the actual canonical
+   completion transaction and physical client, with real source receipts and
+   COMMIT/ACK evidence; no new tool is released before these paths work.
+4. Finish Session/history/queue/SDK/fork/monitor and retained-artifact readers,
+   both publication race orders, bounded maintenance, replacement/undo negatives,
+   hidden-row negatives, literal Unicode/microsecond pagination and shared quotas.
+   Preserve ADR0024 raw-TTL positive controls and lawful human-authored originals.
+5. Pass all applicable Hosted gates, then deploy affected existing resident
+   services from clean committed source using the normal deployment entrypoint.
+   Read back live revisions and changed behavior before closing GET-455.
 
-The remaining required evidence includes replacement/undo irreversibility,
-source/target/evidence transitions, both real publication-race orderings, queue
-result-before-Session crash recovery, atomic dependencies, all derivative
-readbacks/forks/monitor/SDK, current authorization before LIMIT, microsecond and
-Unicode pagination, hidden-row negatives, exact bytes/read-set quotas and raw-TTL
-positive controls. Six initial cases do not constitute complete C03 coverage.
-
-Full applicable Hosted gates, independent review and clean committed resident
-revision readback remain required. Synthetic CI does not prove real provider,
-native/device or production acceptance. Keep GET-455 In Progress until the whole
-accepted capability and its actual acceptance are complete.
+The existing6 discovery and15 runtime regressions remain mandatory alongside the
+foundation tests. Their semantic failures cannot be replaced by helper-only
+passes. Do not overwrite C05 protocols or released SQL/auth/claim guards. Keep
+independent source ownership, the full migration manifest order (113 before112),
+private receipts and existing transport/schema contracts. No production secrets
+or user source content belong in lineage metadata, tests or reports. Synthetic
+CI does not prove actual provider, physical-device or production acceptance.

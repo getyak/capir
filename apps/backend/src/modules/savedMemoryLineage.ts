@@ -225,7 +225,7 @@ export async function readSavedMemoryLineage(database: DatabaseClient, auth: Pic
     'stamps',COALESCE((SELECT jsonb_agg(jsonb_build_object('item_id',d.memory_item_id::text,'item_version',d.item_version,
       'lineage_epoch',d.lineage_epoch::text,'memory_owner_id',d.memory_owner_id::text,'scope',d.scope,
       'subject_id',d.subject_id::text,'relationship_context_id',d.relationship_context_id::text) ORDER BY d.memory_item_id)
-      FROM agent_task_memory_dependencies d WHERE d.account_id=t.account_id AND d.task_id=t.task_id),'[]'::jsonb)) AS proof
+      FROM agent_task_saved_memory_dependencies d WHERE d.account_id=t.account_id AND d.task_id=t.task_id),'[]'::jsonb)) AS proof
     FROM agent_task_memory_lineage t CROSS JOIN tick WHERE t.account_id=$1 AND t.reader_actor_id=$2 AND t.task_id=$3
       AND t.format_version=1 AND t.withdrawn_at IS NULL AND t.expires_at>tick.checked_at
       AND saved_memory_task_current(t.account_id,t.task_id,t.reader_actor_id,tick.checked_at)`, [auth.accountId, auth.userId, taskID])).rows[0];

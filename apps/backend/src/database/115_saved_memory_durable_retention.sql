@@ -146,7 +146,7 @@ $function$;
 CREATE OR REPLACE FUNCTION saved_memory_task_current(a uuid,task uuid,reader uuid,checked_at timestamptz) RETURNS boolean
 LANGUAGE sql STABLE AS $function$
  SELECT checked_at IS NOT NULL AND isfinite(checked_at) AND COALESCE((SELECT t.withdrawn_at IS NULL
-   AND t.reader_actor_id=reader AND t.dependency_count=(SELECT count(*) FROM agent_task_memory_dependencies d WHERE d.account_id=a AND d.task_id=task)
+   AND t.reader_actor_id=reader AND t.dependency_count=(SELECT count(*) FROM agent_task_saved_memory_dependencies d WHERE d.account_id=a AND d.task_id=task)
    AND ((t.format_version=1 AND t.retention_kind='legacy_finite' AND t.completion_idempotency_id IS NULL
        AND t.source_origin_session_id IS NULL AND t.expires_at IS NOT NULL AND t.expires_at>checked_at)
      OR (t.format_version=2 AND saved_memory_completion_current(a,reader,task,t.completion_idempotency_id,checked_at)
@@ -156,7 +156,7 @@ LANGUAGE sql STABLE AS $function$
      'item_id',d.memory_item_id::text,'item_version',d.item_version,'lineage_epoch',d.lineage_epoch::text,
      'memory_owner_id',d.memory_owner_id::text,'scope',d.scope,'subject_id',d.subject_id::text,
      'relationship_context_id',d.relationship_context_id::text) ORDER BY d.memory_item_id)
-     FROM agent_task_memory_dependencies d WHERE d.account_id=a AND d.task_id=task),'[]'::jsonb),checked_at)
+     FROM agent_task_saved_memory_dependencies d WHERE d.account_id=a AND d.task_id=task),'[]'::jsonb),checked_at)
    FROM agent_task_memory_lineage t WHERE t.account_id=a AND t.task_id=task),false)
 $function$;
 -- Origin is an immutable registration/provenance binding only. No new live-
@@ -175,11 +175,11 @@ BEGIN
    OR stored.reader_actor_id<>u OR stored.expires_at<>deadline OR stored.proof_digest<>digest OR stored.withdrawn_at IS NOT NULL
    OR stored.dependency_count<>jsonb_array_length(stamps) THEN RETURN false; END IF;
  FOR stamp IN SELECT value FROM jsonb_array_elements(stamps) LOOP
-   INSERT INTO agent_task_memory_dependencies(account_id,task_id,memory_item_id,item_version,lineage_epoch,memory_owner_id,scope,subject_id,relationship_context_id)
+   INSERT INTO agent_task_saved_memory_dependencies(account_id,task_id,memory_item_id,item_version,lineage_epoch,memory_owner_id,scope,subject_id,relationship_context_id)
    VALUES(a,task,(stamp->>'item_id')::uuid,(stamp->>'item_version')::int,(stamp->>'lineage_epoch')::bigint,
      (stamp->>'memory_owner_id')::uuid,stamp->>'scope',(stamp->>'subject_id')::uuid,(stamp->>'relationship_context_id')::uuid)
    ON CONFLICT DO NOTHING;
-   IF NOT EXISTS (SELECT 1 FROM agent_task_memory_dependencies d WHERE d.account_id=a AND d.task_id=task
+   IF NOT EXISTS (SELECT 1 FROM agent_task_saved_memory_dependencies d WHERE d.account_id=a AND d.task_id=task
      AND d.memory_item_id=(stamp->>'item_id')::uuid AND d.item_version=(stamp->>'item_version')::int
      AND d.lineage_epoch=(stamp->>'lineage_epoch')::bigint AND d.memory_owner_id=(stamp->>'memory_owner_id')::uuid
      AND d.scope=stamp->>'scope' AND d.subject_id IS NOT DISTINCT FROM (stamp->>'subject_id')::uuid
@@ -237,11 +237,11 @@ BEGIN
      RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='SAVED_MEMORY_DURABLE_REGISTER_REFUSED';
    END IF;
    FOR stamp IN SELECT value FROM jsonb_array_elements(stamps) LOOP
-     INSERT INTO agent_task_memory_dependencies(account_id,task_id,memory_item_id,item_version,lineage_epoch,memory_owner_id,scope,subject_id,relationship_context_id)
+     INSERT INTO agent_task_saved_memory_dependencies(account_id,task_id,memory_item_id,item_version,lineage_epoch,memory_owner_id,scope,subject_id,relationship_context_id)
      VALUES(a,task,(stamp->>'item_id')::uuid,(stamp->>'item_version')::int,(stamp->>'lineage_epoch')::bigint,
        (stamp->>'memory_owner_id')::uuid,stamp->>'scope',(stamp->>'subject_id')::uuid,(stamp->>'relationship_context_id')::uuid)
      ON CONFLICT DO NOTHING;
-     IF NOT EXISTS (SELECT 1 FROM agent_task_memory_dependencies d WHERE d.account_id=a AND d.task_id=task
+     IF NOT EXISTS (SELECT 1 FROM agent_task_saved_memory_dependencies d WHERE d.account_id=a AND d.task_id=task
        AND d.memory_item_id=(stamp->>'item_id')::uuid AND d.item_version=(stamp->>'item_version')::int
        AND d.lineage_epoch=(stamp->>'lineage_epoch')::bigint AND d.memory_owner_id=(stamp->>'memory_owner_id')::uuid
        AND d.scope=stamp->>'scope' AND d.subject_id IS NOT DISTINCT FROM (stamp->>'subject_id')::uuid

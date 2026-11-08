@@ -71,7 +71,7 @@ CREATE TABLE agent_task_memory_lineage (
 );
 CREATE INDEX agent_task_memory_cleanup ON agent_task_memory_lineage(withdrawn_at,account_id,task_id)
   WHERE withdrawn_at IS NOT NULL AND NOT cleanup_complete;
-CREATE TABLE agent_task_memory_dependencies (
+CREATE TABLE agent_task_saved_memory_dependencies (
   account_id uuid NOT NULL,
   task_id uuid NOT NULL,
   memory_item_id uuid NOT NULL,
@@ -88,7 +88,7 @@ CREATE TABLE agent_task_memory_dependencies (
     OR (scope='relationship' AND subject_id IS NOT NULL AND relationship_context_id IS NOT NULL))
   -- No FK to the original item/epoch: dropping proof cannot mean independence.
 );
-CREATE INDEX agent_task_memory_by_item ON agent_task_memory_dependencies(account_id,memory_item_id,lineage_epoch,task_id);
+CREATE INDEX agent_task_memory_by_item ON agent_task_saved_memory_dependencies(account_id,memory_item_id,lineage_epoch,task_id);
 CREATE INDEX saved_memory_idempotency_task ON idempotency_records(account_id,(response_body->>'task_id'),id)
  WHERE operation_scope IN ('create_chat_task','create_unscoped_chat_task');
 CREATE INDEX saved_memory_queue_task ON conversation_queue_entries(account_id,(result->'body'->>'task_id'),id);
@@ -266,12 +266,12 @@ $function$;
 CREATE FUNCTION saved_memory_task_current(a uuid,task uuid,reader uuid,checked_at timestamptz) RETURNS boolean
 LANGUAGE sql STABLE AS $function$
  SELECT checked_at IS NOT NULL AND isfinite(checked_at) AND COALESCE((SELECT t.format_version=1 AND t.withdrawn_at IS NULL AND t.expires_at>checked_at
-   AND t.reader_actor_id=reader AND t.dependency_count=(SELECT count(*) FROM agent_task_memory_dependencies d WHERE d.account_id=a AND d.task_id=task)
+   AND t.reader_actor_id=reader AND t.dependency_count=(SELECT count(*) FROM agent_task_saved_memory_dependencies d WHERE d.account_id=a AND d.task_id=task)
    AND saved_memory_read_set_current(a,reader,COALESCE((SELECT jsonb_agg(jsonb_build_object(
      'item_id',d.memory_item_id::text,'item_version',d.item_version,'lineage_epoch',d.lineage_epoch::text,
      'memory_owner_id',d.memory_owner_id::text,'scope',d.scope,'subject_id',d.subject_id::text,
      'relationship_context_id',d.relationship_context_id::text) ORDER BY d.memory_item_id)
-     FROM agent_task_memory_dependencies d WHERE d.account_id=a AND d.task_id=task),'[]'::jsonb),t.expires_at,checked_at)
+     FROM agent_task_saved_memory_dependencies d WHERE d.account_id=a AND d.task_id=task),'[]'::jsonb),t.expires_at,checked_at)
    FROM agent_task_memory_lineage t WHERE t.account_id=a AND t.task_id=task),false)
 $function$;
 
@@ -286,11 +286,11 @@ BEGIN
  IF stored.reader_actor_id<>u OR stored.expires_at<>deadline OR stored.proof_digest<>digest OR stored.withdrawn_at IS NOT NULL
    OR stored.dependency_count<>jsonb_array_length(stamps) THEN RETURN false; END IF;
  FOR stamp IN SELECT value FROM jsonb_array_elements(stamps) LOOP
-   INSERT INTO agent_task_memory_dependencies(account_id,task_id,memory_item_id,item_version,lineage_epoch,memory_owner_id,scope,subject_id,relationship_context_id)
+   INSERT INTO agent_task_saved_memory_dependencies(account_id,task_id,memory_item_id,item_version,lineage_epoch,memory_owner_id,scope,subject_id,relationship_context_id)
    VALUES(a,task,(stamp->>'item_id')::uuid,(stamp->>'item_version')::int,(stamp->>'lineage_epoch')::bigint,
      (stamp->>'memory_owner_id')::uuid,stamp->>'scope',(stamp->>'subject_id')::uuid,(stamp->>'relationship_context_id')::uuid)
    ON CONFLICT DO NOTHING;
-   IF NOT EXISTS (SELECT 1 FROM agent_task_memory_dependencies d WHERE d.account_id=a AND d.task_id=task
+   IF NOT EXISTS (SELECT 1 FROM agent_task_saved_memory_dependencies d WHERE d.account_id=a AND d.task_id=task
      AND d.memory_item_id=(stamp->>'item_id')::uuid AND d.item_version=(stamp->>'item_version')::int
      AND d.lineage_epoch=(stamp->>'lineage_epoch')::bigint AND d.memory_owner_id=(stamp->>'memory_owner_id')::uuid
      AND d.scope=stamp->>'scope' AND d.subject_id IS NOT DISTINCT FROM (stamp->>'subject_id')::uuid
@@ -400,7 +400,7 @@ BEGIN
    WHERE account_id=a AND memory_item_id=item AND cleanup_epoch<epoch FOR UPDATE NOWAIT;
  IF NOT FOUND THEN RETURN 0; END IF;
  WITH selected AS MATERIALIZED (
-   SELECT t.task_id FROM agent_task_memory_lineage t JOIN agent_task_memory_dependencies d
+   SELECT t.task_id FROM agent_task_memory_lineage t JOIN agent_task_saved_memory_dependencies d
      ON d.account_id=t.account_id AND d.task_id=t.task_id
    WHERE d.account_id=a AND d.memory_item_id=item AND d.lineage_epoch<>current_epoch
      AND (frontier IS NULL OR t.task_id>frontier)
@@ -411,7 +411,7 @@ BEGIN
  ) SELECT count(*)::int,(array_agg(task_id ORDER BY task_id DESC))[1] INTO changed,next_frontier FROM marked;
  IF next_frontier IS NOT NULL THEN UPDATE memory_item_lineage SET cleanup_after_task=next_frontier
    WHERE account_id=a AND memory_item_id=item AND epoch=current_epoch; END IF;
- IF NOT EXISTS (SELECT 1 FROM agent_task_memory_dependencies d WHERE d.account_id=a AND d.memory_item_id=item
+ IF NOT EXISTS (SELECT 1 FROM agent_task_saved_memory_dependencies d WHERE d.account_id=a AND d.memory_item_id=item
    AND d.lineage_epoch<>current_epoch AND (COALESCE(next_frontier,frontier) IS NULL OR d.task_id>COALESCE(next_frontier,frontier))) THEN
    UPDATE memory_item_lineage SET cleanup_epoch=current_epoch,cleanup_after_task=NULL
      WHERE account_id=a AND memory_item_id=item AND epoch=current_epoch;
@@ -458,10 +458,10 @@ $function$;
 
 INSERT INTO lab_test_workspace_table_manifest(table_name,scope) VALUES
  ('memory_item_lineage','account'),('memory_discovery_queries','account'),('agent_task_memory_lineage','account'),
- ('agent_task_memory_dependencies','account'),('agent_task_memory_session_copies','account');
+ ('agent_task_saved_memory_dependencies','account'),('agent_task_memory_session_copies','account');
 DO $function$ DECLARE item text; BEGIN
  FOREACH item IN ARRAY ARRAY['memory_item_lineage','memory_discovery_queries','agent_task_memory_lineage',
-   'agent_task_memory_dependencies','agent_task_memory_session_copies'] LOOP
+   'agent_task_saved_memory_dependencies','agent_task_memory_session_copies'] LOOP
   EXECUTE format('CREATE TRIGGER account_retirement_fence BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION enforce_account_retirement_fence(''account_id'')',item);
   EXECUTE format('CREATE TRIGGER lab_test_workspace_write_guard BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION lab_test_workspace_write_guard()',item);
  END LOOP;

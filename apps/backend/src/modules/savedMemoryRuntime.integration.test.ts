@@ -23,7 +23,7 @@ function memoryToolItems(r: Runtime): Array<{ id: string; version: number; displ
 async function dependencies(r: Runtime, taskID: string): Promise<RuntimeStamp[]> {
   return (await r.control.query<RuntimeStamp>(`SELECT memory_item_id::text,item_version,lineage_epoch::text,
     memory_owner_id::text,scope,subject_id::text,relationship_context_id::text
-    FROM agent_task_memory_dependencies WHERE account_id=$1 AND task_id=$2 ORDER BY memory_item_id`,
+    FROM agent_task_saved_memory_dependencies WHERE account_id=$1 AND task_id=$2 ORDER BY memory_item_id`,
   [r.f.auth.accountId, taskID])).rows;
 }
 async function publication(r: Runtime, taskID: string, key: string) {
@@ -31,7 +31,7 @@ async function publication(r: Runtime, taskID: string, key: string) {
     proof_digest: string; no_task_deadline: boolean; canonical_same_tx: boolean; dependencies_same_tx: boolean }>(`
     SELECT t.format_version,t.reader_actor_id::text AS reader,t.dependency_count,t.proof_digest,
       t.expires_at IS NULL AS no_task_deadline,t.xmin=i.xmin AS canonical_same_tx,
-      NOT EXISTS(SELECT 1 FROM agent_task_memory_dependencies d WHERE d.account_id=t.account_id
+      NOT EXISTS(SELECT 1 FROM agent_task_saved_memory_dependencies d WHERE d.account_id=t.account_id
         AND d.task_id=t.task_id AND d.xmin<>t.xmin) AS dependencies_same_tx
     FROM agent_task_memory_lineage t JOIN idempotency_records i ON i.account_id=t.account_id
       AND i.actor_user_id=t.reader_actor_id AND i.operation_scope='create_unscoped_chat_task'
