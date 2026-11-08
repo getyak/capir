@@ -23,6 +23,9 @@ function routeKind(path: string): string {
 }
 type FetchObservation = { decision: "continue" | "fail"; command: "requested" | "acknowledged" | "rejected"; correlation: "matched" | "ambiguous" };
 type ExtraObservation = "unobserved" | "seen" | "ambiguous";
+type IconLifetime = { id:string; ordinal:number; requestOrder:number; mainDocumentReceiveCountAtRequest:number; reportedDocumentRoute:string;
+  reportedFrameRelation:"main"|"other"|"unobserved"; ambiguous:boolean; responseStatus:number|null; responseOrder:number|null;
+  finished:number; failed:number; terminalOrder:number|null; canceled:boolean|null; failure:"aborted"|"failed"|"connection_closed"|"other"|"unobserved" };
 export class DirectoryProtocolPage {
   readonly observed = { blockedExternal: 0, runtimeErrors: 0, consoleErrors: 0, cookieBlocks: {} as Record<string, number>, maxRequestTargetBytes: 0,
     lastDocumentStatus: null as number | null, lastDocumentRoute: "unobserved", httpErrors: {} as Record<string, number> };
@@ -37,6 +40,57 @@ export class DirectoryProtocolPage {
   private mainLoaderId = "";
   private transportIds = new Set<string>();
   private transportHistorySaturated = false;
+  private iconIds=new Set<string>();
+  private iconLifetime:IconLifetime[]=[];
+  private iconOrder=0;
+  private iconHistoryInvalid=false;
+  private iconHistorySaturated=false;
+  private mainDocumentSequence=0;
+  private mainDocumentRoute="unobserved";
+  private mainFrame="";
+  private iconRouteAudit:ReturnType<ProtocolCdp["watchTerminalRoutes"]>|undefined;
+  private iconTick(){if(this.iconOrder>=4096){this.iconHistorySaturated=true;return 4096;}return ++this.iconOrder;}
+  private documentRoute(value:unknown){
+    try{if(typeof value!=="string")return "unobserved";const url=new URL(value);return url.origin===this.origin?routeKind(url.pathname):"other_origin";}
+    catch{return "unobserved";}
+  }
+  private noteMainDocument(value:Record<string,unknown>){
+    try{const frame=value.frame as {parentId?:unknown;id?:unknown;url?:unknown}|undefined;
+      if(!frame||frame.parentId)return;
+      this.iconTick();if(this.mainDocumentSequence<64)this.mainDocumentSequence++;else this.iconHistorySaturated=true;
+      this.mainFrame=typeof frame.id==="string"?frame.id:"";this.mainDocumentRoute=this.documentRoute(frame.url);
+    }catch{this.iconHistoryInvalid=true;}
+  }
+  private noteIconStart(value:Record<string,unknown>){
+    try{const request=value.request as {url?:unknown;method?:unknown}|undefined;
+      if(request?.method!=="GET"||typeof request.url!=="string")return;
+      const url=new URL(request.url);if(url.origin!==this.origin||url.pathname!=="/icon")return;
+      const id=value.requestId;if(typeof id!=="string"){this.iconHistoryInvalid=true;return;}
+      if(this.iconLifetime.length>=64){this.iconHistorySaturated=true;return;}
+      const previous=this.iconLifetime.filter(row=>row.id===id);for(const row of previous)row.ambiguous=true;
+      this.iconIds.add(id);const frame=typeof value.frameId==="string"?value.frameId:"";
+      this.iconLifetime.push({id,ordinal:this.iconLifetime.length+1,requestOrder:this.iconTick(),mainDocumentReceiveCountAtRequest:this.mainDocumentSequence,
+        reportedDocumentRoute:this.documentRoute(value.documentURL),reportedFrameRelation:!frame||!this.mainFrame?"unobserved":frame===this.mainFrame?"main":"other",
+        ambiguous:previous.length>0||this.activeKinds.get(id)?.singleHop!==true,responseStatus:null,responseOrder:null,
+        finished:0,failed:0,terminalOrder:null,canceled:null,failure:"unobserved"});
+    }catch{this.iconHistoryInvalid=true;}
+  }
+  private noteIconResponse(value:Record<string,unknown>){
+    try{const status=(value.response as {status?:unknown}|undefined)?.status;
+      const rows=this.iconLifetime.filter(row=>row.id===value.requestId);if(!rows.length)return;const order=this.iconTick();
+      for(const row of rows){row.responseStatus=typeof status==="number"&&Number.isInteger(status)&&status>=100&&status<=599?status:null;row.responseOrder=order;}
+    }catch{this.iconHistoryInvalid=true;}
+  }
+  private noteIconTerminal(value:Record<string,unknown>,failed:boolean){
+    try{const rows=this.iconLifetime.filter(row=>row.id===value.requestId);if(!rows.length)return;
+      const order=this.iconTick();
+      for(const row of rows){if(rows.length>1)row.ambiguous=true;
+        if(failed)row.failed=Math.min(4096,row.failed+1);else row.finished=Math.min(4096,row.finished+1);
+        row.terminalOrder=order;row.canceled=typeof value.canceled==="boolean"?value.canceled:null;
+        row.failure=!failed?"unobserved":value.errorText==="net::ERR_ABORTED"?"aborted":value.errorText==="net::ERR_FAILED"?"failed":value.errorText==="net::ERR_CONNECTION_CLOSED"?"connection_closed":typeof value.errorText==="string"?"other":"unobserved";
+      }
+    }catch{this.iconHistoryInvalid=true;}
+  }
   private firstTransportObservation(id: string): boolean {
     // Never evict a terminal/early ID and later mistake it for a first hop.
     // Saturation degrades only diagnostics; the original gate is unchanged.
@@ -53,6 +107,8 @@ export class DirectoryProtocolPage {
       const { sessionId } = await cdp.call<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
       page = new DirectoryProtocolPage(cdp, sessionId, browserContextId, origin);
       const current = page;
+      current.iconRouteAudit=cdp.watchTerminalRoutes(sessionId,current.iconIds);
+      current.disposers.push(current.iconRouteAudit.dispose);
       current.disposers.push(cdp.on(sessionId, "Page.frameNavigated", value => {
         const frame = value.frame as { parentId?: unknown; loaderId?: unknown } | undefined;
         if (frame && !frame.parentId && typeof frame.loaderId === "string") current.mainLoaderId = frame.loaderId;
@@ -155,6 +211,13 @@ export class DirectoryProtocolPage {
       }));
       current.disposers.push(cdp.on(sessionId, "Runtime.exceptionThrown", () => { current.observed.runtimeErrors++; }));
       current.disposers.push(cdp.on(sessionId, "Runtime.consoleAPICalled", value => { if (value.type === "error") current.observed.consoleErrors++; }));
+      // Passive lifetime callbacks are installed after the original handlers.
+      // No lifecycle observation retires a request or changes quietness.
+      current.disposers.push(cdp.on(sessionId,"Page.frameNavigated",value=>current.noteMainDocument(value)));
+      current.disposers.push(cdp.on(sessionId,"Network.requestWillBeSent",value=>current.noteIconStart(value)));
+      current.disposers.push(cdp.on(sessionId,"Network.responseReceived",value=>current.noteIconResponse(value)));
+      current.disposers.push(cdp.on(sessionId,"Network.loadingFinished",value=>current.noteIconTerminal(value,false)));
+      current.disposers.push(cdp.on(sessionId,"Network.loadingFailed",value=>current.noteIconTerminal(value,true)));
       for (const method of ["Page.enable", "Runtime.enable", "Network.enable"]) await current.call(method);
       await current.call("Network.setCacheDisabled", { cacheDisabled: true });
       await current.call("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
@@ -245,6 +308,13 @@ export class DirectoryProtocolPage {
       pendingFetchVersion: 1, pendingFetch: Object.fromEntries([...fetch].sort(([a], [b]) => a.localeCompare(b))),
       pendingTransportVersion: 1, pendingTransport: Object.fromEntries([...transport].sort(([a], [b]) => a.localeCompare(b))),
       transportHistorySaturated: this.transportHistorySaturated,
+      iconLifetimeVersion:1,iconLifetime:{invalid:this.iconHistoryInvalid,saturated:this.iconHistorySaturated,
+        routeAudit:this.iconRouteAudit?.status()??{invalid:true,saturated:false},
+        mainDocumentSequence:this.mainDocumentSequence,currentMainDocumentRoute:this.mainDocumentRoute,
+        entries:this.iconLifetime.map(row=>({ordinal:row.ordinal,requestOrder:row.requestOrder,mainDocumentReceiveCountAtRequest:row.mainDocumentReceiveCountAtRequest,
+          reportedDocumentRoute:row.reportedDocumentRoute,reportedFrameRelation:row.reportedFrameRelation,ambiguous:row.ambiguous,responseStatus:row.responseStatus,responseOrder:row.responseOrder,
+          finished:row.finished,failed:row.failed,terminalOrder:row.terminalOrder,canceled:row.canceled,failure:row.failure,
+          stillInOriginalActiveLedger:this.active.has(row.id),terminalRoutes:this.iconRouteAudit?.forRequest(row.id)??null}))},
       unmatchedFetchPausesUpTo1024: this.unmatchedFetchPausesUpTo1024,
       httpStatuses: Object.fromEntries([...this.httpStatuses].sort(([a], [b]) => a.localeCompare(b))) };
   }
