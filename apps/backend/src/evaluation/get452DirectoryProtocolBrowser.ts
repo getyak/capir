@@ -23,6 +23,14 @@ function routeKind(path: string): string {
 }
 type FetchObservation = { decision: "continue" | "fail"; command: "requested" | "acknowledged" | "rejected"; correlation: "matched" | "ambiguous" };
 type ExtraObservation = "unobserved" | "seen" | "ambiguous";
+type ReadyProbe = { readyStateNotLoading: boolean | null; selectorPresent: boolean | null;
+  titleNonempty: boolean | null; mainPresent: boolean | null; noNextjsPortal: boolean | null };
+function readyProbe(value: unknown): Readonly<ReadyProbe> {
+  const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const flag = (key: string) => { const value = row[key]; return typeof value === "boolean" ? value : null; };
+  return Object.freeze({ readyStateNotLoading: flag("readyStateNotLoading"), selectorPresent: flag("selectorPresent"),
+    titleNonempty: flag("titleNonempty"), mainPresent: flag("mainPresent"), noNextjsPortal: flag("noNextjsPortal") });
+}
 function clickProbe(value: unknown, target: string): Record<string, unknown> {
   const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const finite = (key: string) => typeof row[key] === "number" && Number.isFinite(row[key])
@@ -57,6 +65,7 @@ export class DirectoryProtocolPage {
   private changedAt = Date.now();
   private observerFailed = false;
   private lastClickProbe: Record<string, unknown> | null = null;
+  private lastReadyProbe: Readonly<ReadyProbe> | null = null;
   private mainLoaderId = "";
   private transportIds = new Set<string>();
   private transportHistorySaturated = false;
@@ -284,7 +293,16 @@ export class DirectoryProtocolPage {
     requireProtocol(!this.observerFailed, "BROWSER_OBSERVER");
   }
   async ready(selector: string) {
-    await until(() => this.evaluate<boolean>(`document.readyState!=="loading" && !!document.querySelector(${JSON.stringify(selector)})`), "GET452 production DOM");
+    this.lastReadyProbe = null;
+    await until(async () => {
+      // One poll evaluation observes all original readiness/identity predicates.
+      // Clear first: a replaced/failed context cannot retain an older sample.
+      this.lastReadyProbe = null;
+      const probe = readyProbe(await this.evaluate<unknown>(`(() => ({readyStateNotLoading:document.readyState!=="loading",selectorPresent:!!document.querySelector(${JSON.stringify(selector)}),titleNonempty:document.title.length>0,mainPresent:!!document.querySelector("main"),noNextjsPortal:!document.querySelector("nextjs-portal")}))()`));
+      this.lastReadyProbe = probe;
+      return probe.readyStateNotLoading === true && probe.selectorPresent === true
+        && probe.titleNonempty === true && probe.mainPresent === true && probe.noNextjsPortal === true;
+    }, "GET452 production DOM");
     // Verify meaningful production markup, never a fabricated ready marker.
     requireProtocol(await this.evaluate<boolean>('document.title.length>0 && !!document.querySelector("main") && !document.querySelector("nextjs-portal")'), "BROWSER_PAGE_IDENTITY");
   }
@@ -350,6 +368,7 @@ export class DirectoryProtocolPage {
     return { ...this.observed, cookieBlocks: { ...this.observed.cookieBlocks }, httpErrors: { ...this.observed.httpErrors },
       observerFailed: this.observerFailed, activeRequests: this.active.size,
       clickProbeVersion: 1, lastClickProbe: this.lastClickProbe ? { ...this.lastClickProbe } : null,
+      readyProbeVersion: 1, lastReadyProbe: this.lastReadyProbe ? { ...this.lastReadyProbe } : null,
       settlementVersion: 1, settlement: { basis: "committed_main_document", documentCommitted: this.documentCommitted,
         activeRequests: this.documentActive.size, replacedDocumentRequests: this.replacedDocumentRequests,
         unterminatedPriorDocumentRequests: [...this.active].filter(id => !this.documentActive.has(id)).length },
