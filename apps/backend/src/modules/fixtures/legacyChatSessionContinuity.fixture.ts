@@ -255,7 +255,7 @@ async function scenario(options: ScenarioOptions) {
         return (await q<{ lineage: number; audits: number }>(`SELECT
           (SELECT count(*)::int FROM agent_session_chat_tasks WHERE account_id=$1 AND origin_session_id=$2) AS lineage,
           (SELECT count(*)::int FROM audit_events WHERE account_id=$1 AND event_type='unscoped_chat_task.completed'
-            AND metadata->>'conversation_session_id'=$2) AS audits`, [accountId, sessionID])).rows[0]!;
+            AND metadata->>'conversation_session_id'=$2::text) AS audits`, [accountId, sessionID])).rows[0]!;
       },
       async close() {
         for (const barrier of heldCalls.values()) barrier.resolve(); readyRelease.resolve(); sourceRelease.resolve(); finalRelease.resolve();
