@@ -529,6 +529,12 @@ jobs:
           DATABASE_URL="$GET_298_TEST_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
           pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 src/modules/memoryDraftTarget.integration.test.ts
 
+      - name: Verify Memory source clocks with PostgreSQL
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+        run: |
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryFinalClock.integration.test.ts
+
       - name: Verify exact Memory literal SQL with a populated isolated upgrade
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci

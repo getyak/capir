@@ -34,7 +34,10 @@ const sourceFingerprintJSON = `'{"session":' || to_json(p.session_id::text)::tex
   || ',"imageManifest":' || ${imageManifestJSON}
   || ',"capture":[null,null,null]}'`;
 
-const sessionSourceMatches = `EXISTS (
+// Closed owner choice only: no caller-supplied clock/SQL expression. The false
+// branch preserves the legacy GET448 predicate's exact resolved bytes.
+function sessionSourceMatches(atTick: boolean): string {
+  return `EXISTS (
   SELECT 1 FROM agent_sessions s
   LEFT JOIN LATERAL (
     SELECT messages.message FROM (
@@ -58,7 +61,7 @@ const sessionSourceMatches = `EXISTS (
   ) expected
   WHERE s.account_id = p.account_id AND s.id = p.session_id
     AND s.created_by_user_id = $2
-    AND s.deleted_at IS NULL AND s.expires_at > clock_timestamp() AND s.payload IS NOT NULL
+    AND s.deleted_at IS NULL AND s.expires_at > ${atTick ? "tick.checked_at" : "clock_timestamp()"} AND s.payload IS NOT NULL
     AND jsonb_typeof(s.payload->'turns') = 'array'
     AND NOT EXISTS (
       SELECT 1 FROM jsonb_array_elements(${safeTurns}) t(value)
@@ -76,7 +79,7 @@ const sessionSourceMatches = `EXISTS (
     AND p.source_message_text_hash IS NOT DISTINCT FROM ${currentTextHash}
     AND (SELECT count(*) FROM conversation_message_images stored
       WHERE stored.account_id = p.account_id AND stored.session_id = p.session_id
-        AND stored.message_id::text = chosen.message->>'id' AND stored.expires_at > now())
+        AND stored.message_id::text = chosen.message->>'id' AND stored.expires_at > ${atTick ? "tick.checked_at" : "now()"})
       = jsonb_array_length(expected.images)
     AND NOT EXISTS (
       SELECT 1 FROM jsonb_array_elements(expected.images) WITH ORDINALITY image(value, ordinality)
@@ -86,7 +89,7 @@ const sessionSourceMatches = `EXISTS (
           SELECT 1 FROM conversation_message_images stored
           WHERE stored.account_id = p.account_id AND stored.session_id = p.session_id
             AND stored.message_id::text = chosen.message->>'id'
-            AND stored.image_index = image.ordinality - 1 AND stored.expires_at > now()
+            AND stored.image_index = image.ordinality - 1 AND stored.expires_at > ${atTick ? "tick.checked_at" : "now()"}
             AND stored.attachment_id::text = image.value->>'attachment_id'
             AND stored.content_hash = image.value->>'content_hash'
         )
@@ -119,8 +122,10 @@ const sessionSourceMatches = `EXISTS (
           )))
     )
 )`;
+}
 
-export const MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_SQL = `(
+function proposalSourceEligibility(atTick: boolean): string {
+  return `(
   CASE WHEN i.capture_id IS NOT NULL THEN EXISTS (
     SELECT 1 FROM captures capture
     JOIN source_retention_receipts receipt
@@ -130,8 +135,8 @@ export const MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_SQL = `(
       AND capture.subject_id IS NOT DISTINCT FROM i.subject_id
       AND capture.assignment_id IS NOT DISTINCT FROM COALESCE(i.relationship_context_id, capture.assignment_id)
       AND receipt.authorization_state = 'authorized' AND receipt.source_access_state = 'available'
-      AND (receipt.authorization_expires_at IS NULL OR receipt.authorization_expires_at > clock_timestamp())
-      AND (receipt.retention_until IS NULL OR receipt.retention_until > clock_timestamp())
+      AND (receipt.authorization_expires_at IS NULL OR receipt.authorization_expires_at > ${atTick ? "tick.checked_at" : "clock_timestamp()"})
+      AND (receipt.retention_until IS NULL OR receipt.retention_until > ${atTick ? "tick.checked_at" : "clock_timestamp()"})
       AND (i.source_resource_id IS NULL OR EXISTS (
         SELECT 1 FROM source_resources resource
         WHERE resource.account_id = p.account_id AND resource.id = i.source_resource_id
@@ -150,7 +155,7 @@ export const MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_SQL = `(
       SELECT 1 FROM agent_sessions live
       WHERE live.account_id = p.account_id AND live.id = i.source_session_id
         AND live.created_by_user_id = $2 AND live.deleted_at IS NULL
-        AND live.expires_at > now() AND live.payload IS NOT NULL
+        AND live.expires_at > ${atTick ? "tick.checked_at" : "now()"} AND live.payload IS NOT NULL
     )))
     OR (i.source_session_id IS NOT NULL
       AND NOT EXISTS (
@@ -160,7 +165,7 @@ export const MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_SQL = `(
           AND media.status = 'ready' AND media.deleted_at IS NULL
       )
       AND ((p.session_id IS NULL AND p.source_message_id IS NOT DISTINCT FROM i.source_message_id)
-        OR ${sessionSourceMatches}))
+        OR ${sessionSourceMatches(atTick)}))
   ) END
   AND NOT EXISTS (
     SELECT 1 FROM memory_source_revocations revoked
@@ -171,3 +176,9 @@ export const MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_SQL = `(
         OR (revoked.source_kind = 'artifact' AND revoked.source_id = i.source_artifact_id))
   )
 )`;
+}
+
+export const MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_SQL = proposalSourceEligibility(false);
+/** New joint Memory reader only. Its owning statement must materialize one
+ * tick with clock_timestamp() AS checked_at; this predicate is not authority. */
+export const MEMORY_PROPOSAL_SOURCE_ELIGIBILITY_AT_TICK_SQL = proposalSourceEligibility(true);
