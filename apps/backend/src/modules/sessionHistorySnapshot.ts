@@ -38,17 +38,39 @@ export interface SessionHistoryCanonicalResult {
     context_manifest_id?: string };
 }
 
+/** Fixed server-only fragments for the canonical history readers. The join
+ * uses a guarded UUID cast so legacy non-UUID task IDs remain ordinary data.
+ * A required-but-missing proof withholds the assistant body; a genuine empty
+ * V2 proof remains readable. This is shaping, never a new history capability. */
+export const SESSION_HISTORY_TASK_UUID_SQL = `(CASE WHEN i.response_body->>'task_id'
+  ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+  THEN (i.response_body->>'task_id')::uuid ELSE NULL::uuid END)`;
+export const SESSION_HISTORY_CANONICAL_BODY_SQL = `(CASE WHEN
+  (NOT i.saved_memory_lineage_required AND memory_lineage.task_id IS NULL)
+  OR (saved_memory_task_current($1,memory_lineage.task_id,$2,memory_tick.checked_at)
+    AND ((NOT i.saved_memory_lineage_required AND memory_lineage.format_version=1) OR (memory_lineage.format_version=2
+      AND memory_lineage.completion_idempotency_id=i.id AND i.response_status=201
+      AND i.operation_scope='create_unscoped_chat_task')))
+  THEN i.response_body ELSE jsonb_build_object('task_id',i.response_body->>'task_id','blocks','[]'::jsonb) END)`;
+
 /** The CASE guards the scalar aggregation: oversized rows never cross the
  * database connection. Counting first in a separate statement would race an
  * update between admission and download. No partial body is called complete. */
 export async function readSessionHistoryBodies(database: DatabaseClient, auth: AuthContext,
   taskIDs: string[]): Promise<SessionHistoryCanonicalResult[]> {
   const row = (await database.query<{ history_result_rows: string; history_result_bytes: string;
-    responses: SessionHistoryCanonicalResult[] | null }>(`WITH candidates AS MATERIALIZED (
-      SELECT operation_scope,response_body,octet_length(response_body::text) AS bytes FROM idempotency_records
-      WHERE account_id=$1 AND actor_user_id=$2 AND status='completed'
-        AND operation_scope IN ('create_chat_task','create_unscoped_chat_task')
-        AND response_body->>'task_id'=ANY($3::text[])
+    responses: SessionHistoryCanonicalResult[] | null }>(`WITH memory_tick AS MATERIALIZED (
+      SELECT statement_timestamp() AS checked_at
+    ), visible AS MATERIALIZED (
+      SELECT i.operation_scope,${SESSION_HISTORY_CANONICAL_BODY_SQL} AS response_body
+      FROM idempotency_records i CROSS JOIN memory_tick
+      LEFT JOIN agent_task_memory_lineage memory_lineage ON memory_lineage.account_id=i.account_id
+        AND memory_lineage.task_id=${SESSION_HISTORY_TASK_UUID_SQL}
+      WHERE i.account_id=$1 AND i.actor_user_id=$2 AND i.status='completed'
+        AND i.operation_scope IN ('create_chat_task','create_unscoped_chat_task')
+        AND i.response_body->>'task_id'=ANY($3::text[])
+    ), candidates AS MATERIALIZED (
+      SELECT operation_scope,response_body,octet_length(response_body::text) AS bytes FROM visible
     ), budget AS MATERIALIZED (
       SELECT count(*) AS result_rows,COALESCE(sum(bytes),0) AS result_bytes FROM candidates
     ) SELECT result_rows::text AS history_result_rows,result_bytes::text AS history_result_bytes,

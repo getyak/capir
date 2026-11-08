@@ -176,3 +176,34 @@ continue with selected history and V2 provenance, and a shared history/Self
 budget refusal before model entry without changing the saved Session. Source
 reviews and test fixture repairs do not establish typecheck, SQL execution,
 current-head CI, resident deployment or full C03 acceptance. Those remain open.
+
+## Current historical readback repair after e89
+
+At e89a6c00403c9339c73affd04db55d015ca80cdc, Hosted run42527955391
+passed types/build, ReaderPG6, Legacy historyPG8, public HTTP2, CompletionPG4
+and MarkerPG3. The public shared-budget case reached its actual413 response
+with no model/fallback, no successful publication and no Session mutation.
+RuntimePG15 reached7 passes and8 failures; DiscoveryPG6 was not reached.
+This supersedes the earlier pending Session execution evidence above, not the
+remaining capability or resident boundaries. Original failing logs remain in
+the operational code-sync evidence.
+
+Six Runtime failures compare a physical Self subject UUID with the admitted
+semantic-null tuple. The fixture now independently proves the actual active
+workspace-owner subject mapping, authenticated owner and null relationship
+context before projecting Self subject to null. Two other failures are actual
+ordinary/complete history leaks after withdrawal. The canonical history SELECT
+now applies the current saved-Memory proof at one statement tick. Missing
+required proofs and noncurrent dependencies return an empty assistant block
+projection while preserving the task match, human prose and independent
+answers. Required new claims need their exact V2 completion; finite V1
+compatibility is limited to claims without the new marker. Legacy untracked
+claims remain on their existing path. Full-reader byte admission measures the
+visible projection in the same statement.
+
+This source batch changes none of the original Runtime15 case bodies, their
+budgets, released migrations or manifest. It requires independent review and
+fresh exact-head Hosted execution. Already captured complete snapshots still
+need fresh Memory checks before later tool exposure; Session/list payloads,
+queue/SDK/scoped/Lab/images, final HTTP bytes and bounded maintenance also
+remain open. Do not infer whole C03 completion or deployment from this repair.

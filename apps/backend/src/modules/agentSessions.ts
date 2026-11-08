@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { boundInlineAgentSessionMessages } from "./savedMemorySessionHistory.js";
-import { SESSION_HISTORY_MAX_TURNS, assertSessionHistoryTextBudget, readSessionHistoryBodies, readSessionHistorySources,
+import { SESSION_HISTORY_MAX_TURNS, SESSION_HISTORY_CANONICAL_BODY_SQL, SESSION_HISTORY_TASK_UUID_SQL,
+  assertSessionHistoryTextBudget, readSessionHistoryBodies, readSessionHistorySources,
   readSessionHistoryScreenshots, sessionHistorySnapshotUnavailable } from "./sessionHistorySnapshot.js";
 
 import { FormatRegistry } from "@sinclair/typebox";
@@ -1279,8 +1280,14 @@ export async function readAgentSessionConversation(
         context_manifest_id?: string;
       };
     }>(
-      `SELECT operation_scope,response_body FROM idempotency_records WHERE account_id=$1 AND actor_user_id=$2 AND status='completed'
-    AND operation_scope IN ('create_chat_task','create_unscoped_chat_task') AND response_body->>'task_id'=ANY($3::text[])`,
+      `WITH memory_tick AS MATERIALIZED (SELECT statement_timestamp() AS checked_at)
+    SELECT i.operation_scope,${SESSION_HISTORY_CANONICAL_BODY_SQL} AS response_body
+    FROM idempotency_records i CROSS JOIN memory_tick
+    LEFT JOIN agent_task_memory_lineage memory_lineage ON memory_lineage.account_id=i.account_id
+      AND memory_lineage.task_id=${SESSION_HISTORY_TASK_UUID_SQL}
+    WHERE i.account_id=$1 AND i.actor_user_id=$2 AND i.status='completed'
+      AND i.operation_scope IN ('create_chat_task','create_unscoped_chat_task')
+      AND i.response_body->>'task_id'=ANY($3::text[])`,
       [
         auth.accountId,
         auth.userId,

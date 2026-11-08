@@ -222,9 +222,15 @@ export async function withSavedMemoryRuntime(operation: (runtime: {
         stamp: async id => {
           const row = (await control.query<RuntimeStamp>(`SELECT m.id::text AS memory_item_id,m.version AS item_version,
             l.epoch::text AS lineage_epoch,m.owner_user_id::text AS memory_owner_id,m.scope,
-            m.subject_id::text,m.relationship_context_id::text FROM memory_items m
+            CASE WHEN m.scope='self' THEN NULL::text ELSE m.subject_id::text END AS subject_id,
+            m.relationship_context_id::text FROM memory_items m
             JOIN memory_item_lineage l ON l.account_id=m.account_id AND l.memory_item_id=m.id
-            WHERE m.account_id=$1 AND m.id=$2`, [f.auth.accountId, id])).rows[0];
+            WHERE m.account_id=$1 AND m.id=$2 AND (m.scope<>'self' OR
+              (m.owner_user_id=$3 AND m.relationship_context_id IS NULL AND EXISTS (
+                SELECT 1 FROM subjects owner_subject WHERE owner_subject.account_id=m.account_id
+                  AND owner_subject.id=m.subject_id AND owner_subject.status='active'
+                  AND owner_subject.external_ref='workspace-owner:' || $3::text)))`,
+          [f.auth.accountId, id, f.auth.userId])).rows[0];
           if (!row) throw new Error("The real accepted synthetic item has no lineage epoch.");
           return row;
         },
