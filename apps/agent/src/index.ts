@@ -49,3 +49,5 @@ export * from "./workspaceResearchToolSchemas.js";
 export * from "./productRunCapture.js";
 
 export type {RunFile,RunArtifact,RunFileAdmission} from "./runFileTools.js";
+
+export * from "./savedMemorySearchSchema.js";

@@ -117,6 +117,7 @@
     "110_chat_media_upload_attempts",
     "111_conversation_memory_draft_target",
     "113_memory_literal_content",
-    "112_legacy_chat_executions"
+    "112_legacy_chat_executions",
+    "114_saved_memory_lineage"
   ]
 }
