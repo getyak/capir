@@ -1,0 +1,181 @@
+{
+  "format": "memory-accepted-literal-golden.v1",
+  "reference": "Independent Python stdlib UTF8/UTF16/scalar counts and hashlib; fixed ASCII ordered tuple. No runtime codec imported.",
+  "vectors": [
+    {
+      "name": "new-v2",
+      "input": {
+        "display_text": "é",
+        "original_display_text": "é",
+        "original_content_protocol": "literal-v2",
+        "reviewed_evidence": [
+          {
+            "evidence_id": "22222222-2222-4222-8222-222222222222",
+            "content_protocol": "literal-v2",
+            "content_version": 1,
+            "content_manifest_digest": "9ec26ed8ac1980be65cffb4075b7ae320dfc8ca6e4a246cba434874b792df2e7"
+          }
+        ]
+      },
+      "manifest": {
+        "version": "accepted-memory-literal.v1",
+        "original_content_protocol": "literal-v2",
+        "display_text": {
+          "sha256": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+          "utf8_bytes": 2,
+          "utf16_code_units": 1,
+          "unicode_scalar_count": 1
+        },
+        "original_display_text": {
+          "sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+          "utf8_bytes": 3,
+          "utf16_code_units": 2,
+          "unicode_scalar_count": 2
+        },
+        "reviewed_evidence": [
+          {
+            "evidence_id": "22222222-2222-4222-8222-222222222222",
+            "content_protocol": "literal-v2",
+            "content_version": 1,
+            "content_manifest_digest": "9ec26ed8ac1980be65cffb4075b7ae320dfc8ca6e4a246cba434874b792df2e7"
+          }
+        ]
+      },
+      "digest_tuple_ascii": "[\"memory-accepted-literal.v1\",\"literal-v2\",[\"4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c\",2,1,1],[\"bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6\",3,2,2],[[\"22222222-2222-4222-8222-222222222222\",\"literal-v2\",1,\"9ec26ed8ac1980be65cffb4075b7ae320dfc8ca6e4a246cba434874b792df2e7\"]]]",
+      "manifest_digest_sha256": "f54c24b5557dcb4dc9fc1838b00926f257abfb86341e697cb89166c897b84151"
+    },
+    {
+      "name": "legacy-correction-unknown-original",
+      "input": {
+        "display_text": "Human corrected Ａé🙂",
+        "original_display_text": null,
+        "original_content_protocol": "legacy-v1",
+        "reviewed_evidence": [
+          {
+            "evidence_id": "11111111-1111-4111-8111-111111111111",
+            "content_protocol": "legacy-v1",
+            "content_version": 1,
+            "content_manifest_digest": null
+          },
+          {
+            "evidence_id": "22222222-2222-4222-8222-222222222222",
+            "content_protocol": "literal-v2",
+            "content_version": 1,
+            "content_manifest_digest": "9ec26ed8ac1980be65cffb4075b7ae320dfc8ca6e4a246cba434874b792df2e7"
+          }
+        ]
+      },
+      "manifest": {
+        "version": "accepted-memory-literal.v1",
+        "original_content_protocol": "legacy-v1",
+        "display_text": {
+          "sha256": "4375c433dae037f754fa8bfb101baadd7b604f7a6e428de747b9a1034166f2a3",
+          "utf8_bytes": 26,
+          "utf16_code_units": 21,
+          "unicode_scalar_count": 20
+        },
+        "original_display_text": null,
+        "reviewed_evidence": [
+          {
+            "evidence_id": "11111111-1111-4111-8111-111111111111",
+            "content_protocol": "legacy-v1",
+            "content_version": 1,
+            "content_manifest_digest": null
+          },
+          {
+            "evidence_id": "22222222-2222-4222-8222-222222222222",
+            "content_protocol": "literal-v2",
+            "content_version": 1,
+            "content_manifest_digest": "9ec26ed8ac1980be65cffb4075b7ae320dfc8ca6e4a246cba434874b792df2e7"
+          }
+        ]
+      },
+      "digest_tuple_ascii": "[\"memory-accepted-literal.v1\",\"legacy-v1\",[\"4375c433dae037f754fa8bfb101baadd7b604f7a6e428de747b9a1034166f2a3\",26,21,20],null,[[\"11111111-1111-4111-8111-111111111111\",\"legacy-v1\",1,null],[\"22222222-2222-4222-8222-222222222222\",\"literal-v2\",1,\"9ec26ed8ac1980be65cffb4075b7ae320dfc8ca6e4a246cba434874b792df2e7\"]]]",
+      "manifest_digest_sha256": "bfafdb438909894bf0bc4845d41fd48067f8dfaae1ea1c52852cb6daad41b793"
+    },
+    {
+      "name": "legacy-correction-known-stored-original",
+      "input": {
+        "display_text": "Human corrected Ａé🙂",
+        "original_display_text": "Legacy normalized rendering A",
+        "original_content_protocol": "legacy-v1",
+        "reviewed_evidence": [
+          {
+            "evidence_id": "11111111-1111-4111-8111-111111111111",
+            "content_protocol": "legacy-v1",
+            "content_version": 1,
+            "content_manifest_digest": null
+          }
+        ]
+      },
+      "manifest": {
+        "version": "accepted-memory-literal.v1",
+        "original_content_protocol": "legacy-v1",
+        "display_text": {
+          "sha256": "4375c433dae037f754fa8bfb101baadd7b604f7a6e428de747b9a1034166f2a3",
+          "utf8_bytes": 26,
+          "utf16_code_units": 21,
+          "unicode_scalar_count": 20
+        },
+        "original_display_text": {
+          "sha256": "e853d117f2a42d5cd01bed222410aed30df406b2efc30e5acb4897e8f1b40c30",
+          "utf8_bytes": 29,
+          "utf16_code_units": 29,
+          "unicode_scalar_count": 29
+        },
+        "reviewed_evidence": [
+          {
+            "evidence_id": "11111111-1111-4111-8111-111111111111",
+            "content_protocol": "legacy-v1",
+            "content_version": 1,
+            "content_manifest_digest": null
+          }
+        ]
+      },
+      "digest_tuple_ascii": "[\"memory-accepted-literal.v1\",\"legacy-v1\",[\"4375c433dae037f754fa8bfb101baadd7b604f7a6e428de747b9a1034166f2a3\",26,21,20],[\"e853d117f2a42d5cd01bed222410aed30df406b2efc30e5acb4897e8f1b40c30\",29,29,29],[[\"11111111-1111-4111-8111-111111111111\",\"legacy-v1\",1,null]]]",
+      "manifest_digest_sha256": "5a12acb623bf5082c9a0c326c3be7f15df39ea39b68ef2e8f3ebafa65045b6fd"
+    },
+    {
+      "name": "distinct-literal-final",
+      "input": {
+        "display_text": "é",
+        "original_display_text": "é",
+        "original_content_protocol": "literal-v2",
+        "reviewed_evidence": [
+          {
+            "evidence_id": "22222222-2222-4222-8222-222222222222",
+            "content_protocol": "literal-v2",
+            "content_version": 1,
+            "content_manifest_digest": "9ec26ed8ac1980be65cffb4075b7ae320dfc8ca6e4a246cba434874b792df2e7"
+          }
+        ]
+      },
+      "manifest": {
+        "version": "accepted-memory-literal.v1",
+        "original_content_protocol": "literal-v2",
+        "display_text": {
+          "sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+          "utf8_bytes": 3,
+          "utf16_code_units": 2,
+          "unicode_scalar_count": 2
+        },
+        "original_display_text": {
+          "sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+          "utf8_bytes": 3,
+          "utf16_code_units": 2,
+          "unicode_scalar_count": 2
+        },
+        "reviewed_evidence": [
+          {
+            "evidence_id": "22222222-2222-4222-8222-222222222222",
+            "content_protocol": "literal-v2",
+            "content_version": 1,
+            "content_manifest_digest": "9ec26ed8ac1980be65cffb4075b7ae320dfc8ca6e4a246cba434874b792df2e7"
+          }
+        ]
+      },
+      "digest_tuple_ascii": "[\"memory-accepted-literal.v1\",\"literal-v2\",[\"bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6\",3,2,2],[\"bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6\",3,2,2],[[\"22222222-2222-4222-8222-222222222222\",\"literal-v2\",1,\"9ec26ed8ac1980be65cffb4075b7ae320dfc8ca6e4a246cba434874b792df2e7\"]]]",
+      "manifest_digest_sha256": "10fd26e6b9122964f134d20c47216c5564180782141b87a0d5ab22de454395fb"
+    }
+  ]
+}

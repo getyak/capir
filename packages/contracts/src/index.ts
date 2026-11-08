@@ -40,6 +40,7 @@ export * from "./mcpInteractionSchemas.js";
 export * from "./timeWorkspaceSchemas.js";
 export * from "./personSourceSyncSchemas.js";
 export * from "./memorySchemas.js";
+export * from "./memoryContent.js";
 
 // Legacy Stage A capir client contract definitions (auth/sandbox) adopted from
 // the reviewed CLI source. They describe the historical human-grant surface for
@@ -50,3 +51,6 @@ export * from "./capirSchemas.js";
 // grant management, user test entitlement scopes). Negotiated separately from
 // the legacy capir.v1 surface above.
 export * from "./capirAuthSchemas.js";
+
+export * from "./memoryAcceptedContent.js";
+export * from "./memoryLiteralSchemas.js";
