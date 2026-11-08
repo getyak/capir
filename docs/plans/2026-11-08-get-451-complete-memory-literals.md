@@ -118,5 +118,42 @@ and memoryLiteralReferenceSchemas under Backend modules. Independent source
 review closed the move; the actualf2d full build now proves it. Historical183
 still does not replace a current applicable gate after the latest fixture fix.
 
+## StageB pure regression contract
+
+The reviewed StageB design now requires one joint final content/authority SQL
+envelope and finite safe Memory refusal outcomes. The first code batch adds
+only Backend-owned DTO, preparation, confirmation and projection test sources.
+They resolve planned APIs through existing real module namespaces, so an absent
+new protocol fails a Vitest assertion instead of missing imports/type exports.
+Finite Unicode/range/proof fixtures and independent fixed ASCII confirmation
+tuples define the new contracts; there is no implementation mock or production
+V2 route/Agent/envelope exposure. Confirmation is consistency, not an access grant.
+No local test, compiler, PG, build, installation or child service was run for
+this batch. Root must publish/read back actual Hosted initial red before the
+four pure implementations. That expected new-feature red is not evidence of a
+current production HTTP/DB vulnerability. Existing API/Run/source budgets stay.
+
 Stage/commit/read/recall wire integration, Web/native, exact-head full gates and
 resident/runtime acceptance remain incomplete. Keep original worktrees/evidence.
+
+## Shared reader authority before the literal HTTP path
+
+The pure-protocol slice is merged in f649771da91d1e60c64d2ca56aea1002d9eff430.
+Its actual103 pure,45 SQL and42 feedback cases passed; HTTP/Agent/BFF/client
+wiring, final content fencing and resident acceptance remain incomplete.
+
+Active milestone: extract the existing accepted-login SQL and deadline bounds
+from proposal pagination into memoryReadAuthority.ts, preserving the public
+opaque header proof, parameter positions, current/previous-token and Lab
+predicates, final content requalification, whole-roundtrip expiry bound and
+49-record-plus-lookahead traversal. The new owner is reused by the forthcoming
+literal reader; it does not itself establish content permission or configured
+serving-deployment eligibility. Keep the concrete joint domain/auth final SQL
+and commit-before-final-envelope integration as the next milestone.
+
+The existing pagination unit and real Memory HTTP/PG bodies are unchanged.
+Source extraction proof, independent review and latest Hosted results are
+required before landing; prior201-case PG evidence stays revision-qualified.
+No schema, migration, source predicate, authentication configuration or runtime
+retention policy changes in this extraction. GET-451 stays In Progress until
+the actual literal path and affected resident behavior are accepted.
