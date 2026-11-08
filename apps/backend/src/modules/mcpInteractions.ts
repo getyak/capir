@@ -2569,9 +2569,15 @@ export async function invalidateMcpInteractionsForSession(
     [accountId, sessionId],
   );
   // Replay snapshots must never return pre-deletion private payloads.
+  // Durable legacy attempts retain their key/dispatch facts while this same
+  // owner atomically removes canonical and pending checkpoint private copies.
+  await retireLegacyChatMcpContent(client, accountId, sessionId);
   await client.query(
     `DELETE FROM idempotency_records r
-     WHERE r.account_id = $1 AND (
+     WHERE r.account_id = $1
+       AND NOT EXISTS (SELECT 1 FROM legacy_chat_executions e
+         WHERE e.account_id=r.account_id AND e.idempotency_id=r.id)
+       AND (
        r.operation_scope IN (
          SELECT 'resolve_mcp_interaction:' || id FROM mcp_interaction_requests
          WHERE account_id = $1 AND session_id = $2)
@@ -3344,3 +3350,4 @@ export async function pollNangoConnectRequest(
     dependencies,
   );
 }
+import { retireLegacyChatMcpContent } from "./legacyChatRetirement.js";
