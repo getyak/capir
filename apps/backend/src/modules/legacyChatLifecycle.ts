@@ -65,7 +65,7 @@ export async function finalizeLegacyChatCheckpoint(input: {
 export async function readLegacyChatPublication(input: {
   database: OwnerDatabase; authority: LegacyChatAuthority; auth: AuthContext; parentID: string;
 }): Promise<{ state: string; taskID: string; completed?: UnscopedChatTaskMutationResult } | null> {
-  return input.database.run(async client => {
+  const result = await input.database.run(async client => {
     await input.authority.lockAccountsForFinalization(client);
     await input.authority.lockReadersForFinalization(client);
     const row = (await client.query<{ state: string; task_id: string; response_status: number | null;
@@ -88,6 +88,8 @@ export async function readLegacyChatPublication(input: {
     await input.authority.assertFinalCurrent(client);
     return { state: row.state,taskID: row.task_id,...(completed ? { completed } : {}) };
   });
+  input.authority.throwIfTerminated();
+  return result;
 }
 
 function pause(ms: number, signal: AbortSignal): Promise<void> {
