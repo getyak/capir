@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises"
 import { isAbsolute, join, relative } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { get as getHttp, type ClientRequest, type IncomingMessage } from "node:http";
 import { ProtocolCdp, until } from "./get350NextProtocolCdp.js";
 import { DirectoryProtocolPage, directoryInput } from "./get452DirectoryProtocolBrowser.js";
 import { createDirectoryFixture, type DirectoryFixture } from "./get452DirectoryProtocolFixture.js";
@@ -23,6 +24,52 @@ type LoginCheckpoint = "directory_navigation" | "login_form" | "login_network_se
   | "submit_onboarding_skip" | "onboarding_readback" | "directory_readback" | "auth_cookie_presence"
   | "backend_login_search_receipt" | "recovery_login_form";
 type LoginFields = { identifierEqual: boolean; passwordEqual: boolean };
+type IconServerProbe = { attempted: boolean; outcome: "not_attempted" | "eof" | "timeout" | "body_limit" | "request_failed" | "read_failed" | "redirect_refused";
+  status: number | null; mime: "image/png" | "other" | "unobserved"; eof: boolean; withinBodyLimit: boolean; pngSignature: boolean };
+function probeIconServer(port: number): Promise<IconServerProbe> {
+  return new Promise(resolve => {
+    const result: IconServerProbe = { attempted: true, outcome: "request_failed", status: null, mime: "unobserved",
+      eof: false, withinBodyLimit: true, pngSignature: false };
+    let request: ClientRequest | undefined, response: IncomingMessage | undefined, settled = false, bytes = 0, prefixBytes = 0;
+    const deadline = performance.now() + 3_000;
+    const prefix = Buffer.alloc(8), signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    const finish = (outcome: IconServerProbe["outcome"]) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); result.outcome = performance.now() >= deadline ? "timeout" : outcome;
+      result.pngSignature = prefixBytes === 8 && prefix.equals(signature);
+      request?.destroy(); response?.destroy(); resolve({ ...result });
+    };
+    // One total deadline includes connecting, headers and the entire bounded
+    // body. Node HTTP does not follow redirects or attach browser cookies/Auth.
+    const timer = setTimeout(() => finish("timeout"), 3_000);
+    try {
+      // Explicit options cannot inherit URL credentials, cookies, a redirect
+      // target, proxy environment or another request's Agent/session state.
+      request = getHttp({ hostname: "127.0.0.1", port, path: "/icon", agent: false, headers: { Accept: "image/png" } }, incoming => {
+        if (settled) { incoming.destroy(); return; }
+        response = incoming;
+        result.status = Number.isInteger(incoming.statusCode) && incoming.statusCode! >= 100 && incoming.statusCode! <= 599
+          ? incoming.statusCode! : null;
+        const mime = incoming.headers["content-type"];
+        result.mime = typeof mime === "string" && mime.split(";", 1)[0]!.trim().toLowerCase() === "image/png" ? "image/png" : "other";
+        if (result.status !== null && result.status >= 300 && result.status < 400) { finish("redirect_refused"); return; }
+        incoming.on("data", (chunk: unknown) => {
+          if (settled) return;
+          if (performance.now() >= deadline) { finish("timeout"); return; }
+          if (!Buffer.isBuffer(chunk)) { finish("read_failed"); return; }
+          if (bytes + chunk.byteLength > 64 * 1024) { result.withinBodyLimit = false; finish("body_limit"); return; }
+          bytes += chunk.byteLength;
+          const take = Math.min(8 - prefixBytes, chunk.byteLength);
+          if (take) { chunk.copy(prefix, prefixBytes, 0, take); prefixBytes += take; }
+        });
+        incoming.once("end", () => { if (settled) return; result.eof = incoming.complete; finish(result.eof ? "eof" : "read_failed"); });
+        incoming.once("aborted", () => finish("read_failed"));
+        incoming.once("error", () => finish("read_failed"));
+      });
+      request.once("error", () => finish("request_failed"));
+    } catch { finish("request_failed"); }
+  });
+}
 async function currentDirectory(page: DirectoryProtocolPage, query: string) {
   await until(async () => {
     const url = new URL(await page.url());
@@ -85,13 +132,16 @@ async function main() {
   const runtime = await mkdtemp(join(runnerRoot, "get452-directory-runtime-"));
   const receipt: { schema: string; status: "failed" | "passed"; phase: string; failure: string | null; cleanup: boolean;
     source: unknown; chrome: string | null; cases: Record<CaseName, Status>; observations: unknown[]; backend: unknown;
-    diagnosticVersion: 1; checkpoint: LoginCheckpoint | null; loginFields: LoginFields | null; failureSurfaces: unknown[] } = {
+    diagnosticVersion: 1; checkpoint: LoginCheckpoint | null; loginFields: LoginFields | null; failureSurfaces: unknown[];
+    iconServerProbe: IconServerProbe } = {
     schema: "get452-directory-next.v1", status: "failed", phase: "source", failure: null, cleanup: false,
     source: null, chrome: null, cases: Object.fromEntries(cases.map(name => [name, "not_started"])) as Record<CaseName, Status>, observations: [], backend: null,
     diagnosticVersion: 1, checkpoint: null, loginFields: null, failureSurfaces: [],
+    iconServerProbe: { attempted: false, outcome: "not_attempted", status: null, mime: "unobserved", eof: false, withinBodyLimit: false, pngSignature: false },
   };
   let next: ChildProcess | undefined, chrome: ChildProcess | undefined, cdp: ProtocolCdp | undefined;
   let fixture: DirectoryFixture | undefined;
+  let readyPort: number | undefined;
   const pages: DirectoryProtocolPage[] = [];
   const run = async (name: CaseName, operation: () => Promise<void>) => {
     receipt.phase = name; receipt.cases[name] = "running"; receipt.checkpoint = null; receipt.loginFields = null;
@@ -123,6 +173,7 @@ async function main() {
       try { return childOwnsListeningPort(next, port) && (await fetch(origin + "/login", { redirect: "error", signal: AbortSignal.timeout(1000) })).ok; } catch { return false; }
     }, "GET452 full Next startup", 60_000);
     rememberChild(next); requireProtocol(childOwnsListeningPort(next, port), "NEXT_OWNED_LISTENER");
+    readyPort = port;
     receipt.phase = "owned_chrome";
     const profile = join(runtime, "chrome"); await mkdir(profile, { mode: 0o700 });
     const debugPort = await reservePort();
@@ -209,6 +260,7 @@ async function main() {
     requireProtocol(cases.every(name => receipt.cases[name] === "passed"), "CASE_COMPLETENESS");
     receipt.status = "passed";
   } catch (error) {
+    receipt.status = "failed";
     receipt.failure = error instanceof DirectoryProtocolFailure ? error.code : "UNCLASSIFIED_PROTOCOL_FAILURE";
     // Capture pending/counter facts before an asynchronous diagnostic can settle them.
     receipt.observations = pages.map(page => page.diagnostics()); receipt.backend = fixture?.counters() ?? null;
@@ -216,6 +268,12 @@ async function main() {
       try { receipt.failureSurfaces.push({ pageIndex, available: true, surface: await page.surface() }); }
       catch { receipt.failureSurfaces.push({ pageIndex, available: false }); }
     }
+    // The original failure and all browser observations are already fixed.
+    // This is one separate anonymous server-path observation, never a browser
+    // retry/warm-up, success condition or replacement for the failed request.
+    try {
+      if (readyPort && next?.exitCode === null && next.signalCode === null && childOwnsListeningPort(next, readyPort)) receipt.iconServerProbe = await probeIconServer(readyPort);
+    } catch { /* Keep the original failure and explicit not_attempted diagnostic. */ }
   } finally {
     if (receipt.failure === null) {
       receipt.observations = pages.map(page => page.diagnostics()); receipt.backend = fixture?.counters() ?? null;

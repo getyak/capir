@@ -21,12 +21,14 @@ function routeKind(path: string): string {
       : path.startsWith("/api/auth/callback/") ? "auth_callback" : path.startsWith("/api/auth/") ? "auth_other"
         : path.startsWith("/_next/") ? "asset" : "other";
 }
+type FetchObservation = { decision: "continue" | "fail"; command: "requested" | "acknowledged" | "rejected"; correlation: "matched" | "ambiguous" };
 export class DirectoryProtocolPage {
   readonly observed = { blockedExternal: 0, runtimeErrors: 0, consoleErrors: 0, cookieBlocks: {} as Record<string, number>, maxRequestTargetBytes: 0,
     lastDocumentStatus: null as number | null, lastDocumentRoute: "unobserved", httpErrors: {} as Record<string, number> };
   private disposers: Array<() => void> = [];
   private active = new Set<string>();
-  private activeKinds = new Map<string, { route: string; method: string; type: string; scheme: string; metadata: string; initiator: string; responseSeen: boolean; responseType: string }>();
+  private activeKinds = new Map<string, { route: string; method: string; type: string; scheme: string; metadata: string; initiator: string; responseSeen: boolean; responseType: string; fetch: FetchObservation | null }>();
+  private unmatchedFetchPausesUpTo1024 = 0;
   private httpStatuses = new Map<string, number>();
   private changedAt = Date.now();
   private observerFailed = false;
@@ -40,13 +42,25 @@ export class DirectoryProtocolPage {
       page = new DirectoryProtocolPage(cdp, sessionId, browserContextId, origin);
       const current = page;
       current.disposers.push(cdp.on(sessionId, "Fetch.requestPaused", value => {
+        let observation: FetchObservation | undefined;
         try {
           const request = value.request as { url: string };
           const local = request.url === "about:blank" || request.url.startsWith("data:") || new URL(request.url).origin === origin;
           if (!local) current.observed.blockedExternal++;
+          observation = { decision: local ? "continue" : "fail", command: "requested", correlation: "matched" };
+          const pending = typeof value.networkId === "string" ? current.activeKinds.get(value.networkId) : undefined;
+          if (pending && !pending.fetch) pending.fetch = observation;
+          else if (pending?.fetch) pending.fetch.correlation = "ambiguous";
+          else current.unmatchedFetchPausesUpTo1024 = Math.min(1024, current.unmatchedFetchPausesUpTo1024 + 1);
+          // Capture this exact hop's observation, not a future map lookup. A
+          // redirect replaces activeKinds, so its old command ACK cannot attach
+          // itself to the new hop. An unmatched early pause is never guessed.
+          const observedFetch = observation;
           void current.call(local ? "Fetch.continueRequest" : "Fetch.failRequest", local
-            ? { requestId: value.requestId } : { requestId: value.requestId, errorReason: "BlockedByClient" }).catch(() => { current.observerFailed = true; });
-        } catch { current.observerFailed = true; }
+            ? { requestId: value.requestId } : { requestId: value.requestId, errorReason: "BlockedByClient" })
+            .then(() => { observedFetch.command = "acknowledged"; },
+              () => { observedFetch.command = "rejected"; current.observerFailed = true; });
+        } catch { if (observation) observation.command = "rejected"; current.observerFailed = true; }
       }));
       current.disposers.push(cdp.on(sessionId, "Network.requestWillBeSent", value => {
         try {
@@ -59,7 +73,7 @@ export class DirectoryProtocolPage {
             method: ["GET", "POST"].includes(request.method) ? request.method : "OTHER",
             type: typeof value.type === "string" && resourceKinds.has(value.type) ? value.type : "Other",
             scheme: schemeKinds.get(url.protocol) ?? "other", metadata: url.origin === origin ? metadataKind(url.pathname) : "none",
-            initiator: typeof initiator?.type === "string" && initiatorKinds.has(initiator.type) ? initiator.type : "UNOBSERVED", responseSeen: false, responseType: "UNOBSERVED" });
+            initiator: typeof initiator?.type === "string" && initiatorKinds.has(initiator.type) ? initiator.type : "UNOBSERVED", responseSeen: false, responseType: "UNOBSERVED", fetch: null });
         } catch { current.observerFailed = true; }
       }));
       for (const event of ["Network.loadingFinished", "Network.loadingFailed"]) current.disposers.push(cdp.on(sessionId, event, value => {
@@ -168,17 +182,21 @@ export class DirectoryProtocolPage {
     await this.quiet(); this.assertHealthy();
   }
   diagnostics() {
-    const pending = new Map<string, number>(), metadata = new Map<string, number>();
+    const pending = new Map<string, number>(), metadata = new Map<string, number>(), fetch = new Map<string, number>();
     for (const entry of this.activeKinds.values()) {
       const key = `${entry.route}:${entry.method}:${entry.type}`; pending.set(key, (pending.get(key) ?? 0) + 1);
       // Every segment is a closed category. No URL/path/query, initiator URL/stack or request ID is serialized.
       const detail = `${entry.scheme}:${entry.metadata}:${entry.route}:${entry.method}:${entry.type}:${entry.responseType}:${entry.initiator}:${entry.responseSeen ? "response_seen" : "awaiting_response"}`;
       metadata.set(detail, (metadata.get(detail) ?? 0) + 1);
+      const fetched = `${detail}:${entry.fetch ? "pause_seen" : "pause_unobserved"}:${entry.fetch?.decision ?? "UNOBSERVED"}:${entry.fetch?.command ?? "UNOBSERVED"}:${entry.fetch?.correlation ?? "UNOBSERVED"}`;
+      fetch.set(fetched, (fetch.get(fetched) ?? 0) + 1);
     }
     return { ...this.observed, cookieBlocks: { ...this.observed.cookieBlocks }, httpErrors: { ...this.observed.httpErrors },
       observerFailed: this.observerFailed, activeRequests: this.active.size,
       pendingKinds: Object.fromEntries([...pending].sort(([a], [b]) => a.localeCompare(b))),
       pendingMetadataVersion: 1, pendingMetadata: Object.fromEntries([...metadata].sort(([a], [b]) => a.localeCompare(b))),
+      pendingFetchVersion: 1, pendingFetch: Object.fromEntries([...fetch].sort(([a], [b]) => a.localeCompare(b))),
+      unmatchedFetchPausesUpTo1024: this.unmatchedFetchPausesUpTo1024,
       httpStatuses: Object.fromEntries([...this.httpStatuses].sort(([a], [b]) => a.localeCompare(b))) };
   }
   async surface() {
