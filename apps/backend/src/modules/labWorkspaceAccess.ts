@@ -24,20 +24,30 @@ export function operatorTestDeployment(config?: BackendConfig): OperatorTestDepl
 
 /** Token lookup parameters 2–4: enabled, exact Web origin, exact backend origin.
  * Human-parent Lab entries retain their existing canonical authority. */
-export const operatorLabDeploymentActiveSQL = `(NOT EXISTS (
+function operatorDeploymentSQL(memoryContent: boolean): string {
+  // Both layouts are fixed here. The Memory reader reserves its first6slots
+  // for its existing account/reader/login/accepted-slot/deadline binding.
+  const enabled = memoryContent ? "$7" : "$2", web = memoryContent ? "$8" : "$3";
+  const backend = memoryContent ? "$9" : "$4", userAuth = memoryContent ? "$10" : "$5";
+  return `(NOT EXISTS (
   SELECT 1 FROM lab_test_workspace_entries e
   WHERE e.session_id=sessions.id AND e.owner_principal_id IS NOT NULL
-) OR ($2::boolean AND EXISTS (
+) OR (${enabled}::boolean AND EXISTS (
   SELECT 1 FROM capir_test_runs r
   WHERE r.account_id=sessions.account_id AND r.user_id=sessions.user_id
-    AND r.web_origin=$3 AND r.backend_origin=$4
+    AND r.web_origin=${web} AND r.backend_origin=${backend}
 ))) AND (NOT EXISTS (
  SELECT 1 FROM lab_test_workspace_entries e JOIN capir_auth_grants g ON g.backing_session_id=e.owner_session_id
  WHERE e.session_id=sessions.id
-) OR ($5::boolean AND EXISTS (
+) OR (${userAuth}::boolean AND EXISTS (
  SELECT 1 FROM lab_test_workspace_entries e JOIN capir_auth_grants g ON g.backing_session_id=e.owner_session_id
- WHERE e.session_id=sessions.id AND g.web_origin=$3 AND g.backend_origin=$4
+ WHERE e.session_id=sessions.id AND g.web_origin=${web} AND g.backend_origin=${backend}
 )))`;
+}
+export const operatorLabDeploymentActiveSQL = operatorDeploymentSQL(false);
+/** Closed Memory-only serving layout: enabled7, Web8, backend9, userAuth10.
+ * This additional deployment predicate grants no Session or domain access. */
+export const memoryContentOperatorLabDeploymentActiveSQL = operatorDeploymentSQL(true);
 
 // Called only in queries whose aliases are the actual users/sessions tables.
 // One shared authority predicate governs every Lab API/session read. A
@@ -52,16 +62,18 @@ export const operatorLabDeploymentActiveSQL = `(NOT EXISTS (
 // active server-owned test entitlement: revoking one grant disables exactly
 // its derived entries, and entitlement or membership withdrawal disables all
 // associated access.
-export const labWorkspaceSessionActiveSQL = `(users.kind <> 'lab_human' OR EXISTS (
+function labSessionActiveSQL(atTick: boolean): string {
+  const clock = atTick ? "tick.checked_at" : "clock_timestamp()";
+  return `(users.kind <> 'lab_human' OR EXISTS (
   SELECT 1 FROM lab_test_workspaces w
   JOIN lab_test_workspace_entries e ON e.workspace_id=w.id AND e.session_id=sessions.id
   JOIN sessions parent ON parent.id=e.owner_session_id
     AND parent.account_id=w.owner_account_id AND parent.user_id=w.owner_user_id
   JOIN users owner ON owner.account_id=parent.account_id AND owner.id=parent.user_id
   WHERE w.target_account_id=users.account_id AND w.target_user_id=users.id
-    AND w.state='active' AND w.expires_at>clock_timestamp()
-    AND e.revoked_at IS NULL AND e.expires_at>clock_timestamp()
-    AND parent.revoked_at IS NULL AND (parent.expires_at>clock_timestamp() OR EXISTS (SELECT 1 FROM capir_auth_grants pg WHERE pg.backing_session_id=parent.id AND pg.protocol_version='capir-auth.v3' AND pg.state='active'))
+    AND w.state='active' AND w.expires_at>${clock}
+    AND e.revoked_at IS NULL AND e.expires_at>${clock}
+    AND parent.revoked_at IS NULL AND (parent.expires_at>${clock} OR EXISTS (SELECT 1 FROM capir_auth_grants pg WHERE pg.backing_session_id=parent.id AND pg.protocol_version='capir-auth.v3' AND pg.state='active'))
     AND owner.status='active' AND owner.kind<>'lab_human'
     AND (NOT EXISTS (
            SELECT 1 FROM capir_auth_grants g WHERE g.backing_session_id=parent.id)
@@ -70,7 +82,7 @@ export const labWorkspaceSessionActiveSQL = `(users.kind <> 'lab_human' OR EXIST
            JOIN capir_user_test_entitlements t
              ON t.account_id=g.account_id AND t.user_id=g.user_id AND t.state='active'
           WHERE g.backing_session_id=parent.id AND g.state='active'
-            AND (g.absolute_expires_at IS NULL OR g.absolute_expires_at>clock_timestamp())
+            AND (g.absolute_expires_at IS NULL OR g.absolute_expires_at>${clock})
             AND t.generation=g.test_entitlement_generation
             AND 'test.handoff'=ANY(t.scopes) AND 'test.handoff'=ANY(g.scopes)))
 ) OR EXISTS (
@@ -82,13 +94,18 @@ export const labWorkspaceSessionActiveSQL = `(users.kind <> 'lab_human' OR EXIST
     AND w.owner_principal_id=r.principal_id
     AND w.owner_account_id IS NULL AND w.owner_user_id IS NULL
     AND r.account_id=w.target_account_id AND r.user_id=w.target_user_id
-    AND w.state='active' AND w.expires_at>clock_timestamp()
-    AND e.revoked_at IS NULL AND e.expires_at>clock_timestamp()
+    AND w.state='active' AND w.expires_at>${clock}
+    AND e.revoked_at IS NULL AND e.expires_at>${clock}
     AND e.owner_session_id IS NULL
     AND e.principal_generation=r.principal_generation
     AND p.state='enabled' AND p.generation=e.principal_generation
     AND p.web_origin=r.web_origin AND p.backend_origin=r.backend_origin
 ))`;
+}
+export const labWorkspaceSessionActiveSQL = labSessionActiveSQL(false);
+/** Same actual users/sessions aliases and lineage rules, all6TTL checks at
+ * the new reader's one materialized tick. No arbitrary clock expression. */
+export const labWorkspaceSessionActiveAtTickSQL = labSessionActiveSQL(true);
 
 export async function lockLabMediaWorkspace(client: PoolClient, auth: AuthContext,
   storage: ChatMediaStorage): Promise<string> {
