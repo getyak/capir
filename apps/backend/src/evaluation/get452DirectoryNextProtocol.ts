@@ -30,6 +30,12 @@ type SearchContext = { page: DirectoryProtocolPage; expectedQuery: string; check
   urlDirectoryMatch: boolean | null; urlQueryMatch: boolean | null; inputMatch: boolean | null };
 type SearchDiagnostic = Pick<SearchContext, "checkpoint" | "urlDirectoryMatch" | "urlQueryMatch" | "inputMatch"> & {
   state: Awaited<ReturnType<DirectoryProtocolPage["directoryFailureState"]>> | null };
+type ImeCommitDiagnostic = {
+  compositionEndCountUpTo1024: number | null; compositionEndCountSaturated: boolean;
+  compositionEndObserved: boolean; submitEnabled: boolean; inputFound: boolean; submitFound: boolean;
+  focus: "directory" | "body" | "other"; expectedValueEqual: boolean | null;
+  inputCodeUnitsUpTo4096: number | null; inputCodeUnitsSaturated: boolean; predicate: boolean;
+};
 let activeSearch: SearchContext | null = null;
 function searchCheckpoint(page: DirectoryProtocolPage, query: string, checkpoint: SearchCheckpoint) {
   let state = activeSearch;
@@ -181,11 +187,13 @@ async function main() {
     source: unknown; chrome: string | null; cases: Record<CaseName, Status>; observations: unknown[]; backend: unknown;
     diagnosticVersion: 1; checkpoint: LoginCheckpoint | null; loginFields: LoginFields | null; failureSurfaces: unknown[];
     searchDiagnosticVersion: 1; searchDiagnostic: SearchDiagnostic | null; commandError: ReturnType<typeof cdpCommandErrorObservation>;
+    imeDiagnosticVersion: 1; imeCommitDiagnostic: ImeCommitDiagnostic | null;
     iconServerProbe: IconServerProbe; iconServerBeforeFailure: ReturnType<ReturnType<typeof observeDirectoryIconServer>["snapshot"]> | null } = {
     schema: "get452-directory-next.v1", status: "failed", phase: "source", failure: null, cleanup: false,
     source: null, chrome: null, cases: Object.fromEntries(cases.map(name => [name, "not_started"])) as Record<CaseName, Status>, observations: [], backend: null,
     diagnosticVersion: 1, checkpoint: null, loginFields: null, failureSurfaces: [], iconServerBeforeFailure: null,
     searchDiagnosticVersion: 1, searchDiagnostic: null, commandError: null,
+    imeDiagnosticVersion: 1, imeCommitDiagnostic: null,
     iconServerProbe: { attempted: false, outcome: "not_attempted", status: null, mime: "unobserved", eof: false, withinBodyLimit: false, pngSignature: false },
   };
   let next: ChildProcess | undefined, chrome: ChildProcess | undefined, cdp: ProtocolCdp | undefined;
@@ -281,7 +289,27 @@ async function main() {
       requireProtocol(data.observationCount() === before && await long.url() === beforeUrl, "IME_CANDIDATE_NO_DISPATCH");
       const committed = "中文-尾部";
       await long.call("Input.insertText", { text: committed });
-      await until(() => long.evaluate<boolean>('window.__get452Events.composed>0 && !document.querySelector(\'main#main-content form[action="/workspace/people"] button[type="submit"]\')?.disabled'), "GET452 trusted composition commit");
+      await until(async () => {
+        // Capture only the last original poll; no extra CDP command or input.
+        // The predicate below remains the exact original joint condition.
+        const diagnostic = await long.evaluate<ImeCommitDiagnostic>(`(() => {
+          const events=window.__get452Events,input=document.querySelector(${JSON.stringify(directoryInput)}),
+            submit=document.querySelector('main#main-content form[action="/workspace/people"] button[type="submit"]'),
+            count=Number.isSafeInteger(events.composed)&&events.composed>=0?events.composed:null,
+            valueLength=input instanceof HTMLInputElement?input.value.length:null;
+          return {
+            compositionEndCountUpTo1024:count===null?null:Math.min(count,1024),compositionEndCountSaturated:count!==null&&count>1024,
+            compositionEndObserved:events.composed>0,submitEnabled:!submit?.disabled,
+            inputFound:input instanceof HTMLInputElement,submitFound:submit instanceof HTMLButtonElement,
+            focus:input instanceof HTMLInputElement&&document.activeElement===input?"directory":document.activeElement===document.body?"body":"other",
+            expectedValueEqual:input instanceof HTMLInputElement?input.value===${JSON.stringify(committed)}:null,
+            inputCodeUnitsUpTo4096:valueLength===null?null:Math.min(valueLength,4096),inputCodeUnitsSaturated:valueLength!==null&&valueLength>4096,
+            predicate:window.__get452Events.composed>0 && !document.querySelector('main#main-content form[action="/workspace/people"] button[type="submit"]')?.disabled
+          };
+        })()`);
+        receipt.imeCommitDiagnostic = diagnostic;
+        return diagnostic.predicate;
+      }, "GET452 trusted composition commit");
       requireProtocol(await long.value() === committed, "IME_COMMITTED_TEXT");
       await long.key("Enter", "Enter", 13); await currentDirectory(long, committed);
       requireProtocol(data.seen(committed, before), "IME_EXPLICIT_SUBMIT"); await long.health();
