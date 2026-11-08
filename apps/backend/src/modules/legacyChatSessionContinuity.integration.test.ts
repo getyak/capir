@@ -296,6 +296,8 @@ describe.skipIf(!sessionDatabase)("empty Session durable source, publication and
       }
       f.releaseFinal();
       const response = await first.promise;
+      const observation = await f.finalObservation(first.key, session.id);
+      console.info(JSON.stringify({ ...observation, window, cross_expiry: crossExpiry }));
       expect(response.statusCode).toBe(crossExpiry ? 409 : 201);
       expect(f.calls()).toBe(1);
       const finalEvidence = f.finalEvidence(), committed = window === "commit" || !crossExpiry;

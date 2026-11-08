@@ -225,6 +225,26 @@ async function scenario(options: ScenarioOptions) {
       holdNextSource() { holdSource = true; }, sourceEntered, releaseSource() { sourceRelease.resolve(); },
       finalEntered, releaseFinal() { finalRelease.resolve(); },
       finalEvidence: () => ({ ...finalEvidence, sequence: [...finalEvidence.sequence] }),
+      async finalObservation(key: string, sessionID: string) {
+        // One real control snapshot, before assertions can stop this case. Only
+        // closed classifications/counts leave the fixture, never private rows.
+        const row = (await q<{ state: string; has_body: boolean; lineage: number; audits: number }>(`SELECT
+          e.state,p.response_body IS NOT NULL AS has_body,
+          (SELECT count(*)::int FROM agent_session_chat_tasks WHERE account_id=$1 AND origin_session_id=$4) AS lineage,
+          (SELECT count(*)::int FROM audit_events WHERE account_id=$1 AND event_type='unscoped_chat_task.completed'
+            AND metadata->>'conversation_session_id'=$4::text) AS audits
+          FROM idempotency_records p JOIN legacy_chat_executions e ON e.account_id=p.account_id AND e.idempotency_id=p.id
+          WHERE p.account_id=$1 AND p.actor_user_id=$2 AND p.idempotency_key=$3`, [accountId, userId, key, sessionID])).rows[0];
+        const states = ["admitted", "dispatch_started", "result_ready", "completed", "unknown", "result_unavailable",
+          "authority_lost", "cancelled", "expired"] as const;
+        const state = row && states.find(state => state === row.state);
+        const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value)
+          && value >= 0 && value <= 2_147_483_647 ? value : null;
+        return Object.freeze({ schema: "legacy-chat-session-final-source-commit.v1" as const,
+          commit_entered: finalEvidence.commitEntered, commit_acknowledged: finalEvidence.acknowledgedFinalCommit,
+          canonical_state: !row ? "missing" as const : state ?? "unexpected" as const, has_body: row?.has_body === true,
+          lineage_count: count(row?.lineage), audit_count: count(row?.audits) });
+      },
       async createSession() {
         const id = randomUUID(), payload = emptySessionPayload(id);
         const response = await activeApp.inject({ method: "PUT", url: "/v1/agent-sessions/" + id, headers,
