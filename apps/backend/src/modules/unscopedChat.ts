@@ -1,8 +1,15 @@
 import { conversationRunDiagnostics } from "./conversationRunDiagnostics.js";
 import { recordProductEvent } from "@talent-signal/agent";
 import { calendarDraftContextForRequest } from "./calendarDraftContext.js";
-import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
-import { LegacyChatTerminated, type LegacyChatAuthority } from "./legacyChatAuthority.js";
+import { createHarnessSourceGuard, createHarnessSourceGuardWithBinding } from "./harnessSourceGuard.js";
+import { LegacyChatTerminated, terminateLegacySavedMemoryRun, readLegacySavedMemoryPublication,
+  type LegacyChatAuthority } from "./legacyChatAuthority.js";
+import { snapshotLegacyChatAuth } from "./legacyChatOriginalProof.js";
+import { sealWorkspaceSavedMemoryRun, consumeWorkspaceSavedMemoryCompletion,
+  type WorkspaceSavedMemoryAdmission, type WorkspaceSavedMemoryCompletionHandle } from "./workspaceSavedMemoryRun.js";
+import { registerSavedMemoryDurableLineage } from "./savedMemoryDurableLineage.js";
+import { inSavedMemoryCanonicalTransaction } from "./savedMemoryCanonicalTransaction.js";
+import type { SessionChatRetentionReceipt } from "./agentSessionSources.js";
 import { guardLegacyProvider } from "./legacyChatProviderGuard.js";
 import { admitSessionHistoryOwner, createSessionHistorySnapshot } from "./sessionHistorySnapshot.js";
 import { loadAgentResponsePreference } from "./agentPreferences.js";
@@ -22,7 +29,8 @@ import type { Pool, PoolClient } from "pg";
 
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
-import { appendUnscopedChatCompletionAudit, recordUnscopedChatCompletionSources } from "./unscopedChatCompletion.js";
+import { appendUnscopedChatCompletionAudit, recordUnscopedChatCompletionSources,
+  recordUnscopedChatCompletionSourcesWithRetention } from "./unscopedChatCompletion.js";
 import { tryCaptureEmptySessionSource } from "./legacyChatSourceSnapshot.js";
 import { admitLegacyChatExecution, legacyChatWaiterForClaim, snapshotEligibleLegacyProvider,
   type LegacyChatAdmission, type LegacyChatWaiter } from "./legacyChatExecutions.js";
@@ -92,6 +100,14 @@ export interface UnscopedChatExecution {
   } | null;
 }
 
+// Private result provenance changes only COMMIT acknowledgement handling;
+// it never grants read/source authority or enters a response serializer.
+const governedCanonicalResults = new WeakSet<object>();
+const savedMemoryCompletions = new WeakMap<UnscopedChatExecution, Readonly<{
+  admission: WorkspaceSavedMemoryAdmission; handle: WorkspaceSavedMemoryCompletionHandle;
+  taskID: string; runID: string;
+}>>();
+
 function responseBlock(answer: RemoteChatAnswerResult): ChatResponseBlock {
   return {
     id: randomUUID(),
@@ -133,6 +149,8 @@ export async function executeUnscopedChatTask(input: {
   request: UnscopedChatTaskRequest;
   /** Host-owned queue attempt identity; never accepted from the public request. */
   taskID?: string;
+  /** Actual processing claim from the owning atomic transaction, never request JSON. */
+  memoryPublicationClaimID?: string;
   /** Host-only typed MCP human result; enters the run as host data. */
   hostResult?: import("@talent-signal/contracts").McpHumanResult | null;
   /** Live queue run claim; the only host staging authority. */
@@ -187,12 +205,29 @@ export async function executeUnscopedChatTask(input: {
       historyExpiresAt?.valueOf() ?? Infinity)),
       personIDs: [...new Set([...sourcePeople, ...(refs?.kind === "product" ? refs.person_ids : [])])] };
   };
+  // The first canonical integration is the real password-owned text-only
+  // no-Session atomic entry. Other issuers retain their existing path pending
+  // their original claim/image/history qualifications and retained lineage.
+  const memoryEntry = input.memoryPublicationClaimID && input.legacyAuthority
+    && input.database && "release" in input.database && input.probePool && input.auth?.userKind === "password_human"
+    && input.provider && isWorkspaceConversationAgentProvider(input.provider)
+    && !input.request.session_id && !input.hostAuthority && !input.memoryDraftTarget
+    && !input.legacySourceCurrent && !input.images?.length
+    ? Object.freeze({ claimID: input.memoryPublicationClaimID, owner: input.legacyAuthority,
+      database: input.database, pool: input.probePool, auth: snapshotLegacyChatAuth(input.auth) }) : null;
+  const memorySource = memoryEntry
+    ? await memoryEntry.owner.source(() => createHarnessSourceGuardWithBinding(memoryEntry.database, memoryEntry.auth,
+      undefined, sources, memoryEntry.pool)) : null;
+  const savedMemoryAdmission: WorkspaceSavedMemoryAdmission | null = memorySource && memoryEntry
+    ? Object.freeze({ pool: memoryEntry.pool, auth: memoryEntry.auth, owner: memoryEntry.owner,
+      taskID, source: memorySource.source, guard: memorySource.guard }) : null;
+  let savedMemoryCompletion: WorkspaceSavedMemoryCompletionHandle | null = null;
   const assertCurrent = input.provider?.providerId === "claude-agent-sdk" && input.database && input.auth
-    ? await createHarnessSourceGuard(input.database, input.auth, input.request.session_id, sources, input.probePool ?? input.database) : undefined;
+    ? memorySource?.guard ?? await createHarnessSourceGuard(input.database, input.auth, input.request.session_id, sources, input.probePool ?? input.database) : undefined;
   // Keep `assertCurrent` presence and every existing capability selection as
   // before. The additional HTTP source fence grants no history/tool capability.
   const legacySourceCurrent = input.legacyAuthority && input.database && input.auth
-    ? assertCurrent ?? input.legacySourceCurrent ?? await input.legacyAuthority.source(() => createHarnessSourceGuard(
+    ? assertCurrent ?? input.legacySourceCurrent ?? memorySource?.guard ?? await input.legacyAuthority.source(() => createHarnessSourceGuard(
       input.database!, input.auth!, input.request.session_id, sources, input.probePool ?? input.database)) : undefined;
   if (legacySourceCurrent) input.legacyAuthority!.observeSource(legacySourceCurrent);
   if (input.legacyAuthority && input.provider)
@@ -307,12 +342,21 @@ export async function executeUnscopedChatTask(input: {
         input.auth &&
         isWorkspaceConversationAgentProvider(input.provider)
       ) {
+        if (savedMemoryAdmission && memoryEntry) {
+          const marked = await memoryEntry.database.query(`UPDATE idempotency_records
+            SET saved_memory_lineage_required=true
+            WHERE id=$1 AND account_id=$2 AND actor_user_id=$3 AND operation_scope='create_unscoped_chat_task'
+              AND status='processing' AND response_status IS NULL AND response_body IS NULL`,
+          [memoryEntry.claimID, memoryEntry.auth.accountId, memoryEntry.auth.userId]);
+          if (marked.rowCount !== 1) return terminateLegacySavedMemoryRun(savedMemoryAdmission.owner, null);
+        }
         const execution = await executeWorkspaceConversationAgent({
+          ...(savedMemoryAdmission ? { savedMemoryAdmission } : {}),
           ...(input.hostResult ? { hostResult: input.hostResult } : {}),
           ...(input.hostAuthority ? { hostAuthority: input.hostAuthority } : {}),
           ...(input.memoryDraftTarget ? { memoryDraftTarget: input.memoryDraftTarget } : {}),
-          database: input.database,
-          auth: input.auth,
+          database: memoryEntry?.database ?? input.database,
+          auth: savedMemoryAdmission?.auth ?? input.auth,
           objective: effectiveObjective,
           sourceText: input.request.objective,
           provider: input.provider,
@@ -336,6 +380,8 @@ export async function executeUnscopedChatTask(input: {
           recordSourcePerson: personID => { sourcePeople.add(personID); },
           ...(observation ? { observation: { ...observation, authorization_scope: "workspace_conversation" } } : {}),
         });
+        if (savedMemoryAdmission)
+          savedMemoryCompletion = await sealWorkspaceSavedMemoryRun(savedMemoryAdmission, taskID, taskID);
         block = execution.providerResult.calendarDraft ? { ...execution.block, calendar_draft: execution.providerResult.calendarDraft,
           status: "needs_review", requires_user_decision: true } : execution.block;
         agentEvent = execution.event;
@@ -378,6 +424,7 @@ export async function executeUnscopedChatTask(input: {
         remoteStatus = "completed";
       }
     } catch (error) {
+      if (savedMemoryAdmission) return terminateLegacySavedMemoryRun(savedMemoryAdmission.owner, error);
       if (error instanceof LegacyChatTerminated) throw error;
       if (input.legacyAuthority) {
         input.legacyAuthority.throwIfTerminated();
@@ -448,7 +495,7 @@ export async function executeUnscopedChatTask(input: {
     ? firstTurnSessionTitle(input.request.objective, proposedSessionTitle)
     : null;
 
-  return {
+  const result: UnscopedChatExecution = {
     // The complete capability snapshot is a conservative dependency, even when
     // the model elects not to read every page. Withdrawal cannot strand a reply
     // whose earlier context was only available through the history tool.
@@ -474,6 +521,12 @@ export async function executeUnscopedChatTask(input: {
     providerResult,
     agentProviderResult,
   };
+  if (savedMemoryAdmission) {
+    if (!savedMemoryCompletion) return terminateLegacySavedMemoryRun(savedMemoryAdmission.owner, null);
+    savedMemoryCompletions.set(result, Object.freeze({ admission: savedMemoryAdmission,
+      handle: savedMemoryCompletion, taskID, runID: taskID }));
+  }
+  return result;
 }
 
 /** Trusted domain/evaluation API. Public HTTP ingress uses the required-proof
@@ -504,6 +557,10 @@ async function createUnscopedChatTaskInternal(
   legacyAuthority: LegacyChatAuthority | null = null,
   legacySignal?: AbortSignal,
 ): Promise<UnscopedChatTaskMutationResult> {
+  // Bound acquisition only for the new known-provider entry. Existing issuers
+  // retain their ordinary borrow; governed replay ACK policy is provider-agnostic.
+  const memoryAtomicEntry = Boolean(legacyAuthority && auth.userKind === "password_human"
+    && !request.session_id && !selectRemoteProvider && provider && isWorkspaceConversationAgentProvider(provider));
   if (request.session_id) await purgeUnavailableSessionChatSources(pool, auth);
   const execute = async (client: PoolClient): Promise<UnscopedChatTaskMutationResult | LegacyChatAdmission | LegacyChatWaiter> => {
     if (request.session_id) await assertSessionForChat(client, auth, request.session_id);
@@ -550,14 +607,33 @@ async function createUnscopedChatTaskInternal(
           "The prior unscoped Chat task could not be resolved.",
         );
       }
+      let governedReplay = false;
+      if (legacyAuthority) {
+        // A missing proof on a governed claim must never become old-task
+        // compatibility. The private marker survives lineage metadata loss.
+        if (typeof replay.task_id !== "string") return terminateLegacySavedMemoryRun(legacyAuthority, null);
+        const metadata = await client.query<{ required: boolean; format_version: number | null }>(`
+          SELECT claim.saved_memory_lineage_required AS required,lineage.format_version
+          FROM idempotency_records claim LEFT JOIN agent_task_memory_lineage lineage
+            ON lineage.account_id=claim.account_id AND lineage.task_id=$4::uuid
+          WHERE claim.id=$1 AND claim.account_id=$2 AND claim.actor_user_id=$3`,
+        [idempotency.id, auth.accountId, auth.userId, replay.task_id]);
+        const marker = metadata.rows[0];
+        if (metadata.rows.length !== 1 || !marker || typeof marker.required !== "boolean")
+          return terminateLegacySavedMemoryRun(legacyAuthority, null);
+        if (marker.required || marker.format_version !== null) {
+          const retained = await readLegacySavedMemoryPublication(legacyAuthority, auth, replay.task_id);
+          if (retained.completion_idempotency_id !== idempotency.id)
+            return terminateLegacySavedMemoryRun(legacyAuthority, null);
+          governedReplay = true;
+        }
+      }
       await legacyAuthority?.lockAccountsForFinalization(client);
       await legacyAuthority?.lockReadersForFinalization(client);
       await legacyAuthority?.assertFinalCurrent(client);
-      return {
-        body: replay,
-        replayed: true,
-        status: idempotency.replay.status,
-      };
+      const result = { body: replay, replayed: true, status: idempotency.replay.status };
+      if (governedReplay) governedCanonicalResults.add(result);
+      return result;
     }
 
     if (selectRemoteProvider) provider = await selectRemoteProvider(client);
@@ -582,6 +658,7 @@ async function createUnscopedChatTaskInternal(
       probePool: pool,
       auth,
       ...(legacyAuthority ? { legacyAuthority } : {}),
+      ...(memoryAtomicEntry ? { memoryPublicationClaimID: idempotency.id } : {}),
       ...(referenceTime ? { referenceTime } : {}),
       ...(request.session_id ? { continuation: (sources: () => { expiresAt: Date; personIDs: readonly string[] }) => createHarnessContinuationFactory(client, pool, auth, request.session_id!, { kind: "workspace_conversation" }, sources) } : {}),
     });
@@ -596,14 +673,30 @@ async function createUnscopedChatTaskInternal(
       await client.query("RELEASE SAVEPOINT harness_product_reply");
     }
     await legacyAuthority?.lockAccountsForFinalization(client);
-    await recordUnscopedChatCompletionEvidence(client, auth, request, execution);
+    const memory = savedMemoryCompletions.get(execution);
+    let retention: SessionChatRetentionReceipt | undefined;
+    if (memory) retention = await recordUnscopedChatCompletionEvidenceWithRetention(client, auth, request, execution);
+    else await recordUnscopedChatCompletionEvidence(client, auth, request, execution);
     await legacyAuthority?.lockReadersForFinalization(client);
     await completeIdempotency(client, idempotency, 201, execution.body);
+    if (memory) {
+      if (!retention || memory.admission.owner !== legacyAuthority || memory.taskID !== execution.body.task_id)
+        return terminateLegacySavedMemoryRun(memory.admission.owner, null);
+      const original = consumeWorkspaceSavedMemoryCompletion(memory.handle, memory.admission.owner,
+        memory.admission.auth, memory.taskID, memory.runID);
+      await registerSavedMemoryDurableLineage(client, auth, original, retention, idempotency.id);
+    }
     await legacyAuthority?.assertFinalCurrent(client);
-    return { body: execution.body, replayed: false, status: 201,
+    const result: UnscopedChatTaskMutationResult = { body: execution.body, replayed: false, status: 201,
       labProductOutcome: execution.remoteStatus === "agent_completed" || execution.remoteStatus === "completed" ? "accepted" : "fallback" };
+    if (memory) governedCanonicalResults.add(result);
+    return result;
   };
-  const result = await inTransaction(pool, client => legacyAuthority ? legacyAuthority.withClient(client, execute) : execute(client));
+  const result = legacyAuthority
+    ? await inSavedMemoryCanonicalTransaction(pool, legacyAuthority,
+      client => legacyAuthority.withClient(client, execute), value => governedCanonicalResults.has(value),
+      { boundedBorrow: memoryAtomicEntry })
+    : await inTransaction(pool, execute);
   if ("kind" in result && legacyAuthority) {
     if (result.kind === "legacy_durable_waiter") return waitLegacyChatExecution({ pool,auth,authority: legacyAuthority,
       waiter: result,...(legacySignal ? { signal: legacySignal } : {}) });
@@ -640,6 +733,30 @@ export async function recordUnscopedChatCompletionEvidence(
         versionId: execution.providerResult.prompt_snapshot.versionId, source: execution.providerResult.prompt_snapshot.source } : null),
   });
   await recordUnscopedChatCompletionSources(client,auth,{ sessionID: request.session_id,
+    taskID: execution.body.task_id,blocks: execution.body.blocks,messageID: request.message_id,
+    conversationSources: execution.conversationSources ?? [],previousTaskIDs: execution.previousTaskIDs });
+}
+
+/** Qualified canonical completion: forward the real one-use same-client source fact. */
+export async function recordUnscopedChatCompletionEvidenceWithRetention(
+  client: PoolClient,
+  auth: AuthContext,
+  request: UnscopedChatTaskRequest,
+  execution: UnscopedChatExecution,
+): Promise<SessionChatRetentionReceipt> {
+  await appendUnscopedChatCompletionAudit(client, auth, {
+    taskID: execution.body.task_id, sessionID: request.session_id ?? null,
+    messageID: request.message_id ?? null, conversationMessageIDs: execution.conversationMessageIDs,
+    disposition: execution.body.disposition, remoteStatus: execution.remoteStatus,
+    providerID: execution.agentProviderResult?.providerID ?? execution.providerResult?.provider_id ?? null,
+    model: execution.agentProviderResult?.model ?? execution.providerResult?.model ?? null,
+    providerRequestID: execution.agentProviderResult?.providerRequestID ?? execution.providerResult?.provider_request_id ?? null,
+    eventKind: execution.body.agent_event?.kind ?? null,
+    prompt: execution.agentProviderResult?.prompt ?? (execution.providerResult?.prompt_snapshot
+      ? { name: execution.providerResult.prompt_snapshot.name, revision: execution.providerResult.prompt_snapshot.revision,
+        versionId: execution.providerResult.prompt_snapshot.versionId, source: execution.providerResult.prompt_snapshot.source } : null),
+  });
+  return recordUnscopedChatCompletionSourcesWithRetention(client,auth,{ sessionID: request.session_id,
     taskID: execution.body.task_id,blocks: execution.body.blocks,messageID: request.message_id,
     conversationSources: execution.conversationSources ?? [],previousTaskIDs: execution.previousTaskIDs });
 }

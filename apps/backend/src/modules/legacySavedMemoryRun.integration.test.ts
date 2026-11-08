@@ -39,7 +39,12 @@ async function actualOwner(f: SavedMemoryFixture, pool: Pool = f.pool) {
   const auth: AuthContext = { accountId: login.account.id, accountSlug: login.account.slug,
     userId: login.user.id, userEmail: login.user.email, userKind: login.user.kind, sessionId: login.session_id };
   const owner = await admitLegacyChatAuthority(pool, auth, `Bearer ${login.access_token}`, config());
-  return { owner, auth, renewalSecret };
+  // Only the status leaves this closure; the actual accepted bearer is never
+  // exported, compared by an assertion, or copied into SQL/test diagnostics.
+  const acceptedCurrent = async (app: Awaited<ReturnType<typeof buildApp>>) => (await app.inject({
+    method: "GET", url: "/v1/auth/session", headers: { authorization: `Bearer ${login.access_token}` },
+  })).statusCode;
+  return { owner, auth, renewalSecret, acceptedCurrent };
 }
 async function actualSource(f: SavedMemoryFixture) {
   const objective = "Synthetic actual source for the private joint owner gate.";
@@ -60,7 +65,7 @@ async function bound(f: SavedMemoryFixture, owner: LegacyChatAuthority, auth: Au
 describe.skipIf(!savedMemoryDatabase)("Legacy credential + original source + prospective Memory at one fresh tick", { concurrent: false }, () => {
   it("keeps the original accepted login live through a real rotation, then rejects its expired previous branch", async () => {
     await withSavedMemoryFixture(async f => {
-      const { owner, auth, renewalSecret } = await actualOwner(f);
+      const { owner, auth, renewalSecret, acceptedCurrent } = await actualOwner(f);
       let sidecar: Awaited<ReturnType<typeof buildApp>> | undefined;
       try {
         const { run } = await bound(f, owner, auth);
@@ -70,13 +75,35 @@ describe.skipIf(!savedMemoryDatabase)("Legacy credential + original source + pro
           personResearchProvider: null, privateConversationProvider: null, labProviders: new Map(),
           labJobWorkerEnabled: false, conversationQueueWorkerEnabled: false, labCIVerifier: null, screenshotContact: null });
         await sidecar.ready();
+        const state = async () => (await f.pool.query<{ generation: number; current_live: boolean; previous_live: boolean; not_revoked: boolean }>(`
+          SELECT c.access_generation AS generation,s.expires_at>clock_timestamp() AS current_live,
+            COALESCE(s.previous_token_expires_at>clock_timestamp(),false) AS previous_live,s.revoked_at IS NULL AS not_revoked
+          FROM sessions s JOIN persistent_session_credentials c ON c.session_id=s.id
+          WHERE s.account_id=$1 AND s.user_id=$2 AND s.id=$3`, [auth.accountId, auth.userId, auth.sessionId])).rows[0];
+        const before = await state();
+        expect(before).toBeDefined(); expect(before!.current_live && before!.not_revoked).toBe(true);
+        expect(await acceptedCurrent(sidecar)).toBe(200);
+        // Immediate renewal intentionally retains a healthy access generation.
+        // Narrow only this real synthetic login's lifetime below the existing
+        // half-TTL policy so the normal endpoint must perform actual rotation.
+        const aged = await f.pool.query(`UPDATE sessions SET expires_at=clock_timestamp()+interval '2 minutes'
+          WHERE account_id=$1 AND user_id=$2 AND id=$3 AND revoked_at IS NULL AND expires_at>clock_timestamp()`,
+          [auth.accountId, auth.userId, auth.sessionId]);
+        expect(aged.rowCount).toBe(1);
         const renewed = await sidecar.inject({ method: "POST", url: "/v1/auth/persistent/renew",
           payload: { renewal_secret: renewalSecret, account_id: auth.accountId, user_id: auth.userId, session_id: auth.sessionId } });
         expect(renewed.statusCode).toBe(200);
+        const currentAccess = renewed.json<SessionResponse>().access_token;
+        const currentStatus = async () => (await sidecar!.inject({ method: "GET", url: "/v1/auth/session",
+          headers: { authorization: `Bearer ${currentAccess}` } })).statusCode;
+        expect(await state()).toEqual({ generation: before!.generation + 1, current_live: true, previous_live: true, not_revoked: true });
+        expect(await acceptedCurrent(sidecar)).toBe(200); expect(await currentStatus()).toBe(200);
         expect((await run.finalizeProof(run.reads.snapshot())).available).toBe(true);
         const expired = await f.pool.query(`UPDATE sessions SET previous_token_expires_at=clock_timestamp()-interval '1 second'
           WHERE account_id=$1 AND user_id=$2 AND id=$3 AND previous_token_hash IS NOT NULL`, [auth.accountId, auth.userId, auth.sessionId]);
         expect(expired.rowCount).toBe(1);
+        expect(await state()).toEqual({ generation: before!.generation + 1, current_live: true, previous_live: false, not_revoked: true });
+        expect(await acceptedCurrent(sidecar)).toBe(401); expect(await currentStatus()).toBe(200);
         await expect(run.assertCurrent()).rejects.toBeInstanceOf(LegacyChatTerminated);
         expect(owner.signal.aborted).toBe(true);
         let invoked = false;
@@ -142,9 +169,18 @@ describe.skipIf(!savedMemoryDatabase)("Legacy credential + original source + pro
         { terms: ["lexical-joint-needle"], limit: 10 });
         expect(page.items.map(item => item.id)).toContain(memory.itemID);
         expect((await run.finalizeProof(run.reads.snapshot())).available).toBe(true);
-        const expired = await f.pool.query(`UPDATE memory_discovery_queries SET expires_at=clock_timestamp()-interval '1 second'
-          WHERE account_id=$1 AND reader_actor_id=$2`, [auth.accountId, auth.userId]);
-        expect(expired.rowCount).toBe(1);
+        // Preserve the real query row's created/cutoff clock and legal lifetime;
+        // the update must succeed and read back expired before testing authority.
+        const expired = await f.pool.query<{ valid_lifetime: boolean; expired: boolean }>(`
+          UPDATE memory_discovery_queries SET expires_at=created_at+interval '1 microsecond'
+          WHERE account_id=$1 AND reader_actor_id=$2 AND created_at+interval '1 microsecond'<clock_timestamp()
+          RETURNING expires_at>created_at AS valid_lifetime,expires_at<=clock_timestamp() AS expired`, [auth.accountId, auth.userId]);
+        expect(expired.rowCount).toBe(1); expect(expired.rows).toEqual([{ valid_lifetime: true, expired: true }]);
+        const readback = await f.pool.query<{ valid_lifetime: boolean; expired: boolean }>(`
+          SELECT expires_at>created_at AS valid_lifetime,expires_at<=clock_timestamp() AS expired
+          FROM memory_discovery_queries WHERE account_id=$1 AND reader_actor_id=$2`, [auth.accountId, auth.userId]);
+        expect(readback.rows).toEqual([{ valid_lifetime: true, expired: true }]);
+        expect(await f.current()).toBe(200); expect(owner.signal.aborted).toBe(false);
         await expect(run.finalizeProof(run.reads.snapshot())).rejects.toBeInstanceOf(LegacyChatTerminated);
         expect(owner.signal.aborted).toBe(true);
       } finally { owner.dispose(); }

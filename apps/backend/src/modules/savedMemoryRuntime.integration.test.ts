@@ -28,9 +28,12 @@ async function dependencies(r: Runtime, taskID: string): Promise<RuntimeStamp[]>
 }
 async function publication(r: Runtime, taskID: string, key: string) {
   return (await r.control.query<{ format_version: number; reader: string; dependency_count: number;
-    proof_digest: string; no_task_deadline: boolean; canonical_same_tx: boolean; dependencies_same_tx: boolean }>(`
+    proof_digest: string; no_task_deadline: boolean; canonical_same_tx: boolean; dependencies_same_tx: boolean;
+    retention_kind: string; completion_bound: boolean; no_origin_session: boolean }>(`
     SELECT t.format_version,t.reader_actor_id::text AS reader,t.dependency_count,t.proof_digest,
       t.expires_at IS NULL AS no_task_deadline,t.xmin=i.xmin AS canonical_same_tx,
+      t.retention_kind,t.completion_idempotency_id=i.id AS completion_bound,
+      t.source_origin_session_id IS NULL AS no_origin_session,
       NOT EXISTS(SELECT 1 FROM agent_task_saved_memory_dependencies d WHERE d.account_id=t.account_id
         AND d.task_id=t.task_id AND d.xmin<>t.xmin) AS dependencies_same_tx
     FROM agent_task_memory_lineage t JOIN idempotency_records i ON i.account_id=t.account_id
@@ -98,7 +101,7 @@ describe.skipIf(!savedMemoryDatabase)("saved Memory actual runtime read-set, pub
       expect(await dependencies(r, task)).toEqual(stamps); // Includes exposed-but-unquoted b; no model-selected subset.
       const rows = await publication(r, task, key);
       expect(rows).toHaveLength(1);
-      expect(rows[0]).toEqual({ format_version: 1, reader: r.f.auth.userId, dependency_count: stamps.length,
+      expect(rows[0]).toEqual({ format_version: 2, retention_kind: "canonical_no_session", completion_bound: true, no_origin_session: true, reader: r.f.auth.userId, dependency_count: stamps.length,
         proof_digest: expect.stringMatching(/^[a-f0-9]{64}$/), no_task_deadline: true,
         canonical_same_tx: true, dependencies_same_tx: true });
       const replay = await r.post({ idempotency_key: key, objective });
@@ -352,7 +355,7 @@ describe.skipIf(!savedMemoryDatabase)("saved Memory actual runtime read-set, pub
       expect(await dependencies(r, body(answer).task_id)).toEqual([]);
       const rows = await publication(r, body(answer).task_id, key);
       expect(rows).toHaveLength(1); // An absent row is not an empty-set proof.
-      expect(rows[0]).toEqual({ format_version: 1, reader: r.f.auth.userId, dependency_count: 0,
+      expect(rows[0]).toEqual({ format_version: 2, retention_kind: "canonical_no_session", completion_bound: true, no_origin_session: true, reader: r.f.auth.userId, dependency_count: 0,
         proof_digest: expect.stringMatching(/^[a-f0-9]{64}$/), no_task_deadline: true,
         canonical_same_tx: true, dependencies_same_tx: true });
     });

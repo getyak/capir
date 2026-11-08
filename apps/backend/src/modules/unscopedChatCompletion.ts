@@ -2,7 +2,8 @@ import type { PoolClient } from "pg";
 import { appendAudit } from "../lib/audit.js";
 import type { AuthContext } from "./auth.js";
 import type { ChatResponseBlock } from "@talent-signal/contracts";
-import { recordSessionChatSources, type AgentSessionChatSource } from "./agentSessionSources.js";
+import { recordSessionChatSources, recordSessionChatSourcesWithRetention,
+  type SessionChatRetentionReceipt, type AgentSessionChatSource } from "./agentSessionSources.js";
 import { recordMeetingDraftsForTask } from "./meetingDrafts.js";
 
 /** Real source owners shared by atomic and durable publication. No synthesized
@@ -15,6 +16,20 @@ export async function recordUnscopedChatCompletionSources(client: PoolClient, au
   if (input.sessionID) await recordMeetingDraftsForTask(client,auth,{
     blocks: input.blocks,...(input.messageID ? { messageID: input.messageID } : {}),sessionID: input.sessionID,taskID: input.taskID,
   });
+}
+
+/** Qualified saved-Memory completion only. Return the actual source owner's
+ * one-use fact on this same held client; no receipt is reconstructed from DTOs. */
+export async function recordUnscopedChatCompletionSourcesWithRetention(client: PoolClient, auth: AuthContext,
+  input: Parameters<typeof recordUnscopedChatCompletionSources>[2],
+): Promise<SessionChatRetentionReceipt> {
+  const receipt = await recordSessionChatSourcesWithRetention(client, auth, input.sessionID, input.taskID,
+    input.conversationSources, input.previousTaskIDs);
+  if (input.sessionID) await recordMeetingDraftsForTask(client, auth, {
+    blocks: input.blocks, ...(input.messageID ? { messageID: input.messageID } : {}),
+    sessionID: input.sessionID, taskID: input.taskID,
+  });
+  return receipt;
 }
 
 /** Shared audit owner for the existing atomic path and durable answer-only

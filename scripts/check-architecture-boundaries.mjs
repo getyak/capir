@@ -19,7 +19,7 @@ const WORKSPACE_CONFIGURATION = "pnpm-workspace.yaml";
 const WORKSPACE_PATTERNS = ["apps/*", "packages/*"];
 const FROZEN_MIGRATION_COUNT = 119;
 const FROZEN_MIGRATION_DIGEST =
-  "cace44dff140d8700b7637c4956cbd2d07181dd819fe2bde4733fc377eae0618";
+  "7fedb7735274e68a17b061b145543d37a9b46f433a44ac8a1e25e4ed2a819d92";
 
 const LEGACY_MIGRATION_PREFIX_COLLISIONS = new Map([
   // Onboarding was deployed before the queue migration merged into main.

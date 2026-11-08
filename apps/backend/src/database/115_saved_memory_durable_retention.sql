@@ -3,6 +3,24 @@
 SET LOCAL lock_timeout = '100ms';
 LOCK TABLE agent_task_memory_lineage IN SHARE ROW EXCLUSIVE MODE NOWAIT;
 
+-- This unreleased115 revision distinguishes new governed completions from old
+-- unbound tasks even if a lineage row is missing. A true marker is never an
+-- independence grant and cannot be cleared by cleanup or a caller retry.
+ALTER TABLE idempotency_records ADD COLUMN saved_memory_lineage_required boolean NOT NULL DEFAULT false;
+CREATE FUNCTION guard_saved_memory_canonical_marker_115()
+RETURNS trigger LANGUAGE plpgsql AS $function$
+BEGIN
+ IF OLD.saved_memory_lineage_required AND NOT NEW.saved_memory_lineage_required THEN
+   RAISE EXCEPTION USING ERRCODE='23514',CONSTRAINT='saved_memory_canonical_marker_115',
+     MESSAGE='SAVED_MEMORY_CANONICAL_MARKER_IMMUTABLE';
+ END IF;
+ RETURN NEW;
+END;
+$function$;
+CREATE TRIGGER saved_memory_canonical_marker_115
+ BEFORE UPDATE OF saved_memory_lineage_required ON idempotency_records
+ FOR EACH ROW EXECUTE FUNCTION guard_saved_memory_canonical_marker_115();
+
 -- Match only the two known114 constraints by their complete normalized
 -- definitions. Unknown schema drift aborts rather than dropping another guard.
 DO $migration$
@@ -226,6 +244,11 @@ BEGIN
  -- honest late refusal. It does not undo any prior canonical completion, own
  -- COMMIT, classify an unknown ACK or replace the caller's outer transaction.
  BEGIN
+   UPDATE idempotency_records SET saved_memory_lineage_required=true
+     WHERE id=completion AND account_id=a AND actor_user_id=u;
+   IF NOT FOUND THEN
+     RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='SAVED_MEMORY_DURABLE_REGISTER_REFUSED';
+   END IF;
    INSERT INTO agent_task_memory_lineage(account_id,task_id,reader_actor_id,format_version,dependency_count,proof_digest,expires_at,
      retention_kind,completion_idempotency_id,source_origin_session_id)
      VALUES(a,task,u,2,jsonb_array_length(stamps),digest,deadline,kind,completion,origin) ON CONFLICT DO NOTHING;
