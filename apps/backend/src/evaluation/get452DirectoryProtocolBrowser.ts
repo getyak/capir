@@ -22,16 +22,28 @@ function routeKind(path: string): string {
         : path.startsWith("/_next/") ? "asset" : "other";
 }
 type FetchObservation = { decision: "continue" | "fail"; command: "requested" | "acknowledged" | "rejected"; correlation: "matched" | "ambiguous" };
+type ExtraObservation = "unobserved" | "seen" | "ambiguous";
 export class DirectoryProtocolPage {
   readonly observed = { blockedExternal: 0, runtimeErrors: 0, consoleErrors: 0, cookieBlocks: {} as Record<string, number>, maxRequestTargetBytes: 0,
     lastDocumentStatus: null as number | null, lastDocumentRoute: "unobserved", httpErrors: {} as Record<string, number> };
   private disposers: Array<() => void> = [];
   private active = new Set<string>();
-  private activeKinds = new Map<string, { route: string; method: string; type: string; scheme: string; metadata: string; initiator: string; responseSeen: boolean; responseType: string; fetch: FetchObservation | null }>();
+  private activeKinds = new Map<string, { route: string; method: string; type: string; scheme: string; metadata: string; initiator: string; responseSeen: boolean; responseType: string; fetch: FetchObservation | null;
+    singleHop: boolean; loaderId: string; requestExtra: ExtraObservation; responseExtra: ExtraObservation; extraStatus: number | null; dataSeen: boolean }>();
   private unmatchedFetchPausesUpTo1024 = 0;
   private httpStatuses = new Map<string, number>();
   private changedAt = Date.now();
   private observerFailed = false;
+  private mainLoaderId = "";
+  private transportIds = new Set<string>();
+  private transportHistorySaturated = false;
+  private firstTransportObservation(id: string): boolean {
+    // Never evict a terminal/early ID and later mistake it for a first hop.
+    // Saturation degrades only diagnostics; the original gate is unchanged.
+    if (this.transportHistorySaturated || this.transportIds.has(id)) return false;
+    if (this.transportIds.size >= 4096) { this.transportHistorySaturated = true; return false; }
+    this.transportIds.add(id); return true;
+  }
   private constructor(private cdp: ProtocolCdp, readonly session: string, readonly context: string, readonly origin: string) {}
   static async create(cdp: ProtocolCdp, origin: string) {
     const { browserContextId } = await cdp.call<{ browserContextId: string }>("Target.createBrowserContext");
@@ -41,6 +53,10 @@ export class DirectoryProtocolPage {
       const { sessionId } = await cdp.call<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
       page = new DirectoryProtocolPage(cdp, sessionId, browserContextId, origin);
       const current = page;
+      current.disposers.push(cdp.on(sessionId, "Page.frameNavigated", value => {
+        const frame = value.frame as { parentId?: unknown; loaderId?: unknown } | undefined;
+        if (frame && !frame.parentId && typeof frame.loaderId === "string") current.mainLoaderId = frame.loaderId;
+      }));
       current.disposers.push(cdp.on(sessionId, "Fetch.requestPaused", value => {
         let observation: FetchObservation | undefined;
         try {
@@ -68,15 +84,35 @@ export class DirectoryProtocolPage {
           const initiator = value.initiator as { type?: unknown } | undefined;
           if (url.origin === origin) current.observed.maxRequestTargetBytes = Math.max(current.observed.maxRequestTargetBytes, Buffer.byteLength(url.pathname + url.search));
           requireProtocol(current.active.size < 1024, "BROWSER_REQUEST_BUDGET");
+          const firstObservation = current.firstTransportObservation(String(value.requestId));
+          const singleHop = firstObservation && !current.activeKinds.has(String(value.requestId)) && !value.redirectResponse;
           current.active.add(String(value.requestId)); current.changedAt = Date.now();
           current.activeKinds.set(String(value.requestId), { route: routeKind(url.pathname),
             method: ["GET", "POST"].includes(request.method) ? request.method : "OTHER",
             type: typeof value.type === "string" && resourceKinds.has(value.type) ? value.type : "Other",
             scheme: schemeKinds.get(url.protocol) ?? "other", metadata: url.origin === origin ? metadataKind(url.pathname) : "none",
-            initiator: typeof initiator?.type === "string" && initiatorKinds.has(initiator.type) ? initiator.type : "UNOBSERVED", responseSeen: false, responseType: "UNOBSERVED", fetch: null });
+            initiator: typeof initiator?.type === "string" && initiatorKinds.has(initiator.type) ? initiator.type : "UNOBSERVED", responseSeen: false, responseType: "UNOBSERVED", fetch: null,
+            singleHop, loaderId: typeof value.loaderId === "string" ? value.loaderId : "",
+            requestExtra: singleHop ? "unobserved" : "ambiguous", responseExtra: singleHop ? "unobserved" : "ambiguous", extraStatus: null, dataSeen: false });
         } catch { current.observerFailed = true; }
       }));
+      // Passive diagnostics only. ExtraInfo may precede its ordinary event and
+      // RequestId is shared by redirect hops. Never guess an early event or
+      // attach an old hop's information to a redirect/reused live entry.
+      // No headers, cookies, bodies, URL/hash or raw loader/request IDs leave
+      // this observer. Unobserved never means that a request was not sent.
+      current.disposers.push(cdp.on(sessionId, "Network.requestWillBeSentExtraInfo", value => {
+        const pending = current.activeKinds.get(String(value.requestId));
+        if (!pending) { current.firstTransportObservation(String(value.requestId)); return; }
+        pending.requestExtra = pending.singleHop && pending.requestExtra === "unobserved" ? "seen" : "ambiguous";
+      }));
+      current.disposers.push(cdp.on(sessionId, "Network.dataReceived", value => {
+        const pending = current.activeKinds.get(String(value.requestId));
+        if (pending?.singleHop) pending.dataSeen = true;
+        else if (!pending) current.firstTransportObservation(String(value.requestId));
+      }));
       for (const event of ["Network.loadingFinished", "Network.loadingFailed"]) current.disposers.push(cdp.on(sessionId, event, value => {
+        current.firstTransportObservation(String(value.requestId));
         current.active.delete(String(value.requestId)); current.activeKinds.delete(String(value.requestId)); current.changedAt = Date.now();
       }));
       current.disposers.push(cdp.on(sessionId, "Network.responseReceived", value => {
@@ -89,7 +125,7 @@ export class DirectoryProtocolPage {
           if (requestKind) {
             requestKind.responseSeen = true;
             requestKind.responseType = typeof value.type === "string" && resourceKinds.has(value.type) ? value.type : "Other";
-          }
+          } else current.firstTransportObservation(String(value.requestId));
           const statusKey = `${routeKind(path)}:${requestKind?.method ?? "UNOBSERVED"}:${requestKind?.type ?? "Other"}:${response.status}`;
           current.httpStatuses.set(statusKey, (current.httpStatuses.get(statusKey) ?? 0) + 1);
           if (value.type === "Document") { current.observed.lastDocumentStatus = response.status; current.observed.lastDocumentRoute = route; }
@@ -97,6 +133,14 @@ export class DirectoryProtocolPage {
         } catch { current.observerFailed = true; }
       }));
       current.disposers.push(cdp.on(sessionId, "Network.responseReceivedExtraInfo", value => {
+        const pending = current.activeKinds.get(String(value.requestId));
+        if (pending) {
+          const status: unknown = value.statusCode;
+          if (pending.singleHop && pending.responseExtra === "unobserved" && typeof status === "number"
+            && Number.isInteger(status) && status >= 100 && status <= 599) {
+            pending.responseExtra = "seen"; pending.extraStatus = status;
+          } else { pending.responseExtra = "ambiguous"; pending.extraStatus = null; }
+        } else current.firstTransportObservation(String(value.requestId));
         // Deliberately never inspect headers, cookieLine or cookie.value.
         const blocked = value.blockedCookies;
         if (!Array.isArray(blocked)) return;
@@ -182,7 +226,7 @@ export class DirectoryProtocolPage {
     await this.quiet(); this.assertHealthy();
   }
   diagnostics() {
-    const pending = new Map<string, number>(), metadata = new Map<string, number>(), fetch = new Map<string, number>();
+    const pending = new Map<string, number>(), metadata = new Map<string, number>(), fetch = new Map<string, number>(), transport = new Map<string, number>();
     for (const entry of this.activeKinds.values()) {
       const key = `${entry.route}:${entry.method}:${entry.type}`; pending.set(key, (pending.get(key) ?? 0) + 1);
       // Every segment is a closed category. No URL/path/query, initiator URL/stack or request ID is serialized.
@@ -190,12 +234,17 @@ export class DirectoryProtocolPage {
       metadata.set(detail, (metadata.get(detail) ?? 0) + 1);
       const fetched = `${detail}:${entry.fetch ? "pause_seen" : "pause_unobserved"}:${entry.fetch?.decision ?? "UNOBSERVED"}:${entry.fetch?.command ?? "UNOBSERVED"}:${entry.fetch?.correlation ?? "UNOBSERVED"}`;
       fetch.set(fetched, (fetch.get(fetched) ?? 0) + 1);
+      const loader = !entry.loaderId || !this.mainLoaderId ? "loader_unobserved" : entry.loaderId === this.mainLoaderId ? "loader_current" : "loader_other";
+      const extra = `${detail}:${entry.singleHop ? "single_hop" : "redirect_or_reused"}:${loader}:request_extra_${entry.requestExtra}:response_extra_${entry.responseExtra}${entry.extraStatus === null ? "" : `_${entry.extraStatus}`}:${entry.dataSeen ? "data_seen" : "data_unobserved"}`;
+      transport.set(extra, (transport.get(extra) ?? 0) + 1);
     }
     return { ...this.observed, cookieBlocks: { ...this.observed.cookieBlocks }, httpErrors: { ...this.observed.httpErrors },
       observerFailed: this.observerFailed, activeRequests: this.active.size,
       pendingKinds: Object.fromEntries([...pending].sort(([a], [b]) => a.localeCompare(b))),
       pendingMetadataVersion: 1, pendingMetadata: Object.fromEntries([...metadata].sort(([a], [b]) => a.localeCompare(b))),
       pendingFetchVersion: 1, pendingFetch: Object.fromEntries([...fetch].sort(([a], [b]) => a.localeCompare(b))),
+      pendingTransportVersion: 1, pendingTransport: Object.fromEntries([...transport].sort(([a], [b]) => a.localeCompare(b))),
+      transportHistorySaturated: this.transportHistorySaturated,
       unmatchedFetchPausesUpTo1024: this.unmatchedFetchPausesUpTo1024,
       httpStatuses: Object.fromEntries([...this.httpStatuses].sort(([a], [b]) => a.localeCompare(b))) };
   }
