@@ -274,3 +274,48 @@ export async function createMemoryContentManifest(input: MemoryContentManifestIn
   return Object.freeze({ content_protocol: MEMORY_LITERAL_PROTOCOL, content_manifest: manifest,
     content_manifest_digest: manifestDigest });
 }
+
+
+/** Evidence versions have their own digest domain. A corrected statement must
+ * never recertify an earlier supporting excerpt or replace its source binding. */
+export interface MemoryEvidenceManifestV2 {
+  version: typeof MEMORY_LITERAL_PROTOCOL;
+  excerpt: Readonly<MemoryLiteralDescriptor>;
+  source_revision_hash: string;
+  source_locator_sha256: string;
+  message_range: Readonly<MemoryMessageRangeV2> | null;
+}
+export type MemoryEvidenceManifestInput = Pick<MemoryContentManifestInput,
+  "source_excerpt" | "source_revision_hash" | "source_locator_sha256" | "message_range">;
+
+/** Called only for explicitly v2 admitted evidence, never to upgrade a legacy
+ * evidence row when its parent statement is corrected. Hashes are integrity
+ * metadata; the existing host source owner must still admit/revalidate them. */
+export async function createMemoryEvidenceManifest(input: MemoryEvidenceManifestInput,
+  digest: (value: string) => string | Promise<string>): Promise<Readonly<{
+    content_protocol: typeof MEMORY_LITERAL_PROTOCOL;
+    content_manifest: Readonly<MemoryEvidenceManifestV2>;
+    content_manifest_digest: string;
+  }>> {
+  const excerpt = requireMemoryLiteral(input.source_excerpt, "excerpt");
+  const revision = input.source_revision_hash, locatorHash = input.source_locator_sha256;
+  if (typeof revision !== "string" || typeof locatorHash !== "string"
+    || !HASH.test(revision) || !HASH.test(locatorHash)) return invalid();
+  const inputRange = input.message_range;
+  const range = inputRange === null ? null : snapshotMessageRange(inputRange);
+  if (range && range.character_end - range.character_start !== excerpt.length) return invalidRange();
+  const excerptHash = await digest(excerpt);
+  const descriptor = memoryLiteralDescriptor(excerpt, "excerpt", excerptHash);
+  if (range && (range.source_revision_hash !== revision || range.excerpt_sha256 !== excerptHash)) return invalidRange();
+  const manifest: Readonly<MemoryEvidenceManifestV2> = Object.freeze({ version: MEMORY_LITERAL_PROTOCOL,
+    excerpt: descriptor, source_revision_hash: revision, source_locator_sha256: locatorHash, message_range: range });
+  const rangeTuple = range ? [range.kind, range.session_id, range.message_id, range.range_version,
+    range.representation, range.offset_unit, range.character_start, range.character_end,
+    range.source_revision_hash, range.source_text_sha256, range.excerpt_sha256] : null;
+  const tuple = JSON.stringify(["memory-evidence-literal-v2", [descriptor.sha256, descriptor.utf8_bytes,
+    descriptor.utf16_code_units, descriptor.unicode_scalar_count], revision, locatorHash, rangeTuple]);
+  const manifestDigest = await digest(tuple);
+  if (typeof manifestDigest !== "string" || !HASH.test(manifestDigest)) return invalid();
+  return Object.freeze({ content_protocol: MEMORY_LITERAL_PROTOCOL, content_manifest: manifest,
+    content_manifest_digest: manifestDigest });
+}

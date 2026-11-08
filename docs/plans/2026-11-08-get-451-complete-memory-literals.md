@@ -2,7 +2,8 @@
 
 Parent GET-439 / historical C05. [GitHub #528](https://github.com/getyak/capir/issues/528),
 [Linear GET-451](https://linear.app/getyak/issue/GET-451).
-Isolated branch `codex/get-451-complete-memory-literals`, base `965805a0`.
+Isolated branch `codex/get-451-complete-memory-literals`, PR530. Original guard
+PR525 merged as3dc908f3; current source work will normally merge that main.
 
 ## Outcome and boundary
 
@@ -38,10 +39,10 @@ Zod4.6.7. These local peers are not full pinned Hosted acceptance.
 
 ## Milestones
 
-1. Active: protocol/Unicode/UTF-8 limits, independent golden vectors and strict
-   host-bound UTF-16 half-open message ranges. Prove red against current policy,
-   then green. Deliver a frozen source/patch and additive SQL requirements to
-   Root without writing migration files.
+1. Foundation implemented: protocol/Unicode/UTF-8 limits, independent golden
+   vectors, strict host-bound UTF-16 half-open ranges, separate proposal,
+   evidence and accepted manifests, and bounded canonical/draft content refs.
+   Migration113 and its populated-upgrade SQL tests await actual Hosted PG.
 2. Apply the same durable version/manifest/confirmation contract through real
    backend stage/append/regenerate/draft/commit/correct/read/recall and Agent
    scope-bound content pages. No isolated schema-only capacity increase.
@@ -73,6 +74,31 @@ nine new cases failed before three strict string checks, now74/74 pure tests
 pass. The unchanged normal literal/legacy cases still pass. These are helper/policy tests, not HTTP or
 database exploit reproduction or feature acceptance. Six selected source roots
 typechecked with actual compiler API6.0.3/exactSDK declarations at zero diagnostics.
-The additive SQL requirements are being handed to Root without a migration file.
+The later independent evidence/accepted manifest and read-reference helpers
+passed172 tests with12 selected typecheck roots at their recorded hashes.
+New draft references first produced10 failures/173 passes against the previous
+helper, then the current eight-file host selection passed183/183. The latest
+draft delta has no fresh full typecheck or actual SQL evidence yet. Empty
+unfinished edits retain exact bytes and zero counts; canonical statements still
+require nonempty text and their stored v2 proof. A draft ref binds its current
+draft/revision/review-scope/item and never claims an accepted manifest.
+
+Migration113 adds conditional integrity columns/checks without rewriting legacy
+text or certifying old normalized originals. Its three digest roles are
+distinct. The v2 draft storage envelope newly allows at most200 keys and32KiB
+per edit, including empty unfinished values. Multiple bounded saves may exceed
+256KiB durable state; the256KiB request budget is not a whole-row storage cap.
+Existing legacy JSON is not tightened or silently filtered. Independent SQL
+and five-path draft/PG-source reviews closed their confirmed findings.
+
+The dedicated Hosted suite is expected to collect45 cases but has not executed.
+It requires an exclusive empty loopback talent_signal_get451_literal_* database,
+applies the real old manifest prefix, seeds populated legacy rows and calls
+production migrate() for113. A real UPDATE observer includes a positive control;
+negative writes require their exact SQLSTATE/constraint. It has no resident URL
+fallback, no database reset/drop and no permission/substring/source-authorization
+claim. Root registers113, advances the reviewed frozen manifest digest without
+changing its115 old SQL files, and selects this suite with REQUIRED=1.
+
 Stage/commit/read/recall wire integration, Web/native, exact-head full gates and
 resident/runtime acceptance remain incomplete. Keep original worktrees/evidence.

@@ -51,3 +51,6 @@ export * from "./capirSchemas.js";
 // grant management, user test entitlement scopes). Negotiated separately from
 // the legacy capir.v1 surface above.
 export * from "./capirAuthSchemas.js";
+
+export * from "./memoryAcceptedContent.js";
+export * from "./memoryLiteralSchemas.js";

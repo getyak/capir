@@ -4,13 +4,14 @@ import { describe, expect, it } from "vitest";
 import {
   describeMemoryText, requireMemoryLiteral, memoryLiteralDescriptor,
   encodeMemoryLiteralRequest, memoryContentPage, resolveMemoryContentProtocol,
-  createMemoryContentManifest,
-  type MemoryTextStatistics,
+  createMemoryContentManifest, createMemoryEvidenceManifest,
+  type MemoryTextStatistics, type MemoryEvidenceManifestInput,
 } from "./memoryContent.js";
 
 const golden = JSON.parse(readFileSync(new URL("./memoryContentGolden.json", import.meta.url), "utf8")) as {
   vectors: Array<{ text: string; sha256: string } & MemoryTextStatistics>;
   manifest_digest_sha256: string;
+  evidence_manifests: Array<{ name: string; input: MemoryEvidenceManifestInput; excerpt_descriptor: MemoryTextStatistics & { sha256: string }; manifest_digest_sha256: string }>;
 };
 
 describe("literal-v2 lossless content and transport limits", () => {
@@ -139,4 +140,82 @@ describe("literal-v2 lossless content and transport limits", () => {
       source_excerpt: "e\u0301", ...source }, digest)).rejects.toThrow();
     expect(Object.isFrozen(first.content_manifest)).toBe(true);
   });
+});
+
+
+describe("independent literal-v2 evidence manifest", () => {
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+  it.each(golden.evidence_manifests)("matches independent evidence-only ASCII golden $name", async vector => {
+    const result = await createMemoryEvidenceManifest(vector.input, digest);
+    expect(result.content_protocol).toBe("literal-v2");
+    expect(result.content_manifest).toEqual({ version: "literal-v2", excerpt: vector.excerpt_descriptor,
+      source_revision_hash: vector.input.source_revision_hash, source_locator_sha256: vector.input.source_locator_sha256,
+      message_range: vector.input.message_range });
+    expect(result.content_manifest_digest).toBe(vector.manifest_digest_sha256);
+    expect(result.content_manifest).not.toHaveProperty("display_text");
+    expect(result.content_manifest).not.toHaveProperty("original_display_text");
+    expect(Object.isFrozen(result.content_manifest.excerpt)).toBe(true);
+  });
+
+  it("does not rebind earlier evidence when an item is corrected or more evidence is attached", async () => {
+    const old = await createMemoryEvidenceManifest(golden.evidence_manifests[0]!.input, digest);
+    const saved = JSON.stringify(old);
+    const corrected = await createMemoryContentManifest({ ...golden.evidence_manifests[0]!.input,
+      display_text: "Human corrected statement", original_display_text: null, original_content_protocol: "legacy-v1" }, digest);
+    const next = await createMemoryEvidenceManifest({ ...golden.evidence_manifests[0]!.input, source_excerpt: "Another exact excerpt" }, digest);
+    expect(corrected.content_manifest.original_content_protocol).toBe("legacy-v1");
+    expect(old.content_manifest_digest).not.toBe(corrected.content_manifest_digest);
+    expect(old.content_manifest_digest).not.toBe(next.content_manifest_digest);
+    expect(JSON.stringify(old)).toBe(saved);
+    expect(Object.isFrozen(old)).toBe(true);
+  });
+
+  it.each(["source_excerpt", "source_revision_hash", "source_locator_sha256", "message_range"] as const)(
+    "changes evidence identity when %s changes", async key => {
+      const source = golden.evidence_manifests[0]!.input;
+      const input = { ...source, [key]: key === "source_excerpt" ? "é" : key === "message_range"
+        ? { ...golden.evidence_manifests[1]!.input.message_range!, character_start: 3, character_end: 5, excerpt_sha256: digest(source.source_excerpt) }
+        : "c".repeat(64) };
+      expect((await createMemoryEvidenceManifest(input, digest)).content_manifest_digest)
+        .not.toBe((await createMemoryEvidenceManifest(source, digest)).content_manifest_digest);
+    });
+
+  it.each(["source_revision_hash", "source_locator_sha256", "digest"] as const)(
+    "rejects non-string %s without conversion", async key => {
+      let conversions = 0;
+      const invalid = Object.defineProperty({}, "toString", { get() { conversions += 1; throw new Error("synthetic private coercion"); } });
+      const input = { ...golden.evidence_manifests[0]!.input,
+        ...(key === "digest" ? {} : { [key]: invalid as unknown as string }) };
+      await expect(createMemoryEvidenceManifest(input, key === "digest" ? () => invalid as unknown as string : digest))
+        .rejects.toMatchObject({ code: "MEMORY_CONTENT_INVALID" });
+      expect(conversions).toBe(0);
+    });
+
+  it("captures binding and range before the first digest await", async () => {
+    const input = structuredClone(golden.evidence_manifests[1]!.input);
+    const pending = createMemoryEvidenceManifest(input, async value => { await Promise.resolve(); return digest(value); });
+    input.source_excerpt = "changed";
+    input.source_revision_hash = "c".repeat(64);
+    Object.assign(input.message_range!, { character_start: 10 });
+    const result = await pending;
+    expect(result.content_manifest_digest).toBe(golden.evidence_manifests[1]!.manifest_digest_sha256);
+    expect(Object.isFrozen(result.content_manifest.message_range)).toBe(true);
+  });
+
+  it("rejects source/range or excerpt/range mismatch rather than manufacturing a new source proof", async () => {
+    const source = golden.evidence_manifests[1]!.input;
+    await expect(createMemoryEvidenceManifest({ ...source, source_revision_hash: "c".repeat(64) }, digest))
+      .rejects.toMatchObject({ code: "MEMORY_CONTENT_RANGE_INVALID" });
+    await expect(createMemoryEvidenceManifest({ ...source, source_excerpt: "different" }, digest))
+      .rejects.toMatchObject({ code: "MEMORY_CONTENT_RANGE_INVALID" });
+  });
+});
+
+
+it("rejects an internally inconsistent evidence range length before it can describe stored bytes", async () => {
+  const source = golden.evidence_manifests[1]!.input;
+  await expect(createMemoryEvidenceManifest({ ...source,
+    message_range: { ...source.message_range!, character_end: source.message_range!.character_end + 1 } },
+    value => createHash("sha256").update(value).digest("hex")))
+    .rejects.toMatchObject({ code: "MEMORY_CONTENT_RANGE_INVALID" });
 });
