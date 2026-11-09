@@ -18,12 +18,12 @@ import { readLegacyChatSnapshotRecord, snapshotLegacyChatAuth, validateLegacyCha
   type LegacyChatOriginalProof, type LegacyChatLabBinding } from "./legacyChatOriginalProof.js";
 import { readHarnessRunSourceBinding, type HarnessRunSourceHandle } from "./harnessSourceGuard.js";
 import { SAVED_MEMORY_READ_LIMIT, SavedMemoryReadSet, captureSavedMemoryReadProof, savedMemoryOwnRecord, savedMemoryUUID,
-  savedMemoryBudgetLimited, type SavedMemoryAuthority, type SavedMemoryReadProof } from "./savedMemoryLineage.js";
+  savedMemoryBudgetLimited, type SavedMemoryAuthority, type SavedMemoryReadProof, type SavedMemoryStamp } from "./savedMemoryLineage.js";
 import type { SavedMemoryFinalReadDomain } from "./savedMemoryDiscovery.js";
 import { assertLegacySavedMemoryProofSuperset, captureLegacySavedMemoryDomain, captureLegacySavedMemoryEnvelope,
   legacySavedMemoryMicroseconds, legacySavedMemoryProofSQL, legacySavedMemorySourceSQL,
   type LegacySavedMemoryReadEnvelope } from "./legacySavedMemoryDomain.js";
-import { captureSavedMemoryDurableProof, savedMemoryDurableProofDigest,
+import { captureSavedMemoryDurableProof, captureSavedMemoryRetainedProof, savedMemoryDurableProofDigest,
   type SavedMemoryDurableProofV2 } from "./savedMemoryDurableLineage.js";
 import { consumeSessionHistoryReceipt, isForeignSessionHistoryReceipt, isForeignSessionHistoryReceiptError,
   sessionHistoryReceiptUsesDatabase, type SavedMemorySessionHistoryFacts,
@@ -212,6 +212,8 @@ export function hasBoundLegacyCapturedHistory(owner: LegacyChatAuthority): boole
 
 type MemoryBinder = {
   bind(input: LegacySavedMemoryRunInput): Promise<LegacySavedMemoryRunHandle>;
+  bindCaptured(handle: LegacyCapturedHistoryHandle,
+    input: Omit<LegacySavedMemoryRunInput, "source" | "guard">): Promise<LegacySavedMemoryRunHandle>;
   terminate(error: unknown): never;
   readPublication(auth: AuthContext, taskID: string): Promise<Readonly<SavedMemoryDurableProofV2>>;
 };
@@ -239,6 +241,20 @@ export function bindLegacySavedMemoryRun(owner: LegacyChatAuthority, input: Lega
   const binder = memoryBinders.get(owner);
   if (!binder) return Promise.reject(new LegacyChatTerminated());
   return binder.bind(input);
+}
+/** The same original captured owner, handle and consumed Core clock are the
+ * qualification. No provider label, source callback or parsed proof grants it. */
+export function bindLegacyCapturedSavedMemoryRun(owner: LegacyChatAuthority, handle: LegacyCapturedHistoryHandle,
+  input: Omit<LegacySavedMemoryRunInput, "source" | "guard">): Promise<LegacySavedMemoryRunHandle> {
+  assertLegacyCapturedMemoryHandleOwner(handle, owner);
+  const binder = memoryBinders.get(owner);
+  if (!binder) return Promise.reject(new LegacyChatTerminated());
+  return binder.bindCaptured(handle, input);
+}
+/** Reject-only preflight, before a bridge can allocate recipient Run state. */
+export function assertLegacyCapturedMemoryHandleOwner(handle: LegacyCapturedHistoryHandle, owner: LegacyChatAuthority): void {
+  const original = capturedHandles.get(handle);
+  if (original && original !== owner) return foreignHistoryStop();
 }
 /** Construction can fail before a Run handle exists. Only the actual private
  * owner may latch that failure; structural clones never invoke foreign code. */
@@ -498,7 +514,9 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
           || (missingRetention && readerFence !== activeLease)) return fail();
         await source(() => lockCaptureForFinal!(writer));
         for (const current of sourceChecks) await source(current);
-        return capturedCheck(writer);
+        await capturedCheck(writer);
+        if (memorySealed && memoryFinalCurrent) return memoryFinalCurrent(writer);
+        return;
       }
       if (memorySealed && memoryFinalCurrent) return memoryFinalCurrent(client);
       if (memoryPublication && publicationFinalCurrent) return publicationFinalCurrent(client);
@@ -581,6 +599,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         if (captureStarted) {
           if (!captureBound || !capturedCheck) return fail();
           await capturedCheck(guarded);
+          if (memorySealed && memoryFinalCurrent) { await memoryFinalCurrent(guarded); alive(); }
         } else if (memorySealed && memoryFinalCurrent) { await memoryFinalCurrent(guarded); alive(); }
         else if (memoryPublication && publicationFinalCurrent) { await publicationFinalCurrent(guarded); alive(); }
         else await check(client); // Also fences completed-result read-only replay.
@@ -610,6 +629,10 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   let prepared: CapturedPreparation | undefined;
   let captureDatabase: DatabaseClient | undefined;
   let assertCaptureHeld: (() => void) | undefined;
+  let captureCoreDeadline: number | undefined;
+  let capturedMemoryBinding: { source: HarnessRunSourceHandle; guard: () => Promise<void>;
+    domain: string } | undefined;
+  const capturedMemoryBindInputs = new WeakSet<object>();
   const narrowDeadline = (next: number) => {
     memoryDeadline = Math.min(deadline, memoryDeadline ?? Infinity, next);
     if (timer) clearTimeout(timer);
@@ -637,7 +660,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         || !prepared || run.conversationHistory !== prepared.conversationHistory || run.sessionHistory !== prepared.snapshot
         || !Number.isFinite(run.runDeadlineMonotonicMs)) return fail();
       assertCaptureHeld();
-      narrowDeadline(run.runDeadlineMonotonicMs); captureBound = true;
+      narrowDeadline(run.runDeadlineMonotonicMs); captureCoreDeadline = run.runDeadlineMonotonicMs; captureBound = true;
     },
     async prepare(input) {
       // A known foreign lease cannot affect this owner's clock or failure latch.
@@ -678,6 +701,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         held();
         const domain = JSON.parse(frame.domain) as {
           claims: { task: string; proof: unknown; sourceActor: string | null }[]; tasks: string[]; screenshots: unknown[] };
+        capturedMemoryBinding = { source: frame.source, guard: frame.guard, domain: frame.domain };
         // Match the canonical SQL parser, including legacy mixed-case UUIDs.
         missingLineage = domain.claims.some(c => c.proof === null && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(c.task));
         missingRetention = domain.claims.some(c => c.sourceActor === null);
@@ -694,21 +718,25 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
             await frame.guard();
             held();
             const sourceBinding = frame.currentSource();
+            const currentMemory = memoryRun?.reads.snapshot();
             const begun = performance.now();
             if (writer && (!certified() || !activeLease || writer !== activeGuarded)) return fail();
             const row = await (writer ?? queryChannel).query(`WITH tick AS MATERIALIZED (SELECT statement_timestamp() AS checked_at),
               captured_history_owner AS MATERIALIZED (SELECT LEAST($9::timestamptz,(${acceptedDeadlineSQL}),sessions.expires_at,
                 ($12::jsonb->'source'->>'sourceExpiresAt')::timestamptz,($12::jsonb->'source'->>'sessionExpiresAt')::timestamptz,
                 (SELECT expires_at FROM agent_sessions WHERE account_id=$6 AND created_by_user_id=$7
-                  AND id=($12::jsonb->'source'->>'sessionID')::uuid),${capturedHistoryDeadlineSQL}) AS until
+                  AND id=($12::jsonb->'source'->>'sessionID')::uuid),${capturedHistoryDeadlineSQL}
+                  ${currentMemory ? ",($12::jsonb->'proof'->>'expires_at')::timestamptz" : ""}) AS until
                 ${memoryAuthoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10 AND users.kind='password_human'
                 AND ($13::text='current' OR (sessions.token_hash IS DISTINCT FROM $1 AND sessions.previous_token_hash=$1))
                 AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb
-                AND ${legacySavedMemorySourceSQL} AND ${capturedHistorySourcesCurrentSQL} AND ${capturedHistoryClaimsCurrentSQL})
+                AND ${legacySavedMemorySourceSQL} AND ${capturedHistorySourcesCurrentSQL} AND ${capturedHistoryClaimsCurrentSQL}
+                ${currentMemory ? ` AND ${legacySavedMemoryProofSQL}` : ""})
               SELECT true AS available,to_char(tick.checked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at,
                 to_char(captured_history_owner.until AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS read_until
               FROM tick,captured_history_owner WHERE captured_history_owner.until>tick.checked_at`,
-            [...proof, JSON.stringify({ ...domain, source: sourceBinding }), original.tokenBranch]);
+            [...proof, JSON.stringify({ ...domain, source: sourceBinding,
+              ...(currentMemory ? { proof: currentMemory, domains: [] } : {}) }), original.tokenBranch]);
             held();
             if ((writer && (!certified() || writer !== activeGuarded)) || row.rows.length !== 1
               || JSON.stringify(frame.currentSource()) !== JSON.stringify(sourceBinding)) return fail();
@@ -864,8 +892,26 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         return retained;
       } catch (error) { return terminateMemory(error); }
       finally { memoryReaderPending = false; }
+    }, bindCaptured: async (handle, value) => {
+      // A genuine foreign handle cannot affect the recipient's latch or clock.
+      const issuer = capturedHandles.get(handle);
+      if (issuer && issuer !== owner) return foreignHistoryStop();
+      try {
+        alive(); assertCaptureHeld?.();
+        if (!captureBound || !captureHandle || handle !== captureHandle || !captureIdentity || !capturedMemoryBinding)
+          return fail();
+        const row = savedMemoryOwnRecord(value, ["auth", "taskID", "runID", "runDeadlineMonotonicMs"]);
+        if (row.taskID !== captureIdentity.taskID || row.runID !== captureIdentity.taskID
+          || row.runDeadlineMonotonicMs !== captureCoreDeadline) return fail();
+        const input: LegacySavedMemoryRunInput = { auth: snapshotLegacyChatAuth(row.auth as AuthContext),
+          taskID: captureIdentity.taskID, runID: captureIdentity.taskID, runDeadlineMonotonicMs: captureCoreDeadline!,
+          source: capturedMemoryBinding.source, guard: capturedMemoryBinding.guard };
+        capturedMemoryBindInputs.add(input);
+        return await memoryBinders.get(owner)!.bind(input);
+      } catch (error) { return terminateMemory(error); }
     }, bind: async input => {
-    if (captureStarted || memoryRun || memoryBindingPending || memoryReaderPending || memoryReaderUsed) return fail();
+    const capturedBinding = capturedMemoryBindInputs.delete(input) ? capturedMemoryBinding : undefined;
+    if ((captureStarted && !capturedBinding) || memoryRun || memoryBindingPending || memoryReaderPending || memoryReaderUsed) return fail();
     memoryBindingPending = true;
     try {
       alive();
@@ -885,30 +931,57 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
       readHarnessRunSourceBinding(sourceHandle, guard, actor); // Validate identity before executing any supplied function.
       await source(guard);
       const sourceBinding = readHarnessRunSourceBinding(sourceHandle, guard, actor);
-      const begun = performance.now(), remainingMs = Math.floor(Math.min(deadline, coreDeadline) - begun);
+      const begun = performance.now(), remainingMs = Math.floor(Math.min(deadline, coreDeadline,
+        capturedBinding ? memoryDeadline ?? Infinity : Infinity) - begun);
       if (!Number.isSafeInteger(remainingMs) || remainingMs <= 0) return fail();
       // pool.query owns one autocommit command, independently of `active`.
       // https://node-postgres.com/apis/pool#poolquery
-      const initialization = await pool.query(`WITH tick AS MATERIALIZED (SELECT clock_timestamp() AS checked_at),
+      const captureMetadata = capturedBinding ? { ...JSON.parse(capturedBinding.domain), capturedTokenBranch: original.tokenBranch } : {};
+      const captureSQL = capturedBinding ? ` AND ($12::jsonb->>'capturedTokenBranch'='current'
+        OR (sessions.token_hash IS DISTINCT FROM $1 AND sessions.previous_token_hash=$1))
+        AND ${capturedHistorySourcesCurrentSQL} AND ${capturedHistoryClaimsCurrentSQL}` : "";
+      const captureDeadlineSQL = capturedBinding ? `,${capturedHistoryDeadlineSQL}` : "";
+      const initialization = await pool.query(`WITH tick AS MATERIALIZED (SELECT ${capturedBinding ? "statement_timestamp()" : "clock_timestamp()"} AS checked_at),
         admitted AS MATERIALIZED (SELECT LEAST($9::timestamptz,(${acceptedDeadlineSQL}),sessions.expires_at,
           tick.checked_at + $13::bigint * interval '1 millisecond',
           ($12::jsonb->'source'->>'sourceExpiresAt')::timestamptz,
-          COALESCE(($12::jsonb->'source'->>'sessionExpiresAt')::timestamptz,'infinity'::timestamptz)) AS read_deadline
+          COALESCE(($12::jsonb->'source'->>'sessionExpiresAt')::timestamptz,'infinity'::timestamptz)${captureDeadlineSQL}) AS read_deadline
           ${memoryAuthoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10 AND users.kind<>'lab_human'
-          AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb AND ${legacySavedMemorySourceSQL})
+          AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb AND ${legacySavedMemorySourceSQL}${captureSQL})
         SELECT true AS available,to_char(tick.checked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at,
           to_char(admitted.read_deadline AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS read_until
-        FROM tick,admitted WHERE admitted.read_deadline>tick.checked_at`, [...proof, JSON.stringify({ source: sourceBinding }), remainingMs]);
+        FROM tick,admitted WHERE admitted.read_deadline>tick.checked_at`, [...proof,
+        JSON.stringify({ ...captureMetadata, source: sourceBinding }), remainingMs]);
       if (initialization.rows.length !== 1) return fail();
       const initial = captureLegacySavedMemoryEnvelope(initialization.rows[0]);
       // Charge all acquisition, database and ACK time; never reset Core's clock.
       const lifetimeMs = Number((legacySavedMemoryMicroseconds(initial.read_until)
         - legacySavedMemoryMicroseconds(initial.checked_at)) / 1000n);
-      let runDeadline = Math.min(deadline, coreDeadline, begun + lifetimeMs);
+      let runDeadline = Math.min(deadline, coreDeadline, begun + lifetimeMs,
+        capturedBinding ? memoryDeadline ?? Infinity : Infinity);
       if (performance.now() >= runDeadline) return fail();
       const authority: SavedMemoryAuthority = Object.freeze({ auth: Object.freeze({ accountId: actor.accountId, userId: actor.userId }),
         taskID, expiresAt: initial.read_until, assertCurrent: () => owner.assertCurrent() });
       const reads = new SavedMemoryReadSet(authority);
+      // The original fixed capture, including inline-only and empty V2 cases.
+      // No later database read can substitute newer tuples for these ancestors.
+      if (capturedBinding) {
+        const claims = JSON.parse(capturedBinding.domain).claims as { task: string; proof: unknown }[];
+        const inherited = new Map<string, Readonly<SavedMemoryStamp>>();
+        for (const claim of claims) {
+          if (claim.proof === null) continue;
+          const retained = captureSavedMemoryRetainedProof(claim.proof);
+          if (retained.account_id !== actor.accountId || retained.reader_actor_id !== actor.userId
+            || retained.task_id !== savedMemoryUUID(claim.task.toLowerCase()) || retained.task_id === taskID) return fail();
+          for (const stamp of retained.stamps) {
+            const prior = inherited.get(stamp.item_id);
+            if (prior && JSON.stringify(prior) !== JSON.stringify(stamp)) return fail();
+            inherited.set(stamp.item_id, stamp);
+          }
+        }
+        if (inherited.size > SAVED_MEMORY_READ_LIMIT) savedMemoryBudgetLimited();
+        reads.admit([...inherited.values()]);
+      }
       const domains: Readonly<SavedMemoryFinalReadDomain>[] = [];
       const history: SavedMemoryHistoryAncestor[] = [];
       let tail: Promise<unknown> = Promise.resolve();
@@ -966,9 +1039,12 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
             runAlive();
             const actualSource = readHarnessRunSourceBinding(sourceHandle, guard, actor);
             const started = performance.now();
-            const metadata = JSON.stringify({ source: actualSource, proof: next, domains: allDomains,
-              ...(allHistory.length ? { history: allHistory } : {}) });
-            if (Buffer.byteLength(metadata, "utf8") > 512 * 1024) savedMemoryBudgetLimited();
+            const memoryMetadata = { source: actualSource, proof: next, domains: allDomains,
+              ...(allHistory.length ? { history: allHistory } : {}) };
+            if (Buffer.byteLength(JSON.stringify(memoryMetadata), "utf8") > 512 * 1024) savedMemoryBudgetLimited();
+            // The separate original capture has its own unchanged 1 MiB limit.
+            // Do not charge complete-history eligibility to the Run frame cap.
+            const metadata = JSON.stringify({ ...captureMetadata, ...memoryMetadata });
             heldAlive(); historyAlive(); // Recheck after every source await, before touching a held connection.
             // All original credential slots stay inside this owner. One fresh
             // statement snapshot and one MATERIALIZED tick govern every domain.
@@ -987,10 +1063,10 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
                 COALESCE((SELECT min((d->>'query_expires_at')::timestamptz)
                   FROM jsonb_array_elements($12::jsonb->'domains') d),'infinity'::timestamptz),
                 COALESCE((SELECT t.expires_at FROM agent_task_memory_lineage t WHERE t.account_id=$6 AND t.task_id=$13::uuid),
-                  'infinity'::timestamptz)${allHistory.length ? legacySavedMemoryHistoryDeadlineSQL : ""}) AS read_deadline
+                  'infinity'::timestamptz)${allHistory.length ? legacySavedMemoryHistoryDeadlineSQL : ""}${captureDeadlineSQL}) AS read_deadline
                 ${memoryAuthoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10 AND users.kind<>'lab_human'
                 AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb
-                AND ${legacySavedMemorySourceSQL} AND ${legacySavedMemoryProofSQL}${allHistory.length ? ` AND ${legacySavedMemoryHistorySQL}` : ""}
+                AND ${legacySavedMemorySourceSQL} AND ${legacySavedMemoryProofSQL}${allHistory.length ? ` AND ${legacySavedMemoryHistorySQL}` : ""}${captureSQL}
                 AND agent_session_chat_sources_available($6,$13::text)
                 AND NOT EXISTS (SELECT 1 FROM agent_session_chat_tasks c WHERE c.account_id=$6 AND c.task_id=$13::text AND c.actor_user_id<>$7)
                 AND EXISTS (SELECT 1 FROM agent_task_memory_lineage t CROSS JOIN dependencies d
@@ -1001,16 +1077,16 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
               SELECT true AS available,to_char(tick.checked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at,
                 to_char(admitted.read_deadline AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS read_until
               FROM tick,admitted WHERE admitted.read_deadline>tick.checked_at`, [...proof, metadata, taskID])
-              : await pool.query(`WITH tick AS MATERIALIZED (SELECT ${allHistory.length ? "statement_timestamp()" : "clock_timestamp()"} AS checked_at),
+              : await pool.query(`WITH tick AS MATERIALIZED (SELECT ${capturedBinding || allHistory.length ? "statement_timestamp()" : "clock_timestamp()"} AS checked_at),
               admitted AS MATERIALIZED (SELECT LEAST($9::timestamptz,(${acceptedDeadlineSQL}),sessions.expires_at,
                 ($12::jsonb->'proof'->>'expires_at')::timestamptz,
                 ($12::jsonb->'source'->>'sourceExpiresAt')::timestamptz,
                 COALESCE(($12::jsonb->'source'->>'sessionExpiresAt')::timestamptz,'infinity'::timestamptz),
                 COALESCE((SELECT min((d->>'query_expires_at')::timestamptz)
-                  FROM jsonb_array_elements($12::jsonb->'domains') d),'infinity'::timestamptz)${allHistory.length ? legacySavedMemoryHistoryDeadlineSQL : ""}) AS read_deadline
+                  FROM jsonb_array_elements($12::jsonb->'domains') d),'infinity'::timestamptz)${allHistory.length ? legacySavedMemoryHistoryDeadlineSQL : ""}${captureDeadlineSQL}) AS read_deadline
                 ${memoryAuthoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10 AND users.kind<>'lab_human'
                 AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb
-                AND ${legacySavedMemorySourceSQL} AND ${legacySavedMemoryProofSQL}${allHistory.length ? ` AND ${legacySavedMemoryHistorySQL}` : ""})
+                AND ${legacySavedMemorySourceSQL} AND ${legacySavedMemoryProofSQL}${allHistory.length ? ` AND ${legacySavedMemoryHistorySQL}` : ""}${captureSQL})
               SELECT true AS available,to_char(tick.checked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at,
                 to_char(admitted.read_deadline AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS read_until
               FROM tick,admitted WHERE admitted.read_deadline>tick.checked_at`, [...proof, metadata]);
@@ -1020,7 +1096,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
             if (envelope.read_until > authority.expiresAt) return fail();
             const milliseconds = Number((legacySavedMemoryMicroseconds(envelope.read_until)
               - legacySavedMemoryMicroseconds(envelope.checked_at)) / 1000n);
-            runDeadline = Math.min(runDeadline, started + milliseconds);
+            runDeadline = Math.min(runDeadline, started + milliseconds, capturedBinding ? memoryDeadline ?? Infinity : Infinity);
             memoryDeadline = runDeadline;
             if (timer) clearTimeout(timer);
             arm();

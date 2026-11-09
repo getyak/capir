@@ -7,8 +7,8 @@ import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
 import { snapshotLegacyChatAuth } from "./legacyChatOriginalProof.js";
 import type { HarnessRunSourceHandle } from "./harnessSourceGuard.js";
-import { accessLegacySavedMemoryRun, bindLegacySavedMemoryRun, sealLegacySavedMemoryRun, inheritLegacySavedMemoryHistory, isForeignLegacySavedMemoryHistoryError, assertLegacySavedMemoryHistoryReceiptOwner, LegacyChatTerminated,
-  terminateLegacySavedMemoryRun, type LegacyChatAuthority } from "./legacyChatAuthority.js";
+import { accessLegacySavedMemoryRun, bindLegacySavedMemoryRun, bindLegacyCapturedSavedMemoryRun, assertLegacyCapturedMemoryHandleOwner, sealLegacySavedMemoryRun, inheritLegacySavedMemoryHistory, isForeignLegacySavedMemoryHistoryError, assertLegacySavedMemoryHistoryReceiptOwner, LegacyChatTerminated,
+  terminateLegacySavedMemoryRun, type LegacyChatAuthority, type LegacyCapturedHistoryHandle } from "./legacyChatAuthority.js";
 import { SavedMemoryReadSet, captureSavedMemoryReadProof, captureSavedMemoryStamp, savedMemoryBudgetLimited, savedMemoryDeadline,
   savedMemoryOwnArray, savedMemoryOwnRecord, savedMemoryUnavailable, savedMemoryUUID, SAVED_MEMORY_READ_LIMIT,
   type SavedMemoryReadProof, type SavedMemoryStamp } from "./savedMemoryLineage.js";
@@ -16,16 +16,24 @@ import { searchSavedMemory, SAVED_MEMORY_PAGE_MAX_JSON_BYTES, SAVED_MEMORY_RUN_C
 
 import type { SavedMemorySessionHistoryReceipt } from "./savedMemorySessionHistory.js";
 
-export interface WorkspaceSavedMemoryAdmission {
+export type WorkspaceSavedMemoryAdmission = {
   readonly pool: Pool;
   readonly auth: AuthContext;
   readonly owner: LegacyChatAuthority;
   readonly taskID: string;
+} & ({
   readonly source: HarnessRunSourceHandle;
   readonly guard: () => Promise<void>;
   /** Actual selected Session frame; consumed only through the private joint. */
   readonly history?: SavedMemorySessionHistoryReceipt;
-}
+  readonly capturedHistory?: never;
+} | {
+  /** The original captured owner retains its source and exact ancestor domain. */
+  readonly capturedHistory: LegacyCapturedHistoryHandle;
+  readonly source?: never;
+  readonly guard?: never;
+  readonly history?: never;
+});
 export interface WorkspaceTrackedMemoryPage {
   readonly page: AgentMemoryPage;
   readonly originalStamps: readonly Readonly<SavedMemoryStamp>[];
@@ -111,6 +119,8 @@ function freezeFrame<T>(value: T): T {
 }
 export async function createWorkspaceSavedMemoryRun(admission: WorkspaceSavedMemoryAdmission,
   runID: string, runDeadlineMonotonicMs: number) {
+  const capturedHistory = admission.capturedHistory;
+  if (capturedHistory) assertLegacyCapturedMemoryHandleOwner(capturedHistory, admission.owner);
   const existing = runAdmissions.get(admission);
   if (existing) return terminateLegacySavedMemoryRun(existing.owner, null);
   // Capture once before any await; a retained server holder cannot swap the
@@ -123,8 +133,10 @@ export async function createWorkspaceSavedMemoryRun(admission: WorkspaceSavedMem
       phase: "starting", seal: null, assertLive: null };
   } catch (error) { return terminateLegacySavedMemoryRun(owner, error); }
   runAdmissions.set(admission, state);
-  const handle = await bindLegacySavedMemoryRun(owner, { auth, taskID,
-    runID, runDeadlineMonotonicMs, source, guard });
+  const handle = capturedHistory
+    ? await bindLegacyCapturedSavedMemoryRun(owner, capturedHistory, { auth, taskID, runID, runDeadlineMonotonicMs })
+    : source && guard ? await bindLegacySavedMemoryRun(owner, { auth, taskID, runID, runDeadlineMonotonicMs, source, guard })
+      : terminateLegacySavedMemoryRun(owner, null);
   const access = accessLegacySavedMemoryRun(handle, owner, auth);
   let remaining = SAVED_MEMORY_RUN_CONTEXT_MAX;
   let tail: Promise<unknown> = Promise.resolve();
@@ -194,6 +206,10 @@ export async function createWorkspaceSavedMemoryRun(admission: WorkspaceSavedMem
     assertCurrent: () => serial(() => access.assertCurrent(), false),
     throwIfTerminated: () => access.throwIfTerminated(),
     terminate: (error: unknown): never => access.terminate(error),
+    // Count only text actually entering the model/tool frame. The complete
+    // captured eligibility/domain stays intact, even when it exceeds 24k.
+    capturedContext: <T>(value: T): Promise<T> => capturedHistory
+      ? serial(() => admit(value, [])) : Promise.reject(new LegacyChatTerminated()),
     history: (receipt: SavedMemorySessionHistoryReceipt) => {
       // Refuse a known foreign capability before touching this Run's phase,
       // clock or terminal latch. This preflight grants no history access.
@@ -228,7 +244,9 @@ export async function createWorkspaceSavedMemoryRun(admission: WorkspaceSavedMem
     }),
     recall: (tracked: WorkspaceTrackedMemoryPage) => serial(() =>
       admit(recallData(tracked.page), exposedStamps(tracked.page.items, tracked.originalStamps))),
-    search: (input: unknown) => serial(() => searchSavedMemory({ pool, database: pool,
+    search: (input: unknown) => capturedHistory
+      ? Promise.reject(new ApiError(409, "SAVED_MEMORY_UNAVAILABLE", "Saved Memory search is not admitted in this Run."))
+      : serial(() => searchSavedMemory({ pool, database: pool,
       authority: access.authority, reads: access.reads, remainingContextCharacters: () => remaining,
       chargeContextCharacters: charge, finalizeRead: domain => access.finalizeRead(domain) }, input)),
   });

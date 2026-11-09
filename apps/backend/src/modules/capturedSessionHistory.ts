@@ -51,5 +51,8 @@ export async function collectCapturedHistory(database: DatabaseClient, input: Ca
     if (frame.historyTaskIDs) Object.freeze(frame.historyTaskIDs);
     Object.freeze(frame);
   }
-  return { inline: inline.conversation, complete: complete?.conversation, guard: binding.guard, currentSource, domain };
+  // The credential owner's closure alone may reuse this exact source for a
+  // captured SDK Memory Run. It never enters the route's preparation view.
+  return { inline: inline.conversation, complete: complete?.conversation, source: binding.source,
+    guard: binding.guard, currentSource, domain };
 }

@@ -210,32 +210,34 @@ export async function executeUnscopedChatTask(input: {
       historyExpiresAt?.valueOf() ?? Infinity)),
       personIDs: [...new Set([...sourcePeople, ...(refs?.kind === "product" ? refs.person_ids : [])])] };
   };
-  // Bind the real password-owned text-only atomic entry. Session admission
-  // here is inline, known non-SDK only; complete-history/queue/Lab issuers keep
-  // their existing paths until their actual qualifications are connected.
+  const historyOwner = input[publicSDKHistory];
+  // The public SDK continuation has its own genuine captured owner/handle.
+  // Its lineage qualification does not add the ordinary Memory search grant.
   const memoryEntry = input.memoryPublicationClaimID && input.legacyAuthority
     && input.database && "release" in input.database && input.probePool && input.auth?.userKind === "password_human"
     && input.provider && isWorkspaceConversationAgentProvider(input.provider)
-    && (!input.request.session_id || input.provider.providerId !== "claude-agent-sdk")
+    && (!input.request.session_id || input.provider.providerId !== "claude-agent-sdk" || historyOwner === input.legacyAuthority)
     && !input.hostAuthority && !input.memoryDraftTarget
     && !input.legacySourceCurrent && !input.images?.length
     ? Object.freeze({ claimID: input.memoryPublicationClaimID, owner: input.legacyAuthority,
       database: input.database, pool: input.probePool, auth: snapshotLegacyChatAuth(input.auth),
       sessionID: input.request.session_id ?? null, messageID: input.request.message_id ?? null }) : null;
-  const memorySource = memoryEntry
+  const memorySource = memoryEntry && !historyOwner
     ? await memoryEntry.owner.source(() => createHarnessSourceGuardWithBinding(memoryEntry.database, memoryEntry.auth,
       memoryEntry.sessionID ?? undefined, sources, memoryEntry.pool)) : null;
   let savedMemoryAdmission: WorkspaceSavedMemoryAdmission | null = memorySource && memoryEntry
     ? Object.freeze({ pool: memoryEntry.pool, auth: memoryEntry.auth, owner: memoryEntry.owner,
       taskID, source: memorySource.source, guard: memorySource.guard }) : null;
   let savedMemoryCompletion: WorkspaceSavedMemoryCompletionHandle | null = null;
-  const historyOwner = input[publicSDKHistory];
   if (historyOwner && (!input.database || !input.auth || !input.request.session_id))
     return terminateLegacySavedMemoryRun(historyOwner, null);
   const captured = historyOwner
     ? await prepareLegacyCapturedHistory(historyOwner, { database: input.database!, auth: input.auth!,
       sessionID: input.request.session_id!, taskID, messageID: input.request.message_id, sources, onExpiry: narrowHistoryExpiry })
     : undefined;
+  if (captured && memoryEntry && historyOwner === memoryEntry.owner)
+    savedMemoryAdmission = Object.freeze({ pool: memoryEntry.pool, auth: memoryEntry.auth, owner: memoryEntry.owner,
+      taskID, capturedHistory: captured.handle });
   const assertCurrent = input.provider?.providerId === "claude-agent-sdk" && input.database && input.auth
     ? captured?.guard ?? memorySource?.guard ?? await createHarnessSourceGuard(input.database, input.auth, input.request.session_id, sources, input.probePool ?? input.database) : undefined;
   // Keep `assertCurrent` presence and every existing capability selection as
@@ -298,7 +300,7 @@ export async function executeUnscopedChatTask(input: {
     "unscoped_conversation", { sessionID: input.request.session_id,
       screenshotTaskIDs: conversationSources.map(source => source.taskID) }) : undefined;
   if (historyExpiresAt) narrowHistoryExpiry(historyExpiresAt);
-  if (savedMemoryAdmission && memoryEntry && memorySource && memoryEntry.sessionID !== null) {
+  if (savedMemoryAdmission && !savedMemoryAdmission.capturedHistory && memoryEntry && memorySource && memoryEntry.sessionID !== null) {
     const entry = memoryEntry, sessionID = memoryEntry.sessionID;
     // The observation has now narrowed the original source lifetime. Refresh
     // that same private binding before minting its exact history facts.
@@ -697,7 +699,7 @@ async function createUnscopedChatTaskInternal(
       probePool: pool,
       auth,
       ...(legacyAuthority ? { legacyAuthority } : {}),
-      ...(memoryAtomicEntry ? { memoryPublicationClaimID: idempotency.id } : {}),
+      ...(memoryAtomicEntry || captureSDKHistory ? { memoryPublicationClaimID: idempotency.id } : {}),
       ...(referenceTime ? { referenceTime } : {}),
       ...(request.session_id ? { continuation: (sources: () => { expiresAt: Date; personIDs: readonly string[] }) => createHarnessContinuationFactory(client, pool, auth, request.session_id!, { kind: "workspace_conversation" }, sources) } : {}),
     });
