@@ -93,7 +93,7 @@ async function withBuildLock(action) {
     return await action();
   } finally {
     try {
-      database.exec("COMMIT");
+      database.exec("ROLLBACK");
     } finally {
       database.close();
     }
