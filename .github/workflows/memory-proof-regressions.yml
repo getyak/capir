@@ -1,0 +1,81 @@
+name: Memory proof regressions
+on:
+  pull_request:
+    paths:
+      - 'apps/backend/**'
+      - 'apps/agent/**'
+      - 'packages/contracts/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/memory-proof-regressions.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  memory-proof-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      lab-postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: lab-ci-only
+          POSTGRES_DB: lab_regression_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lab_regression_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+      CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+      GET_455_CAPTURED_HISTORY_TEST_REQUIRED: '1'
+      GET_455_STAGE_HTTP_ACK_TEST_REQUIRED: '1'
+      GET_457_STAGE_HTTP_ACK_TEST_REQUIRED: '1'
+      GET_462_MEMORY_AUTHORITY_TEST_REQUIRED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 11.18.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the actual backend and its workspace dependencies
+        run: pnpm --filter @talent-signal/backend build
+      - name: Migrate and seed the isolated fixture database
+        run: |
+          pnpm --filter @talent-signal/backend migrate
+          pnpm --filter @talent-signal/backend seed
+      - name: Run the original protected Memory and commit-order cases
+        run: |
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/savedMemoryRuntime.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/savedMemoryDiscovery.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/savedMemoryCapturedHistory.integration.test.ts src/modules/capturedHistoryOwner.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryReviewStageAck.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryProposalCommitOrder.integration.test.ts
+      - name: Exercise the explicitly planned follow-on proofs when implemented
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          planned = [
+              'savedMemorySdkLineage.integration.test.ts',
+              'savedMemoryLegacyProducers.integration.test.ts',
+              'savedMemorySessionProjection.integration.test.ts',
+              'savedMemoryHttpDelivery.integration.test.ts',
+          ]
+          for name in planned:
+              relative = 'src/modules/' + name
+              if not Path('apps/backend', relative).is_file():
+                  print(name + ': not implemented; no acceptance claimed', flush=True)
+                  continue
+              print('Running the actual proof: ' + name, flush=True)
+              subprocess.run(['pnpm', '--filter', '@talent-signal/backend', 'exec', 'vitest', 'run',
+                              '--maxWorkers=1', '--no-file-parallelism', relative], check=True)
