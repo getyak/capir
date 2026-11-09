@@ -5,6 +5,8 @@ import { createSessionHistorySnapshot } from "./sessionHistorySnapshot.js";
 import { collectCapturedHistory, type CapturedHistoryInput } from "./capturedSessionHistory.js";
 import { capturedHistoryClaimsCurrentSQL, capturedHistoryDeadlineSQL, capturedHistorySourcesCurrentSQL, lockCapturedHistoryClaims } from "./capturedHistoryClaims.js";
 import { types } from "node:util";
+import { canonicalBorrowOwner, claimCanonicalBorrow } from "./savedMemoryCanonicalTransaction.js";
+import { consumeCapturedCoreClock } from "./workspaceConversationAgent.js";
 import type { BackendConfig } from "../config.js";
 import type { DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
@@ -164,19 +166,21 @@ interface CapturedPreparation {
   readonly conversationHistory: readonly ConversationMessage[];
   readonly snapshot: SessionHistorySnapshot | undefined;
 }
-interface CapturedCoreRun {
-  runID: string; runDeadlineMonotonicMs: number;
-  workspaceID: string; sessionID: string | null | undefined; messageID: string | undefined;
-  conversationHistory: readonly ConversationMessage[] | undefined; sessionHistory: SessionHistorySnapshot | undefined;
-}
 const capturedOwners = new WeakMap<object, {
+  readonly pool: Pool;
   prepare(input: CapturedHistoryInput): Promise<CapturedPreparation>;
-  bind(handle: LegacyCapturedHistoryHandle, run: CapturedCoreRun): void;
+  bind(handle: LegacyCapturedHistoryHandle, receipt: object): void;
   assertEntry(handle: LegacyCapturedHistoryHandle, database: DatabaseClient, auth: AuthContext): void;
   bound(): boolean;
 }>();
 const capturedHandles = new WeakMap<object, LegacyChatAuthority>();
 const guardedClientOwners = new WeakMap<object, LegacyChatAuthority>();
+
+/** A known credential owner cannot borrow through a forwarded pool. */
+export function assertLegacyCanonicalPool(owner: LegacyChatAuthority, pool: Pool): void {
+  const issuer = capturedOwners.get(owner);
+  if (issuer && issuer.pool !== pool) return foreignHistoryStop();
+}
 
 /** Only the original credential owner can read and register its history. */
 export async function prepareLegacyCapturedHistory(owner: LegacyChatAuthority, input: CapturedHistoryInput) {
@@ -188,19 +192,19 @@ export function assertLegacyCapturedHistoryEntry(owner: LegacyChatAuthority, han
   database: DatabaseClient, auth: AuthContext): void {
   const original = capturedHandles.get(handle);
   if (original && original !== owner) return foreignHistoryStop();
-  const issuer = guardedClientOwners.get(database);
+  const issuer = guardedClientOwners.get(database) ?? canonicalBorrowOwner(database as PoolClient);
   if (issuer && issuer !== owner) return foreignHistoryStop();
   const binder = capturedOwners.get(owner);
   if (!binder) throw new LegacyChatTerminated();
   binder.assertEntry(handle, database, auth);
 }
 export function bindLegacyCapturedHistoryRun(owner: LegacyChatAuthority, handle: LegacyCapturedHistoryHandle,
-  run: CapturedCoreRun): void {
+  receipt: object): void {
   const original = capturedHandles.get(handle);
   if (original && original !== owner) return foreignHistoryStop();
   const binder = capturedOwners.get(owner);
   if (!binder) throw new LegacyChatTerminated();
-  binder.bind(handle, run);
+  binder.bind(handle, receipt);
 }
 export function hasBoundLegacyCapturedHistory(owner: LegacyChatAuthority): boolean {
   return capturedOwners.get(owner)?.bound() === true;
@@ -384,6 +388,9 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   let active: PoolClient | null = null;
   let activeGuarded: PoolClient | null = null;
   let activeLease: object | null = null;
+  let certifiedBorrow = false;
+  let missingLineage = false, missingRetention = false;
+  let accountFence: object | null = null, readerFence: object | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const sourceChecks = new Set<() => Promise<void>>();
   let captureStarted = false;
@@ -462,15 +469,27 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
     try { if ((await client.query(sql, values)).rowCount !== count) fail(); }
     catch { fail(); }
   };
+  const rejectForeignClient = (client: DatabaseClient) => {
+    const issuer = guardedClientOwners.get(client) ?? canonicalBorrowOwner(client as PoolClient);
+    if (issuer && issuer !== owner) return foreignHistoryStop();
+  };
+  const certified = () => certifiedBorrow && active !== null && canonicalBorrowOwner(active) === owner;
+  const checkFinalClient = (client: DatabaseClient) => {
+    rejectForeignClient(client);
+    if (captureStarted && (client !== activeGuarded || !certified())) return foreignHistoryStop();
+  };
   const owner: LegacyChatAuthority = {
     signal: controller.signal, throwIfTerminated: alive,
     snapshotOriginal: () => { alive(); return original; },
     assertCurrent: () => check(active ?? pool), source,
     observeSource: current => { alive(); sourceChecks.add(current); },
     assertFinalCurrent: async client => {
+      checkFinalClient(client);
       if (captureStarted) {
         const writer = activeGuarded;
-        if (!captureBound || !lockCaptureForFinal || !capturedCheck || !writer || (client !== writer && client !== active)) return fail();
+        if (!captureBound || !lockCaptureForFinal || !capturedCheck || !writer
+          || ((missingLineage || missingRetention) && accountFence !== activeLease)
+          || (missingRetention && readerFence !== activeLease)) return fail();
         await source(() => lockCaptureForFinal!(writer));
         for (const current of sourceChecks) await source(current);
         return capturedCheck(writer);
@@ -483,15 +502,30 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
     host: (operation, sourceCheck) => checked(operation, sourceCheck, true),
     provider: (operation, sourceCheck) => checked(operation, sourceCheck, false),
     lockAccountsForFinalization: async client => {
+      checkFinalClient(client);
       const ids = [...new Set([auth.accountId, ...(binding?.ownerAccount ? [binding.ownerAccount] : [])])].sort();
-      await lock(client, "SELECT id FROM accounts WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE NOWAIT", [ids], ids.length);
+      if (missingLineage || missingRetention) {
+        // Captured owners are password humans and have one original account.
+        // UPDATE conflicts with the FK KEY SHARE for a new lineage or user.
+        await lock(client, "SELECT id FROM accounts WHERE id=$1 FOR UPDATE NOWAIT", [auth.accountId]);
+        accountFence = activeLease;
+      } else await lock(client, "SELECT id FROM accounts WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE NOWAIT", [ids], ids.length);
     },
     lockReadersForFinalization: async client => {
+      checkFinalClient(client);
       // Only after the caller's unchanged source locks. FOR SHARE also blocks
       // revoked_at/expiry/hash non-key updates; KEY SHARE would not.
       // The generation baseline is created with the account by migration061.
       await lock(client, "SELECT account_id FROM harness_source_generations WHERE account_id=$1 FOR SHARE NOWAIT", [auth.accountId]);
-      await lock(client, "SELECT id FROM users WHERE account_id=$1 AND id=$2 FOR SHARE NOWAIT", [auth.accountId, auth.userId]);
+      if (missingRetention) {
+        if (accountFence !== activeLease) return fail();
+        // The task PK is account-wide. Every existing actor is a possible FK
+        // parent; the earlier account lock also fences insertion of a new actor.
+        await lock(client, `WITH locked AS MATERIALIZED (
+          SELECT id FROM users WHERE account_id=$1 ORDER BY id FOR UPDATE NOWAIT
+        ) SELECT 1 FROM locked HAVING bool_or(id=$2::uuid)`, [auth.accountId, auth.userId]);
+        readerFence = activeLease;
+      } else await lock(client, "SELECT id FROM users WHERE account_id=$1 AND id=$2 FOR SHARE NOWAIT", [auth.accountId, auth.userId]);
       await lock(client, "SELECT id FROM sessions WHERE account_id=$1 AND user_id=$2 AND id=$3 FOR SHARE NOWAIT", [auth.accountId, auth.userId, auth.sessionId]);
       if (binding) {
         await lock(client, "SELECT id FROM lab_test_workspaces WHERE id=$1 FOR SHARE NOWAIT", [binding.workspace]);
@@ -510,9 +544,13 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
       await check(client);
     },
     withClient: async (client, operation) => {
+      rejectForeignClient(client);
+      if (guardedClientOwners.has(client)) return foreignHistoryStop();
+      const canonical = claimCanonicalBorrow(pool, owner, client);
+      if (!canonical && (captureStarted || certified())) return foreignHistoryStop();
       alive();
       if (active) return fail();
-      active = client; activeLease = {};
+      active = client; activeLease = {}; certifiedBorrow = canonical;
       let clientOpen = true;
       const guarded = new Proxy(client, { get(target, key) {
         const value = Reflect.get(target, key, target);
@@ -541,7 +579,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         else if (memoryPublication && publicationFinalCurrent) { await publicationFinalCurrent(guarded); alive(); }
         else await check(client); // Also fences completed-result read-only replay.
         return value;
-      } finally { clientOpen = false; activeGuarded = null; activeLease = null; active = null; }
+      } finally { clientOpen = false; certifiedBorrow = false; activeGuarded = null; activeLease = null; active = null; }
     },
     dispose: () => {
       disposed = true;
@@ -565,42 +603,42 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   let captureIdentity: { taskID: string; sessionID: string; messageID: string | undefined } | undefined;
   let prepared: CapturedPreparation | undefined;
   let captureDatabase: DatabaseClient | undefined;
+  let assertCaptureHeld: (() => void) | undefined;
   const narrowDeadline = (next: number) => {
     memoryDeadline = Math.min(deadline, memoryDeadline ?? Infinity, next);
     if (timer) clearTimeout(timer);
     arm(); alive();
   };
   capturedOwners.set(owner, {
-    bound: () => captureBound,
+    pool, bound: () => captureBound,
     assertEntry(handle, database, entryAuth) {
       try {
         alive();
         const actor = snapshotLegacyChatAuth(entryAuth);
+        assertCaptureHeld?.();
         if (!captureHandle || captureHandle !== handle || captureDatabase !== database
           || (database !== pool && database !== activeGuarded)
           || actor.accountId !== original.accountId || actor.userId !== original.userId
           || actor.sessionId !== original.sessionId || actor.userKind !== original.userKind) return fail();
       } catch (error) { return terminateMemory(error); }
     },
-    bind(handle, run) {
-      try {
-        run = savedMemoryOwnRecord(run, ["runID", "runDeadlineMonotonicMs", "workspaceID", "sessionID", "messageID",
-          "conversationHistory", "sessionHistory"]) as unknown as CapturedCoreRun;
-      } catch (error) { return terminateMemory(error); }
-      if (!captureHandle || handle !== captureHandle || captureBound || !captureIdentity
+    bind(handle, receipt) {
+      const run = consumeCapturedCoreClock(owner, handle, receipt);
+      if (!run || !captureHandle || handle !== captureHandle || captureBound || !captureIdentity || !assertCaptureHeld
         || run.runID !== captureIdentity.taskID || run.workspaceID !== original.accountId
         || typeof run.sessionID !== "string" || run.sessionID.toLowerCase() !== captureIdentity.sessionID
         || (captureIdentity.messageID !== undefined && run.messageID !== captureIdentity.messageID)
         || !prepared || run.conversationHistory !== prepared.conversationHistory || run.sessionHistory !== prepared.snapshot
         || !Number.isFinite(run.runDeadlineMonotonicMs)) return fail();
+      assertCaptureHeld();
       narrowDeadline(run.runDeadlineMonotonicMs); captureBound = true;
     },
     async prepare(input) {
       // A known foreign lease cannot affect this owner's clock or failure latch.
       if (!input || typeof input !== "object" || types.isProxy(input)) throw new LegacyChatTerminated();
       const supplied = Object.getOwnPropertyDescriptor(input, "database");
-      const foreign = supplied && "value" in supplied ? guardedClientOwners.get(supplied.value) : undefined;
-      if (foreign && foreign !== owner) return foreignHistoryStop();
+      if (supplied && "value" in supplied) rejectForeignClient(supplied.value);
+      if (supplied && "value" in supplied && supplied.value === activeGuarded && !certified()) return foreignHistoryStop();
       try {
         alive();
         if (!currentReaderAdmission || captureStarted || memoryRun || memoryBindingPending || memoryReaderUsed
@@ -611,7 +649,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         const database = input.database, lease = activeLease;
         const held = () => {
           alive();
-          if (database !== pool && (!lease || lease !== activeLease || database !== activeGuarded)) return fail();
+          if (database !== pool && (!certified() || !lease || lease !== activeLease || database !== activeGuarded)) return fail();
         };
         held();
         const actor = snapshotLegacyChatAuth(input.auth);
@@ -632,13 +670,17 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         const frame = await collectCapturedHistory(queryChannel,
           { database, auth: actor, taskID, sessionID, messageID, sources: input.sources });
         held();
-        const domain = JSON.parse(frame.domain) as { claims: unknown[]; tasks: string[]; screenshots: unknown[] };
+        const domain = JSON.parse(frame.domain) as {
+          claims: { task: string; proof: unknown; sourceActor: string | null }[]; tasks: string[]; screenshots: unknown[] };
+        // Match the canonical SQL parser, including legacy mixed-case UUIDs.
+        missingLineage = domain.claims.some(c => c.proof === null && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(c.task));
+        missingRetention = domain.claims.some(c => c.sourceActor === null);
         lockCaptureForFinal = async writer => {
           held();
-          if (!activeLease || writer !== activeGuarded) return fail();
+          if (!certified() || !activeLease || writer !== activeGuarded) return fail();
           if (domain.claims.length) await lockCapturedHistoryClaims(writer, actor.accountId, domain.claims);
           held();
-          if (writer !== activeGuarded) return fail();
+          if (!certified() || writer !== activeGuarded) return fail();
         };
         const joint = async (writer?: PoolClient) => {
           try {
@@ -647,7 +689,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
             held();
             const sourceBinding = frame.currentSource();
             const begun = performance.now();
-            if (writer && (!activeLease || writer !== activeGuarded)) return fail();
+            if (writer && (!certified() || !activeLease || writer !== activeGuarded)) return fail();
             const row = await (writer ?? queryChannel).query(`WITH tick AS MATERIALIZED (SELECT statement_timestamp() AS checked_at),
               captured_history_owner AS MATERIALIZED (SELECT LEAST($9::timestamptz,(${acceptedDeadlineSQL}),sessions.expires_at,
                 ($12::jsonb->'source'->>'sourceExpiresAt')::timestamptz,($12::jsonb->'source'->>'sessionExpiresAt')::timestamptz,
@@ -662,7 +704,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
               FROM tick,captured_history_owner WHERE captured_history_owner.until>tick.checked_at`,
             [...proof, JSON.stringify({ ...domain, source: sourceBinding }), original.tokenBranch]);
             held();
-            if ((writer && writer !== activeGuarded) || row.rows.length !== 1
+            if ((writer && (!certified() || writer !== activeGuarded)) || row.rows.length !== 1
               || JSON.stringify(frame.currentSource()) !== JSON.stringify(sourceBinding)) return fail();
             const envelope = captureLegacySavedMemoryEnvelope(row.rows[0]);
             const us = legacySavedMemoryMicroseconds(envelope.read_until) - legacySavedMemoryMicroseconds(envelope.checked_at);
@@ -672,16 +714,17 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         // Serialize checks to keep a single source observation and monotonic
         // narrowing order even when host tools run concurrently.
         let tail: Promise<void> = Promise.resolve();
-        capturedCheck = async writer => {
+        const enqueue = async (operation: () => Promise<void>) => {
           held();
-          if (writer && writer !== activeGuarded) return fail();
-          const pending = tail.then(() => joint(writer)); tail = pending.catch(() => {});
+          const pending = tail.then(async () => { held(); await operation(); held(); });
+          tail = pending.catch(() => {});
           await pending; held();
-          if (writer && writer !== activeGuarded) return fail();
         };
+        capturedCheck = writer => enqueue(() => joint(writer));
         await capturedCheck(); held();
         captureIdentity = { taskID, sessionID, messageID };
         captureDatabase = database;
+        assertCaptureHeld = held;
         captureHandle = Object.freeze({}) as LegacyCapturedHistoryHandle;
         capturedHandles.set(captureHandle, owner);
         const conversationHistory = Object.freeze(boundedConversationHistory(frame.inline.messages, messageID)
@@ -695,15 +738,19 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
             sources: allSources, taskIDs: frame.complete.historyTaskIDs!, sessionStamp: frame.complete.historyStamp!,
             sourceGeneration: frame.complete.historyGeneration!, assertCurrent: frame.guard,
             ...(input.onExpiry ? { onExpiry: input.onExpiry } : {}) });
+          const messages = Object.freeze(originalSnapshot.messages.map(message => Object.freeze(message)));
+          const checkSnapshot = () => enqueue(async () => {
+            await source(originalSnapshot.assertCurrent);
+            await joint();
+          });
+          await checkSnapshot(); // Private preparation, before a provider or tool exists.
           snapshot = Object.freeze({ version: originalSnapshot.version,
-            messages: Object.freeze(originalSnapshot.messages.map(message => Object.freeze(message))),
-            assertCurrent: async () => {
-              await source(originalSnapshot.assertCurrent);
-              await capturedCheck!();
-            } });
+            get messages() { held(); if (!captureBound) return fail(); return messages; },
+            async assertCurrent() { if (!captureBound) return fail(); await checkSnapshot(); } });
+
         }
         prepared = Object.freeze({ handle: captureHandle, inline: frame.inline, complete: frame.complete,
-          guard: frame.guard, conversationHistory, snapshot });
+          guard: () => enqueue(() => source(frame.guard)), conversationHistory, snapshot });
         return prepared;
       } catch (error) { return terminateMemory(error); }
     },

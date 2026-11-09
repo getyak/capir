@@ -1,7 +1,21 @@
 import type { Pool, PoolClient } from "pg";
 import { ApiError } from "../lib/apiError.js";
 import { measureLabServerStage } from "../lib/labDiagnostics.js";
-import type { LegacyChatAuthority } from "./legacyChatAuthority.js";
+import { assertLegacyCanonicalPool, type LegacyChatAuthority } from "./legacyChatAuthority.js";
+
+// Registered only between BEGIN and the end of the real borrow's operation.
+const canonicalBorrows = new WeakMap<PoolClient, { pool: Pool; owner: LegacyChatAuthority; claimed: boolean }>();
+
+export function canonicalBorrowOwner(client: PoolClient) {
+  return canonicalBorrows.get(client)?.owner;
+}
+
+export function claimCanonicalBorrow(pool: Pool, owner: LegacyChatAuthority, client: PoolClient): boolean {
+  const borrow = canonicalBorrows.get(client);
+  if (!borrow || borrow.pool !== pool || borrow.owner !== owner || borrow.claimed) return false;
+  borrow.claimed = true;
+  return true;
+}
 
 /** A sent COMMIT failed to acknowledge. This is never a rollback receipt. */
 export class SavedMemoryCanonicalCommitUnknown extends ApiError {
@@ -41,11 +55,15 @@ function commitCommand(ack: unknown): unknown {
 export async function inSavedMemoryCanonicalTransaction<T>(pool: Pool, authority: LegacyChatAuthority,
   operation: (client: PoolClient) => Promise<T>, governed: (result: T) => boolean,
   options: { boundedBorrow?: boolean } = {}): Promise<T> {
+  assertLegacyCanonicalPool(authority, pool);
   const client = await measureLabServerStage("database_connection", () => options.boundedBorrow === false ? pool.connect() : borrow(pool));
   let protectedResult = false, commitSent = false, discard = false;
   try {
     await client.query("BEGIN");
-    const result = await operation(client);
+    canonicalBorrows.set(client, { pool, owner: authority, claimed: false });
+    let result: T;
+    try { result = await operation(client); }
+    finally { canonicalBorrows.delete(client); }
     protectedResult = governed(result);
     if (protectedResult) authority.throwIfTerminated();
     commitSent = true;

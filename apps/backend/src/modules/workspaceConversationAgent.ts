@@ -43,7 +43,7 @@ import type {
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import type { AuthContext } from "./auth.js";
 import { recallMemoriesTracked } from "./memoryReviewTrackedRecall.js";
-import { assertLegacyCapturedHistoryEntry, bindLegacyCapturedHistoryRun, type LegacyChatAuthority, type LegacyCapturedHistoryHandle,
+import { LegacyChatTerminated, assertLegacyCapturedHistoryEntry, bindLegacyCapturedHistoryRun, type LegacyChatAuthority, type LegacyCapturedHistoryHandle,
   terminateLegacySavedMemoryRun, isForeignLegacySavedMemoryHistoryError, assertLegacySavedMemoryHistoryReceiptOwner } from "./legacyChatAuthority.js";
 import { createWorkspaceSavedMemoryRun, type WorkspaceSavedMemoryAdmission,
   type WorkspaceSavedMemoryRun, type WorkspaceTrackedMemoryPage } from "./workspaceSavedMemoryRun.js";
@@ -71,6 +71,22 @@ import {
   type FirstContactResearchSubject,
 } from "./firstContactResearch.js";
 
+
+type CapturedEntry = { owner: LegacyChatAuthority; handle: LegacyCapturedHistoryHandle };
+type CapturedCoreClock = { runID: string; runDeadlineMonotonicMs: number; workspaceID: string;
+  sessionID: string | null | undefined; messageID: string | undefined;
+  conversationHistory: readonly ConversationMessage[] | undefined; sessionHistory: SessionHistorySnapshot | undefined };
+const capturedEntries = new WeakSet<CapturedEntry>();
+const capturedClocks = new WeakMap<object, { entry: CapturedEntry; clock: CapturedCoreClock }>();
+
+// Only the authenticated wrapper can enter Core with a captured preparation.
+// Only the original timer origin below can issue this one-use receipt.
+export function consumeCapturedCoreClock(owner: LegacyChatAuthority, handle: LegacyCapturedHistoryHandle, receipt: object) {
+  const value = capturedClocks.get(receipt);
+  if (!value || value.entry.owner !== owner || value.entry.handle !== handle) return undefined;
+  capturedClocks.delete(receipt);
+  return value.clock;
+}
 
 export { WORKSPACE_CONVERSATION_SYSTEM_PROMPT } from "@talent-signal/agent";
 
@@ -390,6 +406,8 @@ export async function executeWorkspaceConversationAgentCore(input: {
   /** Live queue run claim: server-owned staging authority. */
   hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
 }): Promise<WorkspaceConversationAgentExecution> {
+  const capturedEntry = input.capturedHistory;
+  if (capturedEntry && !capturedEntries.delete(capturedEntry)) throw new LegacyChatTerminated();
   const memoryAdmission = input.savedMemoryAdmission;
   const memoryHistory = memoryAdmission?.history;
   // A known foreign receipt cannot touch this attempt's setup or owner latch.
@@ -738,9 +756,13 @@ export async function executeWorkspaceConversationAgentCore(input: {
   const runID = input.runID ?? randomUUID();
   // Use the same origin as the existing provider timeout, including all startup.
   const runDeadlineMonotonicMs = performance.now() + durationMs;
-  if (input.capturedHistory) bindLegacyCapturedHistoryRun(input.capturedHistory.owner, input.capturedHistory.handle,
-    { runID, runDeadlineMonotonicMs, workspaceID: input.workspaceID, sessionID: input.sessionID, messageID: input.messageID,
-      conversationHistory: input.conversationHistory, sessionHistory: input.sessionHistory });
+  if (capturedEntry) {
+    const receipt = Object.freeze({});
+    capturedClocks.set(receipt, { entry: capturedEntry, clock: { runID, runDeadlineMonotonicMs,
+      workspaceID: input.workspaceID, sessionID: input.sessionID, messageID: input.messageID,
+      conversationHistory: input.conversationHistory, sessionHistory: input.sessionHistory } });
+    bindLegacyCapturedHistoryRun(capturedEntry.owner, capturedEntry.handle, receipt);
+  }
   let savedMemoryRun: WorkspaceSavedMemoryRun | null = null;
   let savedMemoryConversationHistory: typeof input.conversationHistory = undefined;
   let onMemoryAbort: (() => void) | null = null;
@@ -2073,8 +2095,11 @@ export async function executeWorkspaceConversationAgent(input: {
   /** Live queue run claim: server-owned staging authority for MCP tools. */
   hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
 }): Promise<WorkspaceConversationAgentExecution> {
-  if (input.capturedHistory) assertLegacyCapturedHistoryEntry(input.capturedHistory.owner, input.capturedHistory.handle,
-    input.database, input.auth);
+  const capturedEntry = input.capturedHistory && Object.freeze({ owner: input.capturedHistory.owner, handle: input.capturedHistory.handle });
+  if (capturedEntry) {
+    assertLegacyCapturedHistoryEntry(capturedEntry.owner, capturedEntry.handle, input.database, input.auth);
+    capturedEntries.add(capturedEntry);
+  }
   if (input.savedMemoryAdmission) {
     const admission = input.savedMemoryAdmission, owner = admission.owner;
     try {
@@ -2357,10 +2382,15 @@ export async function executeWorkspaceConversationAgent(input: {
         sessionID: input.sessionID ?? null,
       })
     : null;
+  // The receipt binds this exact snapshot, or the inline-only owner's
+  // original joint guard. An optional caller guard cannot replace either.
+  const capturedCheck = capturedEntry && (input.sessionHistory?.assertCurrent ?? capturedEntry.owner.assertCurrent);
+  const coreCheck = capturedCheck && capturedCheck !== assertCurrent
+    ? async () => { await assertCurrent?.(); await capturedCheck(); } : capturedCheck ?? assertCurrent;
   return executeWorkspaceConversationAgentCore({
     ...(mcpConnections ? { mcpConnections } : {}),
     ...(input.savedMemoryAdmission ? { savedMemoryAdmission: input.savedMemoryAdmission } : {}),
-    ...(input.capturedHistory ? { capturedHistory: input.capturedHistory } : {}),
+    ...(capturedEntry ? { capturedHistory: capturedEntry } : {}),
     ...(input.hostResult ? { hostResult: input.hostResult } : {}),
     messageSources,
     objective: input.objective,
@@ -2381,7 +2411,7 @@ export async function executeWorkspaceConversationAgent(input: {
     ...(input.runID ? { runID: input.runID } : {}),
     ...(input.observation ? { observation: input.observation } : {}),
     ...(input.continuation ? { continuation: input.continuation } : {}),
-    ...(assertCurrent ? { assertCurrent } : {}),
+    ...(coreCheck ? { assertCurrent: coreCheck } : {}),
         ...(input.responsePreference ? { responsePreference: input.responsePreference } : {}),
         ...(input.calendarContext ? { calendarContext: input.calendarContext } : {}),
     ...(input.onVisibleText ? { onVisibleText: input.onVisibleText } : {}),

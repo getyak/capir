@@ -103,6 +103,9 @@ export async function lockCapturedHistoryClaims(database: PoolClient, account: s
   await database.query(`SELECT i.id FROM idempotency_records i WHERE i.account_id=$1
     AND i.id IN (SELECT (a->>'completion')::uuid FROM jsonb_array_elements($2::jsonb) a)
     ORDER BY i.id FOR SHARE NOWAIT`, params);
+  await database.query(`SELECT t.task_id FROM agent_session_chat_tasks t WHERE t.account_id=$1 AND t.task_id IN
+    (SELECT canonical_agent_session_id(a->>'task') FROM jsonb_array_elements($2::jsonb) a)
+    ORDER BY t.task_id FOR SHARE NOWAIT`, params);
   await database.query(`SELECT l.task_id FROM agent_task_memory_lineage l WHERE l.account_id=$1 AND l.task_id IN
     (SELECT (a->'proof'->>'task_id')::uuid FROM jsonb_array_elements($2::jsonb) a)
     ORDER BY l.task_id FOR UPDATE NOWAIT`, params);
@@ -134,8 +137,12 @@ export const capturedHistoryDeadlineSQL = `LEAST(
   (SELECT min(t.expires_at) FROM jsonb_array_elements_text($12::jsonb->'tasks') wanted(task)
     JOIN agent_session_chat_tasks t ON t.account_id=$6 AND t.task_id=canonical_agent_session_id(wanted.task)),
   (SELECT min(LEAST(t.expires_at,c.retention_until,r.authorization_expires_at))
-    FROM jsonb_array_elements($12::jsonb->'screenshots') shot
-    JOIN screenshot_contact_tasks t ON t.account_id=$6 AND t.id=(shot->>'taskID')::uuid
+    FROM (
+      SELECT (shot->>'taskID')::uuid AS id FROM jsonb_array_elements($12::jsonb->'screenshots') shot
+      UNION
+      SELECT d.screenshot_task_id FROM agent_session_chat_sources d WHERE d.account_id=$6
+        AND d.task_id IN (SELECT canonical_agent_session_id(task) FROM jsonb_array_elements_text($12::jsonb->'tasks') wanted(task))
+    ) shot JOIN screenshot_contact_tasks t ON t.account_id=$6 AND t.id=shot.id
     LEFT JOIN captures c ON c.account_id=t.account_id AND c.id=t.capture_id
     LEFT JOIN source_retention_receipts r ON r.account_id=c.account_id AND r.capture_id=c.id),
   (SELECT min(h.valid_until) FROM identity_handles h WHERE h.account_id=$6 AND h.status='confirmed'

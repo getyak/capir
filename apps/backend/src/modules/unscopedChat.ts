@@ -291,7 +291,7 @@ export async function executeUnscopedChatTask(input: {
       sources: conversationSources, taskIDs: completeConversation.historyTaskIDs ?? [],
       sessionStamp: completeConversation.historyStamp ?? "", sourceGeneration: completeConversation.historyGeneration ?? "",
       onExpiry: narrowHistoryExpiry, assertCurrent }) : undefined;
-  await sessionHistory?.assertCurrent();
+  if (!captured) await sessionHistory?.assertCurrent();
   const sessionTitleRequested = !sessionConversation.hasRecordedTurns
     && !sessionConversation.sources?.length;
   observation = input.database && input.auth ? await productObservationContext(input.database, input.auth, taskID,
