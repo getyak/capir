@@ -72,7 +72,7 @@ For this genuine existing entry only:
 
 Likely production surfaces are apps/backend/src/modules/unscopedChat.ts,
 private admission/lineage/completion modules and
-apps/agent/src/workspaceConversationAgent.ts. Identify the smallest correct
+apps/backend/src/modules/workspaceConversationAgent.ts. Identify the smallest correct
 interface before changing it. Task1 legacyChatAuthority.ts is frozen unless a
 precise necessary interface extension is first reported for Root's ruling.
 Schema, transport, Stage and unrelated feature changes require a concrete
