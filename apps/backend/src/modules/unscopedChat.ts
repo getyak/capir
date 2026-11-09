@@ -364,7 +364,10 @@ export async function executeUnscopedChatTask(input: {
   let captureImageObservation: import("@talent-signal/contracts").CaptureImageObservation | undefined;
   if (input.provider) {
     try {
-      await assertCurrent?.();
+      // Core binds the captured exposure guard to its original Run clock below.
+      // Its route-owned preflight checks the frozen domain before that handoff.
+      if (historyOwner) await historyOwner.assertCurrent();
+      else await assertCurrent?.();
       if (
         input.database &&
         input.auth &&
