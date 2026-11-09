@@ -181,7 +181,7 @@ export function registerMemoryReviewRoutes(
     schema: { tags: ["memory"], security, body: MemoryProposalStageRequestSchema },
   }, async (request, reply) => {
     const parsed = request.body as MemoryProposalStageRequest;
-    return inTransaction(pool, async (client) => {
+    const result = await inTransaction(pool, async (client) => {
       const idempotency = await claimIdempotency(
         client,
         { accountId: request.auth.accountId, actorUserId: request.auth.userId },
@@ -190,7 +190,7 @@ export function registerMemoryReviewRoutes(
         parsed,
       );
       if (idempotency.replay) {
-        return reply.status(200).send(idempotency.replay.body);
+        return { body: idempotency.replay.body, status: 200 as const, replayHeader: null };
       }
       const authority = await resolveSessionSourceAuthority(
         client,
@@ -218,11 +218,12 @@ export function registerMemoryReviewRoutes(
         proposal: staged.proposal,
       };
       await completeIdempotency(client, idempotency, 201, body);
-      return reply
-        .header("idempotent-replayed", staged.replayed)
-        .status(staged.replayed ? 200 : 201)
-        .send(body);
+      return { body, status: staged.replayed ? 200 as const : 201 as const, replayHeader: staged.replayed };
     });
+    // Sending a Fastify reply inside the callback can finish the HTTP response
+    // before inTransaction dispatches COMMIT. Publish only after its real ACK.
+    if (result.replayHeader !== null) reply.header("idempotent-replayed", result.replayHeader);
+    return reply.status(result.status).send(result.body);
   });
 
   app.post<{ Params: { proposalId: string }; Body: unknown }>(
