@@ -396,6 +396,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   let captureStarted = false;
   let capturedCheck: ((writer?: PoolClient) => Promise<void>) | undefined;
   let captureBound = false;
+  let capturedSourcePreflight: (() => Promise<void>) | undefined;
   let lockCaptureForFinal: ((writer: PoolClient) => Promise<void>) | undefined;
   let memoryRun: LegacySavedMemoryRunAccess | null = null;
   let memoryBindingPending = false;
@@ -482,7 +483,12 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
     signal: controller.signal, throwIfTerminated: alive,
     snapshotOriginal: () => { alive(); return original; },
     assertCurrent: () => check(active ?? pool), source,
-    observeSource: current => { alive(); sourceChecks.add(current); },
+    observeSource: current => {
+      alive();
+      // The captured final writer already checks this fixed domain after all
+      // its source checks. Keep this earlier phase a private source preflight.
+      sourceChecks.add(current === prepared?.guard && capturedSourcePreflight ? capturedSourcePreflight : current);
+    },
     assertFinalCurrent: async client => {
       checkFinalClient(client);
       if (captureStarted) {
@@ -727,8 +733,19 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
         assertCaptureHeld = held;
         captureHandle = Object.freeze({}) as LegacyCapturedHistoryHandle;
         capturedHandles.set(captureHandle, owner);
+        const assertBound = () => {
+          held();
+          if (!captureBound) fail();
+        };
+        // Routing needs the array identity before Core binds its original Run.
+        // Keep the selected text private even if this view is read or copied.
         const conversationHistory = Object.freeze(boundedConversationHistory(frame.inline.messages, messageID)
-          .map(message => Object.freeze(message)));
+          .map(({ message_id, role, text }) => Object.freeze({ message_id, role,
+            get text() { assertBound(); return text; },
+          })));
+        const frameView = (selected: CapturedFrame["inline"]) => Object.freeze({ ...selected,
+          get messages() { assertBound(); return selected.messages; },
+        });
         const allSources = [...new Map([...(frame.inline.sources ?? []), ...(frame.complete?.sources ?? [])]
           .map(source => [source.taskID, source])).values()];
         let snapshot: SessionHistorySnapshot | undefined;
@@ -745,12 +762,14 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
           });
           await checkSnapshot(); // Private preparation, before a provider or tool exists.
           snapshot = Object.freeze({ version: originalSnapshot.version,
-            get messages() { held(); if (!captureBound) return fail(); return messages; },
-            async assertCurrent() { if (!captureBound) return fail(); await checkSnapshot(); } });
-
+            get messages() { assertBound(); return messages; },
+            async assertCurrent() { assertBound(); await checkSnapshot(); } });
         }
-        prepared = Object.freeze({ handle: captureHandle, inline: frame.inline, complete: frame.complete,
-          guard: () => enqueue(() => source(frame.guard)), conversationHistory, snapshot });
+        capturedSourcePreflight = () => enqueue(() => source(frame.guard));
+        prepared = Object.freeze({ handle: captureHandle, inline: frameView(frame.inline),
+          complete: frame.complete && frameView(frame.complete), conversationHistory, snapshot,
+          async guard() { assertBound(); await enqueue(joint); },
+        });
         return prepared;
       } catch (error) { return terminateMemory(error); }
     },

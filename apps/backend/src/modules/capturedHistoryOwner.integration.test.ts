@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { createConversationHistoryTools, ScriptedAgentProvider } from "@talent-signal/agent";
-import type { SessionResponse, UnscopedChatTaskResponse } from "@talent-signal/contracts";
+import { createConversationHistoryTools, ScriptedAgentProvider, type ConversationMessage } from "@talent-signal/agent";
+import type { AgentSessionPayload, SessionResponse, UnscopedChatTaskResponse } from "@talent-signal/contracts";
 import type { PoolClient } from "pg";
 import { describe, expect, it } from "vitest";
 import type { DatabaseClient } from "../database/pool.js";
@@ -11,6 +11,7 @@ import { inSavedMemoryCanonicalTransaction } from "./savedMemoryCanonicalTransac
 import { createHarnessSourceGuardWithBinding } from "./harnessSourceGuard.js";
 import { registerSavedMemoryLineage, type SavedMemoryReadProof } from "./savedMemoryLineage.js";
 import { sealWorkspaceSavedMemoryRun, consumeWorkspaceSavedMemoryCompletion } from "./workspaceSavedMemoryRun.js";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
 import { recordSessionChatSources } from "./agentSessionSources.js";
 import { createScreenshotContactTask, loadScreenshotContactTask, ScreenshotContactTaskRunner } from "./screenshotContactTasks.js";
 import { createLegacyUnscopedChatTask, createUnscopedChatTask } from "./unscopedChat.js";
@@ -21,14 +22,14 @@ import { independentReply, savedMemoryDatabase, withSavedMemoryFixture,
 if (process.env.GET_455_CAPTURED_HISTORY_TEST_REQUIRED === "1" && !savedMemoryDatabase)
   throw new Error("The captured history owner requires the explicit disposable database.");
 
-async function setup(f: SavedMemoryFixture) {
+async function setup(f: SavedMemoryFixture, priorTurns: AgentSessionPayload["turns"] = []) {
   const objective = "Keep this synthetic greeting in my original Session.";
   const posted = await f.post({ idempotency_key: randomUUID(), objective });
   expect(posted.statusCode).toBe(201);
   const response = posted.json<UnscopedChatTaskResponse>();
   expect(response.blocks[0]?.body).toBe(independentReply);
   const sessionID = randomUUID();
-  const saved = await f.saveAnswer(sessionID, objective, response);
+  const saved = await f.saveAnswer(sessionID, objective, response, { priorTurns });
   const enrollment = await f.request({ method: "POST", url: "/v1/auth/persistent/enroll",
     payload: { renewal_secret: randomBytes(32).toString("base64url"), client_kind: "web" } });
   expect(enrollment.statusCode).toBe(200);
@@ -52,6 +53,35 @@ async function setup(f: SavedMemoryFixture) {
       capturedHistory: { owner: reader, handle: frame.handle }, assertCurrent: frame.snapshot?.assertCurrent ?? frame.guard,
     });
   return { owner, prepare, execute, sessionID, messageID, response, saved };
+}
+
+// Each answer fits the public 8,000-character contract. The genuine canonical
+// bodies exceed the complete reader's 1 MiB aggregate only when read together.
+// Session display blocks are optional; this fixture stores the real task IDs.
+async function oversizedCanonicalHistory(f: SavedMemoryFixture) {
+  const turns: AgentSessionPayload["turns"] = [];
+  const body = "界".repeat(7_900);
+  const provider: RemoteChatAnswerProviding = { providerId: "zhipu-chat-completions", model: "synthetic-bounded",
+    supportsImageInput: false, async answer() { return { kind: "answer", title: "Synthetic note", body,
+      citation_ids: [], provider_id: "zhipu-chat-completions", model: "synthetic-bounded", provider_request_id: null,
+      input_tokens: 0, output_tokens: 0, usage_reported: false }; } };
+  for (let i = 0; i < 45; i++) {
+    const objective = `Read synthetic note ${i + 1}.`;
+    const result = await createUnscopedChatTask(f.pool, f.auth, { idempotency_key: randomUUID(), objective }, provider);
+    expect(result.status === 201 && result.body.blocks[0]?.body === body).toBe(true);
+    const answer = result.body;
+    turns.push({ id: randomUUID(), objective, createdAt: answer.created_at, response: {
+      taskID: answer.task_id, contractVersion: answer.contract_version, disposition: answer.disposition,
+      contextManifestID: "none-unbound-conversation", knowledgeSnapshotID: "none-unbound-conversation",
+      createdAt: answer.created_at,
+    } });
+  }
+  const stored = await f.pool.query(`SELECT sum(octet_length(response_body::text))::int AS bytes FROM idempotency_records
+    WHERE account_id=$1 AND actor_user_id=$2 AND status='completed' AND response_status=201
+      AND operation_scope='create_unscoped_chat_task' AND response_body->>'task_id'=ANY($3::text[])`,
+  [f.auth.accountId, f.auth.userId, turns.map(t => t.response.taskID)]);
+  expect(stored.rows[0].bytes).toBeGreaterThan(1_048_576);
+  return turns;
 }
 
 function withBorrow<T>(f: SavedMemoryFixture, owner: LegacyChatAuthority, operation: (client: PoolClient) => Promise<T>) {
@@ -209,37 +239,103 @@ describe.skipIf(!savedMemoryDatabase)("original captured history owner on real P
   it("refuses capture exposure before Core and refuses a forged same-owner clock on a genuine borrow", async () => {
     await withSavedMemoryFixture(async f => {
       const state = await setup(f);
-      for (const attempt of ["inventory", "page", "clock"] as const) {
+      // A backend caller may already possess these same messages from a
+      // different, genuinely bound read. Exercise the new frame's guard even
+      // when its own protected message getter is deliberately bypassed.
+      const originalReader = await state.owner();
+      let previousMessages: readonly ConversationMessage[];
+      try {
+        const originalRun = randomUUID(), prior = await state.prepare(originalReader, f.pool, originalRun);
+        await state.execute(originalReader, f.pool, originalRun, prior);
+        previousMessages = prior.snapshot!.messages;
+        expect(previousMessages.some(m => m.text === independentReply)).toBe(true);
+      } finally { originalReader.dispose(); }
+
+      for (const attempt of ["clock", "inventory", "complete", "inline", "core-input", "snapshot-guard", "frame-guard"] as const) {
         const owner = await state.owner();
-        let attempted = false;
+        let attempted = false, exposed = false;
         try {
           await expect(withBorrow(f, owner, client => owner.withClient(client, async held => {
             const runID = randomUUID(), frame = await state.prepare(owner, held, runID);
             expect(frame.snapshot).toBeDefined();
+            attempted = true;
             if (attempt === "clock") {
-              attempted = true;
               bindLegacyCapturedHistoryRun(owner, frame.handle, { runID, runDeadlineMonotonicMs: Number.MAX_SAFE_INTEGER,
                 sessionID: state.sessionID, messageID: state.messageID, workspaceID: f.auth.accountId,
                 sessionHistory: frame.snapshot, conversationHistory: frame.conversationHistory });
             } else if (attempt === "inventory") {
-              attempted = true;
               createConversationHistoryTools(frame.snapshot!);
+            } else if (attempt === "inline" || attempt === "core-input") {
+              const messages = attempt === "inline" ? frame.inline.messages : frame.conversationHistory;
+              exposed = messages.some(m => m.text === independentReply);
+              return;
             } else {
-              // A backend caller already has the original private projection.
-              // Even if it assembles a real tool without the inventory getter,
-              // the original snapshot guard must refuse its actual execute call.
-              const tool = createConversationHistoryTools({ version: frame.snapshot!.version,
-                messages: frame.complete!.messages, assertCurrent: frame.snapshot!.assertCurrent }).tools[0]!;
-              attempted = true;
+              const messages = attempt === "complete" ? frame.complete!.messages : previousMessages;
+              const assertCurrent = attempt === "snapshot-guard" ? frame.snapshot!.assertCurrent : frame.guard;
+              const tool = createConversationHistoryTools({ version: frame.snapshot!.version, messages, assertCurrent }).tools[0]!;
               await tool.execute({ operation: "page" }, new AbortController().signal);
             }
+            exposed = true; // Observe the inner return, before withClient's exit fence.
           }))).rejects.toBeInstanceOf(LegacyChatTerminated);
           expect(attempted).toBe(true);
+          expect(exposed).toBe(false);
           expect(owner.signal.aborted).toBe(true);
         } finally { owner.dispose(); }
       }
     });
   }, 15_000);
+
+  it.each(["complete", "inline-only"] as const)(
+    "refuses the prepared guard's own real tool after original metadata loss with %s history", async mode => {
+      await withSavedMemoryFixture(async f => {
+        const turns = mode === "inline-only" ? await oversizedCanonicalHistory(f) : [];
+        const state = await setup(f, turns), owner = await state.owner(), runID = randomUUID();
+        try {
+          const frame = await state.prepare(owner, f.pool, runID);
+          expect(frame.complete !== undefined).toBe(mode === "complete");
+          expect(frame.snapshot !== undefined).toBe(mode === "complete");
+          await state.execute(owner, f.pool, runID, frame);
+          const messages = frame.complete?.messages ?? frame.conversationHistory;
+          expect(messages.some(m => m.message_id === state.response.task_id && m.text === independentReply)).toBe(true);
+          // Deliberately use the preparation guard the review identified,
+          // including when no optional snapshot exists to provide a guard.
+          const tool = createConversationHistoryTools({ version: frame.snapshot?.version ?? "private-inline-test",
+            messages, assertCurrent: frame.guard }).tools[0]!;
+          const read = () => tool.execute({ operation: "read", message_id: state.response.task_id }, new AbortController().signal);
+          const positive = await read();
+          expect(JSON.stringify(positive).includes(independentReply)).toBe(true);
+          const witness = async () => (await f.pool.query(`SELECT
+            md5(jsonb_build_array(s.payload->'turns',s.payload->'personID',s.payload->'relationshipContextID')::text) AS stamp,
+            g.generation::text AS generation, i.saved_memory_lineage_required AS required, md5(i.response_body::text) AS body,
+            agent_session_chat_sources_available(s.account_id,$3::text) AS sources_live,
+            login.revoked_at IS NULL AND login.expires_at>statement_timestamp() AS login_live FROM agent_sessions s
+            JOIN sessions login ON login.account_id=s.account_id AND login.user_id=s.created_by_user_id AND login.id=$4
+            JOIN harness_source_generations g ON g.account_id=s.account_id
+            JOIN idempotency_records i ON i.account_id=s.account_id AND i.actor_user_id=s.created_by_user_id
+            WHERE s.account_id=$1 AND s.id=$2 AND i.operation_scope='create_unscoped_chat_task'
+              AND i.status='completed' AND i.response_status=201 AND i.response_body->>'task_id'=$3`,
+          [f.auth.accountId, state.sessionID, state.response.task_id, f.auth.sessionId])).rows;
+          const before = await witness();
+          expect(before.length === 1 && before[0].required && before[0].sources_live && before[0].login_live).toBe(true);
+          const change = await f.pool.connect();
+          try {
+            await change.query("BEGIN");
+            await change.query("DELETE FROM agent_task_memory_session_copies WHERE account_id=$1 AND task_id=$2",
+              [f.auth.accountId, state.response.task_id]);
+            const deleted = await change.query(`DELETE FROM agent_task_memory_lineage
+              WHERE account_id=$1 AND task_id=$2 AND reader_actor_id=$3 AND format_version=2 AND dependency_count=0`,
+            [f.auth.accountId, state.response.task_id, f.auth.userId]);
+            expect(deleted.rowCount).toBe(1);
+            await change.query("COMMIT");
+          } catch (error) { await change.query("ROLLBACK"); throw error; }
+          finally { change.release(); }
+          expect(JSON.stringify(await witness()) === JSON.stringify(before)).toBe(true);
+          await expect(read()).rejects.toBeInstanceOf(LegacyChatTerminated);
+          expect(owner.signal.aborted).toBe(true);
+          expect(() => owner.throwIfTerminated()).toThrow(LegacyChatTerminated);
+        } finally { owner.dispose(); }
+      });
+    }, 30_000);
 
   it("rejects foreign finalization and nested or forwarded borrows while both genuine owners stay usable", async () => {
     await withSavedMemoryFixture(async f => {
