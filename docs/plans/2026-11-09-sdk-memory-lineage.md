@@ -118,3 +118,10 @@ Use .superpowers/sdd/2026-11-09-sdk-memory-lineage/task-1-report.md and progress
 for the private handoff/implementation evidence. Keep source review, actual
 RED/GREEN, full CI, merge, resident deployment and real provider/device
 acceptance separate. No automatic Linear completion or PR-ready transition.
+
+
+## Root ruling: 2026-11-09 physical-xmin test oracle correction
+
+Independent review task-1-oracle-review-fix1 confirms the new source_same_tx comparison crosses SQL115 outer/source and EXCEPTION registration subtransaction boundaries. PostgreSQL physical xmin equality across those rows is not the same-client/top-level-transaction contract. All four first-source failures are this mistaken witness; actual result remains41PASS4FAIL0skip. Two locktime-outs are the original successful owner negatives, not SDK failures.
+
+Authorize the original implementer to correct only this new SDK test oracle. Retain original production5paths, all119SQL/manifest, six genuine case scenarios, 15-second budgets, source/origin/expiry, marker+typedV2, same canonical/dependency xmin, independent exact digest/tuple, replay/no-model and missing-proof/withdrawal exits. Replace cross-subtransaction xmin equality with pass-through observation of the actual raw client registration expected_xid and real recorded:true, stable backend+observed outer xid/source low32, exact owned task/origin/expiry, independent different-backend pre-COMMIT invisibility of canonical/source/lineage, unchanged same-client top xid and real COMMITACK, followed by exact post-COMMIT visibility. No positive query result fabrication, no source/canonical no-op writes, no new source-grant/interface or horizon change. All observers restored in finally and exact task-scoped; no credentials/proof prose logged. Review the revised oracle/source before normal Root commit/push and actual focused45 + fullBackend verification. Parent536 remainsDraft and other3P1/maintenance remain.

@@ -9,6 +9,7 @@ import { CONTRACT_VERSION, type MemoryCommitRequest, type MemoryCommitResponse,
   type MemoryReviewResponse, type ResourceCaptureRequest, type ResourceCaptureResponse,
   type SessionResponse, type UnscopedChatTaskRequest, type UnscopedChatTaskResponse } from "@talent-signal/contracts";
 import { describe, expect, it } from "vitest";
+import { Pool, type PoolClient } from "pg";
 import { buildApp } from "../app.js";
 import { readAgentSessionConversation } from "./agentSessions.js";
 import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
@@ -27,12 +28,240 @@ type Publication = { claim_id: string; required: boolean; format_version: number
   reader_actor_id: string | null; dependency_count: number | null; proof_digest: string | null;
   retention_kind: string | null; source_origin_session_id: string | null; expires_at: string | null;
   completion_bound: boolean | null; canonical_same_tx: boolean | null; dependencies_same_tx: boolean;
-  retention_matches_source: boolean | null; source_same_tx: boolean | null };
+  retention_matches_source: boolean | null };
 type Candidate = Omit<MemoryProposalCandidate, "source_locator">;
 const responseBody = (value: { json<T>(): T }) => value.json<UnscopedChatTaskResponse>();
 const scope = { personId: null, relationshipContextId: null };
 const childReply = "A synthetic SDK child derived from the actually read notebook history.";
 const legacyReply = "A lawful independent synthetic reply from the existing untracked writer.";
+
+type SdkTransaction = {
+  taskID: string; sessionID: string; claimID: string | null; deadline: string | null; expectedXid: string | null;
+  client: PoolClient | null; lease: object | null; backend: string | null;
+  registrations: number; registered: boolean; heldChecks: number; heldValid: boolean;
+  commitAttempts: number; commitACK: boolean; rolledBack: boolean; http201: boolean;
+  postcommitChecks: number; postcommitExact: boolean; observerFailed: boolean;
+};
+const sdkTransactions = new WeakMap<SavedMemoryFixture, ReturnType<typeof observeSdkTransactions>>();
+const uuid = (value: unknown): value is string => typeof value === "string"
+  && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(value);
+function queryText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  const text: unknown = value && typeof value === "object" ? Object.getOwnPropertyDescriptor(value, "text")?.value : undefined;
+  return typeof text === "string" ? text : undefined;
+}
+function resultRows(value: unknown): Array<Record<string, unknown>> {
+  return value && typeof value === "object" && "rows" in value && Array.isArray(value.rows) ? value.rows : [];
+}
+
+/** Observe actual driver acknowledgements, preserving both query signatures,
+ * callback this/error/result tuples and the driver's original result objects.
+ * Observer failures are mandatory receipt failures, never fabricated DB errors. */
+function observeQuery(original: PoolClient["query"], receiver: unknown, args: unknown[],
+  after: (actual: unknown) => void | Promise<void>, failed: () => void): unknown {
+  const callback = args.at(-1);
+  if (typeof callback === "function") {
+    const forwarded = [...args];
+    forwarded[forwarded.length - 1] = function(this: unknown, ...values: unknown[]) {
+      if (values[0]) { failed(); return Reflect.apply(callback, this, values); }
+      const callbackThis = this;
+      void Promise.resolve().then(() => after(values[1])).then(
+        () => Reflect.apply(callback, callbackThis, values),
+        () => { failed(); return Reflect.apply(callback, callbackThis, values); },
+      );
+    };
+    return Reflect.apply(original, receiver, forwarded);
+  }
+  const result: unknown = Reflect.apply(original, receiver, args);
+  if (!result || typeof (result as { then?: unknown }).then !== "function") { failed(); return result; }
+  return (result as Promise<unknown>).then(async actual => {
+    try { await after(actual); } catch { failed(); }
+    return actual;
+  }, error => { failed(); throw error; });
+}
+
+/** No raw client identity is replaced. acquire covers pg's real callback and
+ * promise checkouts; only bounded task/claim/origin/xid metadata is retained.
+ * The independent pool performs SELECTs only against the admitted fixture DB. */
+function observeSdkTransactions(f: SavedMemoryFixture) {
+  const control = new Pool({ connectionString: savedMemoryDatabase, max: 1,
+    connectionTimeoutMillis: 2_000, statement_timeout: 5_000, query_timeout: 6_000 });
+  const receipts = new Map<string, SdkTransaction>();
+  const clients = new Map<PoolClient, { original: PoolClient["query"]; wrapped: PoolClient["query"];
+    lease: object; current: SdkTransaction | null }>();
+  const held = (client: PoolClient, receipt: SdkTransaction) => {
+    const state = clients.get(client);
+    return Boolean(state && receipt.client === client && receipt.lease === state.lease && state.current === receipt);
+  };
+  const metadata = (receipt: SdkTransaction) => [f.auth.accountId, f.auth.userId,
+    receipt.taskID, receipt.claimID, receipt.sessionID, receipt.deadline, receipt.expectedXid];
+  const visibility = async (receipt: SdkTransaction) => {
+    const rows = (await control.query<{ backend: string; canonical: boolean; source: boolean; lineage: boolean }>(`SELECT
+      pg_backend_pid()::text AS backend,
+      EXISTS(SELECT 1 FROM idempotency_records i WHERE i.account_id=$1 AND i.actor_user_id=$2
+        AND i.id=$4 AND i.operation_scope='create_unscoped_chat_task' AND i.status='completed'
+        AND i.response_status=201 AND i.response_body->>'task_id'=$3::text) AS canonical,
+      EXISTS(SELECT 1 FROM agent_session_chat_tasks s WHERE s.account_id=$1 AND s.actor_user_id=$2
+        AND s.task_id=$3::text) AS source,
+      EXISTS(SELECT 1 FROM agent_task_memory_lineage t WHERE t.account_id=$1 AND t.reader_actor_id=$2
+        AND t.task_id=$3::uuid) AS lineage`, metadata(receipt).slice(0, 4))).rows;
+    if (rows.length !== 1) throw new Error("The real external visibility probe omitted its one metadata row.");
+    return rows[0]!;
+  };
+  const inspectHeld = async (client: PoolClient, receipt: SdkTransaction, actual: unknown) => {
+    receipt.heldChecks++;
+    const original = clients.get(client)!.original;
+    const rows = resultRows(actual);
+    const before = resultRows(await Reflect.apply(original, client, [`SELECT
+      pg_backend_pid()::text AS backend,pg_current_xact_id_if_assigned()::text AS outer_xid,
+      s.xmin::text::numeric=mod($7::numeric,4294967296::numeric) AS source_at_outer,
+      s.origin_session_id=$5::uuid AND to_char(s.expires_at AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')=$6::text AS exact_source,
+      t.source_origin_session_id=s.origin_session_id AND t.expires_at=s.expires_at AS exact_retention
+      FROM idempotency_records i JOIN agent_session_chat_tasks s ON s.account_id=i.account_id
+        AND s.actor_user_id=i.actor_user_id AND s.task_id=$3::text
+      JOIN agent_task_memory_lineage t ON t.account_id=i.account_id AND t.reader_actor_id=i.actor_user_id
+        AND t.task_id=$3::uuid AND t.completion_idempotency_id=i.id
+      WHERE i.account_id=$1 AND i.actor_user_id=$2 AND i.id=$4
+        AND i.operation_scope='create_unscoped_chat_task' AND i.status='completed' AND i.response_status=201
+        AND i.response_body->>'task_id'=$3::text AND i.saved_memory_lineage_required
+        AND t.format_version=2 AND t.retention_kind='session_bound'`, metadata(receipt)]));
+    const outside = await visibility(receipt);
+    const after = resultRows(await Reflect.apply(original, client, [
+      "SELECT pg_backend_pid()::text AS backend,pg_current_xact_id_if_assigned()::text AS outer_xid"]));
+    const first = before[0], last = after[0];
+    const backend = first?.backend;
+    const valid = held(client, receipt) && receipt.registered && rows.length === 1 && rows[0]?.available === true
+      && before.length === 1 && after.length === 1 && typeof backend === "string" && backend !== outside.backend
+      && first?.outer_xid === receipt.expectedXid && last?.outer_xid === receipt.expectedXid
+      && last?.backend === backend && receipt.backend === backend
+      && first?.source_at_outer === true && first.exact_source === true && first.exact_retention === true
+      && outside.canonical === false && outside.source === false && outside.lineage === false;
+    receipt.heldValid = receipt.heldChecks === 1 ? valid : receipt.heldValid && valid;
+    if (typeof backend === "string") receipt.backend = backend;
+  };
+  const acquired = (client: PoolClient) => {
+    const previous = clients.get(client);
+    if (previous) { previous.lease = {}; previous.current = null; return; }
+    const original = client.query;
+    const state = { original, wrapped: original, lease: {}, current: null as SdkTransaction | null };
+    const wrapped = new Proxy(original, { apply(target, receiver, args: unknown[]) {
+      const text = queryText(args[0]);
+      const values: unknown = typeof args[0] === "string" ? args[1]
+        : args[0] && typeof args[0] === "object" ? Object.getOwnPropertyDescriptor(args[0], "values")?.value : undefined;
+      if (text && /^\s*SELECT\s+register_saved_memory_durable_lineage\s*\(/iu.test(text) && Array.isArray(values)) {
+        // Deliberately do not inspect/copy proof JSON, digest or credential data.
+        const receipt = typeof values[2] === "string" ? receipts.get(values[2]) : undefined;
+        if (receipt) {
+          receipt.registrations++; receipt.client = client; receipt.lease = state.lease; state.current = receipt;
+          const valid = values.length === 11 && values[0] === f.auth.accountId && values[1] === f.auth.userId
+            && uuid(values[3]) && values[4] === "session_bound" && values[5] === receipt.sessionID
+            && typeof values[6] === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/u.test(values[6])
+            && typeof values[10] === "string" && /^[1-9][0-9]{0,19}$/u.test(values[10]);
+          if (valid) { receipt.claimID = values[3]; receipt.deadline = values[6]; receipt.expectedXid = values[10]; }
+          else receipt.observerFailed = true;
+          return observeQuery(target, receiver, args, async actual => {
+            const rows = resultRows(actual);
+            receipt.registered = false;
+            if (!valid || rows.length !== 1 || rows[0]?.recorded !== true) return;
+            // Observe the real backend/top xid at registration itself, before
+            // delivering its unchanged positive acknowledgement to production.
+            const stamp = resultRows(await Reflect.apply(target, client, [
+              "SELECT pg_backend_pid()::text AS backend,pg_current_xact_id_if_assigned()::text AS outer_xid"]));
+            const current = stamp[0];
+            receipt.registered = held(client, receipt) && receipt.registrations === 1 && stamp.length === 1
+              && typeof current?.backend === "string" && current.outer_xid === receipt.expectedXid;
+            if (typeof current?.backend === "string") receipt.backend = current.backend;
+          }, () => { receipt.observerFailed = true; });
+        }
+      }
+      const receipt = state.current;
+      if (text && receipt) {
+        if (/^\s*ROLLBACK\b/iu.test(text)) receipt.rolledBack = true;
+        if (text.includes("d.stamps=$12::jsonb->'proof'->'stamps'")) {
+          // Attribute this real ACK only to its actual final-task parameter.
+          // Inspect no credential slot or proof JSON, and never wash a wrong
+          // target away with a later correctly targeted positive ACK.
+          const taskSlot = Array.isArray(values) && values.length === 13
+            ? Object.getOwnPropertyDescriptor(values, "12") : undefined;
+          if (!taskSlot || !("value" in taskSlot) || taskSlot.value !== receipt.taskID) {
+            receipt.observerFailed = true;
+            return Reflect.apply(target, receiver, args);
+          }
+          return observeQuery(target, receiver, args, actual => inspectHeld(client, receipt, actual),
+            () => { receipt.observerFailed = true; });
+        }
+        if (/^\s*COMMIT\s*;?\s*$/iu.test(text)) {
+          receipt.commitAttempts++;
+          return observeQuery(target, receiver, args, actual => {
+            const command = actual && typeof actual === "object" ? Object.getOwnPropertyDescriptor(actual, "command")?.value : undefined;
+            receipt.commitACK = held(client, receipt) && receipt.commitAttempts === 1 && command === "COMMIT";
+          }, () => { receipt.observerFailed = true; });
+        }
+      }
+      return Reflect.apply(target, receiver, args);
+    } });
+    state.wrapped = wrapped; clients.set(client, state); client.query = wrapped;
+  };
+  f.pool.on("acquire", acquired);
+  return {
+    enter: (taskID: string, sessionID: string | null | undefined) => {
+      if (!uuid(taskID) || !uuid(sessionID) || receipts.has(taskID) || receipts.size >= 8)
+        throw new Error("The SDK transaction observer requires one bounded actual Run identity.");
+      receipts.set(taskID, { taskID, sessionID, claimID: null, deadline: null, expectedXid: null,
+        client: null, lease: null, backend: null, registrations: 0, registered: false,
+        heldChecks: 0, heldValid: false, commitAttempts: 0, commitACK: false, rolledBack: false,
+        http201: false, postcommitChecks: 0, postcommitExact: false, observerFailed: false });
+    },
+    afterHTTP: async (taskID: string, sessionID: string) => {
+      const receipt = receipts.get(taskID);
+      if (!receipt) return; // expectDurable requires it; a legacy/no-register201 cannot invent one here.
+      receipt.http201 = true;
+      if (receipt.sessionID !== sessionID) { receipt.observerFailed = true; return; }
+      if (!receipt.registered) return;
+      receipt.postcommitChecks++;
+      const outside = await visibility(receipt);
+      const exact = (await control.query<{ present: boolean }>(`SELECT EXISTS(
+        SELECT 1 FROM idempotency_records i JOIN agent_session_chat_tasks s ON s.account_id=i.account_id
+          AND s.actor_user_id=i.actor_user_id AND s.task_id=$3::text
+        JOIN agent_task_memory_lineage t ON t.account_id=i.account_id AND t.reader_actor_id=i.actor_user_id
+          AND t.task_id=$3::uuid AND t.completion_idempotency_id=i.id
+        WHERE i.account_id=$1 AND i.actor_user_id=$2 AND i.id=$4 AND i.status='completed' AND i.response_status=201
+          AND i.operation_scope='create_unscoped_chat_task' AND i.response_body->>'task_id'=$3::text
+          AND i.saved_memory_lineage_required AND t.format_version=2 AND t.retention_kind='session_bound'
+          AND s.origin_session_id=$5::uuid AND t.source_origin_session_id=s.origin_session_id
+          AND t.expires_at=s.expires_at AND to_char(s.expires_at AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')=$6::text
+          AND s.xmin::text::numeric=mod($7::numeric,4294967296::numeric)) AS present`, metadata(receipt))).rows;
+      const valid = receipt.commitACK && outside.backend !== receipt.backend
+        && outside.canonical && outside.source && outside.lineage && exact.length === 1 && exact[0]?.present === true;
+      receipt.postcommitExact = receipt.postcommitChecks === 1 ? valid : receipt.postcommitExact && valid;
+    },
+    require: (taskID: string, claimID: string, sessionID: string, deadline: string | null) => {
+      const receipt = receipts.get(taskID);
+      expect(receipt, "The actual SDK task omitted its mandatory transaction observation receipt.").toBeDefined();
+      // Never serialize raw clients/pools or private query arguments in assertion output.
+      expect(receipt?.claimID).toBe(claimID); expect(receipt?.sessionID).toBe(sessionID); expect(receipt?.deadline).toBe(deadline);
+      expect({ registrations: receipt?.registrations, registered: receipt?.registered,
+        held: (receipt?.heldChecks ?? 0) > 0 && receipt?.heldValid, commitAttempts: receipt?.commitAttempts,
+        commitACK: receipt?.commitACK, rolledBack: receipt?.rolledBack, http201: receipt?.http201,
+        postcommitExact: receipt?.postcommitExact, observerFailed: receipt?.observerFailed }).toEqual({
+        registrations: 1, registered: true, held: true, commitAttempts: 1, commitACK: true,
+        rolledBack: false, http201: true, postcommitExact: true, observerFailed: false,
+      });
+    },
+    dispose: async () => {
+      f.pool.off("acquire", acquired);
+      let replaced = false;
+      for (const [client, state] of clients) {
+        if (client.query === state.wrapped) client.query = state.original;
+        else replaced = true;
+      }
+      try { await control.end(); }
+      finally { if (replaced) throw new Error("An owned SDK query observer was replaced before restoration."); }
+    },
+  };
+}
 
 function page(output: unknown): Page {
   if (!output || typeof output !== "object" || !("content" in output) || !Array.isArray(output.content))
@@ -76,8 +305,7 @@ async function publication(f: SavedMemoryFixture, taskID: string, key: string): 
     t.completion_idempotency_id=i.id AS completion_bound,t.xmin=i.xmin AS canonical_same_tx,
     NOT EXISTS(SELECT 1 FROM agent_task_saved_memory_dependencies d WHERE d.account_id=i.account_id
       AND d.task_id=$3::uuid AND d.xmin<>t.xmin) AS dependencies_same_tx,
-    t.expires_at=s.expires_at AND t.source_origin_session_id=s.origin_session_id AS retention_matches_source,
-    t.xmin=s.xmin AS source_same_tx
+    t.expires_at=s.expires_at AND t.source_origin_session_id=s.origin_session_id AS retention_matches_source
     FROM idempotency_records i LEFT JOIN agent_task_memory_lineage t ON t.account_id=i.account_id
       AND t.reader_actor_id=i.actor_user_id AND t.task_id=$3::uuid
     LEFT JOIN agent_session_chat_tasks s ON s.account_id=i.account_id AND s.actor_user_id=i.actor_user_id AND s.task_id=$3::text
@@ -97,7 +325,9 @@ function expectDurable(f: SavedMemoryFixture, row: Publication, taskID: string,
   if (sessionID) {
     expect(row.expires_at).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
     expect(row.retention_matches_source).toBe(true);
-    expect(row.source_same_tx).toBe(true);
+    const observed = sdkTransactions.get(f);
+    expect(observed, "A session-bound SDK V2 requires its actual-client transaction observer.").toBeDefined();
+    observed!.require(taskID, row.claim_id, sessionID, row.expires_at);
   } else expect(row.expires_at).toBeNull();
   // Independent hand-built V2 tuple, never the production codec/digest helper.
   const tuple = ["saved-memory-durable.v2", f.auth.accountId, f.auth.userId, taskID,
@@ -233,6 +463,7 @@ async function withSDK<T>(f: SavedMemoryFixture, operation: (sdk: {
   provider.run = async (...args: Parameters<ScriptedAgentProvider["run"]>) => {
     calls++;
     const [input, invokeTool, signal] = args;
+    observed.enter(input.runID, input.scopeSummary.kind === "workspace_conversation" ? input.scopeSummary.sessionID : null);
     const history = input.supplementalTools?.find(tool => tool.name === "read_session_history");
     if (!history) throw new Error("The real public SDK Session entry omitted its complete-history tool.");
     const captured = page(await history.execute({ operation: "page" }, signal));
@@ -254,6 +485,8 @@ async function withSDK<T>(f: SavedMemoryFixture, operation: (sdk: {
       return { outcome: "reply", title: "Synthetic SDK reply", body: answer };
     }).run(...args);
   };
+  const observed = observeSdkTransactions(f);
+  sdkTransactions.set(f, observed);
   let sdk: Awaited<ReturnType<typeof buildApp>> | undefined;
   try {
     sdk = await buildApp({ pool: f.pool, config: { databaseUrl: savedMemoryDatabase!, host: "127.0.0.1", port: 0,
@@ -266,9 +499,20 @@ async function withSDK<T>(f: SavedMemoryFixture, operation: (sdk: {
     await sdk.ready();
     const active = sdk;
     return await operation({ configure: (value, memory) => { answer = value; recalled = memory; }, frames,
-      calls: () => calls, post: payload => active.inject({ method: "POST", url: "/v1/chat/unscoped-tasks",
-        headers: { authorization: `Bearer ${login.access_token}` }, payload }).then(value => value) });
-  } finally { try { await sdk?.close(); } finally { expect(fallbackCalls).toBe(0); } }
+      calls: () => calls, post: async payload => {
+        const result = await active.inject({ method: "POST", url: "/v1/chat/unscoped-tasks",
+          headers: { authorization: `Bearer ${login.access_token}` }, payload });
+        if (result.statusCode === 201 && payload.session_id)
+          await observed.afterHTTP(responseBody(result).task_id, payload.session_id);
+        return result;
+      } });
+  } finally {
+    try { await sdk?.close(); }
+    finally {
+      try { await observed.dispose(); }
+      finally { sdkTransactions.delete(f); expect(fallbackCalls).toBe(0); }
+    }
+  }
 }
 
 function expectSearchClosed(frame: Frame): void {
