@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 
-import type { McpGrantScope } from "@talent-signal/contracts";
+import { PEOPLE_DIRECTORY_QUERY_MAX_SCALARS, parsePeopleDirectoryQuery, type McpGrantScope } from "@talent-signal/contracts";
 
 import type { AuthContext } from "./auth.js";
 import { negotiateProtocolVersion } from "./mcpClient.js";
@@ -228,7 +228,8 @@ export async function handleMcpHttpRequest(
           isError: false,
           structuredContent: result.structuredContent,
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof McpDirectoryQueryError) return rpcError(id, -32602, error.message);
         return rpcResult(id, {
           content: [{ text: "The tool could not complete.", type: "text" }],
           isError: true,
@@ -243,10 +244,18 @@ export async function handleMcpHttpRequest(
   }
 }
 
+class McpDirectoryQueryError extends Error {
+  constructor(reason: "too_long" | "invalid_type" | "invalid_unicode") {
+    super(reason === "too_long" ? "Query exceeds the supported input limit."
+      : "Invalid query. Use supported text without NUL or unpaired surrogates.");
+    this.name = "McpDirectoryQueryError";
+  }
+}
+
 function boundedQuery(args: Record<string, unknown>): string {
-  return typeof args.query === "string"
-    ? args.query.normalize("NFKC").slice(0, 160)
-    : "";
+  const admitted = parsePeopleDirectoryQuery(args.query, { allowMissing: true });
+  if (!admitted.ok) throw new McpDirectoryQueryError(admitted.reason);
+  return admitted.query;
 }
 
 function boundedLimit(args: Record<string, unknown>): number {
@@ -345,7 +354,7 @@ export function createMcpToolRegistry(pool: Pool): McpTool[] {
             minimum: 1,
             type: "integer",
           },
-          query: { maxLength: 160, type: "string" },
+          query: { maxLength: PEOPLE_DIRECTORY_QUERY_MAX_SCALARS, type: "string" },
         },
         type: "object",
       },

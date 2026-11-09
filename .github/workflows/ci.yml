@@ -325,6 +325,37 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-deployment-secret
         run: pnpm build
 
+      - name: Verify complete directory queries in full Next and Chromium
+        id: directory_protocol
+        env:
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/get452_directory_ci
+          GET452_NEXT_PROTOCOL: "1"
+          GET452_NEXT_PROTOCOL_ARTIFACT_DIR: ${{ runner.temp }}/get452-directory-next-evidence
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            GET452_CHROME_PATH="$(command -v google-chrome)"
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            GET452_CHROME_PATH="$(command -v google-chrome-stable)"
+          else
+            echo "An existing Chrome binary is required for the directory transport gate" >&2
+            exit 1
+          fi
+          export GET452_CHROME_PATH
+          test -x "$GET452_CHROME_PATH"
+          # Reuse this job's complete production Web build. The runner creates
+          # and removes its own fresh DB; no Auth.js alias or fixture cookie.
+          pnpm --filter @talent-signal/backend exec tsx src/evaluation/get452DirectoryNextProtocol.ts
+
+      - name: Preserve sanitized directory protocol receipt
+        if: always() && steps.directory_protocol.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: directory-next-protocol-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/get452-directory-next-evidence/receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
 
   cli:
     name: CLI quality
@@ -371,7 +402,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       lab-postgres:
         image: postgres:18-alpine
@@ -453,6 +484,15 @@ jobs:
         env:
           CHAT_MEDIA_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
         run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/chatMediaLifecycle.integration.test.ts
+
+      - name: Verify Memory proposal HTTP commit ordering with PostgreSQL
+        # Keep this independent proof observable after another regression fails;
+        # any failed step still keeps Backend required red.
+        if: ${{ !cancelled() }}
+        env:
+          CONTACT_AGENT_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          GET_457_STAGE_HTTP_ACK_TEST_REQUIRED: '1'
+        run: pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 --no-file-parallelism src/modules/memoryProposalCommitOrder.integration.test.ts
 
       - name: Verify account authority and isolated workspace cleanup
         env:
