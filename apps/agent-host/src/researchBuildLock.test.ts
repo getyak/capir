@@ -39,6 +39,7 @@ async function exerciseFirstUseReader(scenario: Scenario): Promise<void> {
   let writer: DatabaseSync | undefined;
   let reader: DatabaseSync | undefined;
   let probe: DatabaseSync | undefined;
+  let distinctLiveReader = false;
   let readerTransaction = false;
   let probeTransaction = false;
   let observerError: unknown;
@@ -121,6 +122,7 @@ async function exerciseFirstUseReader(scenario: Scenario): Promise<void> {
         events.push("writer-acquired");
         try {
           reader = new DatabaseSync(lockPath, { readOnly: true });
+          distinctLiveReader = reader !== this;
           actualExec.call(reader, "BEGIN");
           readerTransaction = true;
           readSnapshot();
@@ -168,7 +170,7 @@ async function exerciseFirstUseReader(scenario: Scenario): Promise<void> {
     const ownerCloses = closeSpy.mock.contexts.filter((context) => context === writer).length;
     const evidence = JSON.stringify({ scenario, beforeBytes: beforeBegin?.size,
       beforeHeader: beforeBegin?.header, journalMode, actionChecks, ownerCloses,
-      readerChecks, releaseAttempts, releaseAcknowledgements, events,
+      distinctLiveReader, readerChecks, releaseAttempts, releaseAcknowledgements, events,
       releaseError: releaseError === undefined ? null : errorMetadata(releaseError),
       outcome: outcome.ok ? "returned" : errorMetadata(outcome.error) });
     // Only content-free fixture metadata is emitted; no environment or paths.
@@ -177,7 +179,8 @@ async function exerciseFirstUseReader(scenario: Scenario): Promise<void> {
     expect(beforeBegin?.size, evidence).toBe(0);
     expect(beforeBegin?.header, evidence).toBe("");
     expect(journalMode, evidence).toBe("delete");
-    expect(writer, evidence).not.toBe(reader);
+    // Assert only the live identity witness, never a closed native handle.
+    expect(distinctLiveReader, evidence).toBe(true);
     expect(readerTransaction, evidence).toBe(true);
     expect(readerChecks, evidence).toBe(2);
     expect(actionChecks, evidence).toBe(1);
