@@ -43,7 +43,8 @@ import type {
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import type { AuthContext } from "./auth.js";
 import { recallMemoriesTracked } from "./memoryReviewTrackedRecall.js";
-import { terminateLegacySavedMemoryRun, isForeignLegacySavedMemoryHistoryError, assertLegacySavedMemoryHistoryReceiptOwner } from "./legacyChatAuthority.js";
+import { assertLegacyCapturedHistoryEntry, bindLegacyCapturedHistoryRun, type LegacyChatAuthority, type LegacyCapturedHistoryHandle,
+  terminateLegacySavedMemoryRun, isForeignLegacySavedMemoryHistoryError, assertLegacySavedMemoryHistoryReceiptOwner } from "./legacyChatAuthority.js";
 import { createWorkspaceSavedMemoryRun, type WorkspaceSavedMemoryAdmission,
   type WorkspaceSavedMemoryRun, type WorkspaceTrackedMemoryPage } from "./workspaceSavedMemoryRun.js";
 import { createWorkspaceMcpConnections, type WorkspaceMcpConnections } from "./mcpAgentTools.js";
@@ -373,6 +374,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
   assertCurrent?: () => Promise<void>;
   /** Private prepared admission; actual entry activation needs canonical completion/readback. */
   savedMemoryAdmission?: WorkspaceSavedMemoryAdmission;
+  capturedHistory?: { owner: LegacyChatAuthority; handle: LegacyCapturedHistoryHandle };
   responsePreference?: import("@talent-signal/agent").ResponsePreference;
   calendarContext?: import("@talent-signal/agent").CalendarDraftContext;
   onVisibleText?: (text: string) => void;
@@ -736,6 +738,9 @@ export async function executeWorkspaceConversationAgentCore(input: {
   const runID = input.runID ?? randomUUID();
   // Use the same origin as the existing provider timeout, including all startup.
   const runDeadlineMonotonicMs = performance.now() + durationMs;
+  if (input.capturedHistory) bindLegacyCapturedHistoryRun(input.capturedHistory.owner, input.capturedHistory.handle,
+    { runID, runDeadlineMonotonicMs, workspaceID: input.workspaceID, sessionID: input.sessionID, messageID: input.messageID,
+      conversationHistory: input.conversationHistory, sessionHistory: input.sessionHistory });
   let savedMemoryRun: WorkspaceSavedMemoryRun | null = null;
   let savedMemoryConversationHistory: typeof input.conversationHistory = undefined;
   let onMemoryAbort: (() => void) | null = null;
@@ -2051,6 +2056,7 @@ export async function executeWorkspaceConversationAgent(input: {
   assertCurrent?: () => Promise<void>;
   /** Private prepared admission; actual entry activation needs canonical completion/readback. */
   savedMemoryAdmission?: WorkspaceSavedMemoryAdmission;
+  capturedHistory?: { owner: LegacyChatAuthority; handle: LegacyCapturedHistoryHandle };
   responsePreference?: import("@talent-signal/agent").ResponsePreference;
   calendarContext?: import("@talent-signal/agent").CalendarDraftContext;
   onVisibleText?: (text: string) => void;
@@ -2067,6 +2073,8 @@ export async function executeWorkspaceConversationAgent(input: {
   /** Live queue run claim: server-owned staging authority for MCP tools. */
   hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
 }): Promise<WorkspaceConversationAgentExecution> {
+  if (input.capturedHistory) assertLegacyCapturedHistoryEntry(input.capturedHistory.owner, input.capturedHistory.handle,
+    input.database, input.auth);
   if (input.savedMemoryAdmission) {
     const admission = input.savedMemoryAdmission, owner = admission.owner;
     try {
@@ -2352,6 +2360,7 @@ export async function executeWorkspaceConversationAgent(input: {
   return executeWorkspaceConversationAgentCore({
     ...(mcpConnections ? { mcpConnections } : {}),
     ...(input.savedMemoryAdmission ? { savedMemoryAdmission: input.savedMemoryAdmission } : {}),
+    ...(input.capturedHistory ? { capturedHistory: input.capturedHistory } : {}),
     ...(input.hostResult ? { hostResult: input.hostResult } : {}),
     messageSources,
     objective: input.objective,

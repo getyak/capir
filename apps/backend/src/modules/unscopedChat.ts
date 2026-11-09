@@ -2,7 +2,7 @@ import { conversationRunDiagnostics } from "./conversationRunDiagnostics.js";
 import { recordProductEvent } from "@talent-signal/agent";
 import { calendarDraftContextForRequest } from "./calendarDraftContext.js";
 import { createHarnessSourceGuard, createHarnessSourceGuardWithBinding } from "./harnessSourceGuard.js";
-import { LegacyChatTerminated, terminateLegacySavedMemoryRun, readLegacySavedMemoryPublication, isForeignLegacySavedMemoryHistoryError,
+import { prepareLegacyCapturedHistory, hasBoundLegacyCapturedHistory, LegacyChatTerminated, terminateLegacySavedMemoryRun, readLegacySavedMemoryPublication, isForeignLegacySavedMemoryHistoryError,
   type LegacyChatAuthority } from "./legacyChatAuthority.js";
 import { snapshotLegacyChatAuth } from "./legacyChatOriginalProof.js";
 import { sealWorkspaceSavedMemoryRun, consumeWorkspaceSavedMemoryCompletion,
@@ -104,6 +104,7 @@ export interface UnscopedChatExecution {
 // Private result provenance changes only COMMIT acknowledgement handling;
 // it never grants read/source authority or enters a response serializer.
 const governedCanonicalResults = new WeakSet<object>();
+const publicSDKHistory = Symbol();
 const savedMemoryCompletions = new WeakMap<UnscopedChatExecution, Readonly<{
   admission: WorkspaceSavedMemoryAdmission; handle: WorkspaceSavedMemoryCompletionHandle;
   taskID: string; runID: string;
@@ -147,6 +148,7 @@ function localFallbackBlock(
 }
 
 export async function executeUnscopedChatTask(input: {
+  [publicSDKHistory]?: LegacyChatAuthority;
   request: UnscopedChatTaskRequest;
   /** Host-owned queue attempt identity; never accepted from the public request. */
   taskID?: string;
@@ -227,8 +229,15 @@ export async function executeUnscopedChatTask(input: {
     ? Object.freeze({ pool: memoryEntry.pool, auth: memoryEntry.auth, owner: memoryEntry.owner,
       taskID, source: memorySource.source, guard: memorySource.guard }) : null;
   let savedMemoryCompletion: WorkspaceSavedMemoryCompletionHandle | null = null;
+  const historyOwner = input[publicSDKHistory];
+  if (historyOwner && (!input.database || !input.auth || !input.request.session_id))
+    return terminateLegacySavedMemoryRun(historyOwner, null);
+  const captured = historyOwner
+    ? await prepareLegacyCapturedHistory(historyOwner, { database: input.database!, auth: input.auth!,
+      sessionID: input.request.session_id!, taskID, messageID: input.request.message_id, sources, onExpiry: narrowHistoryExpiry })
+    : undefined;
   const assertCurrent = input.provider?.providerId === "claude-agent-sdk" && input.database && input.auth
-    ? memorySource?.guard ?? await createHarnessSourceGuard(input.database, input.auth, input.request.session_id, sources, input.probePool ?? input.database) : undefined;
+    ? captured?.guard ?? memorySource?.guard ?? await createHarnessSourceGuard(input.database, input.auth, input.request.session_id, sources, input.probePool ?? input.database) : undefined;
   // Keep `assertCurrent` presence and every existing capability selection as
   // before. The additional HTTP source fence grants no history/tool capability.
   const legacySourceCurrent = input.legacyAuthority && input.database && input.auth
@@ -240,16 +249,16 @@ export async function executeUnscopedChatTask(input: {
   // Scope failures must escape before provider fallbacks; they are not model errors.
   const responsePreference = !input.memoryDraftTarget && assertCurrent && input.database && input.auth
     ? await loadAgentResponsePreference(input.database, input.auth) : undefined;
-  const sessionConversation = !input.memoryDraftTarget && input.request.session_id && input.database && input.auth
+  const sessionConversation = captured?.inline ?? (!input.memoryDraftTarget && input.request.session_id && input.database && input.auth
     ? await readAgentSessionConversation(
         input.database, input.auth, input.request.session_id,
         { personId: null, relationshipContextId: null },
       )
-    : { hasRecordedTurns: Boolean(input.memoryDraftTarget), messages: [] };
-  const conversationHistory = boundedConversationHistory(sessionConversation.messages, input.request.message_id);
-  let completeConversation: Awaited<ReturnType<typeof readAgentSessionConversation>> | undefined;
-  let sessionHistoryUnavailable = false;
-  if (assertCurrent && !input.memoryDraftTarget && input.request.session_id && input.database && input.auth) {
+    : { hasRecordedTurns: Boolean(input.memoryDraftTarget), messages: [] });
+  const conversationHistory = captured?.conversationHistory ?? boundedConversationHistory(sessionConversation.messages, input.request.message_id);
+  let completeConversation: Awaited<ReturnType<typeof readAgentSessionConversation>> | undefined = captured?.complete;
+  let sessionHistoryUnavailable = Boolean(captured && !captured.complete);
+  if (!captured && assertCurrent && !input.memoryDraftTarget && input.request.session_id && input.database && input.auth) {
     const historyLoginAvailable = await admitSessionHistoryOwner({ database: input.database, auth: input.auth,
       sessionID: input.request.session_id, taskID,
       ...(input.request.message_id ? { messageID: input.request.message_id } : {}),
@@ -276,7 +285,7 @@ export async function executeUnscopedChatTask(input: {
   const conversationSources = [...new Map([
     ...(sessionConversation.sources ?? []), ...(completeConversation?.sources ?? []),
   ].map(source => [source.taskID, source])).values()];
-  const sessionHistory = completeConversation && completeConversation.messages.length > 0 && assertCurrent && input.request.session_id && input.database && input.auth
+  const sessionHistory = captured ? captured.snapshot : completeConversation && completeConversation.messages.length > 0 && assertCurrent && input.request.session_id && input.database && input.auth
     ? createSessionHistorySnapshot({ database: input.database, auth: input.auth, sessionID: input.request.session_id,
       messages: completeConversation.messages, ...(input.request.message_id ? { currentMessageID: input.request.message_id } : {}),
       sources: conversationSources, taskIDs: completeConversation.historyTaskIDs ?? [],
@@ -370,6 +379,7 @@ export async function executeUnscopedChatTask(input: {
           if (marked.rowCount !== 1) return terminateLegacySavedMemoryRun(savedMemoryAdmission.owner, null);
         }
         const execution = await executeWorkspaceConversationAgent({
+          ...(captured && historyOwner ? { capturedHistory: { owner: historyOwner, handle: captured.handle } } : {}),
           ...(savedMemoryAdmission ? { savedMemoryAdmission } : {}),
           ...(input.hostResult ? { hostResult: input.hostResult } : {}),
           ...(input.hostAuthority ? { hostAuthority: input.hostAuthority } : {}),
@@ -582,7 +592,8 @@ async function createUnscopedChatTaskInternal(
   const memoryAtomicEntry = Boolean(legacyAuthority && auth.userKind === "password_human"
     && !selectRemoteProvider && provider && isWorkspaceConversationAgentProvider(provider)
     && (!request.session_id || provider.providerId !== "claude-agent-sdk"));
-  if (memoryAtomicEntry) request = Object.freeze({ ...request });
+  if (memoryAtomicEntry || (legacyAuthority && auth.userKind === "password_human" && request.session_id))
+    request = Object.freeze({ ...request });
   if (request.session_id) await purgeUnavailableSessionChatSources(pool, auth);
   const execute = async (client: PoolClient): Promise<UnscopedChatTaskMutationResult | LegacyChatAdmission | LegacyChatWaiter> => {
     if (request.session_id) await assertSessionForChat(client, auth, request.session_id);
@@ -673,7 +684,10 @@ async function createUnscopedChatTaskInternal(
     }
     const protectContinuation = provider?.providerId === "claude-agent-sdk" && Boolean(request.session_id);
     if (protectContinuation) await client.query("SAVEPOINT harness_product_reply");
+    const captureSDKHistory = protectContinuation && legacyAuthority && auth.userKind === "password_human"
+      && provider && isWorkspaceConversationAgentProvider(provider);
     const execution = await executeUnscopedChatTask({
+      ...(captureSDKHistory && legacyAuthority ? { [publicSDKHistory]: legacyAuthority } : {}),
       request,
       provider,
       database: client,
@@ -711,7 +725,7 @@ async function createUnscopedChatTaskInternal(
     await legacyAuthority?.assertFinalCurrent(client);
     const result: UnscopedChatTaskMutationResult = { body: execution.body, replayed: false, status: 201,
       labProductOutcome: execution.remoteStatus === "agent_completed" || execution.remoteStatus === "completed" ? "accepted" : "fallback" };
-    if (memory) governedCanonicalResults.add(result);
+    if (memory || (legacyAuthority && hasBoundLegacyCapturedHistory(legacyAuthority))) governedCanonicalResults.add(result);
     return result;
   };
   const result = legacyAuthority

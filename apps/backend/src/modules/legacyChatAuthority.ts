@@ -1,4 +1,9 @@
 import type { Pool, PoolClient } from "pg";
+import type { ConversationMessage, SessionHistorySnapshot } from "@talent-signal/agent";
+import { boundedConversationHistory } from "./chatAnswerProvider.js";
+import { createSessionHistorySnapshot } from "./sessionHistorySnapshot.js";
+import { collectCapturedHistory, type CapturedHistoryInput } from "./capturedSessionHistory.js";
+import { capturedHistoryClaimsCurrentSQL, capturedHistoryDeadlineSQL, capturedHistorySourcesCurrentSQL, lockCapturedHistoryClaims } from "./capturedHistoryClaims.js";
 import { types } from "node:util";
 import type { BackendConfig } from "../config.js";
 import type { DatabaseClient } from "../database/pool.js";
@@ -148,6 +153,59 @@ export interface LegacySavedMemoryHistoryFrame {
    * context budget before exposure and terminate on a failed charge. */
   readonly messages: SavedMemorySessionHistoryFacts["messages"];
 }
+declare const capturedHistoryBrand: unique symbol;
+export interface LegacyCapturedHistoryHandle { readonly [capturedHistoryBrand]: true }
+type CapturedFrame = Awaited<ReturnType<typeof collectCapturedHistory>>;
+interface CapturedPreparation {
+  readonly handle: LegacyCapturedHistoryHandle;
+  readonly inline: CapturedFrame["inline"];
+  readonly complete: CapturedFrame["complete"];
+  readonly guard: CapturedFrame["guard"];
+  readonly conversationHistory: readonly ConversationMessage[];
+  readonly snapshot: SessionHistorySnapshot | undefined;
+}
+interface CapturedCoreRun {
+  runID: string; runDeadlineMonotonicMs: number;
+  workspaceID: string; sessionID: string | null | undefined; messageID: string | undefined;
+  conversationHistory: readonly ConversationMessage[] | undefined; sessionHistory: SessionHistorySnapshot | undefined;
+}
+const capturedOwners = new WeakMap<object, {
+  prepare(input: CapturedHistoryInput): Promise<CapturedPreparation>;
+  bind(handle: LegacyCapturedHistoryHandle, run: CapturedCoreRun): void;
+  assertEntry(handle: LegacyCapturedHistoryHandle, database: DatabaseClient, auth: AuthContext): void;
+  bound(): boolean;
+}>();
+const capturedHandles = new WeakMap<object, LegacyChatAuthority>();
+const guardedClientOwners = new WeakMap<object, LegacyChatAuthority>();
+
+/** Only the original credential owner can read and register its history. */
+export async function prepareLegacyCapturedHistory(owner: LegacyChatAuthority, input: CapturedHistoryInput) {
+  const binder = capturedOwners.get(owner);
+  if (!binder) throw new LegacyChatTerminated();
+  return binder.prepare(input);
+}
+export function assertLegacyCapturedHistoryEntry(owner: LegacyChatAuthority, handle: LegacyCapturedHistoryHandle,
+  database: DatabaseClient, auth: AuthContext): void {
+  const original = capturedHandles.get(handle);
+  if (original && original !== owner) return foreignHistoryStop();
+  const issuer = guardedClientOwners.get(database);
+  if (issuer && issuer !== owner) return foreignHistoryStop();
+  const binder = capturedOwners.get(owner);
+  if (!binder) throw new LegacyChatTerminated();
+  binder.assertEntry(handle, database, auth);
+}
+export function bindLegacyCapturedHistoryRun(owner: LegacyChatAuthority, handle: LegacyCapturedHistoryHandle,
+  run: CapturedCoreRun): void {
+  const original = capturedHandles.get(handle);
+  if (original && original !== owner) return foreignHistoryStop();
+  const binder = capturedOwners.get(owner);
+  if (!binder) throw new LegacyChatTerminated();
+  binder.bind(handle, run);
+}
+export function hasBoundLegacyCapturedHistory(owner: LegacyChatAuthority): boolean {
+  return capturedOwners.get(owner)?.bound() === true;
+}
+
 type MemoryBinder = {
   bind(input: LegacySavedMemoryRunInput): Promise<LegacySavedMemoryRunHandle>;
   terminate(error: unknown): never;
@@ -328,6 +386,10 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   let activeLease: object | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const sourceChecks = new Set<() => Promise<void>>();
+  let captureStarted = false;
+  let capturedCheck: ((writer?: PoolClient) => Promise<void>) | undefined;
+  let captureBound = false;
+  let lockCaptureForFinal: ((writer: PoolClient) => Promise<void>) | undefined;
   let memoryRun: LegacySavedMemoryRunAccess | null = null;
   let memoryBindingPending = false;
   let memoryDeadline: number | null = null;
@@ -356,6 +418,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   arm();
   const check = async (database: DatabaseClient) => {
     alive();
+    if (captureStarted) return capturedCheck ? capturedCheck() : fail();
     if (memoryBindingPending) return fail();
     if (memoryRun) return memoryRun.assertCurrent();
     try {
@@ -376,8 +439,10 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
   };
   const checked = async <T>(operation: () => Promise<T>, sourceCheck: (() => Promise<void>) | undefined,
     hostOperation: boolean): Promise<T> => {
+    if (captureStarted && !captureBound) return fail();
     await check(active ?? pool);
     if (sourceCheck) await source(sourceCheck);
+    if (capturedCheck && sourceCheck) await capturedCheck();
     let result: T;
     try { result = await operation(); }
     catch (error) {
@@ -389,6 +454,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
     }
     await check(active ?? pool);
     if (sourceCheck) await source(sourceCheck);
+    if (capturedCheck && sourceCheck) await capturedCheck();
     return result;
   };
   const lock = async (client: DatabaseClient, sql: string, values: unknown[], count = 1) => {
@@ -402,6 +468,13 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
     assertCurrent: () => check(active ?? pool), source,
     observeSource: current => { alive(); sourceChecks.add(current); },
     assertFinalCurrent: async client => {
+      if (captureStarted) {
+        const writer = activeGuarded;
+        if (!captureBound || !lockCaptureForFinal || !capturedCheck || !writer || (client !== writer && client !== active)) return fail();
+        await source(() => lockCaptureForFinal!(writer));
+        for (const current of sourceChecks) await source(current);
+        return capturedCheck(writer);
+      }
       if (memorySealed && memoryFinalCurrent) return memoryFinalCurrent(client);
       if (memoryPublication && publicationFinalCurrent) return publicationFinalCurrent(client);
       for (const current of sourceChecks) await source(current);
@@ -458,10 +531,13 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
           } catch { return fail(); }
         };
       } });
-      activeGuarded = guarded;
+      activeGuarded = guarded; guardedClientOwners.set(guarded, owner);
       try {
         const value = await operation(guarded);
-        if (memorySealed && memoryFinalCurrent) { await memoryFinalCurrent(guarded); alive(); }
+        if (captureStarted) {
+          if (!captureBound || !capturedCheck) return fail();
+          await capturedCheck(guarded);
+        } else if (memorySealed && memoryFinalCurrent) { await memoryFinalCurrent(guarded); alive(); }
         else if (memoryPublication && publicationFinalCurrent) { await publicationFinalCurrent(guarded); alive(); }
         else await check(client); // Also fences completed-result read-only replay.
         return value;
@@ -485,6 +561,153 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
     }
     return fail();
   };
+  let captureHandle: LegacyCapturedHistoryHandle | undefined;
+  let captureIdentity: { taskID: string; sessionID: string; messageID: string | undefined } | undefined;
+  let prepared: CapturedPreparation | undefined;
+  let captureDatabase: DatabaseClient | undefined;
+  const narrowDeadline = (next: number) => {
+    memoryDeadline = Math.min(deadline, memoryDeadline ?? Infinity, next);
+    if (timer) clearTimeout(timer);
+    arm(); alive();
+  };
+  capturedOwners.set(owner, {
+    bound: () => captureBound,
+    assertEntry(handle, database, entryAuth) {
+      try {
+        alive();
+        const actor = snapshotLegacyChatAuth(entryAuth);
+        if (!captureHandle || captureHandle !== handle || captureDatabase !== database
+          || (database !== pool && database !== activeGuarded)
+          || actor.accountId !== original.accountId || actor.userId !== original.userId
+          || actor.sessionId !== original.sessionId || actor.userKind !== original.userKind) return fail();
+      } catch (error) { return terminateMemory(error); }
+    },
+    bind(handle, run) {
+      try {
+        run = savedMemoryOwnRecord(run, ["runID", "runDeadlineMonotonicMs", "workspaceID", "sessionID", "messageID",
+          "conversationHistory", "sessionHistory"]) as unknown as CapturedCoreRun;
+      } catch (error) { return terminateMemory(error); }
+      if (!captureHandle || handle !== captureHandle || captureBound || !captureIdentity
+        || run.runID !== captureIdentity.taskID || run.workspaceID !== original.accountId
+        || typeof run.sessionID !== "string" || run.sessionID.toLowerCase() !== captureIdentity.sessionID
+        || (captureIdentity.messageID !== undefined && run.messageID !== captureIdentity.messageID)
+        || !prepared || run.conversationHistory !== prepared.conversationHistory || run.sessionHistory !== prepared.snapshot
+        || !Number.isFinite(run.runDeadlineMonotonicMs)) return fail();
+      narrowDeadline(run.runDeadlineMonotonicMs); captureBound = true;
+    },
+    async prepare(input) {
+      // A known foreign lease cannot affect this owner's clock or failure latch.
+      if (!input || typeof input !== "object" || types.isProxy(input)) throw new LegacyChatTerminated();
+      const supplied = Object.getOwnPropertyDescriptor(input, "database");
+      const foreign = supplied && "value" in supplied ? guardedClientOwners.get(supplied.value) : undefined;
+      if (foreign && foreign !== owner) return foreignHistoryStop();
+      try {
+        alive();
+        if (!currentReaderAdmission || captureStarted || memoryRun || memoryBindingPending || memoryReaderUsed
+          || original.userKind !== "password_human") return fail();
+        const fields = savedMemoryOwnRecord(input, ["database", "auth", "sessionID", "taskID", "messageID", "sources",
+          ...(Object.getOwnPropertyDescriptor(input, "onExpiry") ? ["onExpiry"] : [])]);
+        input = fields as unknown as CapturedHistoryInput;
+        const database = input.database, lease = activeLease;
+        const held = () => {
+          alive();
+          if (database !== pool && (!lease || lease !== activeLease || database !== activeGuarded)) return fail();
+        };
+        held();
+        const actor = snapshotLegacyChatAuth(input.auth);
+        if (actor.userKind !== original.userKind || actor.accountId !== original.accountId
+          || actor.userId !== original.userId || actor.sessionId !== original.sessionId) return fail();
+        if (typeof input.sessionID !== "string" || (input.messageID !== undefined && typeof input.messageID !== "string")
+          || typeof input.sources !== "function" || (input.onExpiry !== undefined && typeof input.onExpiry !== "function")) return fail();
+        const sessionID = savedMemoryUUID(input.sessionID.toLowerCase());
+        const taskID = savedMemoryUUID(input.taskID);
+        const messageID = input.messageID;
+        if (messageID !== undefined) savedMemoryUUID(messageID.toLowerCase());
+        captureStarted = true;
+        // Only fixed server readers see this query channel. Check the original
+        // lease both before I/O and after its ACK, including the capture reads.
+        const queryChannel = { query: async (sql: string, values?: unknown[]) => {
+          held(); const result = await database.query(sql, values); held(); return result;
+        } } as DatabaseClient;
+        const frame = await collectCapturedHistory(queryChannel,
+          { database, auth: actor, taskID, sessionID, messageID, sources: input.sources });
+        held();
+        const domain = JSON.parse(frame.domain) as { claims: unknown[]; tasks: string[]; screenshots: unknown[] };
+        lockCaptureForFinal = async writer => {
+          held();
+          if (!activeLease || writer !== activeGuarded) return fail();
+          if (domain.claims.length) await lockCapturedHistoryClaims(writer, actor.accountId, domain.claims);
+          held();
+          if (writer !== activeGuarded) return fail();
+        };
+        const joint = async (writer?: PoolClient) => {
+          try {
+            held();
+            await frame.guard();
+            held();
+            const sourceBinding = frame.currentSource();
+            const begun = performance.now();
+            if (writer && (!activeLease || writer !== activeGuarded)) return fail();
+            const row = await (writer ?? queryChannel).query(`WITH tick AS MATERIALIZED (SELECT statement_timestamp() AS checked_at),
+              captured_history_owner AS MATERIALIZED (SELECT LEAST($9::timestamptz,(${acceptedDeadlineSQL}),sessions.expires_at,
+                ($12::jsonb->'source'->>'sourceExpiresAt')::timestamptz,($12::jsonb->'source'->>'sessionExpiresAt')::timestamptz,
+                (SELECT expires_at FROM agent_sessions WHERE account_id=$6 AND created_by_user_id=$7
+                  AND id=($12::jsonb->'source'->>'sessionID')::uuid),${capturedHistoryDeadlineSQL}) AS until
+                ${memoryAuthoritySQL} AND tick.checked_at<$9::timestamptz AND users.kind=$10 AND users.kind='password_human'
+                AND ($13::text='current' OR (sessions.token_hash IS DISTINCT FROM $1 AND sessions.previous_token_hash=$1))
+                AND (${labBindingSQL}) IS NOT DISTINCT FROM $11::jsonb
+                AND ${legacySavedMemorySourceSQL} AND ${capturedHistorySourcesCurrentSQL} AND ${capturedHistoryClaimsCurrentSQL})
+              SELECT true AS available,to_char(tick.checked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at,
+                to_char(captured_history_owner.until AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS read_until
+              FROM tick,captured_history_owner WHERE captured_history_owner.until>tick.checked_at`,
+            [...proof, JSON.stringify({ ...domain, source: sourceBinding }), original.tokenBranch]);
+            held();
+            if ((writer && writer !== activeGuarded) || row.rows.length !== 1
+              || JSON.stringify(frame.currentSource()) !== JSON.stringify(sourceBinding)) return fail();
+            const envelope = captureLegacySavedMemoryEnvelope(row.rows[0]);
+            const us = legacySavedMemoryMicroseconds(envelope.read_until) - legacySavedMemoryMicroseconds(envelope.checked_at);
+            narrowDeadline(begun + Number(us / 1000n));
+          } catch (error) { return terminateMemory(error); }
+        };
+        // Serialize checks to keep a single source observation and monotonic
+        // narrowing order even when host tools run concurrently.
+        let tail: Promise<void> = Promise.resolve();
+        capturedCheck = async writer => {
+          held();
+          if (writer && writer !== activeGuarded) return fail();
+          const pending = tail.then(() => joint(writer)); tail = pending.catch(() => {});
+          await pending; held();
+          if (writer && writer !== activeGuarded) return fail();
+        };
+        await capturedCheck(); held();
+        captureIdentity = { taskID, sessionID, messageID };
+        captureDatabase = database;
+        captureHandle = Object.freeze({}) as LegacyCapturedHistoryHandle;
+        capturedHandles.set(captureHandle, owner);
+        const conversationHistory = Object.freeze(boundedConversationHistory(frame.inline.messages, messageID)
+          .map(message => Object.freeze(message)));
+        const allSources = [...new Map([...(frame.inline.sources ?? []), ...(frame.complete?.sources ?? [])]
+          .map(source => [source.taskID, source])).values()];
+        let snapshot: SessionHistorySnapshot | undefined;
+        if (frame.complete?.messages.length) {
+          const originalSnapshot = createSessionHistorySnapshot({ database: queryChannel, auth: actor, sessionID,
+            messages: frame.complete.messages, ...(messageID ? { currentMessageID: messageID } : {}),
+            sources: allSources, taskIDs: frame.complete.historyTaskIDs!, sessionStamp: frame.complete.historyStamp!,
+            sourceGeneration: frame.complete.historyGeneration!, assertCurrent: frame.guard,
+            ...(input.onExpiry ? { onExpiry: input.onExpiry } : {}) });
+          snapshot = Object.freeze({ version: originalSnapshot.version,
+            messages: Object.freeze(originalSnapshot.messages.map(message => Object.freeze(message))),
+            assertCurrent: async () => {
+              await source(originalSnapshot.assertCurrent);
+              await capturedCheck!();
+            } });
+        }
+        prepared = Object.freeze({ handle: captureHandle, inline: frame.inline, complete: frame.complete,
+          guard: frame.guard, conversationHistory, snapshot });
+        return prepared;
+      } catch (error) { return terminateMemory(error); }
+    },
+  });
   const readCurrentPublication = async (database: DatabaseClient, taskID: string) => {
         const begun = performance.now();
         // Canonical source functions055/056/065 use statement_timestamp(). Use
@@ -560,7 +783,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
     readPublication: async (readerAuth, value) => {
       try {
         alive();
-        if (!currentReaderAdmission || memoryRun || memoryBindingPending || memoryReaderPending
+        if (!currentReaderAdmission || captureStarted || memoryRun || memoryBindingPending || memoryReaderPending
           || original.userKind === "lab_human") return fail();
         // This current reader may not later be repurposed as an execution Run.
         memoryReaderPending = true; memoryReaderUsed = true;
@@ -576,7 +799,7 @@ function buildLegacyChatAuthority(pool: Pool, original: Readonly<LegacyChatOrigi
       } catch (error) { return terminateMemory(error); }
       finally { memoryReaderPending = false; }
     }, bind: async input => {
-    if (memoryRun || memoryBindingPending || memoryReaderPending || memoryReaderUsed) return fail();
+    if (captureStarted || memoryRun || memoryBindingPending || memoryReaderPending || memoryReaderUsed) return fail();
     memoryBindingPending = true;
     try {
       alive();

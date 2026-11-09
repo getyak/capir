@@ -1,3 +1,6 @@
+import { boundedConversationHistory } from "./chatAnswerProvider.js";
+import { readCapturedHistoryBodies, type CapturedCanonicalBody } from "./capturedHistoryClaims.js";
+import type { HarnessRunSourceBinding } from "./harnessSourceGuard.js";
 import { randomUUID } from "node:crypto";
 import { boundInlineAgentSessionMessages } from "./savedMemorySessionHistory.js";
 import { SESSION_HISTORY_MAX_TURNS, SESSION_HISTORY_CANONICAL_BODY_SQL, SESSION_HISTORY_TASK_UUID_SQL,
@@ -1222,12 +1225,77 @@ export async function mutateAgentSession(
   }
 }
 
+/** Read only the turn fields consumed below. A canonical HTTP turn's saved
+ * display blocks can be large and are never its authoritative assistant text.
+ * Bound the selected Session payload in SQL before sending it to the host. */
+async function capturedHistorySessionRow(client: DatabaseClient, auth: AuthContext, sessionID: string, complete: boolean) {
+  const row = (await client.query<Pick<Row, "payload" | "deleted_at" | "expires_at" | "history_stamp" | "history_generation">>(`
+    WITH product AS MATERIALIZED (
+      SELECT payload,expires_at,deleted_at,md5(jsonb_build_array(payload->'turns',payload->'personID',
+        payload->'relationshipContextID')::text) AS history_stamp FROM agent_sessions
+      WHERE account_id=$1 AND created_by_user_id=$2 AND id=$3
+    ), selected AS MATERIALIZED (
+      SELECT t,n FROM product,jsonb_array_elements(product.payload->'turns') WITH ORDINALITY turns(t,n)
+      ORDER BY n DESC LIMIT $4::int
+    ), dialogue AS MATERIALIZED (
+      SELECT n,jsonb_build_object('id',t->'id','objective',${complete ? "t->>'objective'" : "left(t->>'objective',2000)"},
+        'steeredMessages',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',m->'id',
+          'objective',${complete ? "m->>'objective'" : "left(m->>'objective',2000)"}) ORDER BY pos)
+          FROM jsonb_array_elements(t->'steeredMessages') WITH ORDINALITY steer(m,pos)),'[]'::jsonb),
+        'response',jsonb_strip_nulls(jsonb_build_object('taskID',t->'response'->'taskID',
+          'disposition',t->'response'->'disposition','hostResult',t->'response'->'hostResult',
+          'execution',CASE WHEN t->'response' ? 'execution' THEN true END,
+          'unboundConversationBlocks',CASE WHEN t->'response' ? 'execution' THEN jsonb_build_array(
+            jsonb_build_object('kind','answer','body',(SELECT ${complete ? "string_agg(b->>'body',E'\\n' ORDER BY pos)"
+              : "left(string_agg(b->>'body',E'\\n' ORDER BY pos),2000)"}
+              FROM jsonb_array_elements(COALESCE(t->'response'->'unboundConversationBlocks',t->'response'->'savedBlocks','[]'::jsonb))
+                WITH ORDINALITY blocks(b,pos) WHERE b->>'kind' IN ('answer','clarification','question_set')))) END))) AS turn
+      FROM selected
+    ), frame AS MATERIALIZED (
+      SELECT product.*,jsonb_build_object('personID',payload->'personID','relationshipContextID',payload->'relationshipContextID',
+        'screenshotTaskIDs',COALESCE((SELECT jsonb_agg(t->'response'->'taskID') FROM selected
+          WHERE (payload->'screenshotTaskIDs') ? (t->'response'->>'taskID')),'[]'::jsonb),
+        'turns',COALESCE((SELECT jsonb_agg(turn ORDER BY n) FROM dialogue),'[]'::jsonb)) AS projected FROM product
+    ) SELECT expires_at,deleted_at,history_stamp,COALESCE((SELECT generation FROM harness_source_generations WHERE account_id=$1),0)::text
+      AS history_generation,CASE WHEN octet_length(projected::text)<=1048576
+        AND (NOT $5::boolean OR jsonb_array_length(payload->'turns')<=$4::int) THEN projected ELSE NULL END AS payload FROM frame`,
+  [auth.accountId, auth.userId, sessionID, complete ? SESSION_HISTORY_MAX_TURNS : 6, complete])).rows[0];
+  if (row && row.payload === null) throw sessionHistorySnapshotUnavailable();
+  return row;
+}
+
+interface CaptureSelection {
+  readonly source: Readonly<HarnessRunSourceBinding>;
+  readonly currentMessageID: string | undefined;
+  readonly claims: string[];
+  readonly tasks: Set<string>;
+}
+
 export async function readAgentSessionConversation(
+  client: DatabaseClient, auth: AuthContext, sessionId: string,
+  scope: { personId: string | null; relationshipContextId: string | null },
+  options: { complete?: boolean } = {},
+) {
+  return readConversation(client, auth, sessionId, scope, options);
+}
+
+/** Called directly by the private owner. No receipt supplied by a caller is
+ * accepted back as authority. The metadata never enters ConversationMessage. */
+export async function readCapturedAgentSessionConversation(client: DatabaseClient, auth: AuthContext,
+  sessionId: string, source: Readonly<HarnessRunSourceBinding>, currentMessageID: string | undefined, complete: boolean) {
+  const capture: CaptureSelection = { source, currentMessageID, claims: [], tasks: new Set() };
+  const conversation = await readConversation(client, auth, sessionId,
+    { personId: null, relationshipContextId: null }, { complete }, capture);
+  return { conversation, claims: capture.claims, tasks: [...capture.tasks] };
+}
+
+async function readConversation(
   client: DatabaseClient,
   auth: AuthContext,
   sessionId: string,
   scope: { personId: string | null; relationshipContextId: string | null },
-  options: { complete?: boolean } = {},
+  options: { complete?: boolean },
+  capture?: CaptureSelection,
 ): Promise<{
   /** Persistence truth, independent of whether old content is still admissible. */
   hasRecordedTurns: boolean;
@@ -1242,7 +1310,10 @@ export async function readAgentSessionConversation(
   historyStamp?: string;
   historyGeneration?: string;
 }> {
-  const row = await rowFor(client, auth, sessionId, options.complete);
+  const row = capture ? await capturedHistorySessionRow(client, auth, sessionId, Boolean(options.complete))
+    : await rowFor(client, auth, sessionId, options.complete);
+  if (capture && (!row || row.history_stamp !== capture.source.sessionStamp || row.history_generation !== capture.source.generation))
+    throw new ApiError(409, "HARNESS_SOURCE_CHANGED", "The original conversation changed.");
   if (!row) return { hasRecordedTurns: false, messages: [] };
   if (row.deleted_at || row.expires_at <= new Date())
     throw new ApiError(
@@ -1267,7 +1338,8 @@ export async function readAgentSessionConversation(
   const turns = options.complete ? payload.turns : payload.turns.slice(-6);
   const dialogueText = (text: string) => options.complete ? text : text.slice(0, 2000);
   const taskIDs = [...new Set(turns.map(turn => canonicalID(turn.response.taskID)))];
-  const bodies = options.complete ? await readSessionHistoryBodies(client, auth, taskIDs) : (
+  const capturedBodies = capture ? await readCapturedHistoryBodies(client, auth, taskIDs, Boolean(options.complete)) : null;
+  const bodies = capturedBodies ?? (options.complete ? await readSessionHistoryBodies(client, auth, taskIDs) : (
     await client.query<{
       operation_scope: string;
       response_body: {
@@ -1294,7 +1366,7 @@ export async function readAgentSessionConversation(
         turns.map((t) => canonicalID(t.response.taskID)),
       ],
     )
-  ).rows;
+  ).rows);
   const manifests = await canonicalSessionManifests(
     client,
     auth,
@@ -1306,9 +1378,9 @@ export async function readAgentSessionConversation(
       [auth.accountId, turns.map((turn) => canonicalID(turn.response.taskID))],
     )
   ).rows;
-  const screenshotContexts = options.complete ? await readSessionHistoryScreenshots(client, auth, taskIDs)
+  const screenshotContexts = options.complete || capture ? await readSessionHistoryScreenshots(client, auth, taskIDs)
     : await loadSessionScreenshotContexts(client, auth, turns.map(turn => canonicalID(turn.response.taskID)));
-  const completeSources = options.complete ? await readSessionHistorySources(client, auth, taskIDs) : undefined;
+  const completeSources = options.complete || capture ? await readSessionHistorySources(client, auth, taskIDs) : undefined;
   const sourcesByMessage = new Map<string, AgentSessionChatSource[]>();
   const admittedTasks = new Set<string>();
   let unavailableScreenshotContext = false;
@@ -1317,7 +1389,12 @@ export async function readAgentSessionConversation(
     role: "user" | "assistant";
     text: string;
   }> = [];
+  const provenance: Array<{ task: string; claim: string | null }> = [];
   for (const turn of turns) {
+    const append = (message: (typeof messages)[number], claim: string | null = null) => {
+      messages.push(message);
+      if (capture) provenance.push({ task: canonicalID(turn.response.taskID), claim });
+    };
     // A stopped partial answer has no durable lineage and must not re-enter the
     // model as successful assistant history.
     if (turn.response.taskID.startsWith("cancelled-")) continue;
@@ -1341,7 +1418,7 @@ export async function readAgentSessionConversation(
       }
       const hostResult = (turn.response as { hostResult?: { request_id: string; call_id: string; outcome: string } }).hostResult;
       admittedTasks.add(canonicalID(turn.response.taskID));
-      messages.push(hostResult
+      append(hostResult
         ? {
             message_id: turn.id,
             role: "assistant",
@@ -1353,7 +1430,7 @@ export async function readAgentSessionConversation(
             text: dialogueText(turn.objective),
           });
       if (source.summary || source.question || source.findings?.length) {
-        messages.push({
+        append({
           message_id: source.id,
           role: "assistant",
           text: screenshotConversationText(source, turn.id),
@@ -1408,7 +1485,7 @@ export async function readAgentSessionConversation(
       const hostResult = message === turn
         ? (turn.response as { hostResult?: { request_id: string; call_id: string; outcome: string; actor_user_id: string } }).hostResult
         : undefined;
-      messages.push(hostResult
+      append(hostResult
         ? {
             message_id: message.id,
             role: "assistant",
@@ -1433,16 +1510,32 @@ export async function readAgentSessionConversation(
       .map((block) => block.body)
       .join("\n"));
     if (text)
-      messages.push({
+      append({
         message_id: turn.response.taskID,
         role: "assistant",
         text,
-      });
+      }, canonical?.blocks && capturedBodies ? (canonicalResult as CapturedCanonicalBody).claim : null);
     if (text && inheritedSources.length)
       sourcesByMessage.set(turn.response.taskID, inheritedSources);
   }
   if (options.complete) assertSessionHistoryTextBudget(messages);
   const boundedMessages = options.complete ? messages : boundInlineAgentSessionMessages(messages);
+  if (capture) {
+    // Both selectors copy message objects. Carry positional identity through
+    // their actual shaping, including duplicate IDs shared with host prose.
+    // The Core receives only the original public fields.
+    const indexed = messages.map((message, index) => ({ ...message, message_id:
+      message.message_id === capture.currentMessageID ? "current" : String(index) }));
+    const selected = options.complete
+      ? indexed.filter(message => message.message_id !== "current" && message.text.trim())
+      : boundedConversationHistory(boundInlineAgentSessionMessages(indexed), "current");
+    for (const message of selected) {
+      const item = provenance[Number(message.message_id)]!;
+      capture.tasks.add(item.task);
+      if (item.claim !== null) capture.claims.push(item.claim);
+    }
+  }
+
   const sources = [
     ...new Map(
       boundedMessages
