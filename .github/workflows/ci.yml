@@ -402,7 +402,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The serialized required PostgreSQL suites exceed 25 minutes together.
+    # Keep their individual test, SQL, source and Run deadlines unchanged.
+    timeout-minutes: 30
     services:
       lab-postgres:
         image: postgres:18-alpine
